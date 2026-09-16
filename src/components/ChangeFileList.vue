@@ -122,7 +122,8 @@ function splitPath(p: string): { dir: string; name: string } {
   text-overflow: ellipsis;
   color: var(--aide-text-secondary);
   font-family: var(--aide-font-mono);
-  font-size: 11.5px;
+  /* 与树行同名同号：两处都渲染同一批文件，字号不一致会被读成"不是一回事" */
+  font-size: 12px;
 }
 
 .cfl-dir {

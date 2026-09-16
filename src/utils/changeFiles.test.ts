@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { mergeChangeFiles } from "./changeFiles";
-import type { ChangeFile, ChangeRound } from "../types";
+import { asTouchedFile, mergeChangeFiles, roundRows } from "./changeFiles";
+import type { ChangeFile, ChangeRound, TouchedFile } from "../types";
 
 const f = (path: string, status: string, additions: number, deletions: number): ChangeFile => ({
   path,
@@ -35,5 +35,26 @@ describe("mergeChangeFiles — 顶部统一树的输入（全会话累计）", (
     const rounds = [r(1, [f("a.ts", "M", 1, 0)]), r(2, [f("a.ts", "M", 2, 0)])];
     mergeChangeFiles(rounds);
     expect(rounds[0].files[0].additions).toBe(1);
+  });
+});
+
+describe("roundRows / asTouchedFile — 轮内展示行的形状补齐", () => {
+  it("内存轮有片段：原样用 touches（点开 = 本轮精确 diff）", () => {
+    const touched: TouchedFile[] = [
+      { path: "a.ts", status: "M", additions: 1, deletions: 1, segments: [{ oldText: "a", newText: "b", addCount: 1, delCount: 1 }] },
+    ];
+    expect(roundRows({ ...r(1, [f("a.ts", "M", 1, 1)]), touches: touched })).toBe(touched);
+  });
+
+  it("历史轮（磁盘加载，无 touches）：files 补齐空片段，走累计视图", () => {
+    expect(roundRows(r(1, [f("a.ts", "M", 3, 2)]))).toEqual([
+      { path: "a.ts", status: "M", additions: 3, deletions: 2, segments: [] },
+    ]);
+  });
+
+  it("asTouchedFile 不修改原条目（落盘投影是共享对象）", () => {
+    const file = f("a.ts", "M", 1, 0);
+    asTouchedFile(file);
+    expect(file).not.toHaveProperty("segments");
   });
 });

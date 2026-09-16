@@ -1,4 +1,4 @@
-import type { ChangeFile, ChangeRound } from "../types";
+import type { ChangeFile, ChangeRound, TouchedFile } from "../types";
 
 /**
  * 全会话累计文件清单（顶部统一树的输入，D2 = 本会话累计）。
@@ -27,4 +27,15 @@ export function mergeChangeFiles(rounds: ChangeRound[]): ChangeFile[] {
     }
   }
   return [...merged.values()];
+}
+
+/** 补齐成归集器的统一形状（空片段 = 累计视图）：落盘投影里没有片段字段。 */
+export function asTouchedFile(f: ChangeFile): TouchedFile {
+  return { ...f, segments: [] };
+}
+
+/** 轮内平铺的行：内存有本轮片段就带片段（点开 = 本轮精确 diff），历史轮没有 →
+ *  空片段数组，走累计视图。补齐成同一种形状，渲染层不做「有没有 touches」的分支。 */
+export function roundRows(round: ChangeRound): TouchedFile[] {
+  return round.touches ?? round.files.map(asTouchedFile);
 }

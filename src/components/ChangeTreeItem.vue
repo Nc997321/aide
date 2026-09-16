@@ -157,7 +157,7 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--aide-text-secondary);
-  font-size: 11.5px;
+  font-size: 12px;
 }
 .cft-dir:hover .cft-dir-name {
   color: var(--aide-text-primary);
@@ -211,7 +211,8 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
   text-overflow: ellipsis;
   color: var(--aide-text-secondary);
   font-family: var(--aide-font-mono);
-  font-size: 11.5px;
+  /* 与行高 12px 对齐（原 11.5px 是半像素档，与分组标题、统计数字三档挤在一起） */
+  font-size: 12px;
 }
 
 .cft-stats {

@@ -69,6 +69,20 @@ function openAction(row: any) {
   return row.findAll(".cft-act")[0];
 }
 
+type Panel = ReturnType<typeof mountPanel>;
+
+/** 展开一轮（轮次默认收起）。roundIndex 是**轮号**，不是列表下标——列表是倒序的。 */
+async function expandRound(wrapper: Panel, roundIndex: number) {
+  await wrapper
+    .get(`.changelog-round[data-round="${roundIndex}"] .changelog-round-toggle`)
+    .trigger("click");
+}
+
+/** 某轮展开后的平铺文件行 */
+function roundRows(wrapper: Panel, roundIndex: number) {
+  return wrapper.findAll(`.changelog-round[data-round="${roundIndex}"] .cfl-row`);
+}
+
 describe("ChangeLogPanel — 变更文件点击打开", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -175,12 +189,13 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(collapsed[0].text()).toContain("1 轮无变更");
   });
 
-  it("轮次区是平铺列表（一行一条），树只在顶部出现一次", () => {
+  it("轮次区是平铺列表（一行一条），树只在顶部出现一次", async () => {
     const wrapper = mountPanel();
 
     expect(wrapper.findAll(".changelog-round")).toHaveLength(1);
+    await expandRound(wrapper, 1);
     // 轮内：平铺行（每行一条文件）
-    expect(wrapper.findAll(".cfl-row")).toHaveLength(2);
+    expect(roundRows(wrapper, 1)).toHaveLength(2);
     // 顶部统一树：文件节点
     expect(wrapper.findAll(".cft-file")).toHaveLength(2);
   });
@@ -214,6 +229,7 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     ];
     const wrapper = mountPanel();
 
+    await expandRound(wrapper, 1);
     await wrapper.get(".cfl-row").trigger("click");
     await flushPromises();
 
@@ -249,7 +265,7 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
   });
 
-  it("顶部统一树 = 全会话累计：跨轮同路径合并一条（行数累加、状态取最新）", () => {
+  it("顶部统一树 = 全会话累计：跨轮同路径合并一条（行数累加、状态取最新）", async () => {
     mocks.rounds = [
       { index: 1, time: "11:00", prompt: "建文件", files: [{ path: "a.ts", status: "A", additions: 3, deletions: 0 }] },
       { index: 2, time: "11:01", prompt: "改文件", files: [{ path: "a.ts", status: "M", additions: 2, deletions: 1 }] },
@@ -262,16 +278,157 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     expect(rows[0].text()).toContain("+5");
     expect(rows[0].text()).toContain("-1");
     // 轮区不建树：两轮各一条平铺行
+    await expandRound(wrapper, 1);
+    await expandRound(wrapper, 2);
     expect(wrapper.findAll(".cfl-row")).toHaveLength(2);
   });
 
   it("撤回按范围分流：轮内 → 单轮撤回，统一树 → 全会话撤回", async () => {
     const wrapper = mountPanel();
 
+    await expandRound(wrapper, 1);
     await wrapper.get(".cfl-row").findAll(".cfl-act")[1].trigger("click");
     expect(mocks.revertSingleFile).toHaveBeenCalled();
 
     await wrapper.get(".cft-file").findAll(".cft-act")[1].trigger("click");
     expect(mocks.revertFileGlobally).toHaveBeenCalled();
+  });
+
+  it("撤回失败：面板给 toast，不静默（git 回滚失败必须让用户看见）", async () => {
+    mocks.revertSingleFile.mockRejectedValueOnce(new Error("not a git repository"));
+    const wrapper = mountPanel();
+
+    await expandRound(wrapper, 1);
+    await wrapper.get(".cfl-row").findAll(".cfl-act")[1].trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("撤回失败");
+  });
+
+  it("统一树撤回失败：同样给 toast", async () => {
+    mocks.revertFileGlobally.mockRejectedValueOnce(new Error("boom"));
+    const wrapper = mountPanel();
+
+    await wrapper.get(".cft-file").findAll(".cft-act")[1].trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("撤回失败");
+  });
+
+  it("「撤回到此处」失败：同样给 toast（三条撤回路径一个出口）", async () => {
+    mocks.revertRound.mockRejectedValueOnce(new Error("truncate failed"));
+    mocks.rounds = [{ index: 1, time: "11:00:00", prompt: "改点东西", files: [], rewindTo: 100 }];
+    const wrapper = mountPanel();
+
+    await wrapper.get(".changelog-round-revert").trigger("click");
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("撤回失败");
+  });
+});
+
+describe("ChangeLogPanel — 轮次默认收起", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seedRounds();
+    mocks.workspaceOf.mockReturnValue(null);
+  });
+
+  it("默认收起：只有一行头，文件行不渲染", () => {
+    const wrapper = mountPanel();
+
+    expect(roundRows(wrapper, 1)).toHaveLength(0);
+    expect(wrapper.get(".changelog-round-toggle").attributes("aria-expanded")).toBe("false");
+  });
+
+  it("点轮次头展开，再点收起", async () => {
+    const wrapper = mountPanel();
+
+    await expandRound(wrapper, 1);
+    expect(roundRows(wrapper, 1)).toHaveLength(2);
+    expect(wrapper.get(".changelog-round-toggle").attributes("aria-expanded")).toBe("true");
+
+    await expandRound(wrapper, 1);
+    expect(roundRows(wrapper, 1)).toHaveLength(0);
+  });
+
+  it("展开态按轮隔离：点哪轮开哪轮", async () => {
+    mocks.rounds = [
+      { index: 1, time: "12:00:00", prompt: "第一轮", files: [{ path: "a.ts", status: "M", additions: 1, deletions: 0 }] },
+      { index: 2, time: "12:01:00", prompt: "第二轮", files: [{ path: "b.ts", status: "M", additions: 2, deletions: 0 }] },
+    ];
+    const wrapper = mountPanel();
+
+    await expandRound(wrapper, 2);
+    expect(roundRows(wrapper, 2)).toHaveLength(1);
+    expect(roundRows(wrapper, 1)).toHaveLength(0);
+  });
+
+  it("纯问答轮（无文件）：头是禁用态，不摆一个点开也没东西的折叠入口", () => {
+    mocks.rounds = [{ index: 1, time: "12:00:00", prompt: "这个函数干嘛的", files: [], rewindTo: 100 }];
+    const wrapper = mountPanel();
+
+    expect(wrapper.get(".changelog-round-toggle").attributes("disabled")).toBeDefined();
+  });
+
+  it("换会话清空展开态：新会话的轮次回到默认收起", async () => {
+    const wrapper = mountPanel();
+
+    await expandRound(wrapper, 1);
+    expect(roundRows(wrapper, 1)).toHaveLength(2);
+
+    // 轮号在两个会话里都从 1 开始：不清就是"新会话第 1 轮莫名开着"（张冠李戴）
+    await wrapper.setProps({ sessionId: "s2" });
+    expect(roundRows(wrapper, 1)).toHaveLength(0);
+  });
+});
+
+describe("ChangeLogPanel — 轮次头元信息", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seedRounds();
+    mocks.workspaceOf.mockReturnValue(null);
+  });
+
+  it("有变更：文件数 + 汇总 ± + 时间收在同一行头里", () => {
+    const wrapper = mountPanel();
+    const meta = wrapper.get(".changelog-round-meta");
+
+    expect(meta.text()).toContain("2 文件");
+    expect(meta.text()).toContain("+1");
+    expect(meta.text()).toContain("-5");
+    expect(wrapper.get(".changelog-round-time").text()).toBe("12:00:00");
+  });
+
+  it("无变更轮：元信息位显示「无变更」，不再单占一行", () => {
+    mocks.rounds = [{ index: 1, time: "11:13:57", prompt: "可以，跑吧", files: [] }];
+    const wrapper = mountPanel();
+
+    expect(wrapper.get(".changelog-round-meta").text()).toContain("无变更");
+    expect(wrapper.find(".changelog-nochange").exists()).toBe(false);
+  });
+
+  it("进行中轮同样默认收起，元信息给「等待文件变更…」", () => {
+    mocks.rounds = [{ index: 1, time: "11:03:00", prompt: "正在改代码", files: [], pending: true }];
+    const wrapper = mountPanel();
+
+    expect(wrapper.get(".changelog-round-toggle").attributes("aria-expanded")).toBe("false");
+    expect(wrapper.get(".changelog-round-meta").text()).toContain("等待文件变更…");
+  });
+});
+
+describe("ChangeLogPanel — 分区", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seedRounds();
+    mocks.workspaceOf.mockReturnValue(null);
+  });
+
+  it("全部文件树在可收缩的滚动容器内，轮次在容器外（树再长也顶不走轮次）", () => {
+    const wrapper = mountPanel();
+    const scroller = wrapper.get(".changelog-all-tree");
+
+    expect(scroller.find(".cft-file").exists()).toBe(true);
+    expect(scroller.find(".changelog-round").exists()).toBe(false);
   });
 });

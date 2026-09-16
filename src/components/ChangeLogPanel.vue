@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { mergeChangeFiles } from "../utils/changeFiles";
+import { computed, ref, watch } from "vue";
+import { mergeChangeFiles, asTouchedFile } from "../utils/changeFiles";
 import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
 import { useFileResolver } from "../composables/useFileResolver";
 import { useDiffWindow } from "../composables/useDiffWindow";
@@ -8,7 +8,7 @@ import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { useToast } from "../composables/useToast";
 import { errorText } from "../utils/errors";
 import ChangeFileTree from "./ChangeFileTree.vue";
-import ChangeFileList from "./ChangeFileList.vue";
+import ChangeRoundItem from "./ChangeRoundItem.vue";
 import AToast from "../ui/AToast.vue";
 import type { TouchedFile } from "../types";
 
@@ -35,18 +35,23 @@ const sessionWs = useSessionWorkspaces();
  *  旧工作区根下集体报「找不到文件」。未注册就是没有，交给解析器按相对路径处理。 */
 const wsRoot = computed(() => sessionWs.workspaceOf(props.sessionId)?.wsPath || undefined);
 
-// 连续无变更轮次 > 2 时，中间折叠成一行省略号，点击可展开
-const NOCHANGE_COLLAPSE_THRESHOLD = 2;
+/**
+ * 轮次默认收起：整块面板要能一眼扫完十几轮，摊开成 N 行文件会把结构淹掉。
+ *
+ * 状态住在这一层（而不是每个轮次行自持）：轮号在各会话里都从 1 开始，
+ * 换会话必须清空，否则表现为「新会话第 1 轮莫名开着」。
+ */
+const expandedRounds = ref<Set<number>>(new Set());
 
-type RenderItem =
-  | { kind: "round"; round: ChangeRound }
-  | { kind: "collapsed"; key: string; hiddenCount: number };
+watch(() => props.sessionId, () => {
+  expandedRounds.value = new Set();
+});
 
-const expandedGroups = ref<Set<string>>(new Set());
-
-function expandGroup(key: string) {
-  expandedGroups.value.add(key);
-  expandedGroups.value = new Set(expandedGroups.value);
+function toggleRound(index: number) {
+  const next = new Set(expandedRounds.value);
+  if (next.has(index)) next.delete(index);
+  else next.add(index);
+  expandedRounds.value = next;
 }
 
 /**
@@ -71,23 +76,20 @@ async function openDiff(row: TouchedFile) {
 
 /** 顶部统一树是跨轮视图，没有片段 → 以累计视图打开。 */
 function openDiffFromTree(f: ChangeFile) {
-  void openDiff(asTouched(f));
+  void openDiff(asTouchedFile(f));
 }
 
-/** 补齐成归集器的统一形状（空片段 = 累计视图）：落盘投影里没有片段字段。 */
-function asTouched(f: ChangeFile): TouchedFile {
-  return { ...f, segments: [] };
-}
-
-/** 轮内平铺的行：内存有本轮片段就带片段（点开 = 本轮精确 diff），历史轮没有 →
- *  空片段数组，走累计视图。补齐成同一种形状，渲染层不做「有没有 touches」的分支。 */
-function rowsOf(round: ChangeRound): TouchedFile[] {
-  if (round.touches) return round.touches;
-  return round.files.map(asTouched);
-}
-
-function revertFileInRound(round: ChangeRound, f: ChangeFile) {
-  void props.revertSingleFile(round, f.path);
+/**
+ * 撤回两条路径的错误出口。归集器特意把 git 失败向上抛（`revertFile` 的 catch
+ * 再 throw），就是为了这一层能感知——直接 `void` 掉的话，回滚没发生而面板
+ * 照旧显示"已撤回"，用户以为文件回去了。破坏性动作失败必须出声。
+ */
+async function revertWithToast(action: () => Promise<void>) {
+  try {
+    await action();
+  } catch (e) {
+    showToast(`撤回失败：${errorText(e)}`, "danger");
+  }
 }
 
 /** 顶部统一树的输入：全会话累计（D2）。跨轮同路径合并，行数累加、状态取最新。 */
@@ -98,6 +100,22 @@ const totalFiles = computed(() => {
   for (const r of props.rounds) n += r.files.length;
   return n;
 });
+
+// 连续无变更轮次 > 2 时，中间折叠成一行省略号，点击可展开
+const NOCHANGE_COLLAPSE_THRESHOLD = 2;
+
+type RenderItem =
+  | { kind: "round"; round: ChangeRound }
+  | { kind: "collapsed"; key: string; hiddenCount: number };
+
+/** ⋯N 轮无变更⋯ 的展开态。与轮次的展开态分开：那个是"看这一轮改了什么"，
+ *  这个是"把中间一长串空轮摊开"，两者互不牵连。 */
+const expandedNoChangeRuns = ref<Set<string>>(new Set());
+
+function expandNoChangeRun(key: string) {
+  expandedNoChangeRuns.value.add(key);
+  expandedNoChangeRuns.value = new Set(expandedNoChangeRuns.value);
+}
 
 const displayedRounds = computed(() => [...props.rounds].reverse());
 
@@ -116,7 +134,7 @@ const renderItems = computed<RenderItem[]>(() => {
     while (j < list.length && list[j].files.length === 0 && !list[j].pending) j++;
     const group = list.slice(i, j);
     const groupKey = String(group[0].index);
-    if (group.length > NOCHANGE_COLLAPSE_THRESHOLD && !expandedGroups.value.has(groupKey)) {
+    if (group.length > NOCHANGE_COLLAPSE_THRESHOLD && !expandedNoChangeRuns.value.has(groupKey)) {
       const hidden = group.slice(1, -1);
       items.push({ kind: "round", round: group[0] });
       items.push({ kind: "collapsed", key: groupKey, hiddenCount: hidden.length });
@@ -150,59 +168,38 @@ const renderItems = computed<RenderItem[]>(() => {
         <div class="changelog-empty">暂无变更记录</div>
       </template>
       <template v-else>
-        <!-- 顶部：全会话统一文件树（全面板只此一棵，轮次区不再各自建树） -->
+        <!-- 顶部：全会话统一文件树（全面板只此一棵，轮次区不再各自建树）。
+             树单独限高滚动：长会话几十上百个文件时不至于把下面的轮次顶出屏幕。 -->
         <div v-if="allFiles.length > 0" class="changelog-all">
-          <div class="changelog-all-head">全部文件 · {{ allFiles.length }}</div>
-          <ChangeFileTree
-            :files="allFiles"
-            :open-file="openFile"
-            :open-diff="openDiffFromTree"
-            :revert-file="(f: ChangeFile) => void props.revertFileGlobally(f.path)"
-            :workspace-root="wsRoot"
-          />
+          <div class="changelog-all-head">全部文件<span class="changelog-all-count">{{ allFiles.length }}</span></div>
+          <div class="changelog-all-tree">
+            <ChangeFileTree
+              :files="allFiles"
+              :open-file="openFile"
+              :open-diff="openDiffFromTree"
+              :revert-file="(f: ChangeFile) => revertWithToast(() => props.revertFileGlobally(f.path))"
+              :workspace-root="wsRoot"
+            />
+          </div>
         </div>
         <template v-for="item in renderItems" :key="item.kind === 'round' ? `r-${item.round.index}` : `c-${item.key}`">
           <div
             v-if="item.kind === 'collapsed'"
             class="changelog-collapsed"
             v-tooltip="`展开 ${item.hiddenCount} 轮无变更记录`"
-            @click="expandGroup(item.key)"
+            @click="expandNoChangeRun(item.key)"
           >⋯ {{ item.hiddenCount }} 轮无变更 ⋯</div>
-          <div v-else class="changelog-round" :class="{ 'changelog-round--live': item.round.pending }">
-            <div class="changelog-round-header">
-              <span class="changelog-round-label">轮 {{ item.round.index }}</span>
-              <span
-                class="changelog-round-title"
-                :class="{ 'changelog-round-title--empty': !item.round.prompt }"
-                v-tooltip="item.round.prompt || undefined"
-              >{{ item.round.prompt || '（无提问记录）' }}</span>
-              <span
-                v-if="item.round.pending"
-                class="changelog-round-live"
-                v-tooltip="'本轮进行中，文件变更实时刷新'"
-              ><i class="live-dot"></i>进行中</span>
-              <button
-                v-if="item.round.rewindTo !== undefined"
-                class="changelog-round-revert"
-                v-tooltip="'撤回到此处：回滚对话与文件到该轮之前'"
-                @click="revertRound(item.round)"
-              ><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button>
-            </div>
-            <div class="changelog-round-time">{{ item.round.time }}</div>
-            <div
-              v-if="item.round.files.length === 0"
-              class="changelog-nochange"
-              :class="{ 'changelog-nochange--pending': item.round.pending }"
-            >{{ item.round.pending ? '等待文件变更…' : '无变更' }}</div>
-            <ChangeFileList
-              v-else
-              :rows="rowsOf(item.round)"
-              :workspace-root="wsRoot"
-              :open-file="openFile"
-              :open-diff="openDiff"
-              :revert-file="(f: ChangeFile) => revertFileInRound(item.round, f)"
-            />
-          </div>
+          <ChangeRoundItem
+            v-else
+            :round="item.round"
+            :expanded="expandedRounds.has(item.round.index)"
+            :workspace-root="wsRoot"
+            @toggle="toggleRound(item.round.index)"
+            @open-file="openFile"
+            @open-diff="openDiff"
+            @revert-round="revertWithToast(() => revertRound(item.round))"
+            @revert-file="(path: string) => revertWithToast(() => props.revertSingleFile(item.round, path))"
+          />
         </template>
       </template>
     </div>
@@ -270,9 +267,19 @@ const renderItems = computed<RenderItem[]>(() => {
 
 /* ── Body ── */
 
+/* 自适应布局：树能吃多少空间，取决于轮次区用完之后还剩多少——
+   不是一个写死的 210px（那会在面板明明还空着时就砍掉树、逼它内部滚动）。
+   规则：谁都不会被压扁（shrink: 0），只有树会在空间不够时让位（内部滚动），
+   轮次永远完整可见；两边都装不下时，body 自己滚。 */
 .changelog-body {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
+}
+
+.changelog-body > * {
+  flex-shrink: 0;
 }
 
 .changelog-empty {
@@ -284,125 +291,55 @@ const renderItems = computed<RenderItem[]>(() => {
 
 /* ── 顶部统一文件树 ── */
 
+/* 分区边界：与轮次区之间**必须一眼能分开**——两段都在 bg-deep 上，1px 的
+   border（10% 白）在深色玻璃面板里实测几乎看不见。2px 强调色是四种候选里
+   唯一在 1:1 缩放下明确可辨的（2026-09-16 用真实组件渲染比对选定）。 */
 .changelog-all {
-  border-bottom: 1px solid var(--aide-border);
+  /* 全场唯一可收缩的块：空间不够时它让位，其余块按内容排 */
+  flex: 0 1 auto;
+  /* 地板 ≈ 分区标题 + 3 行文件：再挤就只剩个标题，等于把树藏了 */
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 2px solid color-mix(in srgb, var(--aide-accent) 45%, transparent);
   background: var(--aide-bg-deep);
 }
 
+/* 分区标题：与轮次标签同级（12px），往上跟面板标题（11px 小写间距体）分开 */
 .changelog-all-head {
-  padding: 5px 12px 3px;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
-  color: var(--aide-text-muted);
-}
-
-/* ── Round groups ── */
-
-.changelog-round {
-  border-bottom: 1px solid var(--aide-border-subtle);
-}
-
-.changelog-round:last-child {
-  border-bottom: none;
-}
-
-.changelog-round-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 3px 12px;
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-deep);
-  border-bottom: 1px solid var(--aide-border-subtle);
-}
-
-.changelog-round-label {
-  flex-shrink: 0;
-  font-weight: 600;
-  color: var(--aide-accent);
-}
-
-.changelog-round-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--aide-text-secondary);
-}
-
-.changelog-round-title--empty {
-  color: var(--aide-text-muted);
-  font-style: italic;
-}
-
-/* ── 进行中轮次 ── */
-
-.changelog-round-live {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  color: var(--aide-accent);
-  background: color-mix(in srgb, var(--aide-accent) 10%, transparent);
-  border-radius: 8px;
-  padding: 1px 7px;
-}
-
-.live-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--aide-accent);
-  animation: live-breathe 1.4s ease-in-out infinite;
-}
-
-@keyframes live-breathe {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.35; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .live-dot { animation: none; }
-}
-
-.changelog-round-time {
-  padding: 0 12px 4px;
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  background: var(--aide-bg-deep);
-}
-
-.changelog-round-revert {
-  background: none;
-  border: none;
-  color: var(--aide-text-muted);
-  cursor: pointer;
+  gap: 6px;
+  padding: 6px 12px 4px;
   font-size: 12px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  transition: color 0.15s ease, background 0.15s ease;
-  font-family: inherit;
-}
-.changelog-round-revert:hover {
-  color: var(--aide-danger);
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
-}
-
-.changelog-nochange {
-  padding: 4px 12px;
-  font-size: 11px;
-  color: var(--aide-text-muted);
-  font-style: italic;
-}
-
-.changelog-nochange--pending {
+  font-weight: 600;
   color: var(--aide-text-secondary);
+  background: var(--aide-bg-deep);
 }
+
+.changelog-all-count {
+  font-size: 10px;
+  font-weight: 400;
+  font-family: var(--aide-font-mono);
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  padding: 0 5px;
+  border-radius: 7px;
+}
+
+/* 树：占满 .changelog-all 除标题外的全部高度；被压缩时才内部滚动。
+   没有 max-height —— 能长多高由「轮次区用完后剩多少」决定（见 .changelog-body）。 */
+.changelog-all-tree {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* ── ⋯N 轮无变更⋯ ── */
 
 .changelog-collapsed {
   padding: 4px 12px;
@@ -420,13 +357,16 @@ const renderItems = computed<RenderItem[]>(() => {
 
 /* ── Scrollbar ── */
 
-.changelog-body::-webkit-scrollbar {
+.changelog-body::-webkit-scrollbar,
+.changelog-all-tree::-webkit-scrollbar {
   width: 4px;
 }
-.changelog-body::-webkit-scrollbar-track {
+.changelog-body::-webkit-scrollbar-track,
+.changelog-all-tree::-webkit-scrollbar-track {
   background: transparent;
 }
-.changelog-body::-webkit-scrollbar-thumb {
+.changelog-body::-webkit-scrollbar-thumb,
+.changelog-all-tree::-webkit-scrollbar-thumb {
   background: var(--aide-surface-hover);
   border-radius: 2px;
 }
