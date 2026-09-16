@@ -207,6 +207,46 @@ impl BrowserFacade {
         Ok(())
     }
 
+    /// 列出全部视图快照，**顺序稳定**（id 序号升序，见 `BrowserRegistry::views_in_order`）。
+    ///
+    /// 用途：agent 发现"有哪些视图可操作"、以及 `view_id` 缺省时的消歧数据源。UI 对账也可用。
+    pub fn list_views(&self) -> Result<Vec<BrowserViewDto>, FacadeError> {
+        let reg = self.lock()?;
+        Ok(reg
+            .views_in_order()
+            .into_iter()
+            .map(BrowserViewDto::from)
+            .collect())
+    }
+
+    /// 在视图里执行脚本并取回 JSON 结果——**agent 读页面的地基**。
+    ///
+    /// ⚠️ **必须在非主线程调用**：下钻层（`adapter/webview2/native.rs`）会在**调用线程**上等
+    /// COM 回调。主线程调用 = 闭包内联 + 主线程阻塞等消息循环 = 自锁。async 命令请套
+    /// `spawn_blocking`（state 已注册成 `Arc`，可直接 clone 进闭包）。
+    ///
+    /// **脚本契约**：脚本须返回信封 `{ok: true|false, ...}`——页面脚本抛异常时 `ExecuteScript`
+    /// 回 `null`，与「脚本确实返回 null」不可区分（见 `native.rs`）。
+    pub fn eval(&self, id_raw: &str, script: &str) -> Result<serde_json::Value, FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        Ok(self.engine.eval(&id, script)?)
+    }
+
+    /// 裸 CDP 调用——agent **操作**页面的通道（真实输入事件 `Input.dispatchMouseEvent`、
+    /// 文件上传 `DOM.setFileInputFiles`）。线程契约同 [`eval`](Self::eval)。
+    ///
+    /// CDP 域名可用性是**运行期变量**（WebView2 是 Evergreen 运行时，各机版本不同），
+    /// 失败原样上抛，由消费方如实上报——不在这里静默降级。
+    pub fn call_cdp(
+        &self,
+        id_raw: &str,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        Ok(self.engine.call_cdp(&id, method, params)?)
+    }
+
     /// 加载信号观察者：引擎每报一次事件，就把信号交给 [`apply_page_load`]。
     fn observer(&self, id: BrowserViewId) -> PageLoadObserver {
         let app = self.app.clone();

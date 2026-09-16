@@ -2,6 +2,7 @@ import * as readline from "readline";
 import { SessionManager } from "./engine/session-manager.js";
 import { ensureWindowsBashEnv } from "./engine/winBashEnv.js";
 import { ensureCodegraphSkill } from "./extensions/codegraphSkill.js";
+import { ensureBrowserSkill } from "./extensions/browserSkill.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
 
 // test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
@@ -22,6 +23,10 @@ ensureWindowsBashEnv(process.env);
 // 订阅。配置走 env：AIDE_HEADLESS_PORT（默认 18090）、AIDE_HEADLESS_TOKEN（鉴权，
 // 省略则只允许回环监听）。桌面路径零改动，本分支不触碰任何 stdio 初始化。
 if (process.argv[2] === "headless") {
+  // 宿主标记：内嵌浏览器工具据此在**发起前**短路成引导文本。没有它，桥的对面（桌面 Rust）
+  // 不存在，调用只会白等 15s 超时，而超时文案会把「本环境没这个能力」伪装成「浏览器卡了」。
+  // 工具本身**照挂不摘**——理由见 browserMcp.ts（工具列表跨宿主稳定，模型要拿到明确信号）。
+  process.env.AIDE_HEADLESS = "1";
   const { startHeadlessServer, PROTOCOL_VERSION } = await import("./headless-server.js");
   const port = Number(process.env.AIDE_HEADLESS_PORT ?? "18090");
   const token = process.env.AIDE_HEADLESS_TOKEN || undefined;
@@ -67,6 +72,10 @@ async function mainDesktop(): Promise<void> {
   // codegraph-explore skill 落地：任务级触发「探索代码先用索引工具」，
   // 与 MCP instructions 互补。内建于 runtime，免用户配置。
   ensureCodegraphSkill(process.env);
+
+  // browser-inspect skill 落地：任务级触发「用户丢原型/规格页链接 → 读页面骨架 → 逐页抽规格」，
+  // 并约定站点适配住 references/（数据），不进代码。与 codegraphSkill 同款内建落地。
+  ensureBrowserSkill(process.env);
 
   // 过滤 SDK 的 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告。
   // 该警告是 SDK 提醒 canUseTool 不会对 allowedTools 里的裸名（"Agent","Task"）

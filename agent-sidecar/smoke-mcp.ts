@@ -9,6 +9,7 @@ import { existsSync } from "node:fs";
 import { CODEGRAPH_INSTRUCTIONS } from "./src/extensions/codegraphTools.js";
 import { DOCS_INSTRUCTIONS } from "./src/extensions/docsMcp.js";
 import { KNOWLEDGE_INSTRUCTIONS } from "./src/extensions/knowledgeMcp.js";
+import { BROWSER_INSTRUCTIONS } from "./src/extensions/browserMcp.js";
 
 // dev 默认用 SDK 平台包里的 claude.exe，免设 AIDE_CLAUDE_EXE。
 const DEFAULT_CLAUDE_EXE =
@@ -216,3 +217,43 @@ if (!knowledgeTools.some((n) => n.includes("search") || n.includes("list_spaces"
   process.exit(1);
 }
 console.log("\nPASS: knowledge tool was called");
+
+// 6) browser 冒烟——验证 instructions 让模型在「用户指着页面」时采纳浏览器工具。
+// 与知识库同理：mock handler，验的是 instructions 的采纳率；真驱动 WebView2 由桌面 E2E 验
+// （那需要真的开着浏览器面板）。
+const browserServer = createSdkMcpServer({
+  name: "aide-browser",
+  version: "1.0.0",
+  instructions: BROWSER_INSTRUCTIONS,
+  tools: [
+    tool(
+      "browser_tabs",
+      "List the browser views (tabs) currently open in Aide's embedded browser, with each one's id, url, title and visibility.",
+      {},
+      async () => ({
+        content: [{ type: "text" as const, text: "MOCK views: browser-1 [ready, visible] https://example.test/ledger" }],
+      }),
+    ),
+    tool(
+      "browser_read",
+      "Read the page loaded in an embedded browser view as a STRUCTURED SKELETON: outline, tables, form fields, clickable elements.",
+      { view_id: z.string().optional().describe("Target browser view id (from browser_tabs)") },
+      async () => ({
+        content: [{ type: "text" as const, text: "MOCK read: title=设备台账管理 tables=1 fields=3" }],
+      }),
+    ),
+  ],
+});
+
+const browserTools = await runQuery(
+  "browser",
+  "帮我看一下我现在浏览器面板里打开的那个页面，把表格上的字段读出来。",
+  { "aide-browser": browserServer },
+  ["mcp__aide-browser__browser_tabs", "mcp__aide-browser__browser_read"],
+  "browser",
+);
+if (!browserTools.some((n) => n.includes("browser_tabs") || n.includes("browser_read"))) {
+  console.error("\nFAIL: model did not call a browser tool — BROWSER_INSTRUCTIONS may be ineffective");
+  process.exit(1);
+}
+console.log("\nPASS: browser tool was called");

@@ -43,6 +43,7 @@ import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
 import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
+import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
   buildUserMessage,
@@ -526,6 +527,8 @@ export class SessionWorker {
       this.permMgr.cancelAll();
       this.jumpQueueCtl.clear();
       cancelAllCodegraphQueries("interrupted");
+      // 内嵌浏览器挂起查询同理：用户已打断，继续等 Rust 回包没有意义（回包来了也会被静默丢弃）。
+      cancelAllBrowserQueries("interrupted");
       // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
       this.currentQuery?.interrupt().catch(() => {});
 
@@ -1091,6 +1094,7 @@ export class SessionWorker {
     this.currentQuery = null;
     this.queue.close();
     cancelAllCodegraphQueries("session stopped");
+    cancelAllBrowserQueries("session stopped");
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();
     // 挂起中的切换确认按 deny 收尾（进程都没了，确认没有继续等的意义）

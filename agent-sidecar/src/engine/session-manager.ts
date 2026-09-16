@@ -6,6 +6,7 @@ import type {
 } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
 import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
+import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 
 export interface SessionManagerOptions {
@@ -74,6 +75,13 @@ export class SessionManager {
     // codegraph MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
     if (cmd.cmd === "codegraph_result") {
       resolveCodegraphResult(cmd);
+      return;
+    }
+
+    // 内嵌浏览器 MCP 工具的 Rust 回包：同上，按 request_id 结算，无会话路由。
+    // （headless 下永远收不到这条——`invokeBodySchema` 刻意不含它，见 headless-schema.ts。）
+    if (cmd.cmd === "browser_result") {
+      resolveBrowserResult(cmd);
       return;
     }
 

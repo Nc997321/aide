@@ -67,6 +67,9 @@ pub enum EngineError {
     CreateFailed(String),
     NavigationFailed(String),
     EvalFailed(String),
+    /// 裸 CDP 调用失败（`CallDevToolsProtocolMethod`）。与 `EvalFailed` 分开：CDP 域名不可用、
+    /// 参数形状错、内核版本不支持，排查路径与脚本注入完全不同。
+    CdpFailed(String),
     CaptureFailed(String),
     CookieFailed(String),
     /// 引擎内部错误（锁中毒、几何设置失败等），带上下文。
@@ -85,6 +88,7 @@ impl std::fmt::Display for EngineError {
             EngineError::CreateFailed(detail) => write!(f, "create browser view failed: {detail}"),
             EngineError::NavigationFailed(detail) => write!(f, "navigation failed: {detail}"),
             EngineError::EvalFailed(detail) => write!(f, "script eval failed: {detail}"),
+            EngineError::CdpFailed(detail) => write!(f, "devtools protocol call failed: {detail}"),
             EngineError::CaptureFailed(detail) => write!(f, "capture failed: {detail}"),
             EngineError::CookieFailed(detail) => write!(f, "cookie operation failed: {detail}"),
             EngineError::Internal(detail) => write!(f, "browser engine internal error: {detail}"),
@@ -101,13 +105,16 @@ impl std::error::Error for EngineError {}
 ///
 /// 注：**前进后退不在端口上**——历史/游标的唯一主人是 `BrowserView`（领域层），外壳取
 /// `view.go_back() -> Option<Url>` 后调 `navigate`。引擎不另记一份历史（避免双主人）。
-// 未接线的方法（stop / eval / capture / cookies_clear）是**端口完整能力面**，不是空壳：
-// - eval（带返回值）/ capture：用途①「agent 网页任务」与③「本地预览」的地基，实现在 adapter 里
-//   已就位（capture/cookies_clear 当前如实返回「需 webview2-com」的错误，不假装成功）；
+// 未接线的方法（stop / capture / cookies_clear）是**端口完整能力面**，不是空壳：
+// - capture：用途③「本地预览」的地基（当前如实返回「未实现」的错误，不假装成功）；
 // - stop：UI 停止加载按钮（下一批）；
 // - cookies_clear：用途④ OAuth 的隔离清理。
 // 它们是设计文档 §6 承诺的扩展面（agent 工具从 facade 进、调的就是这些方法），故保留接线前的
 // allow；**新增方法前先问一句「谁调它」**——答不上来就别加（死代码直接删，不靠 allow 留尸）。
+//
+// 注：`eval` / `call_cdp` 已实现（裸 WebView2 下钻），消费方是 agent 桥（`browser/agent_bridge.rs`
+// → facade）。等桥接线完成后，本 trait 的整块 `#[allow(dead_code)]` 应只覆盖上面三个未接线项，
+// 而不是整个 trait——别让它继续当遮盖。
 #[allow(dead_code)]
 pub trait BrowserEngine: Send + Sync {
     /// 在 `window` 内创建一个加载 `cfg.initial_url` 的子视图。
@@ -127,7 +134,23 @@ pub trait BrowserEngine: Send + Sync {
     fn set_visible(&self, id: &BrowserViewId, visible: bool) -> Result<(), EngineError>;
 
     /// agent 网页任务：注入脚本并取回 JSON 结果（WebView2 `ExecuteScript`）。
+    ///
+    /// **脚本契约**：经此方法执行的脚本必须返回信封 `{ok: true|false, ...}`——`ExecuteScript`
+    /// 在页面脚本抛异常时回 `null`，与「脚本确实返回 null」不可区分（详见 adapter 的 `native.rs`）。
     fn eval(&self, id: &BrowserViewId, script: &str) -> Result<serde_json::Value, EngineError>;
+
+    /// agent 操作任务：裸 CDP 调用（WebView2 `CallDevToolsProtocolMethod`）。
+    /// 用途 = 真实输入事件（`Input.dispatchMouseEvent`）、文件上传（`DOM.setFileInputFiles`）。
+    ///
+    /// ⚠️ WebView2 对部分 CDP 域名有限制，可用性是运行期行为——调用方必须把失败**如实上报**，
+    /// 不许静默降级假装成功。
+    fn call_cdp(
+        &self,
+        id: &BrowserViewId,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, EngineError>;
+
     /// agent 网页任务：截图为 PNG 字节（WebView2 `CapturePreview`）。
     fn capture(&self, id: &BrowserViewId) -> Result<Vec<u8>, EngineError>;
 

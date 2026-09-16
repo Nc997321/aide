@@ -262,6 +262,21 @@ export type ChatEvent =
       args: Record<string, unknown>;
       project_root: string;
     }
+  // Rust reader 拦截的内嵌浏览器查询（不转发 Vue；响应走 browser_result 命令）。
+  // op 面**刻意收窄**为三个机制词汇——页面语义（正文/表格/表单）全在 sidecar 的投影脚本里，
+  // 不进协议（见 src-tauri/src/browser/agent_bridge.rs 头注释：换站点时 Rust 一行不动）。
+  | {
+      type: "browser_query";
+      request_id: string;
+      op: "list_views" | "eval" | "call_cdp";
+      /** 缺省 = 由 Rust 执行体按「唯一可见 → 唯一存在」解析；歧义时回错误并附清单。 */
+      view_id?: string;
+      /** op=eval */
+      script?: string;
+      /** op=call_cdp */
+      method?: string;
+      params?: unknown;
+    }
   // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
   | { type: "image_input_rejected"; message: string }
   // 图片 400 回滚：模型不支持图片时，sidecar 已从会话历史移除带图消息（会话不报废）。
@@ -484,5 +499,15 @@ export type SidecarCommand =
       results?: unknown[];
       candidates?: number;
       truncated?: boolean;
+      error?: string;
+    }
+  // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
+  // data 刻意用 unknown 而非扁平字段：载荷随 op 而变（视图列表 / 脚本返回值 / CDP 返回值），
+  // 不像 codegraph 那样形状固定。
+  | {
+      cmd: "browser_result";
+      request_id: string;
+      ok: boolean;
+      data?: unknown;
       error?: string;
     };

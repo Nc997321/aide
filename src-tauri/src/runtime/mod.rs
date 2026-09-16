@@ -9,6 +9,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 pub mod bg_registry;
+pub mod browser_agent;
 pub mod env;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
@@ -323,6 +324,23 @@ impl AgentRuntimeManager {
                                     let mut g = stdin2.lock().await;
                                     let _ = g.write_all(line.as_bytes()).await;
                                 }
+                            });
+                            continue;
+                        }
+                        // 内嵌浏览器 agent 工具查询：同 codegraph，是 Rust ↔ Runtime 的内部
+                        // request/response，**不转发 Vue**。执行体在 `runtime/browser_agent.rs`
+                        // ——这里只做「拦截 + 派发」，业务不内联（也避免本文件撞 1000 行拆分线）。
+                        if let Some(req) = crate::browser::agent_bridge::parse_browser_query(&event)
+                        {
+                            let app_browser = app.clone();
+                            let stdin_browser = stdin_for_agent.clone();
+                            tokio::spawn(async move {
+                                crate::runtime::browser_agent::handle(
+                                    app_browser,
+                                    stdin_browser,
+                                    req,
+                                )
+                                .await;
                             });
                             continue;
                         }
