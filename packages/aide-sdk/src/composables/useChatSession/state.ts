@@ -407,15 +407,23 @@ export function resetRuntimeState(store: SessionStore, clearTasks = true) {
 
 /** 按 sessionId 停止会话进程：杀 sidecar worker + 清运行时状态 + 释放 provider 绑定。
  *  模块级、不依赖当前激活 tab——供 usePaneLayout.closeTab 在关闭任意 tab 时按该 tab
- *  的 sid 就地停止（"关闭即停止"合并语义）。try/finally 吞错：进程已死 / 通信瞬断 /
- *  管道断也不抛，finally 兜底把前端状态置 stopped（UI 以这里为准，sidecar 对不存在的
- *  worker 是 no-op，幂等）。与原闭包内 stopSession 的 finally 完全一致，只是 sid 由
- *  调用方传入而非取激活 tab。 */
-export async function stopSessionById(sid: string) {
-  if (disposedSids.has(sid)) return;
+ *  的 sid 就地停止（"关闭即停止"合并语义）。
+ *
+ *  **返回"命令是否送达"**：true = 送达（或本就无需送：已 dispose / 前端无此会话）；
+ *  false = 抛错没送到（IPC/管道断、sidecar 无响应）。sidecar 对不存在的 worker 是
+ *  no-op（幂等），所以 true 不代表进程已死、只代表"该做的都做了"；false 则意味着
+ *  进程可能还活着——调用方不能当成功处理（2026-09-17 实锤：关标签后 claude.exe 与
+ *  它名下的 rust-analyzer 常驻 7.9GB，前端却以为早停了）。
+ *  无论成败，前端状态一律收口置 stopped（UI 不卡"运行中"）。 */
+export async function stopSessionById(sid: string): Promise<boolean> {
+  if (disposedSids.has(sid)) return true;
   const store = getStore(sid);
   try {
     await api.stopChatSession(sid);
+    return true;
+  } catch (e: unknown) {
+    console.warn(`[useChatSession] 停止命令未送达 ${sid}：`, e);
+    return false;
   } finally {
     resetRuntimeState(store);
     setSessionState(sid, "stopped");

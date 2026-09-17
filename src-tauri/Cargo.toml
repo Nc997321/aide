@@ -125,6 +125,12 @@ windows = { version = "0.61", features = [
     "Win32_System_Kernel",
     "Win32_System_ProcessStatus",
     "Win32_Foundation",
+    # Job Object（runtime/job_object.rs）：aide.exe 被强杀时由内核连根收掉 sidecar
+    # 整棵树（claude.exe / rust-analyzer / tsserver）。JobObjects 用到 Threading 的
+    # IO_COUNTERS；CreateJobObjectW 在 windows crate 里挂在 Security 之下（签名带
+    # SECURITY_ATTRIBUTES），两个特性都必须开。
+    "Win32_System_JobObjects",
+    "Win32_Security",
 ] }
 # 内嵌浏览器 agent 路径：裸 WebView2（ExecuteScript 带返回值 / CallDevToolsProtocolMethod）。
 # 已在依赖树（tauri → tauri-runtime-wry → wry 传递引入，Cargo.lock 现值 0.38.2），

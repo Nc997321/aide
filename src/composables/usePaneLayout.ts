@@ -226,26 +226,36 @@ export function usePaneLayout() {
 
   /** 预览改绑无声落下的旧会话收口：与 closeTab 同语义——已启动先 stop（防孤儿
    *  sidecar 不可见不可达），再 disposeSession 释放前端内存。fire-and-forget
-   *  （openSession 是同步函数，stop 异步等命令送达即可）。oldSid 为空（空白预览）no-op。 */
+   *  （openSession 是同步函数，stop 异步等命令送达即可）。oldSid 为空（空白预览）no-op。
+   *  送达失败只留痕：预览 tab 已被新会话顶替，没有"保留原 tab"这个选项。 */
   function retireSilentSession(oldSid: string | null): void {
     if (!oldSid) return;
-    if (isStarted(oldSid)) void stopSessionById(oldSid);
+    if (isStarted(oldSid)) {
+      void stopSessionById(oldSid).then((delivered) => {
+        if (!delivered) console.warn(`[paneLayout] 隐式收口 ${oldSid}：停止命令未送达`);
+      });
+    }
     disposeSession(oldSid);
   }
 
-  /** 关闭 tab：会话存活时先停止进程再移除布局（"关闭即停止"合并语义），移除后
+  /** 关闭 tab：先停止会话进程再移除布局（"关闭即停止"合并语义），移除后
    *  disposeSession 彻底收口前端状态（删 store + per-sid 字典 + 标记拦截延迟事件）。
    *  async 以 await stopSessionById——stop_chat_session 只是往 sidecar stdin 写一行
    *  命令即返回（毫秒级，不等 worker 退出），所以 await 几乎无成本，且能确认命令送达
-   *  才移除 tab。已停止 / 空白 tab 跳过停止，直接移除。dispose 放 removeTab 后：stop
-   *  失败 = tab 仍在 = 不 dispose，保持一致性。所有关闭入口（X / 中键 / 右键
-   *  "关闭" / Ctrl+W / "关闭其他"）都走这里，单点一致。 */
+   *  才移除 tab。stop 失败 = tab 仍在 = 不 dispose，保持一致性（用户可再点一次关闭）。
+   *
+   *  **不按 sessionState 跳过停止**：前端状态只是镜像——重载后恢复的标签根本没有状态、
+   *  被标成 stopped 的会话进程也可能还活着，跳过就等于把 claude.exe 留成孤儿
+   *  （2026-09-17 实锤）。stop_chat_session 幂等（sidecar 找不到 worker 就 no-op），
+   *  多送一次的代价只是一行 stdin。空白 tab（无 sid）不送。
+   *  所有关闭入口（X / 中键 / 右键"关闭" / Ctrl+W / "关闭其他"）都走这里，单点一致。 */
   async function closeTab(groupId: string, tabId: string) {
     const group = findGroup(layout.root, groupId);
     const tab = group?.tabs.find((t) => t.id === tabId);
     const sid = tab?.sessionId;
-    if (sid && (sessionState[sid] ?? "stopped") !== "stopped") {
-      await stopSessionById(sid);
+    if (sid && !(await stopSessionById(sid))) {
+      console.warn(`[paneLayout] ${sid} 的停止命令未送达，保留标签页（进程可能还活着）`);
+      return;
     }
     commitRoot(removeTab(layout.root, groupId, tabId));
     if (sid) disposeSession(sid);
@@ -272,11 +282,12 @@ export function usePaneLayout() {
   }
 
   /** 会话被删除（侧栏删除动作）：关掉对应 tab。删除流程已先 stopChatSession，
-   *  这里走 closeTab 时 sessionState 已 stopped → 跳过 stopSessionById，直接移除
-   *  （幂等）。fire-and-forget。 */
-  function closeSessionTab(sessionId: string) {
+   *  closeTab 会再送一次（幂等——sidecar 找不到 worker 就 no-op，见其注释：
+   *  前端状态不作判据）。async 以把"停止命令没送达 → tab 保留"的结果交给调用方，
+   *  调用点用 `void` 表达"不等"语义。 */
+  async function closeSessionTab(sessionId: string): Promise<void> {
     const hit = findTabBySession(layout.root, sessionId);
-    if (hit) void closeTab(hit.group.id, hit.tab.id);
+    if (hit) await closeTab(hit.group.id, hit.tab.id);
   }
 
   /** 预览转正：会话启动（首次派发消息）或双击 tab 时调用。 */

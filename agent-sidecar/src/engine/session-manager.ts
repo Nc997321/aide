@@ -8,6 +8,11 @@ import { SessionWorker } from "./session-worker.js";
 import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
+import {
+  reapAllSync,
+  rekeySessionSubprocess,
+  trackSessionSubprocess,
+} from "./subprocessReaper.js";
 
 export interface SessionManagerOptions {
   /** 测试缝：覆盖 stdout 写入；生产省略则 JSONL 写 process.stdout。 */
@@ -166,6 +171,9 @@ export class SessionManager {
     });
 
     this.workers.set(sessionId, worker);
+    // 强杀兜底登记：会话停止/进程退出时按它反查 claude.exe 的 pid（见 subprocessReaper）
+    const target = worker.subprocessTarget();
+    trackSessionSubprocess(target.sessionId, target.configDir);
     return worker;
   }
 
@@ -174,6 +182,9 @@ export class SessionManager {
     this.workers.delete(oldKey);
     worker.routingKey = newKey;
     this.workers.set(newKey, worker);
+    // 兜底登记跟着过户：否则强杀按旧键反查不到 pid（session_init 后 claude.exe
+    // 写的注册条目用的是真实 id）
+    rekeySessionSubprocess(oldKey, newKey);
   }
 
   /** 测试专用：通过 getOrCreate 建 worker 但不调 handleCommand（不 startLoop、
@@ -281,5 +292,8 @@ export class SessionManager {
       try { worker.stop(); } catch { /* 吞错：确保所有 worker 都遍历到 */ }
     }
     this.workers.clear();
+    // 收尾不留活口：worker.stop() 只排了宽限后的强杀，这里是"进程马上要没了"的
+    // 场景，等不到定时器——立刻同步杀（异步代码在退出路径上不会被执行）。
+    reapAllSync();
   }
 }

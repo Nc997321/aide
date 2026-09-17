@@ -246,7 +246,7 @@ export function sessionMenuItems(
           onDeleteFailed();
           return;
         }
-        pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉
+        void pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉（fire-and-forget）
       },
     },
   ];

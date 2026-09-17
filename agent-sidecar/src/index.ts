@@ -4,6 +4,7 @@ import { ensureWindowsBashEnv } from "./engine/winBashEnv.js";
 import { ensureCodegraphSkill } from "./extensions/codegraphSkill.js";
 import { ensureBrowserSkill } from "./extensions/browserSkill.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
+import { installExitReaper, sweepStaleRegistryEntries } from "./engine/subprocessReaper.js";
 
 // test-mcp 子命令：探活 MCP server。被 Rust test_mcp_connection spawn 调用
 // （agent-runtime test-mcp <config-json>）。最早分支，跳过会话初始化，输出 JSON 退出。
@@ -100,6 +101,17 @@ async function mainDesktop(): Promise<void> {
   // SessionManager 负责按 session_id 路由 stdin 命令并统一 stdout 输出。
   // 本身不再持有任何 SDK / 权限 / 子代理状态。
   // ================================================================
+
+  // ---- 进程收尾兜底（N4 孤儿红线）----
+  // claude.exe 是常驻进程（streaming-input，回合结束不退），它名下的
+  // rust-analyzer / typescript-language-server 又不会随父进程死。没有这层，
+  // sidecar 一停（正常退出 / 信号 / 未捕获异常）就留下一串活着的孤儿进程——
+  // 2026-09-17 实锤：三个会话各挂一个 rust-analyzer，合计 ~7.9GB 常驻。
+  installExitReaper();
+  // 启动清扫：清掉被强杀的 claude.exe 留下的 pid 残条目（否则被 list_sessions
+  // 扫成侧栏"幽灵会话"）。stderr 而不是 stdout——stdout 是协议通道。
+  const sweptEntries = sweepStaleRegistryEntries(process.env.CLAUDE_CONFIG_DIR);
+  if (sweptEntries > 0) console.error(`[reaper] 启动清扫：删掉 ${sweptEntries} 条 pid 残条目`);
 
   const manager = new SessionManager();
   manager.startHealthTimer();

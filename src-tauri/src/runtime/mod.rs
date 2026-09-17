@@ -11,6 +11,8 @@ use tokio::sync::Mutex as TokioMutex;
 pub mod bg_registry;
 pub mod browser_agent;
 pub mod env;
+#[cfg(windows)]
+pub mod job_object;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
@@ -59,6 +61,12 @@ pub struct AgentRuntimeManager {
     /// chat-event 广播：worker 读 sidecar stdout 后同时推这里，网关订阅后经中继
     /// 推给手机。前端路径（app.emit + poll 缓冲）不动，这是并行新增的扇出。
     chat_events: tokio::sync::broadcast::Sender<Value>,
+    /// Windows Job Object（`KILL_ON_JOB_CLOSE`）：sidecar 及其全部后代（claude.exe /
+    /// rust-analyzer / tsserver）被收进这个作业，**句柄一关就由内核连根杀掉**——
+    /// aide.exe 被强杀也收得干净。`kill_runtime` 显式 take 掉它，Runtime 重启不留旧树。
+    /// 见 `runtime/job_object.rs`。
+    #[cfg(windows)]
+    job: Mutex<Option<job_object::KillOnCloseJob>>,
 }
 
 impl AgentRuntimeManager {
@@ -77,6 +85,8 @@ impl AgentRuntimeManager {
                 let (tx, _) = tokio::sync::broadcast::channel(1024);
                 tx
             },
+            #[cfg(windows)]
+            job: Mutex::new(None),
         }
     }
 
@@ -219,6 +229,8 @@ impl AgentRuntimeManager {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("无法启动 Agent Runtime（bin: {bin}）：{e}。"))?;
+        #[cfg(windows)]
+        self.attach_job_object(&child);
         let stdin = child.stdin.take().ok_or("No stdin")?;
         let stdout = child.stdout.take().ok_or("No stdout")?;
         let stderr = child.stderr.take().ok_or("No stderr")?;
@@ -487,12 +499,34 @@ impl AgentRuntimeManager {
         self.chat_events.clone()
     }
 
+    /// 把 sidecar 收进 `KILL_ON_JOB_CLOSE` 的 Job Object（见 `runtime/job_object.rs`）。
+    /// 装配失败**不阻断启动**：降级为 sidecar 侧 `subprocessReaper` 的收尾兜底，只留警告。
+    #[cfg(windows)]
+    fn attach_job_object(&self, child: &Child) {
+        use windows::Win32::Foundation::HANDLE;
+        let Some(handle) = child.raw_handle() else {
+            tracing::warn!("runtime: 拿不到 sidecar 进程句柄，Job Object 未装配（降级 sidecar 兜底）");
+            return;
+        };
+        match job_object::KillOnCloseJob::assign(HANDLE(handle as _)) {
+            Ok(job) => *self.job.lock().unwrap() = Some(job),
+            Err(e) => {
+                tracing::warn!(error = %e, "runtime: Job Object 装配失败（降级 sidecar 兜底）")
+            }
+        }
+    }
+
     /// 杀死 Runtime 进程（全局 stop / app 退出）。
     ///
     /// 调用点：托盘菜单「退出 Aide」经 `commands::app::shutdown_children` 调到这里
     /// ——aide.exe 退出不会带走 node 子进程，必须显式收。
     pub async fn kill_runtime(&self) {
         self.killed.store(true, Ordering::Relaxed);
+        // Job Object 先放：句柄一关，内核把 sidecar **及其全部后代**（claude.exe /
+        // rust-analyzer / typescript-language-server）连根收掉。下面的 start_kill()
+        // 只杀得掉 sidecar 自己，而且 TerminateProcess 不会执行它内部的收尾钩子。
+        #[cfg(windows)]
+        self.job.lock().unwrap().take();
         let child = { self.child.lock().unwrap().clone() };
         if let Some(child_arc) = child {
             let mut c = child_arc.lock().await;

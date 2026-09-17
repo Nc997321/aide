@@ -22,6 +22,7 @@ import { BgTaskTail } from "../desktop/bgTaskOutputTail.js";
 import { JumpQueueController } from "../desktop/jumpQueue.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
+import { reapSessionSubprocess } from "./subprocessReaper.js";
 import {
   automationHookVerdict,
   buildAutomationConfig,
@@ -960,6 +961,13 @@ export class SessionWorker {
     return this.automationConfig?.sessionDir || process.env.CLAUDE_CONFIG_DIR;
   }
 
+  /** 强杀兜底的定位信息：会话 id（= 注册条目里的 sessionId）+ 子进程配置根。
+   *  供 SessionManager 登记进 subprocessReaper——SDK 不暴露 claude.exe 的 pid，
+   *  只能靠这两个字段反查。 */
+  subprocessTarget(): { sessionId: string; configDir: string | undefined } {
+    return { sessionId: this.routingKey, configDir: this.subprocessConfigDir() };
+  }
+
   /** 薄接线：回滚执行体已迁 imageRollback.ts 的 rollbackImageHistory（纯移动，
    *  失败静默语义在内）。返回的场景 B 注入消息预置到下一轮私有迭代器——不能
    *  queue.push（旧迭代器挂起的 resolveNext 会吞消息，见 rollbackInjection 字段注释）。 */
@@ -1128,6 +1136,11 @@ export class SessionWorker {
     }
     this.currentQuery?.close?.();
     this.currentQuery = null;
+    // 兜底强杀（N4）：close() 是**优雅**关闭——query 为空 / CLI 卡在等权限或长工具
+    // 调用里时它不会让进程退，于是 claude.exe 与名下的 rust-analyzer /
+    // typescript-language-server 一直挂着（2026-09-17 实锤）。给优雅退出留一个宽限
+    // 窗口，到点还活着就按 sessionId 反查 pid 连树杀，见 subprocessReaper.ts 头注。
+    reapSessionSubprocess(this.routingKey);
     this.queue.close();
     cancelAllCodegraphQueries("session stopped");
     cancelAllBrowserQueries("session stopped");

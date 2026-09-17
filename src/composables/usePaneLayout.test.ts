@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { api } from "@aide/sdk/api";
 import { usePaneLayout, __resetPaneLayoutForTest } from "./usePaneLayout";
 import { listGroups, listSnapshotTabs, type GroupNode, type SplitNode } from "./paneLayout/tree";
 import { useSessionNames } from "./useSessionNames";
@@ -7,6 +8,14 @@ import { useSessionState } from "./useSessionState";
 
 /** 「已启动」判定注入：测试里显式指定哪些会话算已启动 */
 const started = new Set<string>();
+
+// 「关闭即停止」契约：closeTab 一律向 sidecar 送停止命令（幂等，前端状态不作判据）。
+// 把这条命令换成可控 mock——默认送达；失败路径由个别用例 mockRejectedValueOnce 注入。
+// mock 必须指 @aide/sdk/api（包内模块实例），指应用侧壳会漏（壳与包内模块不同实例）。
+vi.mock("@aide/sdk/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@aide/sdk/api")>();
+  return { ...actual, api: { ...actual.api, stopChatSession: vi.fn(async () => undefined) } };
+});
 
 function groups() {
   return listGroups(usePaneLayout().layout.root);
@@ -20,6 +29,8 @@ function focused(): GroupNode {
 beforeEach(() => {
   started.clear();
   __resetPaneLayoutForTest((sid) => started.has(sid));
+  vi.mocked(api.stopChatSession).mockReset();
+  vi.mocked(api.stopChatSession).mockImplementation(async () => undefined);
 });
 
 describe("预览 tab 语义（用户确认的行为）", () => {
@@ -126,36 +137,36 @@ describe("拆分与关闭", () => {
     expect(pl.activeSessionId.value).toBe("s2");
   });
 
-  it("关掉组内最后一个 tab：组消失、split 拍平、聚焦修复", () => {
+  it("关掉组内最后一个 tab：组消失、split 拍平、聚焦修复", async () => {
     const pl = usePaneLayout();
     pl.openSession("s1");
     started.add("s1");
     pl.promoteTab("s1");
     pl.openSessionInSplit("s2", "horizontal");
     const right = groups()[1];
-    pl.closeTab(right.id, right.tabs[0].id);
+    await pl.closeTab(right.id, right.tabs[0].id);
     expect(groups()).toHaveLength(1);
     expect(pl.layout.focusedGroupId).toBe(groups()[0].id);
     expect(pl.activeSessionId.value).toBe("s1");
   });
 
-  it("关掉最后一个 tab：回到空根组（零会话欢迎态）", () => {
+  it("关掉最后一个 tab：回到空根组（零会话欢迎态）", async () => {
     const pl = usePaneLayout();
     pl.openSession("s1");
     const g = focused();
-    pl.closeTab(g.id, g.tabs[0].id);
+    await pl.closeTab(g.id, g.tabs[0].id);
     expect(groups()).toHaveLength(1);
     expect(focused().tabs).toHaveLength(0);
     expect(pl.activeSessionId.value).toBe("");
   });
 
-  it("空根组（欢迎态）上 openSession / openBlankTab 正常建 tab", () => {
+  it("空根组（欢迎态）上 openSession / openBlankTab 正常建 tab", async () => {
     const pl = usePaneLayout();
     pl.openSession("s1");
     expect(focused().tabs).toHaveLength(1);
     expect(pl.activeSessionId.value).toBe("s1");
     // 关回空根组后 openBlankTab 也能建
-    pl.closeTab(focused().id, focused().tabs[0].id);
+    await pl.closeTab(focused().id, focused().tabs[0].id);
     expect(focused().tabs).toHaveLength(0);
     pl.openBlankTab("新会话 A");
     expect(focused().tabs).toHaveLength(1);
@@ -178,12 +189,12 @@ describe("拆分与关闭", () => {
     expect(pl.activeSessionId.value).toBe("s1");
   });
 
-  it("hasAnyTab：空根组为 false，有 tab 为 true，关光回到 false", () => {
+  it("hasAnyTab：空根组为 false，有 tab 为 true，关光回到 false", async () => {
     const pl = usePaneLayout();
     expect(pl.hasAnyTab.value).toBe(false);
     pl.openSession("s1");
     expect(pl.hasAnyTab.value).toBe(true);
-    pl.closeTab(focused().id, focused().tabs[0].id);
+    await pl.closeTab(focused().id, focused().tabs[0].id);
     expect(pl.hasAnyTab.value).toBe(false);
   });
 
@@ -201,13 +212,13 @@ describe("拆分与关闭", () => {
     expect(g.activeTabId).toBe(keep.id);
   });
 
-  it("closeSessionTab：会话删除时对应 tab 消失", () => {
+  it("closeSessionTab：会话删除时对应 tab 消失", async () => {
     const pl = usePaneLayout();
     pl.openSession("s1");
     started.add("s1");
     pl.promoteTab("s1");
     pl.openSession("s2");
-    pl.closeSessionTab("s1");
+    await pl.closeSessionTab("s1");
     expect(groups().flatMap((g) => g.tabs).some((t) => t.sessionId === "s1")).toBe(false);
   });
 });
@@ -304,7 +315,7 @@ describe("tab 切换与聚焦", () => {
     expect(pl.activeSessionId.value).toBe("c");
   });
 
-  it("MRU 切换跨分屏组，且已关闭的 tab 被惰性跳过", () => {
+  it("MRU 切换跨分屏组，且已关闭的 tab 被惰性跳过", async () => {
     const pl = usePaneLayout();
     pl.openSession("a");
     started.add("a");
@@ -313,7 +324,7 @@ describe("tab 切换与聚焦", () => {
     pl.openSession("c"); // 落在聚焦的右组
     started.add("c");
     pl.promoteTab("c"); // MRU: c,b,a
-    pl.closeSessionTab("b");
+    await pl.closeSessionTab("b");
     pl.mruSwitch(1);
     pl.endMruSwitch();
     expect(pl.activeSessionId.value).toBe("a"); // b 已关，跳到 a（在另一组，聚焦跟随）
@@ -453,5 +464,35 @@ describe("生命周期收口（closeTab / 预览改绑触发 disposeSession）",
     pl.openBlankTab("B"); // 覆盖 → retireSilentSession(null) → if (!oldSid) return
     expect(focused().tabs).toHaveLength(1);
     expect(focused().tabs[0].pendingName).toBe("B");
+  });
+});
+
+describe("关闭即停止：stop 命令的送达契约（2026-09-17 孤儿进程事故的回归）", () => {
+  it("命令送达才移除 tab", async () => {
+    const pl = usePaneLayout();
+    pl.openSession("s-stop-ok");
+    const g = focused();
+    await pl.closeTab(g.id, g.tabs[0].id);
+    expect(api.stopChatSession).toHaveBeenCalledWith("s-stop-ok");
+    expect(focused().tabs).toHaveLength(0);
+  });
+
+  it("前端状态缺失（重载后恢复的标签）也照样送——状态是镜像，不能当判据", async () => {
+    const pl = usePaneLayout();
+    pl.openSession("s-stop-restored"); // 未 setSessionState：state[sid] 不存在
+    const g = focused();
+    await pl.closeTab(g.id, g.tabs[0].id);
+    expect(api.stopChatSession).toHaveBeenCalledWith("s-stop-restored");
+    expect(focused().tabs).toHaveLength(0);
+  });
+
+  it("命令未送达：保留 tab（进程可能还活着），不 dispose", async () => {
+    vi.mocked(api.stopChatSession).mockRejectedValueOnce(new Error("ipc down"));
+    const pl = usePaneLayout();
+    pl.openSession("s-stop-fail");
+    const g = focused();
+    await pl.closeTab(g.id, g.tabs[0].id);
+    expect(focused().tabs).toHaveLength(1);
+    expect(focused().tabs[0].sessionId).toBe("s-stop-fail");
   });
 });
