@@ -18,7 +18,7 @@
 //! - 因 hidden 收尾或恢复且时长 < `MIN_REPORT_MS` 的短冻结丢弃（节流伪影/抖动）。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicIsize, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -28,9 +28,10 @@ use tauri::{AppHandle, Manager};
 
 use super::report::{
     self, FreezeInfo, FreezeReport, FreezeSample, MainThreadProbe, ParkFrameRecord, ProcessSample,
-    ReportMeta, RingSnapshot, StackFrameRecord,
+    ReportMeta, RingSnapshot,
 };
 use super::stackwalk;
+use super::threads;
 use super::{DiagInner, DiagnosticsState};
 
 /// watchdog 检查周期 = 冻结期采样周期
@@ -92,9 +93,11 @@ fn run(app: AppHandle) {
     let hwnd = resolve_hwnd(&app);
     let main_tid = resolve_main_thread_id(&app);
 
-    let mut sys = System::new();
+    // probe 还要给每 tick 的 post_probe 用，所以只借一份引用；hwnd/main_tid 只归采样器
+    let mut sampler = Sampler::new(Arc::clone(&probe), hwnd, main_tid);
     let mut freeze: Option<ActiveFreeze> = None;
     let mut last_tick = Instant::now();
+    let report_dir = crate::commands::our_config_dir().join("diagnostics");
 
     loop {
         std::thread::sleep(Duration::from_millis(TICK_MS));
@@ -105,7 +108,8 @@ fn run(app: AppHandle) {
         if suspended {
             // 整机休眠恢复：进行中的冻结按 suspected_sleep 收尾，不新开
             if let Some(fz) = freeze.take() {
-                close_freeze(&inner, fz, FreezeOutcome::SuspectedSleep);
+                close_freeze(&inner, fz, FreezeOutcome::SuspectedSleep, &report_dir);
+                sampler.reset();
             }
             continue;
         }
@@ -120,7 +124,8 @@ fn run(app: AppHandle) {
         if inner.hidden.load(Ordering::Relaxed) {
             // 窗口隐藏：定时器被浏览器节流，缺口不可信。停止监测，收尾进行中的冻结。
             if let Some(fz) = freeze.take() {
-                close_freeze(&inner, fz, FreezeOutcome::Ongoing);
+                close_freeze(&inner, fz, FreezeOutcome::Ongoing, &report_dir);
+                sampler.reset();
             }
             continue;
         }
@@ -129,6 +134,8 @@ fn run(app: AppHandle) {
         match freeze.as_mut() {
             None if gap_ms >= FREEZE_GAP_MS => {
                 tracing::warn!("diag: heartbeat gap {gap_ms}ms — freeze sampling started");
+                // 新冻结 = 新现场：上一场的补交不能带进来（否则张冠李戴）
+                *inner.frontend_supplement.lock().unwrap() = None;
                 let mut fz = ActiveFreeze {
                     started_epoch: report::epoch_ms().saturating_sub(gap_ms),
                     detected_gap_ms: gap_ms,
@@ -136,29 +143,28 @@ fn run(app: AppHandle) {
                     path: None,
                     tick_since_flush: 0,
                 };
-                // 立即预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，
-                // 预热让下一帧就有有效 CPU 数据
-                let _ = sample_processes(&mut sys);
-                fz.samples
-                    .push(make_sample(&mut sys, &probe, &hwnd, &main_tid, true));
-                fz.path = flush_report(&inner, &fz, FreezeOutcome::Ongoing);
+                // 起新冻结：采样状态清零（预热句柄/基线都是上一场的）
+                sampler.reset();
+                sampler.warm_up();
+                fz.samples.push(sampler.sample(true));
+                fz.path = flush_report(&inner, &fz, FreezeOutcome::Ongoing, &report_dir);
                 freeze = Some(fz);
             }
             Some(fz) if gap_ms >= FREEZE_GAP_MS => {
                 if fz.samples.len() < MAX_SAMPLES {
-                    fz.samples
-                        .push(make_sample(&mut sys, &probe, &hwnd, &main_tid, false));
+                    fz.samples.push(sampler.sample(false));
                 }
                 fz.tick_since_flush += 1;
                 if fz.tick_since_flush >= FLUSH_EVERY_TICKS {
-                    fz.path = flush_report(&inner, fz, FreezeOutcome::Ongoing);
+                    fz.path = flush_report(&inner, fz, FreezeOutcome::Ongoing, &report_dir);
                     fz.tick_since_flush = 0;
                 }
             }
             Some(_) => {
                 // 心跳恢复 → 最终落盘（recovered=true），前端随后补交明细
                 let fz = freeze.take().expect("freeze checked Some");
-                close_freeze(&inner, fz, FreezeOutcome::Recovered);
+                close_freeze(&inner, fz, FreezeOutcome::Recovered, &report_dir);
+                sampler.reset();
             }
             None => {}
         }
@@ -180,44 +186,68 @@ fn post_probe(app: &AppHandle, probe: &Arc<ProbeState>) {
     }
 }
 
-fn make_sample(
-    sys: &mut System,
-    probe: &ProbeState,
-    hwnd: &AtomicIsize,
-    main_tid: &AtomicU32,
-    walk_full: bool,
-) -> FreezeSample {
-    let stuck = super::current_stuck_command();
-    // 跨线程抓主线程顶帧：SuspendThread + GetThreadContext + 解析模块名。
-    // stuck_command 看不到的框架路径（emit 投递 / 事件循环 / 锁 / 系统调用）靠这帧点名。
-    // walk_full=true 时进一步 StackWalk64 走完整调用链（仅冻结首帧，栈静态）。
-    // 非目标平台 / 抓取失败为 None，不污染报告。
-    let park = stackwalk::capture_main_thread_park(main_tid.load(Ordering::Relaxed), walk_full)
-        .map(|f| ParkFrameRecord {
-            module: f.module,
-            address: f.address,
-            offset: f.offset,
-            frames: f
-                .frames
-                .into_iter()
-                .map(|fr| StackFrameRecord {
-                    module: fr.module,
-                    address: fr.address,
-                    offset: fr.offset,
-                })
-                .collect(),
-        });
-    FreezeSample {
-        t: report::epoch_ms(),
-        processes: sample_processes(sys),
-        main_thread: MainThreadProbe {
-            pending: probe.pending.load(Ordering::Relaxed),
-            last_latency_ms: probe.last_latency_us.load(Ordering::Relaxed) as f64 / 1000.0,
-            stuck_command: stuck.map(|(name, _)| name.to_string()),
-            stuck_for_ms: stuck.map(|(_, dur)| dur.as_millis() as u64),
-            park,
-        },
-        is_hung_window: is_hung_window(hwnd.load(Ordering::Relaxed)),
+/// 冻结采样器：把「只在一场冻结期间存在」的采样状态收进一个结构——sysinfo 句柄、
+/// 主线程探针、渲染进程线程采样器（后者要跨帧保持 CPU 基线与目标进程句柄）。
+/// 原先这些是 make_sample 的一串入参；再加渲染采样就超过「单函数 ≤4 输入」的红线，
+/// 而这些状态本来就是同一场冻结的搭档。
+struct Sampler {
+    sys: System,
+    probe: Arc<ProbeState>,
+    hwnd: Arc<AtomicIsize>,
+    main_tid: Arc<AtomicU32>,
+    renderer: threads::RendererSampler,
+}
+
+impl Sampler {
+    fn new(probe: Arc<ProbeState>, hwnd: Arc<AtomicIsize>, main_tid: Arc<AtomicU32>) -> Self {
+        Self {
+            sys: System::new(),
+            probe,
+            hwnd,
+            main_tid,
+            renderer: threads::RendererSampler::new(),
+        }
+    }
+
+    /// 冻结收尾 / 起新冻结：丢掉渲染采样状态（CPU 基线、目标进程句柄与符号会话）。
+    /// 跨冻结留着基线会把上一场的 CPU 增量算进这一场。
+    fn reset(&mut self) {
+        self.renderer = threads::RendererSampler::new();
+    }
+
+    /// 预热一次进程表：sysinfo 的 cpu_usage 是两次刷新间的差值，不预热则首帧
+    /// CPU 全 0——`select_frame_processes` 会把空闲 CPU 的 webview 全滤掉。
+    fn warm_up(&mut self) {
+        let _ = sample_processes(&mut self.sys);
+    }
+
+    /// 采一帧。`walk_full` = 冻结首帧：aide 主线程走完整调用链、栈静态所以只采一次。
+    fn sample(&mut self, walk_full: bool) -> FreezeSample {
+        let stuck = super::current_stuck_command();
+        // 跨线程抓主线程顶帧：SuspendThread + GetThreadContext + 解析模块名。
+        // stuck_command 看不到的框架路径（emit 投递 / 事件循环 / 锁 / 系统调用）靠这帧点名。
+        // walk_full=true 时进一步 StackWalk64 走完整调用链（仅冻结首帧，栈静态）。
+        // 非目标平台 / 抓取失败为 None，不污染报告。
+        let park =
+            stackwalk::capture_main_thread_park(self.main_tid.load(Ordering::Relaxed), walk_full)
+                .map(ParkFrameRecord::from);
+        // 进程表先刷（渲染采样要拿本帧 CPU 选最忙的 webview）：sysinfo 的 cpu_usage
+        // 是两次刷新间的差值，所以进程采样必须在同一帧内先于渲染采样。
+        let processes = sample_processes(&mut self.sys);
+        let renderer = self.renderer.sample(&processes);
+        FreezeSample {
+            t: report::epoch_ms(),
+            processes,
+            main_thread: MainThreadProbe {
+                pending: self.probe.pending.load(Ordering::Relaxed),
+                last_latency_ms: self.probe.last_latency_us.load(Ordering::Relaxed) as f64 / 1000.0,
+                stuck_command: stuck.map(|(name, _)| name.to_string()),
+                stuck_for_ms: stuck.map(|(_, dur)| dur.as_millis() as u64),
+                park,
+            },
+            renderer,
+            is_hung_window: is_hung_window(self.hwnd.load(Ordering::Relaxed)),
+        }
     }
 }
 
@@ -252,7 +282,14 @@ fn sample_processes(sys: &mut System) -> Vec<ProcessSample> {
 
 /// 组装并落盘一份报告。返回报告路径（按 started 锚定，增量重写同一文件）。
 /// `FreezeOutcome::Recovered` 表示心跳已恢复、是一次完整收尾的瞬时冻结。
-fn flush_report(inner: &DiagInner, fz: &ActiveFreeze, outcome: FreezeOutcome) -> Option<PathBuf> {
+/// `dir` 由调用方给定（生产 = 配置目录，测试 = 临时目录——本函数会写盘，
+/// 测试不能碰用户真实诊断目录）。
+fn flush_report(
+    inner: &DiagInner,
+    fz: &ActiveFreeze,
+    outcome: FreezeOutcome,
+    dir: &Path,
+) -> Option<PathBuf> {
     let ended = report::epoch_ms();
     let report = FreezeReport {
         meta: ReportMeta::current(),
@@ -270,10 +307,12 @@ fn flush_report(inner: &DiagInner, fz: &ActiveFreeze, outcome: FreezeOutcome) ->
             event_rates: inner.event_rates.lock().unwrap().snapshot(),
             trace: super::trace::snapshot(),
         },
-        frontend: None,
+        // 收尾重写必须带上内存里那份补交：否则「补交先到（merge 进文件）→ 收尾
+        // 重写（frontend: None）」把最值钱的现场原样抹掉（2026-09-17 前 20/20 份
+        // 报告都没有 frontend 字段）。
+        frontend: inner.frontend_supplement.lock().unwrap().clone(),
     };
-    let dir = crate::commands::our_config_dir().join("diagnostics");
-    match report::write_report(&dir, &report) {
+    match report::write_report(dir, &report) {
         Ok(path) => {
             match outcome {
                 FreezeOutcome::Recovered => tracing::warn!(
@@ -299,7 +338,7 @@ fn flush_report(inner: &DiagInner, fz: &ActiveFreeze, outcome: FreezeOutcome) ->
 }
 
 /// 收尾一次冻结。短冻结（非恢复、非休眠、< MIN_REPORT_MS）丢弃，避免节流伪影噪声。
-fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome) {
+fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome, dir: &Path) {
     let duration = report::epoch_ms().saturating_sub(fz.started_epoch);
     if outcome == FreezeOutcome::Ongoing && duration < MIN_REPORT_MS {
         if let Some(p) = &fz.path {
@@ -313,7 +352,7 @@ fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome) {
         }
         return;
     }
-    flush_report(inner, &fz, outcome);
+    flush_report(inner, &fz, outcome, dir);
 }
 
 /// 主窗口 HWND（Windows 判「未响应」用）。在主线程解析一次，存成整数共享。
@@ -371,6 +410,7 @@ mod tests {
             heartbeats: Mutex::new(super::super::ring::Ring::new(4)),
             event_rates: Mutex::new(super::super::EventRates::new(4)),
             last_report: Mutex::new(None),
+            frontend_supplement: Mutex::new(None),
         })
     }
 
@@ -400,6 +440,7 @@ mod tests {
             &inner,
             freeze_now(Some(path.clone())),
             FreezeOutcome::Ongoing,
+            &dir,
         );
 
         assert!(!path.exists(), "短冻结丢弃应删除已落盘的报告文件");
@@ -420,7 +461,7 @@ mod tests {
         std::fs::write(&other, "{}").unwrap();
         *inner.last_report.lock().unwrap() = Some((other.clone(), Instant::now()));
 
-        close_freeze(&inner, freeze_now(None), FreezeOutcome::Ongoing);
+        close_freeze(&inner, freeze_now(None), FreezeOutcome::Ongoing, &dir);
 
         let kept = inner.last_report.lock().unwrap();
         assert_eq!(
@@ -429,6 +470,51 @@ mod tests {
             "无关 last_report 保留"
         );
         assert!(other.exists(), "无关文件不受影响");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **补交先到、收尾重写后到 → frontend 必须还在。**
+    ///
+    /// 回归守卫（2026-09-17）：补交搭「恢复心跳」的车到达，而 watchdog 要到下一个
+    /// tick 才收尾；既然收尾会重写同一个文件，`frontend` 就必须从内存里取
+    /// （DiagInner.frontend_supplement），不能写死 None——否则全量长帧/现场状态
+    /// 在最值钱的那一刻被原样抹掉。此前 20/20 份报告的 frontend 字段全缺，
+    /// 就是这条时序。报告落盘到临时目录，不碰真实诊断目录。
+    #[test]
+    fn recovered_flush_keeps_earlier_supplement() {
+        let inner = test_inner();
+        let dir = std::env::temp_dir().join(format!("diag-supplement-test-{}", std::process::id()));
+        let fz = freeze_now(None);
+        // ① 冻结进行中的首刷：报告落盘（此刻 frontend 还空）
+        let path = flush_report(&inner, &fz, FreezeOutcome::Ongoing, &dir).expect("首刷落盘");
+        let first: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert!(
+            first.get("frontend").is_none(),
+            "补交之前不应有 frontend 字段"
+        );
+
+        // ② 前端补交：进内存（收尾要读）+ 立即 merge 进文件（强杀保命）
+        let payload = serde_json::json!({ "gapMs": 8076, "longFrames": [{ "t": 1 }] });
+        *inner.frontend_supplement.lock().unwrap() = Some(payload.clone());
+        report::merge_supplement(&path, payload).unwrap();
+
+        // ③ 心跳恢复 → 收尾重写同一文件
+        flush_report(&inner, &fz, FreezeOutcome::Recovered, &dir).expect("收尾落盘");
+
+        let after: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(
+            after["frontend"]["gapMs"],
+            serde_json::json!(8076),
+            "收尾重写把前端补交抹掉了——最值钱的现场会随第二次落盘消失"
+        );
+        assert_eq!(
+            after["frontend"]["longFrames"][0]["t"],
+            serde_json::json!(1),
+            "全量长帧明细必须逐字保留"
+        );
+        assert_eq!(after["freeze"]["recovered"], serde_json::json!(true));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -114,12 +114,14 @@ winreg = "0.55"
 # SHChangeNotify：写完注册表后通知 shell 刷新文件关联缓存（复用 tauri 已拉的版本）
 # 卡死诊断：Win32_System_Threading（OpenThread/SuspendThread/GetThreadContext 跨线程抓主线程栈）
 #   + Win32_System_Diagnostics_Debug（CONTEXT/StackWalk 相关；CONTEXT 顶帧解析）
+#   + Win32_System_Diagnostics_ToolHelp（CreateToolhelp32Snapshot 枚举渲染进程线程）
 #   + Win32_System_Kernel（CONTEXT 类型，与 Debug 共同 gated）
 #   + Win32_System_ProcessStatus（GetModuleFileNameExW 解析停在哪模块）
 windows = { version = "0.61", features = [
     "Win32_UI_Shell",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_Kernel",
     "Win32_System_ProcessStatus",
     "Win32_Foundation",

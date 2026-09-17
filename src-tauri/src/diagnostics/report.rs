@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 /// v3：`ring.trace` 常驻操作轨迹——2026-07-08 第四次真实冻结（低 CPU 主线程
 /// park 在埋点命令之外，stuckCommand 全 null 定不到帧；另有一次同类卡 21.9min）
 /// 后补上，记录撞墙前最后一串命令/emit/会话事件的时间线。
-pub const SCHEMA_VERSION: u32 = 3;
+pub const SCHEMA_VERSION: u32 = 4;
 /// 目录里最多保留的报告份数（按文件名里的 epoch 排序，淘汰最旧）。
 pub const KEEP_REPORTS: usize = 20;
 
@@ -41,6 +41,11 @@ pub struct HeartbeatPayload {
     /// 版本过老）时为默认值。Rust 不解释这些字段，只随环落盘供事后分析。
     #[serde(default)]
     pub frames: FrameSummary,
+    /// 前端现场状态读数（行数 / 消息数 / DOM 节点数 / JS 堆 / 是否在落位…）。
+    /// 每拍一份 → 报告里就是「挂载量怎么涨上去的」时间线（补交那份是终值快照，
+    /// 两者合读才看得出增长曲线）。形状前端所有，Rust 同样不解释、只落盘。
+    #[serde(default)]
+    pub gauges: serde_json::Value,
 }
 
 /// 长动画帧汇总：条数 + 本周期最长那一帧的归因分解。
@@ -69,6 +74,10 @@ pub struct FrameSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LongFrame {
+    /// 帧起点（performance.now 时间轴，ms）。此前漏了这个字段——多条帧进报告后
+    /// 无法排序、无法和 longtask 对时，等于把「哪一帧在什么时候」这条线索丢了。
+    #[serde(default)]
+    pub t: u64,
     pub duration_ms: u32,
     pub script_ms: u32,
     pub style_layout_ms: u32,
@@ -164,9 +173,41 @@ pub struct FreezeSample {
     /// aide 主进程 + 全部后代进程（WebView2 渲染进程、node sidecar…）
     pub processes: Vec<ProcessSample>,
     pub main_thread: MainThreadProbe,
+    /// 渲染进程线程采样——**渲染卡死的肇事现场**（`main_thread` 那个是 aide.exe
+    /// 自己的主线程，冻结期几乎总是健康）。不依赖渲染进程配合，JS 侧探针全哑时
+    /// 它是唯一还说话的数据源（见 threads.rs 模块注释）。抓不到为 None。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub renderer: Option<RendererProbe>,
     /// Windows IsHungAppWindow 判定；非 Windows 为 None
     #[serde(skip_serializing_if = "Option::is_none")]
     pub is_hung_window: Option<bool>,
+}
+
+/// 渲染进程（最忙的 msedgewebview2）的线程快照。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RendererProbe {
+    pub pid: u32,
+    pub name: String,
+    /// 按本帧 CPU 占用降序，最多 8 条
+    pub threads: Vec<ThreadSample>,
+}
+
+/// 单个线程的 CPU 与（可选）顶帧。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadSample {
+    pub tid: u32,
+    /// **累计** CPU 时间（自线程创建；首帧无基线时也是累计值）——跨帧相减即得
+    /// 冻结期真实消耗量，所以两帧之间别当成增量读。
+    pub user_ms: u64,
+    pub kernel_ms: u64,
+    /// 本帧占用速率（单核百分比，>100 = 多核）。**首帧恒 0**（没有基线），
+    /// 判读要看第二帧起。
+    pub cpu_pct: f32,
+    /// 顶帧（模块名 + 偏移）：只给最烧的前几条抓，其余 None
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub park: Option<ParkFrameRecord>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -232,6 +273,27 @@ pub struct StackFrameRecord {
     pub address: u64,
     /// 相对模块基址的偏移
     pub offset: u64,
+}
+
+/// 采集侧结构 → 报告 DTO：转换只此一处，两个调用方（宿主主线程顶帧 / 渲染进程
+/// 线程顶帧）共用，避免各写一遍字段搬运（搬错了报告里看不出来）。
+impl From<super::stackwalk::ParkFrame> for ParkFrameRecord {
+    fn from(f: super::stackwalk::ParkFrame) -> Self {
+        Self {
+            module: f.module,
+            address: f.address,
+            offset: f.offset,
+            frames: f
+                .frames
+                .into_iter()
+                .map(|fr| StackFrameRecord {
+                    module: fr.module,
+                    address: fr.address,
+                    offset: fr.offset,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -373,7 +435,318 @@ pub fn write_scroll_trail(dir: &Path, payload: &str) -> std::io::Result<PathBuf>
     Ok(path)
 }
 
+// ── 现场完整性审计（自检装置用）───────────────────────────────────────
+
+/// 一项判定：`id` 是机器可读的检查名，`detail` 是给人看的原因/实测值。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditCheck {
+    pub id: &'static str,
+    pub ok: bool,
+    pub detail: String,
+}
+
+/// 审计结论：`ok` = 全部检查通过（这份报告足以定案）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditVerdict {
+    pub ok: bool,
+    pub report: String,
+    pub checks: Vec<AuditCheck>,
+}
+
+/// 逐项审一份冻结报告的**现场完整性**——判据全部落在「读报告的人需要什么」上，
+/// 而不是实现细节；缺任一项都等于这次白留。
+///
+/// 为什么要有它（2026-09-17）：上一轮「LoAF 必能抓到」是**没验投递链就许的愿**
+/// ——补交落在 `frontend` 字段，而该字段在 20/20 份历史报告里都是空的（收尾重写
+/// 把它抹了）。把「仪器真的产出完整现场」变成可复跑的命令，就不再靠承诺。
+///
+/// `block_ms` = 自检注入的渲染阻塞时长（用来判断「抓到的帧确实是那一下肇事帧，
+/// 而不是旁边的杂鱼」）。
+pub fn audit(path: &Path, block_ms: u64) -> AuditVerdict {
+    let mut checks = Vec::new();
+    let raw = match fs::read_to_string(path) {
+        Ok(r) => r,
+        Err(e) => {
+            checks.push(AuditCheck {
+                id: "report_readable",
+                ok: false,
+                detail: format!("读不出报告 {}: {e}", path.display()),
+            });
+            return AuditVerdict {
+                ok: false,
+                report: path.display().to_string(),
+                checks,
+            };
+        }
+    };
+    let v: serde_json::Value = match serde_json::from_str(&raw) {
+        Ok(v) => v,
+        Err(e) => {
+            checks.push(AuditCheck {
+                id: "report_parses",
+                ok: false,
+                detail: format!("JSON 解析失败: {e}"),
+            });
+            return AuditVerdict {
+                ok: false,
+                report: path.display().to_string(),
+                checks,
+            };
+        }
+    };
+
+    let num = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_u64()).unwrap_or(0);
+    let float = |v: &serde_json::Value, k: &str| v.get(k).and_then(|x| x.as_f64()).unwrap_or(0.0);
+
+    // ① 冻结本身被正确判定（注入 8s 阻塞，报告的时长应与之同量级）
+    let fz = v.get("freeze").cloned().unwrap_or(serde_json::Value::Null);
+    let dur = num(&fz, "durationMs");
+    let recovered = fz
+        .get("recovered")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    checks.push(AuditCheck {
+        id: "freeze_detected",
+        ok: recovered && dur >= block_ms / 2,
+        detail: format!("durationMs={dur} recovered={recovered}（注入阻塞 {block_ms}ms）"),
+    });
+
+    // ② 前端补交到了（这一位是历史事故点：收尾重写会把它抹掉）
+    let frontend = v.get("frontend").filter(|x| !x.is_null());
+    checks.push(AuditCheck {
+        id: "frontend_present",
+        ok: frontend.is_some(),
+        detail: match frontend {
+            Some(_) => "frontend 字段在（收尾重写没抹掉补交）".to_string(),
+            None => "frontend 缺失——补交没落盘或被收尾重写覆盖".to_string(),
+        },
+    });
+    // 前端补交缺失时**不提前返回**：后面的项照查照报红。提前返回会把「渲染进程栈
+    // 其实拿到了」这类好消息一起吞掉——2026-09-17 自检首跑就吃了这个亏（只报两项，
+    // 而那一帧的渲染线程表恰是全场最有价值的产出）。
+    //
+    // ③ 长帧全量在，且每条带时间戳（无 t 就没法排序/对时）
+    let frames = frontend
+        .and_then(|f| f.get("longFrames"))
+        .and_then(|x| x.as_array());
+    let frame_n = frames.map(|a| a.len()).unwrap_or(0);
+    let all_have_t = frames.is_some_and(|a| a.iter().all(|f| f.get("t").and_then(|x| x.as_u64()).is_some()));
+    checks.push(AuditCheck {
+        id: "long_frames_captured",
+        ok: frame_n > 0 && all_have_t,
+        detail: format!("longFrames={frame_n} 条，全部带 t={all_have_t}"),
+    });
+
+    // ④ 抓到的是**肇事那一下**：注入的阻塞必须在**至少一条通道**上现形。
+    //
+    // 为什么是「至少一条」而不是死盯长帧（2026-09-17 自检实测）：注入 8s 单块忙等，
+    // LoAF 只给了 6 条 ~120ms 的帧、longtask 只给了两条 50/60ms——**单块长时间阻塞
+    // 对两个 JS 侧采集器都是隐形的**（它们的时长按「帧/任务」记账，一整块卡住既不
+    // 产生新帧也不产生新的任务边界）。真正抓到它的是跨进程的线程采样：渲染主线程
+    // tid=1284 冻结期 96~102% 占用、累计 CPU 4203ms→9265ms。
+    // 所以判据是：长帧路径 **或** 线程 CPU 路径命中，二者取或。
+    let culprit = frames.and_then(|a| {
+        a.iter()
+            .map(|f| num(f, "durationMs"))
+            .max()
+            .filter(|d| *d >= block_ms / 2)
+    });
+    // 归因段 = 脚本段 + 样式布局段。2026-09-17 修掉 `styleAndLayoutStart` 的绝对时间戳
+    // 语义后，「纯布局型肇事帧」（脚本 0、布局几千 ms）是真实形态——只认脚本段会误红。
+    let culprit_attributed = frames
+        .and_then(|a| {
+            a.iter()
+                .max_by_key(|f| num(f, "durationMs"))
+                .map(|f| num(f, "scriptMs") + num(f, "styleLayoutMs"))
+        })
+        .unwrap_or(0);
+
+    // 线程侧读数：把全部样本的线程表摊平成 (tid, user_ms, kernel_ms, cpu_pct) 行。
+    // **必须在全部样本上取**——首帧恒 cpuPct=0（还没有基线），只看第一帧会把
+    // 「差分生效」误判成「没烧 CPU」（自检第二跑就这么误红过一次）。
+    let samples = v.get("samples").and_then(|x| x.as_array());
+    let thread_rows: Vec<(u64, u64, u64, f64)> = samples
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.get("renderer").filter(|r| !r.is_null()))
+                .filter_map(|r| r.get("threads"))
+                .filter_map(|t| t.as_array())
+                .flat_map(|ts| {
+                    ts.iter().map(|t| {
+                        (
+                            num(t, "tid"),
+                            num(t, "userMs"),
+                            num(t, "kernelMs"),
+                            float(t, "cpuPct"),
+                        )
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let thread_max_pct = thread_rows.iter().map(|r| r.3).fold(0.0_f64, f64::max);
+    // 最忙线程（累计 CPU 最大）的首尾差 = 这次冻结实际烧掉的 CPU 时间
+    let thread_burn_ms = match thread_rows.iter().max_by_key(|r| r.1 + r.2) {
+        None => 0,
+        Some((tid, _, _, _)) => {
+            let tid = *tid;
+            let mut first: Option<u64> = None;
+            let mut last = 0u64;
+            for r in thread_rows.iter().filter(|r| r.0 == tid) {
+                if first.is_none() {
+                    first = Some(r.1 + r.2);
+                }
+                last = r.1 + r.2;
+            }
+            last.saturating_sub(first.unwrap_or(last))
+        }
+    };
+    let frame_hit = culprit.is_some() && culprit_attributed > 0;
+    let thread_hit = thread_burn_ms >= block_ms / 2 && thread_max_pct >= 50.0;
+    checks.push(AuditCheck {
+        id: "culprit_visible",
+        ok: frame_hit || thread_hit,
+        detail: format!(
+            "长帧路：最长帧={culprit:?}ms（其中脚本+样式布局={culprit_attributed}ms）；\
+             线程路：最忙线程冻结期 CPU 增量={thread_burn_ms}ms、峰值占用={thread_max_pct:.0}%\
+             （期望 ≥{}ms 且两路至少一路命中）",
+            block_ms / 2
+        ),
+    });
+
+    // ⑤ 采集来源自述（区分「没有长帧」与「探针没生效」）
+    let src = frontend
+        .and_then(|f| f.get("longFramesSource"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    checks.push(AuditCheck {
+        id: "capture_provenance",
+        ok: !src.is_empty() && src != "none",
+        detail: format!("longFramesSource=\"{src}\"（none/空 = 两条采集路径都没拿到）"),
+    });
+
+    // ⑤b 长任务明细（与长帧互补：帧可能因「主线程压根没提交帧」而缺席，长任务不必；
+    // 实测 Chromium 的 longtask **不进 timeline 缓冲**，来源只可能是 observer ring）
+    let tasks_n = frontend
+        .and_then(|f| f.get("longTasks"))
+        .and_then(|x| x.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    let tasks_src = frontend
+        .and_then(|f| f.get("longTasksSource"))
+        .and_then(|x| x.as_str())
+        .unwrap_or("");
+    checks.push(AuditCheck {
+        id: "long_tasks_captured",
+        ok: tasks_n > 0 && !tasks_src.is_empty() && tasks_src != "none",
+        detail: format!("longTasks={tasks_n} 条 source=\"{tasks_src}\""),
+    });
+
+    // ⑥ 现场状态（挂载了多少东西——没有它，「8 秒在渲染什么」只能靠推理）
+    let gauges = frontend.and_then(|f| f.get("gauges"));
+    let dom_nodes = gauges.map(|g| num(g, "domNodes")).unwrap_or(0);
+    let rows = gauges.map(|g| num(g, "rows")).unwrap_or(0);
+    checks.push(AuditCheck {
+        id: "gauges_present",
+        ok: gauges.is_some() && dom_nodes > 0,
+        detail: format!("gauges.domNodes={dom_nodes} gauges.rows={rows}"),
+    });
+
+    // ⑦ 渲染进程线程采样（JS 侧全哑时唯一还说话的通道）
+    let probe = samples.and_then(|a| a.iter().find_map(|s| s.get("renderer").filter(|r| !r.is_null())));
+    let thread_n = probe
+        .and_then(|p| p.get("threads"))
+        .and_then(|x| x.as_array())
+        .map(|a| a.len())
+        .unwrap_or(0);
+    checks.push(AuditCheck {
+        id: "renderer_threads",
+        ok: thread_n > 0,
+        detail: format!("renderer.threads={thread_n} 条（进程 pid={:?}）", probe.and_then(|p| p.get("pid"))),
+    });
+    let parked = probe
+        .and_then(|p| p.get("threads"))
+        .and_then(|x| x.as_array())
+        .is_some_and(|a| {
+            a.iter().any(|t| {
+                t.get("park")
+                    .and_then(|p| p.get("module"))
+                    .and_then(|m| m.as_str())
+                    .is_some_and(|m| !m.is_empty())
+            })
+        });
+    checks.push(AuditCheck {
+        id: "renderer_park_resolved",
+        ok: parked,
+        detail: format!("有线程顶帧解析出模块名={parked}"),
+    });
+    checks.push(AuditCheck {
+        id: "renderer_cpu_delta",
+        ok: thread_max_pct > 0.0,
+        detail: format!(
+            "全部样本里的线程最大 cpuPct={thread_max_pct:.1}（>0 = 跨帧基线差分生效；\
+             只看首帧会恒 0——它没有基线）"
+        ),
+    });
+
+    // ⑧ schema 版本（报告形状变了必须能一眼看出来）
+    let schema = v
+        .get("meta")
+        .map(|m| num(m, "schemaVersion"))
+        .unwrap_or(0);
+    checks.push(AuditCheck {
+        id: "schema_version",
+        ok: schema == SCHEMA_VERSION as u64,
+        detail: format!("meta.schemaVersion={schema}（当前 {SCHEMA_VERSION}）"),
+    });
+
+    AuditVerdict {
+        ok: checks.iter().all(|c| c.ok),
+        report: path.display().to_string(),
+        checks,
+    }
+}
+
+/// 自检结论落盘：`selfcheck-<epoch>.json`——与冻结报告同目录、同款「临时文件 +
+/// rename」原子写与保留策略（自检文件独立前缀，不会被 freeze- 的保留策略挤掉）。
+pub fn write_selfcheck(dir: &Path, verdict: &AuditVerdict) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let epoch = epoch_ms();
+    let path = dir.join(format!("selfcheck-{epoch}.json"));
+    let tmp = dir.join(format!(".selfcheck-{epoch}.json.tmp"));
+    fs::write(&tmp, serde_json::to_string_pretty(verdict)?)?;
+    fs::rename(&tmp, &path)?;
+    prune_prefixed(dir, "selfcheck-", KEEP_REPORTS)?;
+    Ok(path)
+}
+
+/// 这份报告是不是「那场冻结」的：按冻结起点比对（±`tolerance_ms`）。
+///
+/// 补交第二趟延迟 2.5s 发出，可能在新一场冻结已判定之后才到——30s 的挂靠窗口
+/// 拦不住，于是上一场的现场被写进新报告（张冠李戴比缺失更坏：读报告的人会拿
+/// 上一场的帧当这一场的证据）。读不动/缺字段一律判不匹配。
+pub fn report_matches_freeze(path: &Path, started_epoch_ms: u64, tolerance_ms: u64) -> bool {
+    let Ok(raw) = fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return false;
+    };
+    let Some(actual) = v
+        .get("freeze")
+        .and_then(|f| f.get("started"))
+        .and_then(|x| x.as_u64())
+    else {
+        return false;
+    };
+    actual.abs_diff(started_epoch_ms) <= tolerance_ms
+}
+
 /// 把前端补交合并进已落盘的报告（读-改-写，报告文件很小）。
+/// 写入走「临时文件 + rename」原子替换：用户常在冻结未恢复时强杀进程再取报告，
+/// 半截 JSON 等于这次现场白留（与 write_report 同一理由）。
 pub fn merge_supplement(path: &Path, supplement: serde_json::Value) -> std::io::Result<()> {
     let raw = fs::read_to_string(path)?;
     let mut report: serde_json::Value = serde_json::from_str(&raw)
@@ -381,7 +754,9 @@ pub fn merge_supplement(path: &Path, supplement: serde_json::Value) -> std::io::
     if let Some(obj) = report.as_object_mut() {
         obj.insert("frontend".to_string(), supplement);
     }
-    fs::write(path, serde_json::to_string_pretty(&report)?)
+    let tmp = path.with_extension("json.tmp");
+    fs::write(&tmp, serde_json::to_string_pretty(&report)?)?;
+    fs::rename(&tmp, path)
 }
 
 // ── 进程过滤（纯函数，watchdog 采样用） ─────────────────────────────
@@ -616,6 +991,223 @@ mod tests {
         names.sort();
         assert_eq!(names, vec!["freeze-100030.json", "freeze-100040.json"]);
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// 一份「现场拿全」的报告样本：每个审计项都恰好满足，供审计器正反两向自测。
+    fn full_report_json() -> serde_json::Value {
+        serde_json::json!({
+            "meta": { "schemaVersion": SCHEMA_VERSION },
+            "freeze": { "started": 1, "ended": 2, "durationMs": 8000, "recovered": true },
+            "samples": [{
+                "renderer": {
+                    "pid": 5,
+                    "name": "msedgewebview2.exe",
+                    "threads": [{
+                        "tid": 7, "userMs": 7000, "kernelMs": 10, "cpuPct": 99.5,
+                        "park": { "module": "msedge.dll", "address": 4096, "offset": 64 }
+                    }]
+                }
+            }],
+            "ring": {},
+            "frontend": {
+                "gapMs": 8076,
+                "pass": 1,
+                "longFrames": [{ "t": 100, "durationMs": 8000, "scriptMs": 7900 }],
+                "longFramesSource": "timeline",
+                "longTasks": [{ "start": 100, "duration": 8000 }],
+                "longTasksSource": "ring",
+                "gauges": { "domNodes": 12345, "rows": 40 }
+            }
+        })
+    }
+
+    /// **缺前端补交时后面的检查必须照跑**：只该让 frontend 相关的项红，渲染进程栈
+    /// 那几项拿到了就得报绿。2026-09-17 自检首跑就是提前 return 只报了两项，把
+    /// 「渲染线程表拿到了」这个全场最有价值的产出吞了——审计器的价值有一半在
+    /// 「红的旁边告诉你哪些是绿的」。
+    #[test]
+    fn audit_without_frontend_still_reports_other_channels() {
+        let dir = std::env::temp_dir().join(format!(
+            "diag-audit-nofe-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("freeze-1.json");
+        let mut j = full_report_json();
+        j.as_object_mut().unwrap().remove("frontend");
+        std::fs::write(&path, j.to_string()).unwrap();
+
+        let v = audit(&path, 8000);
+        assert!(!v.ok, "缺前端补交必须整体不绿");
+        assert!(
+            v.checks.iter().any(|c| c.id == "renderer_threads" && c.ok),
+            "渲染线程通道应仍被评估并报绿，实际：{:?}",
+            v.checks.iter().map(|c| (c.id, c.ok)).collect::<Vec<_>>()
+        );
+        assert!(
+            v.checks.len() >= 10,
+            "不该提前返回——应给出全部检查项，实际 {} 项",
+            v.checks.len()
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 冻结身份闸：同一场的报告匹配、另一场的不匹配（±容差）。
+    #[test]
+    fn report_matches_freeze_by_started_with_tolerance() {
+        let dir = std::env::temp_dir().join(format!(
+            "diag-freezeid-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("freeze-1000000.json");
+        fs::write(
+            &path,
+            serde_json::json!({ "freeze": { "started": 1_000_000_u64 } }).to_string(),
+        )
+        .unwrap();
+        assert!(report_matches_freeze(&path, 1_000_000, 5_000), "同一场应匹配");
+        assert!(
+            report_matches_freeze(&path, 1_003_000, 5_000),
+            "前端按断档反推的起点有几百 ms 偏差，5s 容差内应匹配"
+        );
+        assert!(
+            !report_matches_freeze(&path, 1_010_000, 5_000),
+            "差 10s = 另一场冻结，必须拒收（否则上一场的现场会写进新报告）"
+        );
+        assert!(
+            !report_matches_freeze(&dir.join("missing.json"), 1_000_000, 5_000),
+            "读不到/解析失败一律判不匹配"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// **单块长阻塞只在线程路现形**：实测（2026-09-17 自检）注入 8s 忙等，LoAF 只给
+    /// 了 6 条 ~120ms 的帧、longtask 给了两条 50/60ms——JS 侧两个采集器对「一整块卡住」
+    /// 都是隐形的。真正抓到它的是跨进程线程采样（渲染主线程 96~102%、累计 CPU
+    /// 4203→9265ms）。这条用例锁住：帧全是杂鱼时，判据仍必须靠线程路成立。
+    #[test]
+    fn audit_culprit_via_renderer_cpu_when_no_long_frame() {
+        let dir = std::env::temp_dir().join(format!(
+            "diag-audit-cpu-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("freeze-1.json");
+        let mut j = full_report_json();
+        // 帧全是杂鱼（120ms），但线程累计 CPU 在涨
+        j["frontend"]["longFrames"] = serde_json::json!([
+            { "t": 100, "durationMs": 120, "scriptMs": 100, "styleLayoutMs": 0 }
+        ]);
+        j["samples"] = serde_json::json!([
+            { "renderer": { "pid": 5, "name": "msedgewebview2.exe", "threads": [
+                { "tid": 1284, "userMs": 300, "kernelMs": 0, "cpuPct": 0.0,
+                  "park": { "module": "msedge.dll", "address": 1, "offset": 2 } }] } },
+            { "renderer": { "pid": 5, "name": "msedgewebview2.exe", "threads": [
+                { "tid": 1284, "userMs": 8300, "kernelMs": 0, "cpuPct": 99.4,
+                  "park": { "module": "msedge.dll", "address": 1, "offset": 2 } }] } }
+        ]);
+        std::fs::write(&path, j.to_string()).unwrap();
+
+        let v = audit(&path, 8000);
+        let culprit = v.checks.iter().find(|c| c.id == "culprit_visible");
+        assert!(
+            culprit.is_some_and(|c| c.ok),
+            "帧全是 120ms 杂鱼时，线程路（8s 增量 + 99% 占用）必须让判据成立：{:?}",
+            culprit.map(|c| c.detail.clone())
+        );
+        assert!(v.ok, "其余项都合规，整体应全绿：{:?}", v.checks.iter().filter(|c| !c.ok).map(|c| (c.id, c.detail.clone())).collect::<Vec<_>>());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 审计器自测：合规报告必须全绿；**逐个抽掉关键格子必须各自变红**——
+    /// 一个永远说 PASS 的审计器等于没有审计器，而这套自检的全部意义就在这条。
+    #[test]
+    fn audit_flags_each_missing_piece() {
+        // 目录带纳秒后缀：同名测试若被并发注册（曾因重复 #[test] 属性发生），
+        // 共享同一份临时文件会互相读到对方的写入，断言随机飘。
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!("diag-audit-test-{stamp}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("freeze-1.json");
+
+        let full = full_report_json;
+
+        std::fs::write(&path, full().to_string()).unwrap();
+        let green = audit(&path, 8000);
+        assert!(
+            green.ok,
+            "合规报告必须全绿，实际报红：{:?}",
+            green.checks.iter().filter(|c| !c.ok).collect::<Vec<_>>()
+        );
+
+        // (检查名, 把关键格子打坏的闭包)
+        type Broken = (&'static str, fn(&mut serde_json::Value));
+        let cases: Vec<Broken> = vec![
+            ("frontend_present", |j| {
+                j.as_object_mut().unwrap().remove("frontend");
+            }),
+            ("freeze_detected", |j| {
+                j["freeze"]["recovered"] = serde_json::json!(false);
+            }),
+            ("long_frames_captured", |j| {
+                j["frontend"]["longFrames"] = serde_json::json!([]);
+            }),
+            ("culprit_visible", |j| {
+                // 两路都打掉：长帧降成杂鱼 + 线程既没增量也没占用
+                j["frontend"]["longFrames"][0]["durationMs"] = serde_json::json!(120);
+                j["frontend"]["longFrames"][0]["scriptMs"] = serde_json::json!(0);
+                j["frontend"]["longFrames"][0]["styleLayoutMs"] = serde_json::json!(0);
+                j["samples"][0]["renderer"]["threads"][0]["userMs"] = serde_json::json!(0);
+                j["samples"][0]["renderer"]["threads"][0]["cpuPct"] = serde_json::json!(0.0);
+            }),
+            ("capture_provenance", |j| {
+                j["frontend"]["longFramesSource"] = serde_json::json!("none");
+            }),
+            ("gauges_present", |j| {
+                j["frontend"]["gauges"]["domNodes"] = serde_json::json!(0);
+            }),
+            ("renderer_threads", |j| {
+                j["samples"] = serde_json::json!([]);
+            }),
+            ("renderer_park_resolved", |j| {
+                j["samples"][0]["renderer"]["threads"][0]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("park");
+            }),
+            ("renderer_cpu_delta", |j| {
+                j["samples"][0]["renderer"]["threads"][0]["cpuPct"] = serde_json::json!(0.0);
+            }),
+            ("schema_version", |j| {
+                j["meta"]["schemaVersion"] = serde_json::json!(SCHEMA_VERSION - 1);
+            }),
+        ];
+        for (id, break_it) in cases {
+            let mut j = full();
+            break_it(&mut j);
+            std::fs::write(&path, j.to_string()).unwrap();
+            let v = audit(&path, 8000);
+            assert!(!v.ok, "打坏 {id} 之后审计仍说 PASS");
+            assert!(
+                v.checks.iter().any(|c| c.id == id && !c.ok),
+                "{id} 应报红，实际：{:?}",
+                v.checks.iter().map(|c| (c.id, c.ok)).collect::<Vec<_>>()
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

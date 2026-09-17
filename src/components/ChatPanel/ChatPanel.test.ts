@@ -43,11 +43,14 @@ vi.mock("@/api/permissions", () => ({
 vi.mock("../../utils/diagnostics/scrollTrail", () => ({ trail: vi.fn(), snapshotScrollTrail: vi.fn() }));
 
 // ── 其余 composable stub（ChatPanel onMounted/watch 依赖）──
+// 形状必须与 useChatScroll 的返回值一致（行模型：rows/landing——ramp 时代是
+// visibleRows/ramping，已拆；stub 落后会让「组件拿到的字段名写错」这类回归静默通过）
 vi.mock("../../composables/useChatScroll", () => ({
   useChatScroll: () => ({
-    scrollEl: null, contentEl: null, visibleMessages: [], hiddenCount: 0,
-    ramping: false, onScroll: vi.fn(), jumpToBottom: vi.fn(), farFromBottom: false,
-    newWhileAway: false, expandOlderAnchored: vi.fn(),
+    scrollEl: null, contentEl: null, rows: [], landing: false, restoring: false,
+    onScroll: vi.fn(), jumpToBottom: vi.fn(), farFromBottom: false,
+    newWhileAway: false, expandOlderAnchored: vi.fn(), restoreAnchored: vi.fn(),
+    expandLiveAnchored: vi.fn(),
   }),
 }));
 vi.mock("../../composables/useBtwSession", () => ({

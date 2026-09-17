@@ -514,7 +514,7 @@ watch(inputText, (val) => {
 });
 
 // 切换会话时清空待发图片/引用芯片
-// （滚动/窗口复位 + 分帧 ramp 由 useChatScroll 自己 watch sessionId 处理）
+// （滚动/窗口复位 + 切入收紧与落位由 useChatScroll 自己 watch sessionId 处理）
 //
 // 注意:切会话绝不清理 btw 支线——此前这里调 btw.cleanup(),跑中的支线(问答/
 // git-commit)直接被 kill,像被"取消"了一样。现在:抽屉可见性由 ownerSessionId

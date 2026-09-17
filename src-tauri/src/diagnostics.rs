@@ -20,6 +20,7 @@ pub mod experiment;
 mod report;
 mod ring;
 mod stackwalk;
+mod threads;
 pub mod trace;
 mod watchdog;
 
@@ -40,6 +41,9 @@ const HEARTBEAT_RING_CAP: usize = 300;
 const EVENT_RATE_RING_CAP: usize = 360;
 /// 前端补交的挂靠窗口：报告落盘后多久内的补交才被合并
 const SUPPLEMENT_WINDOW: Duration = Duration::from_secs(30);
+/// 冻结身份比对容差：补交带的起点是前端按断档反推的 epoch，报告里的起点是
+/// 「最后一拍心跳」——两者天然差几百 ms，给足 5s 余量挡的是**另一场冻结**。
+const FREEZE_ID_TOLERANCE_MS: u64 = 5_000;
 
 pub struct DiagnosticsState(pub Arc<DiagInner>);
 
@@ -52,6 +56,14 @@ pub struct DiagInner {
     pub event_rates: Mutex<EventRates>,
     /// 最近一份落盘报告（路径 + 落盘时刻），前端补交挂靠用
     pub last_report: Mutex<Option<(PathBuf, Instant)>>,
+    /// 本场冻结的前端补交（全量长帧/长任务/现场状态）。
+    ///
+    /// **必须在内存里留一份**：报告是「进行中增量重写 + 恢复后收尾重写」两次落盘，
+    /// 而补交几乎总在收尾那次之前到达（补交搭恢复心跳的车，watchdog 下一个 tick 才
+    /// 收尾）。只往文件里 merge 的话，收尾重写会用内存里的 `frontend: None` 把它抹掉
+    /// ——2026-09-17 实证：磁盘上 20/20 份报告的 `frontend` 字段全缺，这条投递链
+    /// 一直是死的。新冻结开始时清空（watchdog.rs 起冻结分支）。
+    pub frontend_supplement: Mutex<Option<serde_json::Value>>,
 }
 
 impl DiagnosticsState {
@@ -62,6 +74,7 @@ impl DiagnosticsState {
             heartbeats: Mutex::new(Ring::new(HEARTBEAT_RING_CAP)),
             event_rates: Mutex::new(EventRates::new(EVENT_RATE_RING_CAP)),
             last_report: Mutex::new(None),
+            frontend_supplement: Mutex::new(None),
         }))
     }
 
@@ -220,9 +233,15 @@ pub fn diag_heartbeat(state: State<DiagnosticsState>, payload: HeartbeatPayload)
     });
 }
 
-/// 前端从卡死中恢复后补交现场（longtask 明细 + 面包屑快照）。
+/// 前端从卡死中恢复后补交现场（长帧全量明细 + longtask 明细 + 现场状态 + 面包屑）。
 /// 合并进最近 30s 内落盘的报告；没有可挂靠的报告则静默丢弃
 /// （watchdog 视角没成立的冻结，比如纯后台节流，不值得留档）。
+///
+/// 两条路一起写，缺一条就会丢：
+/// - **内存**：报告收尾那次重写从内存取（`flush_report`）——不写内存，收尾就把
+///   文件里刚 merge 的补交抹掉（2026-09-17 前的实际后果：20/20 份报告没有 frontend）；
+/// - **磁盘**：立即 merge 进当前文件——用户强杀进程（ongoing 冻结最常见收尾）时
+///   内存那份会随进程消失，文件里这份留得住。两处都幂等，重复补交后者覆盖前者。
 #[tauri::command]
 pub async fn diag_freeze_supplement(
     state: State<'_, DiagnosticsState>,
@@ -236,6 +255,15 @@ pub async fn diag_freeze_supplement(
         .as_ref()
         .and_then(|(p, at)| (at.elapsed() < SUPPLEMENT_WINDOW).then(|| p.clone()));
     let Some(path) = path else { return Ok(()) };
+    // 迟到闸：第二趟补交晚 2.5s 才发，可能在新一场冻结已经判定之后才到——30s 的
+    // 挂靠窗口拦不住它，于是上一场的现场会被写进**新报告**，读报告的人张冠李戴。
+    // 按冻结身份比对，不匹配就整份丢弃：宁缺勿错（错误归因比缺失更贵）。
+    if let Some(expect) = payload.get("freezeStartedMs").and_then(|v| v.as_u64()) {
+        if !report::report_matches_freeze(&path, expect, FREEZE_ID_TOLERANCE_MS) {
+            return Ok(());
+        }
+    }
+    *state.0.frontend_supplement.lock().unwrap() = Some(payload.clone());
     tauri::async_runtime::spawn_blocking(move || report::merge_supplement(&path, payload))
         .await
         .map_err(|e| e.to_string())?

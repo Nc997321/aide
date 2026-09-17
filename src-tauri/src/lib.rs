@@ -225,6 +225,11 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::experiment::autorun_on_startup(app.handle());
 
+            // 冻结报告现场完整性自检（仅 dev/诊断包；AIDE_FREEZE_SELFCHECK=<ms>）
+            // ——注入真冻结后审报告，退出码即 verdict。见 experiment.rs 注释。
+            #[cfg(any(debug_assertions, feature = "devtools"))]
+            diagnostics::experiment::selfcheck_on_startup(app.handle());
+
             // 注入 release 资源目录给 provider catalog 加载器（dev 走 CARGO_MANIFEST_DIR）
             #[cfg(not(debug_assertions))]
             {

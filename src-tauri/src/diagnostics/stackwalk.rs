@@ -33,19 +33,20 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE};
 #[cfg(all(windows, target_arch = "x86_64"))]
 use windows::Win32::System::Diagnostics::Debug::{
-    AddrModeFlat, GetThreadContext, StackWalk64, SymInitializeW, SymSetOptions, ADDRESS64, CONTEXT,
-    CONTEXT_FULL_AMD64, STACKFRAME64, SYMOPT_DEFERRED_LOADS, SYMOPT_UNDNAME,
+    AddrModeFlat, GetThreadContext, StackWalk64, SymCleanup, SymInitializeW, SymSetOptions,
+    ADDRESS64, CONTEXT, CONTEXT_FULL_AMD64, STACKFRAME64, SYMOPT_DEFERRED_LOADS, SYMOPT_UNDNAME,
 };
 #[cfg(all(windows, target_arch = "x86_64"))]
 use windows::Win32::System::ProcessStatus::GetModuleFileNameExW;
 #[cfg(all(windows, target_arch = "x86_64"))]
 use windows::Win32::System::Threading::{
-    GetCurrentProcess, OpenThread, ResumeThread, SuspendThread, THREAD_ACCESS_RIGHTS,
-    THREAD_GET_CONTEXT, THREAD_QUERY_LIMITED_INFORMATION, THREAD_SUSPEND_RESUME,
+    GetCurrentProcess, OpenProcess, OpenThread, ResumeThread, SuspendThread, PROCESS_ACCESS_RIGHTS,
+    PROCESS_QUERY_INFORMATION, PROCESS_VM_READ, THREAD_ACCESS_RIGHTS, THREAD_GET_CONTEXT,
+    THREAD_QUERY_LIMITED_INFORMATION, THREAD_SUSPEND_RESUME,
 };
 
 /// 调用链中的一帧：模块 basename + 绝对地址 + 相对模块基址偏移。
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct StackFrame {
     pub module: Option<String>,
     pub address: u64,
@@ -54,6 +55,7 @@ pub struct StackFrame {
 
 /// 抓到的主线程顶帧。模块/偏移用于报告 `mainThread.park`。
 /// `frames` 为完整调用链（顶帧在前），仅 `walk_full=true` 时填充；空表示该帧只抓了顶帧。
+#[derive(Debug)]
 pub struct ParkFrame {
     pub module: Option<String>,
     pub address: u64,
@@ -195,6 +197,99 @@ unsafe fn park_frame_inner(h: HANDLE, ctx: &mut CONTEXT, walk_full: bool) -> Opt
         offset: if base != 0 { rip - base } else { 0 },
         frames,
     })
+}
+
+/// 目标进程的符号会话 + 进程句柄——跨进程抓顶帧用（渲染进程那个「谁在烧 CPU」）。
+///
+/// 为什么要有它：JS 侧探针（LoAF / longtask）都靠渲染主线程**自己的回调**把数据
+/// 取出来，而冻结最严重时它恰恰跑不动——实测 8.2 秒窗口里 50 个长任务只喂到 2 条
+/// 帧；用户强杀不恢复的冻结更是一条都拿不到。这条路径从宿主进程侧采样，不需要
+/// 渲染进程配合。
+///
+/// `SymInitialize` 要求「每个进程句柄各自初始化一次」，所以会话与句柄同生命周期：
+/// 一场冻结开一次（watchdog 持有），冻结收尾 Drop → SymCleanup + CloseHandle。
+/// 只抓顶帧、不跑 StackWalk64 全栈：顶帧的模块名就足以把 V8 / Blink / 合成光栅 /
+/// 系统调用等待分开，而跨进程走全栈要多一套内存读回调与函数表访问——收益不抵复杂度。
+pub struct ForeignProc {
+    h: HANDLE,
+    pid: u32,
+}
+
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+impl ForeignProc {
+    pub fn open(_pid: u32) -> Option<Self> {
+        None
+    }
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+    pub fn top_frame(&self, _tid: u32) -> Option<ParkFrame> {
+        None
+    }
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+impl ForeignProc {
+    /// 打开目标进程并为其建立 dbghelp 会话。失败（权限/进程已退）返回 None。
+    pub fn open(pid: u32) -> Option<Self> {
+        unsafe {
+            // GetModuleFileNameExW 与 dbghelp 读目标进程内存都需要 VM_READ；
+            // 同用户同完整性级别下必然成功，跨完整性（提权进程）会失败 → 降级 None。
+            let access = PROCESS_ACCESS_RIGHTS(PROCESS_QUERY_INFORMATION.0 | PROCESS_VM_READ.0);
+            let h = OpenProcess(access, false, pid).ok()?;
+            // 初始化失败不致命：模块名走 GetModuleFileNameExW 兜底，顶帧仍可解析。
+            let _ = SymInitializeW(h, PCWSTR::null(), true);
+            Some(Self { h, pid })
+        }
+    }
+
+    pub fn pid(&self) -> u32 {
+        self.pid
+    }
+
+    /// 抓某线程当前顶帧（模块 basename + 偏移）。挂起 µs 级、必 Resume。
+    /// 失败（线程已退/权限不足）返回 None，绝不 panic。
+    pub fn top_frame(&self, tid: u32) -> Option<ParkFrame> {
+        unsafe {
+            let access = THREAD_ACCESS_RIGHTS(
+                THREAD_SUSPEND_RESUME.0 | THREAD_GET_CONTEXT.0 | THREAD_QUERY_LIMITED_INFORMATION.0,
+            );
+            let h = OpenThread(access, false, tid).ok()?;
+            let prev = SuspendThread(h);
+            let result = if prev != u32::MAX {
+                let mut ctx = CONTEXT::default();
+                ctx.ContextFlags = CONTEXT_FULL_AMD64;
+                if GetThreadContext(h, &mut ctx as *mut CONTEXT).is_ok() && ctx.Rip != 0 {
+                    let (top, base) = resolve_frame(self.h, ctx.Rip);
+                    Some(ParkFrame {
+                        module: top.module,
+                        address: ctx.Rip,
+                        module_base: base,
+                        offset: if base != 0 { ctx.Rip - base } else { 0 },
+                        // 跨进程不走全栈（见类型注释），顶帧就够分类
+                        frames: Vec::new(),
+                    })
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let _ = ResumeThread(h);
+            let _ = CloseHandle(h);
+            result
+        }
+    }
+}
+
+#[cfg(all(windows, target_arch = "x86_64"))]
+impl Drop for ForeignProc {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = SymCleanup(self.h);
+            let _ = CloseHandle(self.h);
+        }
+    }
 }
 
 /// 解析一帧：模块 basename + 偏移。返回 (StackFrame, module_base)——base 供顶帧

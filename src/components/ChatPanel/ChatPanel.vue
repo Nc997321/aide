@@ -445,13 +445,12 @@ onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
 // 滚动 / 加载历史 / 页级回收全部收拢到 useChatScroll（行模型）：上滚到顶部触发带
 // 自动取更早页；已加载页超字节预算时热区外页折叠成骨架（实测高度撑住不跳滚），
-// 滚动停驻时结算回收/取回；切会话首帧 ramp 分帧挂载防 jam。
+// 滚动停驻时结算回收/取回；切入按热区页收紧驻留量（挂载量由窗口决定，无分帧 ramp）。
 // 见 composables/useChatScroll.ts 与 useChatSession/recycle.ts。
 const {
   scrollEl,
   contentEl,
-  visibleRows,
-  ramping,
+  rows,
   onScroll,
   jumpToBottom,
   farFromBottom,
@@ -530,14 +529,14 @@ function onOpenBgDock(taskId: string) {
            纯布局 wrapper，消息增高的任何来源都会反映为它的盒高变化 -->
       <div ref="contentEl" class="chat-messages-body">
         <button
-          v-if="canLoadOlder && !ramping"
+          v-if="canLoadOlder"
           class="chat-history-gate"
           @click="expandOlderAnchored"
         >
           上方还有更早消息 · 点击或继续上滚加载
         </button>
         <ChatRow
-          v-for="row in visibleRows"
+          v-for="row in rows"
           :key="row.id"
           :row="row"
           :workspace-path="workspacePath"

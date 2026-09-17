@@ -19,8 +19,11 @@ import type { ChatMessage } from "@/types/chat";
 
 /**
  * 几何仿真 v2（2026-09-07 live 窗口化）：单会话、行模型感知——children/scrollHeight
- * 从 api.visibleRows 推导（page=count×行高 / skeleton、liveskel=记账高 / live=单条行高、
+ * 从 api.rows 推导（page=count×行高 / skeleton、liveskel=记账高 / live=单条行高、
  * 无 row-id），不再假设消息↔元素 1:1。
+ *
+ * 一次性挂载（2026-09-17 拆 ramp）：rows 已是「窗口的函数」，不再有首帧 6 行 → 逐帧
+ * 补齐的切片过程——DOM 快照直接跟随 api.rows 即可，无需为「分帧挂载中」的中间态建模。
  *
  * 刻意不做跨会话切换：mock 的几何跟随 active 会话的 rows，而切走 watcher（pre-flush）
  * 需要读到「离开会话」的几何——真实 DOM 能做到（旧 DOM 还挂着），mock 做不到
@@ -124,7 +127,7 @@ function makeGeometry(m: GeoModel, domRows: Ref<Row[]>) {
 }
 
 /** 标准现场：页 [0, pageEnd) loaded + live 段（共 n 条）。单会话（无 sid 切换），
- *  DOM 快照跟随 visibleRows。sid 逐测试自增：pageLedgers/stores 是模块级状态，
+ *  DOM 快照跟随 rows。sid 逐测试自增：pageLedgers/stores 是模块级状态，
  *  共用 sid 会跨测试污染台账。 */
 let sidSeq = 0;
 function setup(opts?: { rows?: number; pageEnd?: number }) {
@@ -156,11 +159,11 @@ function setup(opts?: { rows?: number; pageEnd?: number }) {
     clientHeight: 817,
     scrollTop: 0,
   };
-  // DOM 快照：单会话现场（无 sid 切换）——sync 跟随 visibleRows，测试确定性优先；
+  // DOM 快照：单会话现场（无 sid 切换）——sync 跟随 rows，测试确定性优先；
   // 跨会话的「pre-flush 读旧 DOM」语义由 useChatScroll.test.ts 的 fakeScrollEl 系列覆盖
   const domRows = ref<Row[]>([]);
-  watch([() => api.visibleRows.value, sid], () => {
-    domRows.value = [...api.visibleRows.value];
+  watch([() => api.rows.value, sid], () => {
+    domRows.value = [...api.rows.value];
   }, { flush: "sync", immediate: true });
   const geo = makeGeometry(m, domRows);
   api.scrollEl.value = geo.scrollEl;
@@ -174,7 +177,9 @@ describe("useChatScroll 几何仿真 v2（live 窗口化，单会话）", () => 
     const { flush, api } = setup({ rows: 100, pageEnd: 10 });
     await flush();
     // rows = [pg0(1000), liveskel(6000), 40 live(4000)] → 总高 11000
-    expect(api.visibleRows.value.length).toBe(42);
+    // 一次性挂载语义下这 42 行在切入那一刻就全在（没有 ramp 的逐帧递增中间态），
+    // 但总高仍由 liveskel 的记账高守恒——滚动补偿与落点都建立在这个守恒上。
+    expect(api.rows.value.length).toBe(42);
     expect(api.scrollEl.value!.scrollHeight).toBe(11000);
   });
 
@@ -184,15 +189,15 @@ describe("useChatScroll 几何仿真 v2（live 窗口化，单会话）", () => 
     await api.expandLiveAnchored(); // 50 → 10
     await api.expandLiveAnchored(); // 10 → 0：退役
     await flush();
-    expect(api.visibleRows.value.some((r) => r.kind === "liveskel")).toBe(false);
+    expect(api.rows.value.some((r) => r.kind === "liveskel")).toBe(false);
     // 全量可见：pg0 + 90 live
-    expect(api.visibleRows.value.filter((r) => r.kind === "live").length).toBe(90);
+    expect(api.rows.value.filter((r) => r.kind === "live").length).toBe(90);
   });
 
   it("钉底流式滑动：append 触发 DOM 实测滑动，挂载 live 行数恒 ≤ K", async () => {
     const { list, flush, api } = setup({ rows: 100 });
     await flush(); // rows = [liveskel(60), 40 live]：挂载 live = 40 = K
-    expect(api.visibleRows.value.filter((r) => r.kind === "live").length).toBe(40);
+    expect(api.rows.value.filter((r) => r.kind === "live").length).toBe(40);
     list.value = [
       ...list.value,
       { id: "m100", role: "assistant" as const, blocks: [{ type: "text" as const, text: "n" }], timestamp: 999 },
@@ -200,10 +205,10 @@ describe("useChatScroll 几何仿真 v2（live 窗口化，单会话）", () => 
     await nextTick();
     await flush();
     // 新消息 +1 → 挂载 live 41 → 滑出头部 1 条（实测高 100 折入隐藏区）→ 恒 ≤ K
-    expect(api.visibleRows.value.filter((r) => r.kind === "live").length).toBe(40);
-    expect(api.visibleRows.value.filter((r) => r.kind === "liveskel").length).toBe(1);
+    expect(api.rows.value.filter((r) => r.kind === "live").length).toBe(40);
+    expect(api.rows.value.filter((r) => r.kind === "liveskel").length).toBe(1);
     // 总高守恒：liveskel 记账高 +100（滑出行实测高；创建估算 60×120=7200 基础上）
-    const lsRow = api.visibleRows.value.find((r) => r.kind === "liveskel");
+    const lsRow = api.rows.value.find((r) => r.kind === "liveskel");
     expect(lsRow && lsRow.kind === "liveskel" ? lsRow.heightPx : -1).toBe(7300);
   });
 
@@ -230,6 +235,7 @@ describe("useChatScroll 几何仿真 v2（live 窗口化，单会话）", () => 
 });
 
 // 【未实测·未验收】展开的 sh-delta 视口补偿（「内容不跳」像素级断言）与滑动
-// hiddenPx 逐条累加精度：jsdom mock 的 domRows 时序（sync watcher 与
-// mountedCount 提升的交错）无法忠实建模真实渲染管线，两用例反复给出不稳定值，
-// 已移除——以真机验收（scripts/diag 采样器：瞬峰/落点/棘轮/冻结四指标）为准。
+// hiddenPx 逐条累加精度：jsdom mock 的 domRows 时序（sync watcher 与引擎真实
+// 渲染时序——行高在下一帧被图片/高亮推高——的交错）无法忠实建模，两用例反复
+// 给出不稳定值，已移除——以真机验收（scripts/diag 采样器：瞬峰/落点/棘轮/冻结
+// 四指标）为准。

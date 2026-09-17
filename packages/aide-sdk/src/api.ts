@@ -79,6 +79,8 @@ export interface BtwAskParams {
  *  产出侧是桌面 `src/utils/diagnostics/longFrames.ts`；此处是**线上形状**声明，
  *  不反向 import 产出侧类型（SDK 不依赖 src）。 */
 export interface DiagLongFrame {
+  /** 帧起点（performance.now 时间轴，ms）——排序与对时都靠它，缺了就只能猜先后。 */
+  t: number;
   durationMs: number;
   scriptMs: number;
   styleLayoutMs: number;
@@ -105,6 +107,29 @@ export interface DiagHeartbeatPayload {
    *  `supported=false` = 本环境没装上 LoAF（Chromium 过老），此时 count 恒 0 ——
    *  必须与「确实没长帧」区分开，否则报告会被读成"渲染没问题"。 */
   frames: { count: number; worst: DiagLongFrame | null; supported: boolean };
+  /** 现场状态读数：每拍一份 → 报告里就是挂载量随时间的增长曲线。
+   *  形状镜像桌面 `src/utils/diagnostics/frontendState.ts` 的 `FrontendGauges`
+   *  （同为「线上形状」声明，SDK 不反向 import src；漂移由两端测试兜）。 */
+  gauges: DiagGauges;
+}
+
+/** 现场状态读数（镜像桌面 FrontendGauges）。 */
+export interface DiagGauges {
+  /** 活动会话 id */
+  sessionId: string;
+  /** 渲染行数（行模型长度，≠ 消息数） */
+  rows: number;
+  messages: number;
+  /** 内容区 DOM 节点数（**采样值**：每 4 拍真读一次） */
+  domNodes: number;
+  /** JS 堆占用（MB）；取不到为 0 */
+  jsHeapMb: number;
+  /** 切入落点写入中（原 ramping） */
+  landing: boolean;
+  /** liveskel 隐藏条数 >0 = 被窗口化的长会话 */
+  liveHidden: number;
+  /** 注册中的聊天面板数 */
+  panels: number;
 }
 
 export const api = {

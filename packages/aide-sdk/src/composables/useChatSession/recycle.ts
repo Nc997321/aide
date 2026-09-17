@@ -50,8 +50,13 @@ export interface LiveWindowState {
 /** 无 DOM 可测时的单条消息估算高度（聊天气泡含 padding/代码块，取偏保守值——
  *  误差在下次实测时自校正，只影响从未上过屏的后台会话骨架）。 */
 export const ESTIMATE_MESSAGE_HEIGHT_PX = 120;
-/** 已加载页总字节预算（jsonl UTF-8 字节，≈内存代理）：超出才释放热区外页。 */
-export const RECYCLE_BYTES_BUDGET = 16 * 1024 * 1024;
+/** 已加载页总字节预算（jsonl UTF-8 字节，≈内存代理）：超出才释放热区外页。
+ *
+ * 16MB → 2MB（2026-09-17）：16MB 比本机最大会话（14.19MB 实测）还大 ⇒ **回收
+ * 从未触发过**——「页级回收」是一道永不落下的闸，长会话等于全量驻留。
+ * 2MB ≈ 8 页 × 256KB：视口页 ±1 恒驻（3 页），余量留给连续翻页，同时把单会话
+ * 驻留量钉在 ~2MB jsonl 量级（渲染块数/节点数随字节走，见 freeze-1789629633117）。 */
+export const RECYCLE_BYTES_BUDGET = 2 * 1024 * 1024;
 /** 热区半径：视口所在页 ±K 页不释放。 */
 const HOT_ZONE_RADIUS = 1;
 
@@ -186,6 +191,32 @@ export function releaseFarthestPages(
     }
   }
   return released;
+}
+
+/** 收紧某会话的驻留页到预算内：热区（视口页 ±HOT_ZONE_RADIUS）留载，其余释放成骨架。
+ *
+ * 切走（budget 0，见 useChatScroll.collapseAndTightenForSwitchAway）与**切入**共用；
+ * 切入那一次必须在**建行/渲染之前**调用（watch(sessionId) pre-flush），否则整会话先
+ * 挂载一遍再回收——等于没省（2026-09-17 拆 ramp 时明确：挂载量由本函数 + 预算兜底，
+ * 不再靠逐帧切片）。
+ *
+ * `anchorRowId` = 切回落点所在行 id：用它反查热区页比推算视口可靠——切入时 DOM 还是
+ * 上一个会话的，量不出新会话的视口。热区页算不出（无锚/无记忆）则回退保留最新 2 页。
+ * 无 DOM 时骨架高走估算：落点补偿量的是锚行在真实 DOM 里的位置（useChatScroll.
+ * landAnchored），不受估算误差影响。返回释放页数。 */
+export function tightenResidentPages(
+  sid: string,
+  opts: { budget: number; anchorRowId?: string },
+): number {
+  const ledger = pageLedgers.get(sid);
+  if (!ledger || ledger.length === 0) return 0;
+  // 锚行 id = 页台账条目 id（page 行与 skeleton 行同 id），直接反查页索引——
+  // 不必建行也不必视口推算（切入时量不到新会话的视口）。
+  const hot = opts.anchorRowId ? ledger.findIndex((p) => p.id === opts.anchorRowId) : -1;
+  return releaseFarthestPages(sid, {
+    budget: opts.budget,
+    hotPageIndex: hot >= 0 ? hot : undefined,
+  });
 }
 
 /** liveskel 行的稳定 id（跨 recompute 不变，v-for key / 高度表 / 锚定都靠它）。 */

@@ -25,6 +25,7 @@ import {
   releasePage,
   restorePage,
   setViewportHot,
+  tightenResidentPages,
   type Row,
 } from "./useChatSession/recycle";
 import type { ChatMessage } from "../types/chat";
@@ -237,6 +238,74 @@ describe("useChatSession/recycle 页级回收", () => {
     const released = releaseFarthestPages("s1", { budget: 50, preserveNewest: 2 });
     expect(released).toBe(1); // 最老页释放，最新 2 页豁免
     expect(pageLedgers.get("s1")!.map((p) => p.loaded)).toEqual([false, true, true]);
+  });
+
+  // ── 切入收紧（tightenResidentPages，2026-09-17 拆 ramp）──
+  // 拆掉分帧挂载后，挂载量由「切入收紧 + 停驻结算」两处结构性窗口决定：切入那次必须
+  // 在**建行之前**（useChatScroll 的 watch(sessionId) pre-flush）把远端页放掉，否则
+  // 整会话先挂一遍再回收——等于没省。
+
+  /** 4 页 × 1MB 的长会话现场：预算 2MB 下必须收得动（16MB 旧预算比会话还大 ⇒ 永不触发）。
+   *  sid 逐用例错开：recycle.ts 的 viewportHot 是模块级 Map 且 resetAllState 不清它，
+   *  共用 sid 会读到别处 setViewportHot 留下的热区页（→ hot 分支取代「保留最新 2 页」）。 */
+  function setupMbPages(sid: string, n: number) {
+    const MB = 1024 * 1024;
+    const pages = Array.from({ length: n }, (_, i) =>
+      makePage({ id: `pg${i}`, count: 1, bytes: MB, startOffset: i * MB, endOffset: (i + 1) * MB }),
+    );
+    return setupSession(sid, pages, 0);
+  }
+
+  it("tightenResidentPages：无锚行回退保留最新 2 页，更老的释放成骨架行", () => {
+    const sid = "s-tight-anchorless";
+    const store = setupMbPages(sid, 4);
+    // 切入时还量不到新会话的视口（DOM 还是上一个会话的）且无位置记忆 → 无锚行
+    const released = tightenResidentPages(sid, { budget: 2 * 1024 * 1024 });
+    expect(released).toBe(2); // 4MB → 2MB：只放得动最老两页（最新 2 页豁免）
+    expect(pageLedgers.get(sid)!.map((p) => p.loaded)).toEqual([false, false, true, true]);
+    // 行模型随之立刻是骨架分布（不是「先全量挂载再回收」）
+    expect(buildRows(sid, store.messages).map((r) => r.kind)).toEqual([
+      "skeleton",
+      "skeleton",
+      "page",
+      "page",
+    ]);
+  });
+
+  it("tightenResidentPages：anchorRowId 反查热区页，±1 页豁免", () => {
+    const sid = "s-tight-anchored";
+    setupMbPages(sid, 4);
+    // 切回落点所在行（锚行 id = 台账条目 id）= 第 1 页 → 热区 [0,2] 全豁免，
+    // 预算内只剩第 3 页可放（放完 3MB 仍超 2MB，但已无可放页）
+    const released = tightenResidentPages(sid, { budget: 2 * 1024 * 1024, anchorRowId: "pg1" });
+    expect(released).toBe(1);
+    expect(pageLedgers.get(sid)!.map((p) => p.loaded)).toEqual([true, true, true, false]);
+  });
+
+  it("tightenResidentPages：预算内不动结构；未知锚行 id 回退保留最新 2 页", () => {
+    const sid = "s-tight-unknown-anchor";
+    const store = setupMbPages(sid, 4);
+    // 预算内的会话：一条也不放（收紧是「超了才收」，不是每次切入都清一遍）
+    expect(tightenResidentPages(sid, { budget: 8 * 1024 * 1024 })).toBe(0);
+    expect(pageLedgers.get(sid)!.filter((p) => p.loaded).length).toBe(4);
+    // 锚行 id 对不上任何台账条目（页被丢/会话已换）→ 与无锚同路径
+    expect(tightenResidentPages(sid, { budget: 2 * 1024 * 1024, anchorRowId: "pg-gone" })).toBe(2);
+    expect(buildRows(sid, store.messages).map((r) => r.kind)).toEqual([
+      "skeleton",
+      "skeleton",
+      "page",
+      "page",
+    ]);
+  });
+
+  it("预算 2MB：14MB 级长会话切进来也收得动（回归：16MB 预算比会话还大 ⇒ 回收从未触发）", () => {
+    const sid = "s-tight-longsession";
+    setupMbPages(sid, 14);
+    expect(loadedPagesBytes(sid)).toBe(14 * 1024 * 1024);
+    const released = tightenResidentPages(sid, { budget: 2 * 1024 * 1024 });
+    // 释放到预算内（最老页起一个个放，直到 ≤2MB）
+    expect(released).toBe(12);
+    expect(loadedPagesBytes(sid)).toBe(2 * 1024 * 1024);
   });
 
   it("loadedPagesBytes / liveMessageCount 账本", () => {
