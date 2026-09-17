@@ -42,6 +42,14 @@ impl BrowserEngine for UnsupportedEngine {
     fn eval(&self, _id: &BrowserViewId, _script: &str) -> Result<serde_json::Value, EngineError> {
         Err(EngineError::PlatformUnsupported)
     }
+    fn call_cdp(
+        &self,
+        _id: &BrowserViewId,
+        _method: &str,
+        _params: &serde_json::Value,
+    ) -> Result<serde_json::Value, EngineError> {
+        Err(EngineError::PlatformUnsupported)
+    }
     fn capture(&self, _id: &BrowserViewId) -> Result<Vec<u8>, EngineError> {
         Err(EngineError::PlatformUnsupported)
     }

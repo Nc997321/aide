@@ -6,6 +6,7 @@ import type { ChatEvent } from "../types.js";
 import { codegraphMcpRegistration } from "../../extensions/codegraphTools.js";
 import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
+import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
@@ -56,6 +57,11 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // **未登录也挂**——凭据每次调用现读，未配置时工具返回「去知识库面板登录」的引导
   // 文本（设计 spec §5.1）。无 emit 参数：直连知识库的 HTTP，不走主进程 IPC。
   const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.cwd);
+  // 内嵌浏览器读写（读骨架 / 执行脚本 / CDP）：注册条件=!trusted 跳过、AIDE_BROWSER_TOOLS=off
+  // 跳过。**带 emit**——它要走 request_id 桥回桌面 Rust 驱动 WebView2（本仓库第三种形态：
+  // knowledge 直连 HTTP、docs 本地同步解析、codegraph 与本插件回主进程）。
+  // headless 下**照挂**，由工具层发起前短路成引导文本（不在注册处摘除，理由见 browserMcp.ts）。
+  const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK
@@ -86,7 +92,12 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   //（内建 sdk 型天然不受影响）；桌面路径 mcpHeaders=undefined 时零拷贝直通
   //（见 sessionMetadata.ts）。
   const assembledMcp = assembleMcpServers(
-    { ...(codegraphMcp ?? {}), ...(docsMcp ?? {}), ...(knowledgeMcp ?? {}) },
+    {
+      ...(codegraphMcp ?? {}),
+      ...(docsMcp ?? {}),
+      ...(knowledgeMcp ?? {}),
+      ...(browserMcp ?? {}),
+    },
     userMcp,
   );
   const mcpServers = applyMcpHeaders(

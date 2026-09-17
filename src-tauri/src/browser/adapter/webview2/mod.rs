@@ -1,20 +1,20 @@
 //! WebView2 适配器（Windows）。
 //!
-//! 实现 `BrowserEngine` 的可视子集 + 页面加载信号：create（含 `on_page_load` 观察者接线）/
-//! navigate / reload / stop / set_bounds / set_visible / close。这些只用 tauri `Webview` 自带方法
-//! （`add_child` / `eval` / `set_position` / `set_size` / `show` / `hide` / `close`），
-//! **不引 webview2-com**。
+//! 实现 `BrowserEngine`：可视子集 + 页面加载信号（create / navigate / reload / stop /
+//! set_bounds / set_visible / close）走 tauri `Webview` 自带方法；**agent 路径**（`eval` 带返回值、
+//! `call_cdp`）下沉到同目录 `native.rs` —— 那是全仓库唯一 `use webview2_com` 的地方。
 //!
-//! 截图（capture）、带返回值的脚本注入（eval→Value）、cookie 清除需下钻裸 WebView2
-//! （`with_webview(|pw| pw.controller())` → `ICoreWebView2` 的 CapturePreview/ExecuteScript/
-//! CookieManager）——**这是 agent 路径的地基（下一批）**，现在如实返回带说明的 `EngineError`，
-//! 不静默假装成功。
+//! 仍未实现、**如实报错**（不假装成功）：截图 `capture`（需 `CapturePreview`）、
+//! cookie 清除 `cookies_clear`（需 `CookieManager`）。
 //!
 //! 线程（两条，都已在源码核实）：
 //! - `add_child` / `eval` / `set_position` 内部 `run_on_main_thread` + 阻塞 `rx.recv()` →
 //!   **必须从非主线程调用**（命令层用 `async fn` 跑在 tokio worker），否则主线程死锁；
+//!   下钻层（`native.rs`）同理——它会在调用线程上等 COM 回调；
 //! - `on_page_load` 回调**本身就在主线程**（wry 用 `Rc` 持有 handler）→ 回调里只准做纯状态变更，
 //!   调上面那批方法或 `AppHandle::emit` 都会自锁（emit 的投递终点也是 `Webview::eval`）。
+
+mod native;
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -158,23 +158,32 @@ impl BrowserEngine for Webview2Engine {
     }
 
     fn eval(&self, id: &BrowserViewId, script: &str) -> Result<serde_json::Value, EngineError> {
-        // 原型：fire-and-forget 注入（无返回值）。带返回值的 eval 需 WebView2 ExecuteScript
-        // 的异步 completed-handler，属完整 adapter 阶段（需 webview2-com）。
+        // 下钻裸 WebView2 取返回值（`native.rs`）。⚠️ 调用方须在**非主线程**——本函数会在调用
+        // 线程上等 COM 回调；从主线程调 = 闭包内联 + 主线程阻塞等消息循环 = 自锁。
         let wv = self.handle(id)?;
-        wv.eval(script)
-            .map_err(|e| EngineError::EvalFailed(e.to_string()))?;
-        Ok(serde_json::Value::Null)
+        native::execute_script(&wv, script)
+    }
+
+    fn call_cdp(
+        &self,
+        id: &BrowserViewId,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, EngineError> {
+        // 同上：非主线程调用。CDP 域名可用性是**运行期行为**，失败原样上报，不假装成功。
+        let wv = self.handle(id)?;
+        native::call_cdp(&wv, method, params)
     }
 
     fn capture(&self, _id: &BrowserViewId) -> Result<Vec<u8>, EngineError> {
         Err(EngineError::CaptureFailed(
-            "截图需 WebView2 CapturePreview（完整 adapter 阶段，需 webview2-com）".into(),
+            "截图未实现（需 WebView2 CapturePreview）".into(),
         ))
     }
 
     fn cookies_clear(&self, _id: &BrowserViewId) -> Result<(), EngineError> {
         Err(EngineError::CookieFailed(
-            "cookie 清除需 WebView2 CookieManager（完整 adapter 阶段，需 webview2-com）".into(),
+            "cookie 清除未实现（需 WebView2 CookieManager）".into(),
         ))
     }
 

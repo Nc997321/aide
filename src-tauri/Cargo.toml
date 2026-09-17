@@ -124,6 +124,12 @@ windows = { version = "0.61", features = [
     "Win32_System_ProcessStatus",
     "Win32_Foundation",
 ] }
+# 内嵌浏览器 agent 路径：裸 WebView2（ExecuteScript 带返回值 / CallDevToolsProtocolMethod）。
+# 已在依赖树（tauri → tauri-runtime-wry → wry 传递引入，Cargo.lock 现值 0.38.2），
+# 提为直接依赖、**严格同版本**、零额外编译成本——不新增第二份 windows
+# （webview2-com-sys 0.38.2 要 windows 0.61.3 / windows-core 0.61.2，与上面的 0.61 同大版本）。
+# **只准在 browser/adapter/ 里 use**（browser/mod.rs 的端口隔离红线）。
+webview2-com = "0.38.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.2"

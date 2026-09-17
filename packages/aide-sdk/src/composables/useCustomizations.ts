@@ -75,6 +75,7 @@ export const builtinMcpServers = ref<BuiltinMcpServer[]>([
   { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），该工作区开启代码索引（右侧栏「代码索引」面板）+ 受信任时挂载" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
   { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / append_document / update_document / ingest_file / delete_document 每次要你确认 —— 其中 delete_document 连带子文档、界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
+  { id: "aide-browser", transport: "in-process", purpose: "内置内嵌浏览器读写（browser_tabs 列视图 / browser_read 读页面骨架 / browser_act 点击·填值·悬停 / browser_eval 在页面里执行脚本取回 JSON / browser_screenshot 截图），五个工具都自动放行 —— browser_eval 能读你已登录的任意页面、能发任意请求，信任级别等同于 Bash 工具；要关掉用 AIDE_BROWSER_TOOLS=off。受信任工作区挂载；只在桌面端有效，headless 返回「本环境没有内嵌浏览器」" },
 ]);
 
 // ── State ──

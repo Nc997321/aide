@@ -4,6 +4,7 @@
 //! `Arc<T>` 后 clone 进闭包）。锁选 `std::sync::Mutex`：注册表只持纯领域状态、加锁期内不 await、
 //! 引擎 IO 在锁外执行——std 锁足够且避免 async 锁开销（线程模型最终态在 adapter 阶段定）。
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -47,6 +48,36 @@ impl BrowserRegistry {
     pub fn remove(&mut self, id: &BrowserViewId) -> Option<BrowserView> {
         self.views.remove(id)
     }
+
+    /// 全部视图，**按 id 序号升序**。
+    ///
+    /// 存在理由：`HashMap` 迭代顺序不定——同一份状态两次调用可能给出不同顺序，调用方
+    /// （`browser_tabs` 列表、agent 选 view_id、UI 对账）按位置取视图会莫名错位。
+    /// 排序用**数字序**而非字典序：字典序下 `browser-10` 会排到 `browser-2` 前面。
+    pub fn views_in_order(&self) -> Vec<&BrowserView> {
+        let mut views: Vec<&BrowserView> = self.views.values().collect();
+        views.sort_by(|a, b| cmp_views(a, b));
+        views
+    }
+}
+
+/// 视图排序：双方都是本注册表生成的 id（`browser-<n>`）时按 n 升序；解析不出序号的一方垫底，
+/// 都解析不出则按字典序。构成全序（无环），`sort_by` 可安全使用。
+fn cmp_views(a: &BrowserView, b: &BrowserView) -> Ordering {
+    match (seq_of(a.id()), seq_of(b.id())) {
+        (Some(x), Some(y)) => x.cmp(&y),
+        (Some(_), None) => Ordering::Less,
+        (None, Some(_)) => Ordering::Greater,
+        (None, None) => a.id().as_str().cmp(b.id().as_str()),
+    }
+}
+
+/// 从 `browser-<n>` 取 n。`allocate_id` 是唯一生成方，故正常情况下恒 `Some`；
+/// 解析不出时由调用方兜底排序（宁可顺序怪，不可 panic）。
+fn seq_of(id: &BrowserViewId) -> Option<u64> {
+    id.as_str()
+        .strip_prefix("browser-")
+        .and_then(|n| n.parse::<u64>().ok())
 }
 
 /// Tauri 托管状态。命令层 `.manage(BrowserState::new())` 后取用（接线在原型阶段）。
@@ -66,6 +97,59 @@ mod state_test {
 
     fn bounds() -> Bounds {
         Bounds::new(Position::new(0.0, 0.0), Size::try_new(10.0, 10.0).unwrap())
+    }
+
+    /// 直接造 id（不经 `allocate_id`），使 Map 的插入序与目标序**相反**——这样「根本没排序、
+    /// 只是恰好按插入序迭代」的坏实现不会假绿；同时跨越 9→10 进位点，字典序实现必翻车。
+    #[test]
+    fn views_in_order_sorts_numerically_not_lexically() {
+        let mut reg = BrowserRegistry::new();
+        for raw in [
+            "browser-11",
+            "browser-10",
+            "browser-9",
+            "browser-3",
+            "browser-2",
+            "browser-1",
+        ] {
+            let id = BrowserViewId::try_new(raw).unwrap();
+            reg.insert(BrowserView::new(id, bounds()));
+        }
+
+        let got: Vec<&str> = reg
+            .views_in_order()
+            .iter()
+            .map(|v| v.id().as_str())
+            .collect();
+        assert_eq!(
+            got,
+            [
+                "browser-1",
+                "browser-2",
+                "browser-3",
+                "browser-9",
+                "browser-10",
+                "browser-11"
+            ]
+        );
+    }
+
+    /// 解析不出序号的一方垫底（不该 panic，也不该排到正经 id 前面）。
+    #[test]
+    fn views_in_order_puts_unparseable_ids_last() {
+        let mut reg = BrowserRegistry::new();
+        for raw in ["browser-2", "weird-id", "browser-1", "another"] {
+            let id = BrowserViewId::try_new(raw).unwrap();
+            reg.insert(BrowserView::new(id, bounds()));
+        }
+
+        let got: Vec<&str> = reg
+            .views_in_order()
+            .iter()
+            .map(|v| v.id().as_str())
+            .collect();
+        // 有序号的在前（数字序），无序号的两条垫底且彼此字典序。
+        assert_eq!(got, ["browser-1", "browser-2", "another", "weird-id"]);
     }
 
     #[test]

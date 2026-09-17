@@ -57,6 +57,25 @@ describe("prepareQueryContext", () => {
     );
     expect(ctx.mcpServers["aide-codegraph"]).toBeUndefined();
     expect(ctx.mcpServers["aide-docs"]).toBeUndefined();
+    // 浏览器工具同样受 trusted 门控（它带着用户的登录态，受限模式不该有）
+    expect(ctx.mcpServers["aide-browser"]).toBeUndefined();
+  });
+
+  it("trusted → 内建 MCP 挂载（含 aide-browser）；AIDE_BROWSER_TOOLS=off → 单独摘除", async () => {
+    const on = await prepareQueryContext(
+      deps({ trusted: true, processEnv: { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv }),
+    );
+    expect(on.mcpServers["aide-browser"]).toBeDefined();
+
+    const off = await prepareQueryContext(
+      deps({
+        trusted: true,
+        processEnv: { CLAUDE_CONFIG_DIR: dir, AIDE_BROWSER_TOOLS: "off" } as NodeJS.ProcessEnv,
+      }),
+    );
+    expect(off.mcpServers["aide-browser"]).toBeUndefined();
+    // 开关是**单点**的：关掉浏览器不该顺带关掉别的内建 MCP（那会变成一个隐藏的全局开关）
+    expect(off.mcpServers["aide-docs"]).toBeDefined();
   });
 
   it("automation：mcpServers 按白名单收口——空白名单 = 连接器全不挂载（docs 也被滤掉）", async () => {

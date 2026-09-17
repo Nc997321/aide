@@ -392,7 +392,7 @@ agent（Claude Agent SDK，跑在 sidecar）需要「打开网页 / 点 / 读 / 
 | 标签持久化 | ⬜ | 跨重启恢复（需要视图生命周期事件 + 落盘） |
 | 停止加载 | ⬜ | `stop` 已实现未接命令（工具栏 ⊘ 按钮） |
 | 本地预览入口 | ⬜ | file:// 白名单守门 + UI 入口 |
-| agent 读/截图 | ⬜ | webview2-com（下一批，见 12.5） |
+| agent 读/操作/截图 | 🟢 读 + 操作已落地（2026-09-16）／🔶 截图未做 | 见 `2026-09-16-browser-agent-tools.md`；下钻层在 `adapter/webview2/native.rs` |
 | OAuth 隔离 | ⬜ | CookieManager + data_store_identifier |
 | macOS/Linux | ⬜ | `UnsupportedEngine` 占位中 |
 | 覆盖率 | ⬜ | adapter/命令层 instrumented 覆盖对账 |

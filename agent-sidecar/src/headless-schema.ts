@@ -244,11 +244,16 @@ const setPermissionModeCommand = z.looseObject({
 const sessionStopCommand = z.looseObject({ cmd: z.literal("session_stop"), session_id: sid });
 
 /**
- * invoke body 判别联合。刻意**不含** codegraph_result（永关）：它是桌面 Rust 的
- * codegraph 查询回包通道——headless 宿主没有 Rust 回包方，且 codegraph MCP 仅在
- * send.codegraph_enabled === true 时注册（headless 客户端缺省不注册），命令开了
- * 也无消费方。桌面扩展通道其余命令已按需收编（update_permission_policy /
- * stop_bg_task / model_switch_confirm_decision）。
+ * invoke body 判别联合。刻意**不含**两个 Rust 回包命令：
+ *
+ * - `codegraph_result`（永关）：桌面 Rust 的 codegraph 查询回包通道——headless 宿主没有 Rust
+ *   回包方，且 codegraph MCP 仅在 send.codegraph_enabled === true 时注册（headless 客户端缺省
+ *   不注册），命令开了也无消费方。
+ * - `browser_result`（同理，2026-09-16 加）：内嵌浏览器只在**桌面**存在，headless 无 Rust 回包方；
+ *   `browser_query` 在 headless 下被工具层提前短路（返回「本环境没有内嵌浏览器」），根本不发。
+ *
+ * 桌面扩展通道其余命令已按需收编（update_permission_policy / stop_bg_task /
+ * model_switch_confirm_decision）。
  */
 export const invokeBodySchema = z.discriminatedUnion("cmd", [
   sendCommand,

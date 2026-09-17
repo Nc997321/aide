@@ -6,6 +6,7 @@ import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropi
 import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
+import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption } from "../../extensions/dispatchPlugins.js";
 import { forkResumeOptions } from "./forkResume.js";
 import { automationQueryOverrides, type AutomationConfig } from "../../desktop/automation.js";
@@ -65,7 +66,17 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       append: p.runtime.ctx.instructions,
     },
     // 知识库只放行**读**工具（工具级规则）——写工具走权限弹窗，见 knowledgeMcp.ts。
-    allowedTools: ["Agent", "Task", CODEGRAPH_ALLOW_RULE, DOCS_ALLOW_RULE, ...KNOWLEDGE_READ_RULES],
+    // 浏览器三个工具全放行：`browser_eval` 与 Bash 同信任级别，且只要它放行，单独给其余
+    // 工具挂闸门就是装饰性的（见 browserMcp.ts 的论证）。唯一真控制 = AIDE_BROWSER_TOOLS=off。
+    // 两组都必须是**工具级**规则（server 级前缀会把同 server 的其余工具一起放行）。
+    allowedTools: [
+      "Agent",
+      "Task",
+      CODEGRAPH_ALLOW_RULE,
+      DOCS_ALLOW_RULE,
+      ...KNOWLEDGE_READ_RULES,
+      ...BROWSER_ALLOW_RULES,
+    ],
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
     skills: p.branch.automationConfig ? [] : "all",

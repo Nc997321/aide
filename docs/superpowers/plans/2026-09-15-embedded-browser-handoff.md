@@ -29,7 +29,12 @@
 
 ## 2. 下一步（按序）
 
-### 第 1 步：webview2-com 下钻 = agent 路径的地基（**最优先**）
+> **进度（2026-09-16）**：第 1 步（下钻）与第 3 步（agent 工具 + 桥接）已落地，**外加"操作"
+> （原计划的批 2）**——详见同目录 `2026-09-16-browser-agent-tools.md`。第 2 步（页面 → 可读文本）
+> 以 `browser_read` 的骨架投影形态一并有了一半（尚未落成领域类型）。仍未做：截图、标题、
+> 失败判定、前进后退能力位。
+
+### 第 1 步：webview2-com 下钻 = agent 路径的地基（**已完成 2026-09-16**）
 
 没有"读"，agent 只能导航不能看。要落地的能力（端口方法已在，实现在 adapter 里如实报"未实现"）：
 
@@ -59,6 +64,24 @@ HTML → markdown（参照 `docsMcp` 把 docx 变 markdown 的形态），带 ur
 - **前端镜像登记**：CLAUDE.md 义务——内置 MCP 新增必须同步 `useCustomizations`。
 
 ## 3. 地雷（已核实源码，别重踩）
+
+### 3.0 agent 路径新增（2026-09-16，源码级核实）
+
+- **`send_user_message` 才是卡死家族的真正形状**（`tauri-runtime-wry-2.11.2/src/lib.rs:235-255`）：
+  **主线程调用 → 闭包内联同步执行；非主线程 → `proxy.send_event` 投递后立即返回**。
+  所以问题不在 `with_webview` 本身，而在**我们的等待**——主线程上内联跑闭包、闭包里再阻塞等一个
+  只能由消息循环泵出的 COM 回调 = 自锁。规则：**只从 tokio worker 调下钻层**、闭包内只发起不等待、
+  结果走 channel 回 worker 侧等待。`spawn_blocking` 只用来放"等待"，不是用来放 COM 调用。
+- **别用 webview2-com 的 `wait_for_async_operation`**：它内部 `wait_with_pump` 会泵消息循环，
+  在 webview 线程上泵循环是 7 月 wedge 事故的同款形状。用 `XxxHandler::create(closure)` + 自建 channel。
+- **`ExecuteScript` 页面脚本抛异常时回 `null`**，与"确实返回 null"**不可区分** → 所有经桥的脚本
+  必须返回信封 `{ok:true|false, ...}`，工具层据此分辨失败与空结果（`native.rs` 有完整说明）。
+- **`ExecuteScript` 的 `[in]` 宽字符串在调用期间即被 COM 拷贝**，栈上 buffer 活到调用返回即可；
+  需要活到回调之后的是**结果**指针，那个由 webview2-com 在回调内转成 `String`。
+- **CDP 可用性是运行期变量**（WebView2 是 Evergreen 运行时，各机版本不同）→ `browser_act` 的
+  点击必须 **CDP 优先 + 脚本派发兜底 + 如实上报走了哪条路**，不能二选一、不能静默降级。
+- **`browser_read` 不许接受调用方给的 `script` 参数**——它是自动放行的读工具，收了就变成
+  任意脚本执行 = 权限旁路。有专门的用例钉这条（`browserTools.test.ts`）。
 
 - **`add_child` / `eval` / `set_position` / `set_size` / `show` / `hide` 内部 `run_on_main_thread` +
   阻塞 `recv()`** → 必须从**非主线程**调用（命令层一律 `async fn`），否则主线程自锁。

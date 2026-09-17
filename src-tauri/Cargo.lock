@@ -95,6 +95,7 @@ dependencies = [
  "tracing-subscriber",
  "ureq",
  "url",
+ "webview2-com",
  "which",
  "windows 0.61.3",
  "winreg 0.55.0",
