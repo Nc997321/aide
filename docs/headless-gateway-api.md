@@ -4,7 +4,7 @@
 |---|---|
 | 适用协议版本 | `PROTOCOL_VERSION = 2` |
 | 适用引擎版本 | `agent-sidecar` @ `05c024a` 及以后（含 F3/F4 修复轮） |
-| 文档版本 | 1.3（2026-09-15） |
+| 文档版本 | 1.4（2026-09-17） |
 | 读者 | 把 Aide headless 引擎当编排大脑的宿主网关实现方 |
 | 真相源 | `agent-sidecar/src/headless-schema.ts`（命令字段）· `engine/types.ts`（事件字段）· `headless-server.ts`（HTTP/SSE 层）· `src/index.ts`（启动面） |
 | 验收底稿 | `docs/headless-test-checklist.md`（本文件每条实测断言都可回溯到该清单的 A/B/C/D 组用例与 F1–F11 发现） |
@@ -281,8 +281,6 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 > **边界（重要）**：桌面版对 `additional_dirs` 有"只认已注册工作区本身或其子目录"的裁定——那是在**桌面 Rust 层**（工作区注册表在 `state.json`）做的，headless 引擎**没有注册表**。所以 **headless 下授权是你的责任**：网关若要向租户暴露"给 agent 开另一个目录"的能力，必须在自己的策略层决定放行哪些路径，引擎这边没有第二道闸。
 >
 > 另外，`additional_dirs` 约束的是 CLI 的**文件工具**（Read/Edit/Write）与手动档的弹窗判定，**管不住 Bash**——安全命令白名单不区分目录。别在任何面向用户的文案里承诺"没授权就够不着"。
-
-#### 图片附件（`images`）
 
 #### 图片附件（`images`）
 
