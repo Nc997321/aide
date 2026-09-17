@@ -86,6 +86,27 @@ describe("ContextUsagePanel", () => {
     expect(w.find(".usage-panel__empty").text()).toContain("暂无占用明细");
   });
 
+  it("占用来源区随 breakdown 出现；缺席（旧 sidecar）时整块不渲染", () => {
+    expect(mountPanel().find(".usage-breakdown").exists()).toBe(false);
+
+    const w = mountPanel({
+      usage: {
+        ...usage,
+        breakdown: {
+          mcpTools: [{ name: "start_search", serverName: "desktop-commander", tokens: 1760 }],
+          memoryFiles: [{ path: "C:/ws/CLAUDE.md", type: "project", tokens: 1200 }],
+        },
+      },
+    });
+    expect(w.find(".usage-breakdown__title").text()).toBe("占用来源");
+    // 与分类列表并存：分类说"窗口怎么分块"，来源说"这些 token 是谁的"，两套账互不覆盖
+    expect(w.findAll(".usage-panel__item")).toHaveLength(2);
+    expect(w.findAll(".usage-breakdown__row--head .usage-breakdown__label").map((n) => n.text())).toEqual([
+      "MCP 工具",
+      "记忆文件",
+    ]);
+  });
+
   it("额度环按 utilization 落状态臂（42→ok、96→warning）", () => {
     const w = mountPanel();
     const classes = w.findAll(".usage-panel__rate svg").map((s) => s.classes());
@@ -141,14 +162,17 @@ describe("ContextUsagePanel", () => {
     expect(w.find(".usage-panel").attributes("style")).toContain("visibility: hidden");
   });
 
-  it("position 生产路径·向上弹（下方空间不足）：top=anchor.top-高-6，右缘 clamp 到屏宽-320-8，hidden 解除", async () => {
-    // jsdom 视口 768×1024；anchor rect 贴屏底右缘：spaceBelow=68 < 100+8 → openUp
+  it("position 生产路径·向上弹（下方空间不足）：锚 bottom 而非 top，右缘 clamp 到屏宽-320-8，hidden 解除", async () => {
+    // jsdom 视口 1024×768（宽×高）；anchor rect 贴屏底右缘：spaceBelow=68 < 100+8 → openUp
     const restore = stubPanelMetrics();
     try {
       const w = mountPanel({ anchor: anchorAt({ top: 600, bottom: 700, left: 1260 }) });
       await flushPromises();
       const style = w.find(".usage-panel").attributes("style") ?? "";
-      expect(style).toContain("top: 494px"); // 600 - 100 - 6
+      // 向上弹锚 bottom：面板里的「占用来源」可以展开，长高只向上伸；锚 top 则会把
+      // 底边一路推下去盖住输入框与环形锚点。
+      expect(style).toContain("bottom: 174px"); // 768 - 600 + 6
+      expect(style).not.toContain("top:");
       expect(style).toContain("left: 696px"); // 1024 - 320 - 8
       expect(style).not.toContain("visibility: hidden"); // positioned=true 解除首帧隐藏
     } finally {

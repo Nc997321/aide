@@ -1248,6 +1248,33 @@ describe("SessionWorker — context_usage event extension", () => {
     expect(JSON.stringify(ev)).not.toContain("7B61FF");
   });
 
+  it("占用来源明细端到端透传：有数据的组进 breakdown，空的组不出现", async () => {
+    const events: ChatEvent[] = [];
+    const { worker, release } = makeUsageWorker(events, async () => ({
+      categories: [],
+      totalTokens: 125_500,
+      maxTokens: 160_000,
+      rawMaxTokens: 200_000,
+      percentage: 62.8,
+      // 空组（agents/gridRows…）与缺席组（systemTools 等）都不该在 wire 上出现
+      memoryFiles: [{ path: "C:/ws/CLAUDE.md", type: "project", tokens: 1_200 }],
+      mcpTools: [{ name: "start_search", serverName: "desktop-commander", tokens: 1_760 }],
+      agents: [],
+    }));
+    void worker.startLoop("C:/tmp-ws");
+    const ev = (await waitForUsageEvent(events)) as
+      | Extract<ChatEvent, { type: "context_usage" }>
+      | undefined;
+    worker.stop();
+    release();
+    await flushPromises();
+
+    expect(ev?.breakdown).toEqual({
+      mcpTools: [{ name: "start_search", serverName: "desktop-commander", tokens: 1_760 }],
+      memoryFiles: [{ path: "C:/ws/CLAUDE.md", type: "project", tokens: 1_200 }],
+    });
+  });
+
   it("getContextUsage 抛错时静默无事件（旧 CLI 降级，与既有约定一致）", async () => {
     const events: ChatEvent[] = [];
     const { worker, release } = makeUsageWorker(events, async () => {

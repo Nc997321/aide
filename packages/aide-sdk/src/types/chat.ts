@@ -209,12 +209,51 @@ export interface ContextUsageCategory {
   isDeferred?: boolean;
 }
 
+/** 占用来源明细——与 categories 是同一份用量的两个切面：categories 说「窗口怎么
+ *  分块」，breakdown 说「这些 token 是谁的」（哪个 MCP server 的哪条工具、哪份记忆
+ *  文件…）。粒度不同（类 vs 实例），**不保证合计相等**（延迟加载的工具是否计入
+ *  mcpTools 未验证），故分两处展示、不做分类行下钻。每组独立可选：provider 没给
+ *  就不渲染该组，整条用量照常工作。 */
+export interface ContextUsageMcpTool {
+  name: string;
+  serverName: string;
+  tokens: number;
+}
+
+/** 内置工具 / 延迟加载的内置工具 / 系统提示分区共用形状（来源名 + 占用）。 */
+export interface ContextUsageNamedItem {
+  name: string;
+  tokens: number;
+}
+
+export interface ContextUsageMemoryFile {
+  path: string;
+  type: string;
+  tokens: number;
+}
+
+export interface ContextUsageAgent {
+  agentType: string;
+  source: string;
+  tokens: number;
+}
+
+export interface ContextUsageBreakdown {
+  mcpTools?: ContextUsageMcpTool[];
+  systemTools?: ContextUsageNamedItem[];
+  deferredBuiltinTools?: ContextUsageNamedItem[];
+  systemPromptSections?: ContextUsageNamedItem[];
+  memoryFiles?: ContextUsageMemoryFile[];
+  agents?: ContextUsageAgent[];
+}
+
 export interface ContextUsage {
   totalTokens: number;
   maxTokens: number;
   percentage: number;
   rawMaxTokens?: number;
   categories?: ContextUsageCategory[];
+  breakdown?: ContextUsageBreakdown;
 }
 
 /** 上下文压缩的瞬态展示状态。它不属于 ChatMessage，也不进历史记录；成功事件会

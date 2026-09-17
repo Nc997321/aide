@@ -1,6 +1,13 @@
 import { api } from "../../api";
 import { builtinHooks, type BuiltinHookManifest } from "../../composables/useCustomizations";
-import type { ContextUsageCategory } from "../../types/chat";
+import type {
+  ContextUsageAgent,
+  ContextUsageBreakdown,
+  ContextUsageCategory,
+  ContextUsageMcpTool,
+  ContextUsageMemoryFile,
+  ContextUsageNamedItem,
+} from "../../types/chat";
 import type { HealthSnapshot } from "../../composables/useDiagnosticsDashboard";
 import type {
   BgTask,
@@ -58,12 +65,79 @@ import {
   unregisterToolCall,
 } from "./state";
 
-/** context_usage.categories 的 wire 形状守卫：name 为字符串标签、tokens 为数值，
- *  其余字段（isDeferred 等）可选——跨边界数据逐元素重建，非法元素静默剔除。 */
-function isUsageCategory(v: unknown): v is ContextUsageCategory {
-  if (typeof v !== "object" || v === null) return false;
-  const r = v as Record<string, unknown>;
-  return typeof r["name"] === "string" && typeof r["tokens"] === "number";
+// ---- context_usage 的跨边界重建（M3：wire 数据不信任，逐元素重建成干净对象）----
+// 走这条入口的不止本端 sidecar——任何客户端（remote-pwa / 鸿蒙）都能发事件，所以
+// 元素形状必须逐条校验，而非 Array.isArray 收窄到 any[] 就收下。
+// 顺带的好处：重建出来的对象只带白名单字段，外部客户端塞的额外键不会流进 store。
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null;
+}
+
+function toUsageCategory(v: unknown): ContextUsageCategory | null {
+  if (!isRecord(v)) return null;
+  const { name, tokens, isDeferred } = v;
+  if (typeof name !== "string" || typeof tokens !== "number") return null;
+  return { name, tokens, isDeferred: typeof isDeferred === "boolean" ? isDeferred : undefined };
+}
+
+function toMcpTool(v: unknown): ContextUsageMcpTool | null {
+  if (!isRecord(v)) return null;
+  const { name, serverName, tokens } = v;
+  if (typeof name !== "string" || typeof serverName !== "string" || typeof tokens !== "number") {
+    return null;
+  }
+  return { name, serverName, tokens };
+}
+
+/** 内置工具 / 延迟工具 / 系统提示分区三组同形（来源名 + 占用），共用一个重建。 */
+function toNamedItem(v: unknown): ContextUsageNamedItem | null {
+  if (!isRecord(v)) return null;
+  const { name, tokens } = v;
+  if (typeof name !== "string" || typeof tokens !== "number") return null;
+  return { name, tokens };
+}
+
+function toMemoryFile(v: unknown): ContextUsageMemoryFile | null {
+  if (!isRecord(v)) return null;
+  const { path, type, tokens } = v;
+  if (typeof path !== "string" || typeof type !== "string" || typeof tokens !== "number") return null;
+  return { path, type, tokens };
+}
+
+function toAgent(v: unknown): ContextUsageAgent | null {
+  if (!isRecord(v)) return null;
+  const { agentType, source, tokens } = v;
+  if (typeof agentType !== "string" || typeof source !== "string" || typeof tokens !== "number") {
+    return null;
+  }
+  return { agentType, source, tokens };
+}
+
+/** 逐元素重建一组明细；非法元素静默剔除，整组非数组或全非法 → undefined。
+ *  「没给」与「全非法」对渲染是同一件事：不显示该 section，而不是显示空壳。 */
+function rebuildGroup<T>(raw: unknown, toItem: (v: unknown) => T | null): T[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const kept: T[] = [];
+  for (const item of raw) {
+    const mapped = toItem(item);
+    if (mapped !== null) kept.push(mapped);
+  }
+  return kept.length > 0 ? kept : undefined;
+}
+
+/** 占用来源明细的六组重建；全空 → undefined（前端据此整块不渲染）。 */
+function toUsageBreakdown(v: unknown): ContextUsageBreakdown | undefined {
+  if (!isRecord(v)) return undefined;
+  const breakdown: ContextUsageBreakdown = {
+    mcpTools: rebuildGroup(v["mcpTools"], toMcpTool),
+    systemTools: rebuildGroup(v["systemTools"], toNamedItem),
+    deferredBuiltinTools: rebuildGroup(v["deferredBuiltinTools"], toNamedItem),
+    systemPromptSections: rebuildGroup(v["systemPromptSections"], toNamedItem),
+    memoryFiles: rebuildGroup(v["memoryFiles"], toMemoryFile),
+    agents: rebuildGroup(v["agents"], toAgent),
+  };
+  return Object.values(breakdown).some((group) => group !== undefined) ? breakdown : undefined;
 }
 
 /**
@@ -359,11 +433,8 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         // 可选扩展字段：缺省（旧 sidecar/降级）时 undefined，环形照常工作
         rawMaxTokens:
           typeof e["raw_max_tokens"] === "number" ? e["raw_max_tokens"] : undefined,
-        // wire 数据逐元素重建（M3：Array.isArray 只收窄到 any[]，元素形状必须
-        // type-guard 校验，否则 name 缺失时 toLowerCase 直接炸组件）
-        categories: Array.isArray(e["categories"])
-          ? e["categories"].filter(isUsageCategory)
-          : undefined,
+        categories: rebuildGroup(e["categories"], toUsageCategory),
+        breakdown: toUsageBreakdown(e["breakdown"]),
       };
       break;
     }

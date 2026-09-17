@@ -736,7 +736,66 @@ describe("useChatSession per-session store", () => {
       percentage: 50,
       rawMaxTokens: undefined,
       categories: undefined,
+      breakdown: undefined,
     });
+  });
+
+  it("context_usage 重建 breakdown 六组：畸形元素剔除、整组消失、额外字段不透传", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "context_usage",
+      total_tokens: 125500,
+      max_tokens: 160000,
+      percentage: 62.8,
+      breakdown: {
+        mcpTools: [
+          null, // 非对象：剔除
+          { name: "tabs", tokens: 10 }, // 缺 serverName：剔除
+          { name: "start_search", serverName: "desktop-commander", tokens: 1760 },
+          // wire 上不该带的 isLoaded 就算被塞进来也不进 store（重建只留白名单字段）
+          { name: "browser_read", serverName: "aide-browser", tokens: 150, isLoaded: false },
+        ],
+        // 三种非法形态凑齐（非对象 / 字段类型不对 / 字段缺失）且全非法 → 整组消失
+        systemTools: ["Bash", { name: "Bash", tokens: "nope" }, { tokens: 5 }],
+        memoryFiles: [
+          { path: "C:/ws/CLAUDE.md", type: "project", tokens: 1200 },
+          { path: "C:/ws/OLD.md", tokens: 5 }, // 缺 type：剔除
+          "nope", // 非对象：剔除
+        ],
+        agents: [
+          { agentType: "rust-reviewer", source: "project", tokens: 250 },
+          { agentType: "ts-reviewer", source: "project", tokens: "nope" }, // tokens 非数值：剔除
+          null, // 非对象：剔除
+        ],
+        deferredBuiltinTools: "not-an-array", // 非数组 → 整组消失
+      },
+      session_id: "uuid-a",
+    });
+    await flush();
+
+    expect(chat.contextUsage.value?.breakdown).toEqual({
+      mcpTools: [
+        { name: "start_search", serverName: "desktop-commander", tokens: 1760 },
+        { name: "browser_read", serverName: "aide-browser", tokens: 150 },
+      ],
+      memoryFiles: [{ path: "C:/ws/CLAUDE.md", type: "project", tokens: 1200 }],
+      agents: [{ agentType: "rust-reviewer", source: "project", tokens: 250 }],
+    });
+
+    // 结构合法但六组全空 → 整块 undefined（与"没给"同义，前端整块不渲染）
+    emit({
+      type: "context_usage",
+      total_tokens: 1,
+      max_tokens: 2,
+      percentage: 50,
+      breakdown: {},
+      session_id: "uuid-a",
+    });
+    await flush();
+    expect(chat.contextUsage.value?.breakdown).toBeUndefined();
   });
 
   it("model_switch_confirm 建成本确认状态（wire 字段映射 + 非法枚举兜底）", async () => {

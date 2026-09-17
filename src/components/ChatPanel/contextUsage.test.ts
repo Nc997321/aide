@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { chartVarFor, formatTokens, clampPct } from "./contextUsage";
+import type { ContextUsageMcpTool } from "@/types/chat";
+import {
+  chartVarFor,
+  formatTokens,
+  clampPct,
+  sortByTokensDesc,
+  sumTokens,
+  groupMcpByServer,
+} from "./contextUsage";
 
 /**
  * 上下文用量纯逻辑层的分支覆盖：归桶优先级、未知名兜底、格式口径、钳制边界。
@@ -44,5 +52,54 @@ describe("clampPct — 轨道守卫", () => {
     expect(clampPct(100)).toBe(100);
     expect(clampPct(-5)).toBe(0);
     expect(clampPct(150)).toBe(100);
+  });
+});
+
+describe("sortByTokensDesc / sumTokens — 明细排序与合计", () => {
+  it("降序排列，且不就地改调用方的数组", () => {
+    const src = [{ tokens: 1 }, { tokens: 30 }, { tokens: 7 }];
+    expect(sortByTokensDesc(src).map((i) => i.tokens)).toEqual([30, 7, 1]);
+    expect(src.map((i) => i.tokens)).toEqual([1, 30, 7]);
+  });
+
+  it("合计；空数组为 0", () => {
+    expect(sumTokens([{ tokens: 1 }, { tokens: 2 }])).toBe(3);
+    expect(sumTokens([])).toBe(0);
+  });
+});
+
+describe("groupMcpByServer — MCP 按 server 归组", () => {
+  function tool(name: string, serverName: string, tokens: number): ContextUsageMcpTool {
+    return { name, serverName, tokens };
+  }
+
+  it("组间按合计降序、组内按工具占用降序、组合计=组内之和", () => {
+    const groups = groupMcpByServer([
+      tool("browser_read", "aide-browser", 150),
+      tool("start_search", "desktop-commander", 1760),
+      tool("start_process", "desktop-commander", 1420),
+      tool("browser_eval", "aide-browser", 250),
+    ]);
+    expect(groups.map((g) => g.serverName)).toEqual(["desktop-commander", "aide-browser"]);
+    expect(groups[0]).toEqual({
+      serverName: "desktop-commander",
+      tokens: 3180,
+      tools: [
+        tool("start_search", "desktop-commander", 1760),
+        tool("start_process", "desktop-commander", 1420),
+      ],
+    });
+    expect(groups[1]?.tokens).toBe(400);
+  });
+
+  it("同名 server 合并成一组；空输入不造空壳组", () => {
+    const groups = groupMcpByServer([
+      tool("a", "aide-docs", 1),
+      tool("b", "aide-docs", 2),
+      tool("c", "aide-docs", 3),
+    ]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]?.tools).toHaveLength(3);
+    expect(groupMcpByServer([])).toEqual([]);
   });
 });

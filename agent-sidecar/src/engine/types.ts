@@ -85,6 +85,39 @@ export type UserMessageBlock =
   // 只引用了这一段（编辑器选区），缺省=整文件。与 aide-sdk/src/types/chat.ts 同形。
   | { type: "mention"; path: string; content: string; range?: { start: number; end: number } };
 
+/** 占用来源明细的元素形状（见 context_usage 事件的说明）。与
+ *  packages/aide-sdk/src/types/chat.ts 必须同形。 */
+export interface ContextUsageMcpTool {
+  name: string;
+  serverName: string;
+  tokens: number;
+}
+/** 内置工具 / 延迟加载的内置工具 / 系统提示分区共用形状（来源名 + 占用）。 */
+export interface ContextUsageNamedItem {
+  name: string;
+  tokens: number;
+}
+export interface ContextUsageMemoryFile {
+  path: string;
+  type: string;
+  tokens: number;
+}
+export interface ContextUsageAgent {
+  agentType: string;
+  source: string;
+  tokens: number;
+}
+/** 六组互相独立可选：provider 没给该组就不出现（空数组同理）——前端据此不渲染
+ *  该 section，而不是渲染一个空壳。 */
+export interface ContextUsageBreakdown {
+  mcpTools?: ContextUsageMcpTool[];
+  systemTools?: ContextUsageNamedItem[];
+  deferredBuiltinTools?: ContextUsageNamedItem[];
+  systemPromptSections?: ContextUsageNamedItem[];
+  memoryFiles?: ContextUsageMemoryFile[];
+  agents?: ContextUsageAgent[];
+}
+
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =
   | { type: "session_init"; session_id: string }
@@ -215,6 +248,16 @@ export type ChatEvent =
   // 消息/MCP/技能），name 为不透明标签——前端按名映射色板，未知名落兜底色，
   // 核心协议不识别具体分类语义；缺省时前端退化为只显示总量。raw_max_tokens 为
   // 完整上下文窗（含保留给响应的区间），配合 max_tokens 表达"保留区"；缺省不画。
+  //
+  // breakdown 是同一份用量的**第二个切面**：categories 说「窗口怎么分块的」，
+  // breakdown 说「这些 token 是谁的」（哪个 MCP server 的哪条工具、哪份记忆文件…）。
+  // 两者粒度不同（类 vs 实例），**不保证合计相等**（例如延迟加载的工具是否计入
+  // mcpTools 未验证）——所以前端分两处展示，不做"分类行下钻"的挂靠。
+  // 元素命名与 categories 一致用 camel（嵌套元素随 SDK 源字段，见 isDeferred），
+  // 顶层仍是 snake；这样边界守卫的输出形状即 wire 形状，前端零改名。
+  // 刻意不带（只列名；逐条理由与裁剪决策在 queryTelemetry.ts 的 toBreakdown，那里是
+  // 唯一所在）：color / gridRows / model / slashCommands / skills / messageBreakdown /
+  // apiUsage / autoCompact* / 各元素的 isLoaded。
   | {
       type: "context_usage";
       total_tokens: number;
@@ -222,6 +265,7 @@ export type ChatEvent =
       percentage: number;
       raw_max_tokens?: number;
       categories?: { name: string; tokens: number; isDeferred?: boolean }[];
+      breakdown?: ContextUsageBreakdown;
     }
   // 上下文压缩生命周期——provider-agnostic：只表达任何 agent 都可能提供的阶段，
   // 不把 Claude 的 system/status / compact_result 细节泄露到核心协议。没有真实可测

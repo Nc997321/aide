@@ -13,6 +13,7 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import type { ContextUsage, RateLimitInfo } from "@/types/chat";
 import ContextUsageSegments from "./ContextUsageSegments.vue";
+import ContextUsageBreakdown from "./ContextUsageBreakdown.vue";
 import { chartVarFor, formatTokens, clampPct } from "./contextUsage";
 
 const props = defineProps<{
@@ -42,17 +43,18 @@ async function position() {
   const width = panel.offsetWidth;
   const height = panel.offsetHeight;
   const spaceBelow = window.innerHeight - rect.bottom;
-  // 下方空间不足则向上弹（输入框贴底时常态）
+  // 下方空间不足则向上弹（输入框贴底时常态）。向上弹**锚 bottom 而不是算死 top**：
+  // 「占用来源」区可以展开，面板高度在打开之后还会变——锚 bottom 时长高只向上伸
+  // （伸进当初判定过"更宽裕"的上方），锚 top 则会把底边一路推下去盖住输入框。
   const openUp = spaceBelow < height + margin && rect.top > spaceBelow;
-  const top = openUp ? Math.max(margin, rect.top - height - 6) : rect.bottom + 6;
   let left = rect.left;
   if (left + width > window.innerWidth - margin) {
     left = window.innerWidth - width - margin;
   }
-  panelStyle.value = {
-    top: `${top}px`,
-    left: `${Math.max(margin, left)}px`,
-  };
+  const leftPx = `${Math.max(margin, left)}px`;
+  panelStyle.value = openUp
+    ? { bottom: `${Math.max(margin, window.innerHeight - rect.top + 6)}px`, left: leftPx }
+    : { top: `${rect.bottom + 6}px`, left: leftPx };
   positioned.value = true;
 }
 
@@ -177,6 +179,10 @@ onUnmounted(() => {
       <div class="usage-panel__list usage-panel__empty" v-else>
         <span class="usage-panel__value">暂无占用明细</span>
       </div>
+
+      <!-- 占用来源：分类列表之外的第二个切面（这些 token 是谁的）。缺席（旧
+           sidecar / provider 未提供明细）时整块不渲染，面板其余部分照常。 -->
+      <ContextUsageBreakdown v-if="usage?.breakdown" :breakdown="usage.breakdown" />
 
       <div class="usage-panel__footer" v-if="rateWindows.length">
         <div class="usage-panel__rates">

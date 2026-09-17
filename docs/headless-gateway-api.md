@@ -684,7 +684,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `jump_promoted` | — | 插队消息已接入 |
 | `session_title` | `title` | 自动生成的会话标题 |
 | `tasks_update` | `tasks` | 待办列表快照 |
-| `context_usage` | `total_tokens`, `max_tokens`, `percentage`, `categories?` | 上下文占用 |
+| `context_usage` | `total_tokens`, `max_tokens`, `raw_max_tokens?`, `percentage`, `categories?`, `breakdown?` | 上下文占用（含占用来源明细，见下方注） |
 | `context_compaction` | `stage`, `detail?`, `error?` | 上下文压缩生命周期 |
 | `rate_limit` | `subscription`, `windows` | 订阅额度窗口 |
 | `model_committed` | `from_model`, `to_model`, `requested_model`, `source` | 进程级切换坐实 |
@@ -696,6 +696,10 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `codegraph_query` | `request_id`, `tool`, `args`, `project_root` | 代码索引查询。**headless 下没有应答方**——别开 `send.codegraph_enabled`（§4.1） |
 
 > `bg_task_*` 三个事件：网关若要在业务界面展示「后台跑着什么」，消费它们即可；不消费也不影响会话正确性。
+
+> **`context_usage` 的两个切面**（都可不消费）。`categories` 说「窗口怎么分块」（provider 自报的分类，`name` 是不透明标签）；`breakdown` 说「这些 token 是谁的」——哪个 MCP server 的哪条工具、哪份记忆文件。六组各自可选，缺席即不渲染：
+> `mcpTools[{name, serverName, tokens}]` / `systemTools[{name, tokens}]` / `deferredBuiltinTools[{name, tokens}]` / `systemPromptSections[{name, tokens}]` / `memoryFiles[{path, type, tokens}]` / `agents[{agentType, source, tokens}]`。
+> 两者粒度不同（类 vs 实例），**不保证合计相等**（延迟加载的工具是否计入 `mcpTools` 未验证）——不要拿 `breakdown` 的合计去对 `categories` 的某一行。
 
 ---
 
