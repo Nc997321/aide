@@ -24,6 +24,10 @@ export interface MentionIo {
   /** 本会话已知的授权目录（`useSessionAttachedWorkspaces`）。命中 = 降档：只发一行宣告，
    *  不重发清单与指令（省 token、不重复注入）。缺省 = 全按首次处理。 */
   attachedDirs?: string[];
+  /** 取某目录所属工作区的 auto memory 索引（MEMORY.md 原文，宿主侧已按 200 行/25KiB 截断）。
+   *  缺省 = 不注入记忆。为什么走能力位而不是在本模块拼路径：浏览器端没有 fs，而 key 规则
+   *  （`: \ / `→`-`、点归一）只有 Rust 与 sidecar 两份真相源，SDK 不抄第三份。 */
+  memoryIndex?: (dir: string) => Promise<string | null>;
 }
 
 export interface ResolvedMention {
@@ -128,15 +132,31 @@ export function extractFileMentions(text: string): string[] {
   return [...new Set(matches)];
 }
 
+/** 消息级注入的单文件上限：截断并留一行说明。这是**一次性摘要**的预算，持久规则
+ *  走 systemPrompt（那条按 256KiB/文件）。 */
+function capRules(text: string): string {
+  return text.length > MAX_DIR_RULES_CHARS
+    ? `${text.slice(0, MAX_DIR_RULES_CHARS)}\n…（内容过长，已截断）`
+    : text;
+}
+
 /** 附加仓的指令文件：读不到就算了（不阻断、不噪声）。固定用前向分隔符——
  *  Windows 的文件 API 同样接受 `/`，避免为一次拼接把 node:path 拖进本模块
  *  （它被浏览器端的 PWA 复用）。 */
 async function readDirRules(dir: string, io: MentionIo): Promise<string> {
   try {
-    const text = await io.readFile(`${dir}/CLAUDE.md`);
-    return text.length > MAX_DIR_RULES_CHARS
-      ? `${text.slice(0, MAX_DIR_RULES_CHARS)}\n…（指令文件过长，已截断）`
-      : text;
+    return capRules(await io.readFile(`${dir}/CLAUDE.md`));
+  } catch {
+    return "";
+  }
+}
+
+/** 附加仓的 auto memory 索引（与 CLAUDE.md 同一趟注入、同一预算）。没给能力位
+ *  （老调用点/远端）或读不到 = 不注入——对方仓没有记忆是常态，不是错误。 */
+async function readDirMemory(dir: string, io: MentionIo): Promise<string> {
+  if (!io.memoryIndex) return "";
+  try {
+    return capRules(((await io.memoryIndex(dir)) ?? "").trim());
   } catch {
     return "";
   }
@@ -144,8 +164,8 @@ async function readDirRules(dir: string, io: MentionIo): Promise<string> {
 
 /**
  * 目录段的正文。两档（方案 A 段）：
- *  - 首次 @：宣告 + 一级清单 + 本仓 CLAUDE.md 原文——后者的当轮可达是 F6 逼出来的
- *    （query 全会话只 spawn 一次，systemPrompt 那条路当轮基本不生效）。
+ *  - 首次 @：宣告 + 一级清单 + 本仓 CLAUDE.md 原文 + 记忆索引——后两者的当轮可达是 F6
+ *    逼出来的（query 全会话只 spawn 一次，systemPrompt 那条路当轮基本不生效）。
  *  - 已在账本内：只发一行宣告。用户把芯片留在输入框时不会每轮重注一遍清单。
  */
 async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
@@ -156,12 +176,13 @@ async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
   const shown = entries.slice(0, MAX_DIR_ENTRIES);
   const listing = shown.map((e) => (e.is_dir ? `${e.name}/` : e.name)).join("\n");
   const more = entries.length > shown.length ? `\n…（共 ${entries.length} 个条目，已截断）` : "";
-  const rules = await readDirRules(dir, io);
+  const [rules, memory] = await Promise.all([readDirRules(dir, io), readDirMemory(dir, io)]);
   return [
     `目录：${dir}（已授权访问，可直接 Read/Edit 其中文件）`,
     `一级条目（${entries.length} 个）：`,
     listing + more,
     ...(rules ? [`本仓指令文件 ${dir}/CLAUDE.md 原文（仅当操作该仓文件时适用）：`, rules] : []),
+    ...(memory ? [`本仓记忆索引（auto memory，仅当操作该仓文件时适用）：`, memory] : []),
   ].join("\n");
 }
 

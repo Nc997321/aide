@@ -69,6 +69,9 @@ function historyBlockToContentBlocks(
       result: s.content,
       isError: false,
       isPending: false,
+      // @目录 段（splitMentionSections 按标记置位）→ 头行出「目录」药丸，与上面
+      // 同一条一致性要求：这条漏了就是"实时是目录卡、重开变成文件卡"。
+      ...(s.isDir ? { isDir: true } : {}),
     })),
   ];
 }

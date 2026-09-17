@@ -33,6 +33,11 @@ export interface ToolCallBlock {
   isPending: boolean;
   truncated?: TruncatedInfo;
   lspRelay?: LspRelayVerdict;
+  /** `@目录` 合成卡专用（`@目录` = 授权 + 一级清单/指令/记忆）：头行据此出「目录」
+   *  药丸，与文件引用卡一眼可分。只有 mention 合成卡会置位，真 Read 恒缺省。
+   *  **两条构建路径都要带**（events.ts 的 display 映射 / transcriptMapping.ts 的
+   *  历史回看），漏一条就会"实时是目录卡、重开变成文件卡"。 */
+  isDir?: boolean;
 }
 
 export interface ImageBlock {

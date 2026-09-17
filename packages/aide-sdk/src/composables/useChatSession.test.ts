@@ -1153,6 +1153,29 @@ describe("useChatSession per-session store", () => {
     const tool = msg?.blocks.find((b) => b.type === "tool_call");
     expect(tool && "input" in tool ? tool.input : null).toEqual({ file_path: "src/a.ts" });
     expect(tool && "result" in tool ? tool.result : "").toBe("const a = 1;");
+    // 文件引用不带目录标识（头行不出「目录」药丸）
+    expect(tool && "isDir" in tool ? tool.isDir : undefined).toBeUndefined();
+  });
+
+  it("user_message 带 display：@目录引用带 isDir（头行「目录」药丸），与文件卡可分", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+
+    emit({
+      type: "user_message",
+      text: "把 B 仓调用方一起改掉",
+      session_id: "uuid-a",
+      display: [
+        { type: "text", text: "把 B 仓调用方一起改掉" },
+        { type: "mention", path: "C:\\repoB", content: "目录：C:\\repoB（已授权访问）", isDir: true },
+      ],
+    });
+    await flush();
+
+    const msg = chat.messages.value.find((m) => m.role === "user");
+    const tool = msg?.blocks.find((b) => b.type === "tool_call");
+    expect(tool && "isDir" in tool ? tool.isDir : undefined).toBe(true);
   });
 
   it("user_message 带 display：动作胶囊渲染成 action 块（/compact 之类）", async () => {

@@ -119,4 +119,9 @@ export const memoryObservatoryApi = {
   scanAll(): Promise<MemoryScanAllResult> {
     return getTransport().invoke("memory_observatory_scan_all");
   },
+  /** 按**目录**取该工作区的记忆索引原文（已按 200 行 / 25KiB 截断；没有记忆 = null）。
+   *  与观测台同一套解析规则；用途是 `@目录` 的当轮注入（跨目录会话，方案 D 段）。 */
+  indexForDir(dir: string): Promise<string | null> {
+    return getTransport().invoke("memory_index_for_dir", { dir });
+  },
 };

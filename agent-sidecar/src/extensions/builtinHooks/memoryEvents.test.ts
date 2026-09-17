@@ -3,7 +3,8 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync, utimesSync
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import {
-  pathToKey,
+  // memoryDirs 从壳里取（本文件同时覆盖 re-export：实现已迁 engine/memoryDirs.ts，
+  // 其自身行为由 engine/memoryDirs.test.ts 钉）
   memoryDirs,
   matchMemoryFile,
   classifyOp,
@@ -36,22 +37,8 @@ function readEvents(): any[] {
   return readFileSync(log, "utf8").trim().split("\n").map((l) => JSON.parse(l));
 }
 
-describe("pathToKey / memoryDirs / matchMemoryFile", () => {
-  it("pathToKey 与 Rust 同规则", () => {
-    expect(pathToKey(cwd)).toBe(key);
-    expect(pathToKey("/a/b/c")).toBe("-a-b-c");
-  });
-
-  it("memoryDirs dot 归一匹配分裂目录", () => {
-    // 新版编码把 . 也替换为 -（chennong4.0 → chennong4-0 两目录共存场景）
-    mkdirSync(path.join(configDir, "projects", key, "memory2"), { recursive: true });
-    const dirs = memoryDirs(configDir, cwd);
-    expect(dirs).toHaveLength(1);
-    expect(dirs[0].endsWith("memory")).toBe(true);
-    expect(memoryDirs(configDir, "D:\\nonexistent")).toHaveLength(0);
-  });
-
-  it("matchMemoryFile 只收顶层 .md", () => {
+describe("matchMemoryFile", () => {
+  it("只收顶层 .md", () => {
     const dirs = memoryDirs(configDir, cwd);
     const memDir = toForward(path.join(configDir, "projects", key, "memory"));
     expect(matchMemoryFile(dirs, `${memDir}/note.md`)).toBe("note.md");

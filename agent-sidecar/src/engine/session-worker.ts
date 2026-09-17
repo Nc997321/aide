@@ -728,6 +728,9 @@ export class SessionWorker {
           const queryCtx = await prepareQueryContext({
             cwd: effectiveCwd,
             trusted,
+            // 附加根的记忆注入只在 spawn 期进 system prompt（F6：中途 @ 的走消息级
+            // 目录段当轮送达）
+            attachedDirs: this.additionalDirs,
             codegraphEnabled,
             processEnv: process.env,
             emit: (e) => this.emit(e),

@@ -26,6 +26,7 @@ const MARKER = "s1-marker"; // B 仓 settings.json 里声明的 MCP server（F4 
 const MARKER_CONTENT = "OK-FROM-SPIKE";
 const MODEL = "haiku"; // 最便宜的别名；权限语义与模型无关
 const A_TXT = join(CWD_A, "a.txt");
+const A2_TXT = join(CWD_A, "a2.txt"); // cache 臂：第二轮换新文件，避免 CLI 去重短路
 const B_TXT = join(REPO_B, "b.txt");
 const B2_TXT = join(REPO_B, "b2.txt"); // manual 臂第二轮用：必须是没读过的新文件
 
@@ -86,6 +87,22 @@ const ARMS: Record<string, ArmPlan> = {
     attachAtLaunch: true,
     before: "只回一个字：好。不要调用任何工具。",
   },
+  // cache/cache2：applyFlagSettings 会不会改 prompt 前缀（= 中途扩根是否冷缓存）。
+  // 两臂**逐字相同**，唯一变量 = 两轮之间有没有调 flag；判据 = RESULT 2 的 cacheRead
+  // （前缀没变 → 几乎整段命中；前缀被重写 → 断崖式跌到接近 0、cacheCreate 顶上）。
+  cache: {
+    mode: "auto",
+    attachAtLaunch: false,
+    before: `用 Read 读一次 ${A_TXT}，回一行内容。`,
+    flagThen: `用 Read 读一次 ${A2_TXT}，回一行内容。`,
+  },
+  cache2: {
+    mode: "auto",
+    attachAtLaunch: false,
+    applyFlag: false,
+    before: `用 Read 读一次 ${A_TXT}，回一行内容。`,
+    flagThen: `用 Read 读一次 ${A2_TXT}，回一行内容。`,
+  },
 };
 
 interface State {
@@ -96,6 +113,8 @@ interface State {
   flagMs: number;
   canUseBeforeFlag: number;
   flagApplied: boolean;
+  /** 每轮 result 的 token 账（cache 臂用来判"前缀有没有被重写"）。 */
+  turns: Array<{ in: number; cacheRead: number; cacheCreate: number; out: number }>;
 }
 
 // ── 夹具：两个互不包含的目录 ────────────────────────────────────────────────
@@ -103,6 +122,7 @@ function setupFixture(): void {
   mkdirSync(CWD_A, { recursive: true });
   mkdirSync(join(REPO_B, ".claude"), { recursive: true });
   writeFileSync(A_TXT, "A-FILE-CONTENT\n");
+  writeFileSync(A2_TXT, "A2-FILE-CONTENT\n");
   writeFileSync(B_TXT, "B-FILE-CONTENT\n");
   writeFileSync(B2_TXT, "B2-FILE-CONTENT\n");
   writeFileSync(join(REPO_B, "CLAUDE.md"), "# B 仓规则\n- 这条来自 B 仓的 CLAUDE.md\n");
@@ -215,6 +235,7 @@ async function run(): Promise<void> {
     flagMs: -1,
     canUseBeforeFlag: 0,
     flagApplied: false,
+    turns: [],
   };
   const watchdog = setTimeout(() => {
     console.log("!! WATCHDOG 超时（240s）——现场如上");
@@ -229,7 +250,18 @@ async function run(): Promise<void> {
     observe(msg, state);
     if (msg.type !== "result") continue;
     results++;
+    const u = msg.usage ?? {};
+    state.turns.push({
+      in: u.input_tokens ?? 0,
+      cacheRead: u.cache_read_input_tokens ?? 0,
+      cacheCreate: u.cache_creation_input_tokens ?? 0,
+      out: u.output_tokens ?? 0,
+    });
     console.log(`=== RESULT ${results} ===`, msg.subtype, "| session_id =", msg.session_id);
+    console.log(
+      `    usage: in=${u.input_tokens ?? 0} cacheRead=${u.cache_read_input_tokens ?? 0} ` +
+        `cacheCreate=${u.cache_creation_input_tokens ?? 0} out=${u.output_tokens ?? 0}`,
+    );
     if (results >= 2 || !plan.flagThen) break;
 
     if (results === 1 && plan.flagThen) {
@@ -280,6 +312,21 @@ function verdict(arm: string, plan: ArmPlan, state: State): void {
       `applyFlagSettings  : ${!state.flagApplied ? "未调（对照臂）" : state.flagError ? `✗ 抛错 ${state.flagError}` : `✓ 未抛错 (${state.flagMs}ms)`}`,
     );
     console.log(`B 仓 out.txt       : ${outContent}${arm === "main" ? (outContent === MARKER_CONTENT ? "  ✓ 写到跨目录了" : "  ✗ 没写成功") : ""}`);
+  }
+  if (state.turns.length) {
+    console.log(
+      "每轮 token 账      : " +
+        state.turns
+          .map((t, i) => `#${i + 1} in=${t.in} cacheRead=${t.cacheRead} cacheCreate=${t.cacheCreate}`)
+          .join(" | "),
+    );
+  }
+  if (arm === "cache" || arm === "cache2") {
+    const t2 = state.turns[1];
+    console.log(
+      `判据（RESULT 2）   : cacheRead=${t2?.cacheRead ?? -1} cacheCreate=${t2?.cacheCreate ?? -1}` +
+        "—— cache 与 cache2 两臂相等 = 前缀没被 flag 重写（不冷缓存）；cache 断崖式下跌 = 变了",
+    );
   }
 }
 

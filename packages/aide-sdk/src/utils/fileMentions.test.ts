@@ -162,13 +162,50 @@ describe("resolveFileMentions: 目录引用（@目录 = 授权 + 一级清单）
     expect(result.resolved[0].path).toBe("/repo");
   });
 
-  it("已在账本内（attachedDirs 命中）→ 只发一行宣告，不重发清单与指令", async () => {
-    const io = dirIo("/repo", ["/repo"]);
+  it("已在账本内（attachedDirs 命中）→ 只发一行宣告，不重发清单、指令与记忆", async () => {
+    const io = { ...dirIo("/repo", ["/repo"]), memoryIndex: vi.fn(async () => "- [一](a.md)") };
     const result = await resolveFileMentions("@/repo 再看下", io);
     expect(result.resolved[0].content).toContain("已授权目录：/repo");
     expect(result.resolved[0].content).not.toContain("readme.md");
     expect(result.sendText).not.toContain("本仓规则");
+    expect(result.sendText).not.toContain("本仓记忆索引");
     expect(io.listDir).not.toHaveBeenCalled();
+    expect(io.memoryIndex).not.toHaveBeenCalled();
+  });
+
+  it("首次 @：对方仓的 auto memory 索引也当轮送达（F6）", async () => {
+    const io = { ...dirIo("/repo"), memoryIndex: vi.fn(async () => "- [一](a.md) — 描述") };
+    const result = await resolveFileMentions("@/repo 看下", io);
+    expect(result.sendText).toContain("本仓记忆索引");
+    expect(result.sendText).toContain("- [一](a.md) — 描述");
+  });
+
+  it("记忆索引：缺能力位 / 返回 null / 抛错 → 只少那一块，其余照旧", async () => {
+    const noCap = await resolveFileMentions("@/repo 看下", dirIo("/repo"));
+    expect(noCap.sendText).toContain("本仓规则");
+    expect(noCap.sendText).not.toContain("本仓记忆索引");
+
+    const nulled = await resolveFileMentions("@/repo 看下", {
+      ...dirIo("/repo"),
+      memoryIndex: vi.fn(async () => null),
+    });
+    expect(nulled.sendText).not.toContain("本仓记忆索引");
+
+    const thrown = await resolveFileMentions("@/repo 看下", {
+      ...dirIo("/repo"),
+      memoryIndex: vi.fn(async () => {
+        throw new Error("boom");
+      }),
+    });
+    expect(thrown.sendText).toContain("本仓规则");
+    expect(thrown.sendText).not.toContain("本仓记忆索引");
+  });
+
+  it("记忆索引与指令文件同一预算：超限截断并留一行说明", async () => {
+    const io = { ...dirIo("/repo"), memoryIndex: vi.fn(async () => "x".repeat(20_000)) };
+    const result = await resolveFileMentions("@/repo 看下", io);
+    expect(result.sendText).toContain("…（内容过长，已截断）");
+    expect(result.sendText).not.toContain("x".repeat(20_000));
   });
 
   it("listDir 缺省（老调用点/远端）→ 维持旧行为：目录引用静默忽略", async () => {

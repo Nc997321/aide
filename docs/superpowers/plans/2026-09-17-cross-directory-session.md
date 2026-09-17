@@ -340,6 +340,18 @@ git 面板（30+ 命令绑活动工作区，仅 `git/status.rs:29`、`git/operat
 | `manual2` | manual | 同 `manual` 但**不调 flag** | `canUseTool` **2/2**（b.txt 与 b2.txt 各一次）⇒ 排除"turn 1 的 allow 已授予整个目录"这条混淆 |
 | `auto2` | auto | 两轮、**不调 flag** | `init` 也是 **2 次** ⇒ 第二次 init 是**每轮都有**，与 `applyFlagSettings` 无关 |
 
+**S5 缓存（2026-09-17 追加，回答"中途扩根会不会冷缓存"）——通过**
+
+臂 `cache`（第二轮前调 `applyFlagSettings`）与 `cache2`（逐字相同、不调）对照，判据 = RESULT 2 的 `usage`：
+
+| 臂 | RESULT 1 | RESULT 2 |
+|---|---|---|
+| `cache2`（对照） | in=22082 cacheRead=21888 cacheCreate=0 | in=434 **cacheRead=43904 cacheCreate=0** |
+| `cache`（flag） | in=22082 cacheRead=21888 cacheCreate=0 | in=448 **cacheRead=43904 cacheCreate=0** |
+
+两臂**逐字节相同**（43904/0）⇒ 中途 `applyFlagSettings({permissions:{additionalDirectories}})` **不重写 prompt 前缀**，不冷缓存（66ms、无错、session_id 不变，与 S1 一致）。
+附带实测：**首轮就有 21888 的 cacheRead**——CLI 固定系统提示词那段共享缓存的命中，证明 Aide 的注入（`systemPrompt.append`，尾接）没有破坏跨会话共享前缀；**注入位置绝不能改成头插**。
+
 **结论**
 1. **R1 通过**：`applyFlagSettings({permissions:{additionalDirectories}})` 对在跑的 query 实时生效；会话 id 不变、无 error、75–95ms；对"与 cwd 无子树关系的目录"同样生效 ⇒ CLI 那处 `is not a subdirectory of cwd or of a launch-time --add-dir root` 判定**没有**挡 add-dir 这条路。
 2. **R2 通过**：manual 档下"cwd 外访问要不要授权"这件事确实由 add-dir 决定（`canUseTool` 从 1 次变 0 次、或从 0 次开始就是 0 次）⇒ **不需要 `policy.addSessionRules`**。
@@ -390,3 +402,92 @@ git 面板（30+ 命令绑活动工作区，仅 `git/status.rs:29`、`git/operat
 **未验（阶段 2 的验收项还没做）**：真实会话端到端 #1–#5、#9（要起 dev 或发布版跑真会话）；PWA/鸿蒙侧（阶段 4）。
 
 **手工测试补充（2026-09-17）**：首轮手工测试撞到两个**测试设定**问题（不是缺陷）：① 验证"对方仓 CLAUDE.md 当轮可达"的标记被写进了**会话自己**的 `aide/CLAUDE.md`（B 仓没有这个文件），于是它在每个 aide 会话里都出现——判据应当是**解码转录看 prompt 里有没有 `--- 引用目录 ---` 段**，而不是看模型回答里有没有标记；② 手动档弹窗用例的目标文件**不存在**，CLI 先报"file does not exist"、根本走不到权限判定，模型随后改走 Bash（见 R5b）。用例写法已据此修正（目标文件必须存在、用 Read/Edit 而非 Bash）。
+
+## 阶段 3 落地（2026-09-17）
+
+按「分阶段落地」第 3 阶段实施完毕：**systemPrompt 持久路径**（D 段的另一半）。
+
+**落的文件**
+
+| 文件 | 内容 |
+|---|---|
+| `agent-sidecar/src/engine/memoryDirs.ts`（新） | `pathToKey` / `memoryDirs` 原样搬出 extensions；`memoryEvents.ts` 改 re-export（真相源一份，且 engine 不再反向依赖 extensions） |
+| `agent-sidecar/src/engine/instructions.ts` | `loadAideInstructions(p: InstructionSources)` 对象化（`cwd`/`configDir`/`trusted`/`attached`）；附加根注入 `CLAUDE.md` + `memoryDirs(configDir, att)/MEMORY.md`，逐根带来源头，**不设 `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD`**（F4：不设 CLI 就不加载，故不会双份） |
+| `engine/session-worker/queryContext.ts` | `QueryContextDeps.attachedDirs?` 透传进 `InstructionSources.attached` |
+| `engine/session-worker.ts` | spawn 期传 `attachedDirs: this.additionalDirs`（F6：这是进 system prompt 的唯一通路） |
+| 测试 | `engine/memoryDirs.test.ts`（新，含 dot 归一分裂目录的真实用例）；`instructions.test.ts` 重写（对象化 + 附加根 7 例）；`memoryEvents.test.ts` 收窄为 hook/匹配面（re-export 壳有覆盖） |
+
+**与方案的偏差（实施中定的，都是有意为之）**
+
+1. `MAX_ATTACHED_FILES = 8` → **`MAX_ATTACHED_ROOTS = 8`**：计数单位是"根"而非"文件"——一个根最多产两块（CLAUDE.md + 记忆索引），按文件计会让"只有 CLAUDE.md 的根"占半个名额，语义漂移。
+2. **512 KiB 总预算只作用于附加根区块**，base（全局 + 主根）不在此限：方案原话是"逐文件 256 KiB 原样生效"（既有语义），若把 base 也拉进来，global/主根各 256 KiB 正好把预算吃光、附加根一条都进不来。
+3. 超限是**整块跳过 + 一行诊断**，不切半块——半个 CLAUDE.md 比没有更误导；诊断保证"注入可以少，不能静默少"。
+4. 记忆索引截断按**字节**（`Buffer`）而非 JS 字符串长度：中文按 UTF-16 计长会松 3 倍，而 CLI/Rust 两边的口径都是字节。
+
+**消息级记忆索引（2026-09-17 追加，用户选 A）**：`@目录` 的当轮注入补上对方仓的 auto memory 索引。落点：
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| Rust | `commands/memory_observatory/index.rs`（新） | 纯核 `for_dir`：canonicalize（大小写/8.3/符号链接；projects 下的 key 是 CLI 按它看到的 cwd 编的）→ `workspace::path_to_key` → `resolve::memory_dirs` → 首个非空 `MEMORY.md` → 前 200 行 / 25 KiB 先到先截。命令壳 `memory_index_for_dir` 在 `memory_observatory/mod.rs`（与 `scan` 同款包法），`lib.rs` 注册；**REGISTRY 不收录**（mention 解析是桌面独有路径，收录原则要的是"PWA UI 必需"） |
+| SDK | `api/memoryObservatory.ts` | `indexForDir(dir)`：`invoke("memory_index_for_dir", { dir })` |
+| SDK | `utils/fileMentions.ts` | `MentionIo.memoryIndex?` 能力位（**不在 SDK 抄 key 规则**——那也是它走能力位而非自己拼路径的原因）；首次 @ 时与 CLAUDE.md 同趟注入、同一 `MAX_DIR_RULES_CHARS` 预算；缺能力位/返回 null/抛错都只少那一块，不阻断整段 |
+| 桌面 | `ChatInputBox.vue` | `memoryIndex: (dir) => memoryObservatoryApi.indexForDir(dir)` |
+
+**已知边界**（写进 `index.rs` 头注）：索引里的 topic 链接是相对文件名，模型此刻拿不到对方仓的 memory 目录路径，所以这一轮它"知道有这条记忆"但读不了细节；要读细节走下次 spawn 的 systemPrompt 通路（sidecar `instructions.ts`，同一套截断规则）。
+
+**验证（已跑）**
+
+| 套件 | 结果 |
+|---|---|
+| sidecar `vitest run`（全量） | **73 文件 / 1081 用例全绿**（阶段 2 为 72/1070） |
+| sidecar `tsc --noEmit` | exit 0 |
+| sidecar `build` + `build:bin` | exit 0（`dist/runtime.js` 8.5mb + `dist/aide-agent.exe`） |
+| `cargo test --lib memory_observatory` | 27 passed / 0 failed（含 `index.rs` 5 例） |
+| 根 `vitest run`（全量） | **228 文件 / 2799 用例全绿**（阶段 2 那次的 `ChatMessage.renderScale` 5s 超时本轮未复现） |
+| `vue-tsc --noEmit` | exit 0 |
+| 仓库守卫 | `check:sync-io`（同步命令 25 条已登记）/ `check:overlay-layers` / `check:tauri-imports` 三条全过 |
+
+**未验**：真实会话里"新会话 @B → B 仓 CLAUDE.md/记忆进 system prompt"（属端到端验收 #9 的 systemPrompt 半边，需起 dev 跑真会话）；"中途 @B → 消息段里带 B 仓记忆索引"（同属端到端，桌面路径）。
+
+## 收尾（2026-09-17）：卡片细节 + headless 契约
+
+阶段 4 里**不属于多端**的那半（"卡片细节"）与 headless 契约的 F9 声明，同日补完。
+
+**① 卡片细节：目录引用带标识（用户在两版原型里选了 C）**
+
+原型：`docs/prototypes/2026-09-17-attach-dir-card.html`（四区块：现状 / A 纯文字「目录」/ B 图标+文字 / C 保留 `Read` + 右侧「目录」药丸）。选定 **C**；真组件夹具（动手后验证）在 `docs/prototypes/_harness/attach-card-live.html`（`npx vite --port 5199` 打开，跑的是 ToolCallBlock 自己的 scoped 样式）——截图确认：目录卡出 accent 药丸、文件卡与真 Read 卡都不出、真 Read 卡照旧显示行号区间。
+
+| 文件 | 改动 |
+|---|---|
+| `packages/aide-sdk/src/types/chat.ts` | `ToolCallBlock.isDir?`（只有 mention 合成卡会置位，真 Read 恒缺省；注释写明两条构建路径都必须带） |
+| `packages/aide-sdk/src/composables/useChatSession/events.ts` | display 映射 mention 分支透传 `isDir` |
+| `packages/aide-sdk/src/composables/useChatSession/transcriptMapping.ts` | 历史回看路径同样透传（`splitMentionSections` 已按标记置位）——**两条路漏一条 = "实时是目录卡、重开变文件卡"** |
+| `src/components/ToolCallBlock.vue` | 头行右侧 `.ti-dirpill` + `.relay-pill--dir`（几何复用接力徽章，色走 accent；与 `ti-relay` 那格互斥，不会同框） |
+| 测试 | `transcriptMapping.test.ts`（新，目录段带 isDir / 文件段不带）；`useChatSession.test.ts` 扩（display 双路径各一例） |
+
+**② headless 契约（`docs/headless-gateway-api.md` → 1.4）**
+
+- §4.1 新增专条 **`additional_dirs` / `attach_rejected`——引擎不做授权判定**：桌面那套"只认已注册工作区"是 Rust 层的保证，headless 没有注册表；并写明 **Bash 旁路**（别承诺"没授权就够不着"，见 R5b）。
+- §4.1 的"引擎还接受但网关别依赖"字段清单补上这两个；§4.11 mention 块补 `isDir?`；顺手修掉一处失效路径（`agent-sidecar/src/types.ts` → `engine/types.ts`）。
+- 变更记录加 1.4（PROTOCOL_VERSION 保持 2：纯增量、字段本来就在 schema 内）。
+- **未动** `docs/headless-test-checklist.md`：没有新的"待验行为"（schema 形状早由 `headless-server.test.ts:54` 覆盖），这条是边界声明不是实测结论，按该清单的〔清单〕标注约定不该挂编号。
+
+**余下**：PWA/鸿蒙 chip 条渲染 + ohos `ChatTranscript.ets` 镜像（用户 2026-09-17 决定暂不做）；端到端验收 #1–#5、#9 未跑。
+
+### 引擎级实测（2026-09-17，真模型，11/11 PASS）
+
+脚本 `agent-sidecar/smoke-headless-attach-dirs.ts`（可复跑）：走**真实 headless 引擎**（与桌面同一套 session-worker/dist）+ 真模型（当前 provider），夹具 = 临时目录里的 A（会话 cwd，空）/ B（附加仓，CLAUDE.md 带 `⟦BRULE-E2E⟧`、memory 里带 `⟦BMEM-E2E⟧`）。
+
+| 臂 | 判据 | 结果 |
+|---|---|---|
+| X1 | manual 档、无授权读 cwd 外 → **必弹窗**（边界存在） | 弹窗 1 次 ✓ |
+| X2a | 真 SDK 组合器产出目录段（含 B 的 CLAUDE.md + 记忆标记） | 724 字符 ✓ |
+| X2b | 中途带 `additional_dirs=[B]` 后**同一次读** → 零弹窗 | 弹窗 0 ✓ |
+| X2c | `workspace_attached` 广播全量账本 | `[repoB]` ✓ |
+| X2d/e | 模型**当轮**说出 B 的规则标记与记忆标记 | 两个都命中 ✓ |
+| X3 | 再报同一份全量（D9）→ 零弹窗 + 不重复广播 | ✓ |
+| Y1/Y2 | 首条带目录 → 后续轮**不带目录段**仍答得出 B 的规则与记忆 | ✓（systemPrompt 持久路径） |
+
+**X2d/e 是决定性的**：X1 已经把会话建起来了（spawn 时账本为空），所以 X2 轮里 B 的信息**只可能**来自消息级目录段——systemPrompt 那条当轮不生效（F6）。Y2 反过来钉住持久路径。
+
+**仍未验（要真窗口）**：#1 芯片、#2 气泡卡片与粘性 chip 条、#4 界面回声（Rust 裁定 + Tauri IPC 连线也只有单测）、#6 杀 sidecar 后的恢复、#7 manual 档写。其中卡片药丸已由真组件夹具截图确认（`docs/prototypes/_harness/attach-card-live.html`）。

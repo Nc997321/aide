@@ -19,6 +19,7 @@
 | 2026-09-14 | 1.1 | btw 侧问接入：新增命令 `btw_ask`（§4.12）与事件 `btw_answer`（§5.2）；**从 send schema 剥除 `btw` / `lightweight` / `fork_from` / `tools` 四个桌面字段**（原「明令禁发」改为 schema 层直接拒绝，清单 B14 结案）。事件总数 44 → 45，命令总数 10 → 11。**`PROTOCOL_VERSION` 1 → 2**（命令面不兼容变更，按 §1.2 判据必须递增）。 |
 | 2026-09-15 | 1.2 | `permission_response` 增**标签形态**（§4.2，官方推荐）：`response:{kind}` 四变体 `approve` / `answer` / `deny` / `unanswered`，与扁平形态**互斥**（恰好一个在场）。新增 `unanswered` 语义 = 无人应答（确认超时等），模型侧走官方「无人工审批可用」外框（自带"不要重试"）；`deny` 仍走人工外框。新增类别校验与 `fatal:false` 报错臂。**`PROTOCOL_VERSION` 保持 2**——纯增量（新形态是可选字段，扁平形态语义零变化，旧客户端不受影响）。 |
 | 2026-09-15 | 1.3 | `send.images` 增**本地路径形态** `{path}`（§4.1）：引擎自己读文件，绕开 1MB body 上限——手机原图经 base64 后 2.7~5.3MB，此前根本进不来。两种形态互斥；路径形态**不需要 mediaType**（引擎按魔数嗅探），并带读入上限 20MB/张与非图片拒收两道守卫。既有内嵌形态零改动。**`PROTOCOL_VERSION` 保持 2**（纯增量）。另记 §9.3 第 11 条：图片失败的可见性缺口（`terminal_reason`/`image_error` 未接），待真模型实测后落地。 |
+| 2026-09-17 | 1.4 | 补记 `send.additional_dirs` / `send.attach_rejected`（§4.1）：单会话跨目录（@目录即授权）落地后 `headless-schema` 一直收这两个字段，本文此前未写。**边界声明**：引擎对它们只做透明透传，**不做任何授权判定**——"只能 @ 已注册工作区"是桌面 Rust 层的保证，headless 下授权归网关。`display` 的 mention 块增 `isDir?`（§4.11）。**`PROTOCOL_VERSION` 保持 2**（纯增量，且字段早已在 schema 内）。 |
 
 ---
 
@@ -264,12 +265,24 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `metadata` | object | — | 不透明租户上下文，见 §7.2 |
 | `mcp_headers` | object | — | MCP 头注入表，见 §7.1 |
 
-**网关应当只使用上表这些字段。** 引擎还接受 `automation` / `jump_queue` / `provider_switched` / `auto_title` / `thinking_enabled` / `output_style` / `trusted` / `codegraph_enabled` 等字段，但它们是桌面产品语义，未在网关场景验证过：`automation` 明令禁发（规程第 11 条），其余下发后按引擎内部语义执行，网关不要依赖其行为。1.1 版起 `btw` / `lightweight` / `fork_from` / `tools` **不在 schema 内**，发送即 400。
+**网关应当只使用上表这些字段。** 引擎还接受 `additional_dirs` / `attach_rejected`（见下方专条）/ `automation` / `jump_queue` / `provider_switched` / `auto_title` / `thinking_enabled` / `output_style` / `trusted` / `codegraph_enabled` 等字段，但它们是桌面产品语义，未在网关场景验证过：`automation` 明令禁发（规程第 11 条），其余下发后按引擎内部语义执行，网关不要依赖其行为。1.1 版起 `btw` / `lightweight` / `fork_from` / `tools` **不在 schema 内**，发送即 400。
 
 两个具体警告：
 
 - **`codegraph_enabled: true` 在 headless 下是个死胡同。** 它会让引擎注册 codegraph MCP 工具，工具调用会发出 `codegraph_query` 事件等一个 `codegraph_result` 命令来应答——而那个响应通道是桌面 Rust 进程专属的，headless 下**没有人会应答**。网关不要开这个字段。
 - **`permission_mode` / `effort` / `model` / `mode` 的值在 schema 层是不校验的字符串**（`z.string()`，不是枚举）。引擎把它当不透明值透传给 provider。写错值的后果是 provider 侧拒绝，不是 400。
+
+#### `additional_dirs`（附加目录）——引擎不做授权判定
+
+`send` 可带 `additional_dirs: string[]`（原生绝对路径，如 `C:/work/backend`），引擎把它落到 CLI 的 `--add-dir`（等价于让 agent 访问会话 cwd 之外的目录）。`attach_rejected: string[]` 是**回声**字段：桌面端 Rust 层裁定后把被丢弃的条目放这里透传回来，供发起方显示"某某未注册，已忽略"；引擎自己既不产生也不消费它。
+
+引擎对这两个字段**只做透明透传**：不解释、不校验、不落盘，也不做任何授权判定。
+
+> **边界（重要）**：桌面版对 `additional_dirs` 有"只认已注册工作区本身或其子目录"的裁定——那是在**桌面 Rust 层**（工作区注册表在 `state.json`）做的，headless 引擎**没有注册表**。所以 **headless 下授权是你的责任**：网关若要向租户暴露"给 agent 开另一个目录"的能力，必须在自己的策略层决定放行哪些路径，引擎这边没有第二道闸。
+>
+> 另外，`additional_dirs` 约束的是 CLI 的**文件工具**（Read/Edit/Write）与手动档的弹窗判定，**管不住 Bash**——安全命令白名单不区分目录。别在任何面向用户的文案里承诺"没授权就够不着"。
+
+#### 图片附件（`images`）
 
 #### 图片附件（`images`）
 
@@ -480,11 +493,11 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `text` | `text` | 纯文本段 |
 | `image` | `data`, `mediaType` | 图片 |
 | `action` | `actionId`, `label`, `icon?` | 动作胶囊（斜杠命令等） |
-| `mention` | `path`, `content`, `range?` | @引用卡片；`range` 表示只引用了文件的一段 |
+| `mention` | `path`, `content`, `range?`, `isDir?` | @引用卡片；`range` 表示只引用了文件的一段；`isDir=true` 表示引用的是**目录**（桌面语义 = 授权 + 一级清单/指令/记忆） |
 
 为什么需要它：`prompt` 是 @引用展开后的纯文本，正文 / 引用卡片 / 动作胶囊的边界在编译成 `prompt` 时就丢了，引擎无法还原。渲染信息只能随 `send` 下发、再随 `user_message` 回灌。〔清单 B3〕
 
-**降级约定**：`display` 缺失或出现未知形态时降级为纯文本或跳过该块，**整条消息不能消失**；`text` 字段取 display 原文而非 `prompt`。网关加新的 block 形态时要知道：`UserMessageBlock` 在 `agent-sidecar/src/types.ts` 与 `packages/aide-sdk/src/types/chat.ts` 各定义一份且必须同形，形态漂移会让 display **静默失效**（降级成纯文本，不报错）。
+**降级约定**：`display` 缺失或出现未知形态时降级为纯文本或跳过该块，**整条消息不能消失**；`text` 字段取 display 原文而非 `prompt`。网关加新的 block 形态时要知道：`UserMessageBlock` 在 `agent-sidecar/src/engine/types.ts` 与 `packages/aide-sdk/src/types/chat.ts` 各定义一份且必须同形，形态漂移会让 display **静默失效**（降级成纯文本，不报错）。
 
 ---
 

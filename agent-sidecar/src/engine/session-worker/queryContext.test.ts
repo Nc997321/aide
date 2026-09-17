@@ -2,7 +2,7 @@
 // MCP/hooks），钉住装配臂：CLAUDE_CONFIG_DIR ?? 兜底、taskTools 跳过内建注册、
 // automation 白名单过滤。session 适配器用桩（policy hook 语义归 sessionHook.test）。
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareQueryContext } from "./queryContext.js";
@@ -76,6 +76,16 @@ describe("prepareQueryContext", () => {
     expect(off.mcpServers["aide-browser"]).toBeUndefined();
     // 开关是**单点**的：关掉浏览器不该顺带关掉别的内建 MCP（那会变成一个隐藏的全局开关）
     expect(off.mcpServers["aide-docs"]).toBeDefined();
+  });
+
+  it("attachedDirs 透传 → 附加工作区指令进 instructions（spawn 期唯一通路）", async () => {
+    const att = join(dir, "repoB");
+    mkdirSync(att, { recursive: true });
+    writeFileSync(join(att, "CLAUDE.md"), "B-RULES");
+    // trusted=false 也注入：附加根不走主根那道信任门（D8）
+    const ctx = await prepareQueryContext(deps({ attachedDirs: [att] }));
+    expect(ctx.instructions).toContain(`--- 附加工作区指令：${att} ---`);
+    expect(ctx.instructions).toContain("B-RULES");
   });
 
   it("automation：mcpServers 按白名单收口——空白名单 = 连接器全不挂载（docs 也被滤掉）", async () => {

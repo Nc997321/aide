@@ -1,7 +1,12 @@
-import { appendFileSync, existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import * as path from "node:path";
 import type { HookCallback, HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { toForwardSlashes, safeDirname } from "../../engine/winPaths.js";
+import { memoryDirs, pathToKey } from "../../engine/memoryDirs.js";
+
+// 路径解析（pathToKey/memoryDirs）已迁 engine/memoryDirs.ts —— instructions.ts 也要用，
+// 而它不依赖 extensions。这里保留 re-export：对外形状不变，真相源仍是一份。
+export { memoryDirs, pathToKey };
 
 /**
  * memoryEvents 内建 hook：记忆观测台的事件台账埋点（spec §4.2）。
@@ -20,27 +25,6 @@ import { toForwardSlashes, safeDirname } from "../../engine/winPaths.js";
  */
 
 const WATCHED_TOOLS = new Set(["Read", "Write", "Edit", "MultiEdit"]);
-
-/** 与 Rust 侧 workspace::path_to_key 同规则：`: \ /` → `-`。 */
-export function pathToKey(p: string): string {
-  return p.replace(/[:\\/]/g, "-");
-}
-
-/** memory 目录解析：dot 归一匹配（对齐 Rust resolve_project_dirs 的分裂目录合并语义）。 */
-export function memoryDirs(configDir: string, cwd: string): string[] {
-  const projects = path.join(configDir, "projects");
-  const key = pathToKey(cwd).replace(/\./g, "-");
-  let entries: string[] = [];
-  try {
-    entries = readdirSync(projects);
-  } catch {
-    return [];
-  }
-  return entries
-    .filter((e) => e.replace(/\./g, "-") === key)
-    .map((e) => path.join(projects, e, "memory"))
-    .filter((d) => existsSync(d));
-}
 
 /** file_path 是否落在任一 memory 目录内；命中返回 memory_id（文件名）。 */
 export function matchMemoryFile(dirs: string[], filePath: string): string | null {

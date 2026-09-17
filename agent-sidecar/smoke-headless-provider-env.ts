@@ -13,6 +13,8 @@ const KEYRING_SERVICE = "io.aide.desktop";
 /** kind → catalog 预置 base_url 兜底（预置 kind 的 baseUrl 不入 settings，见 provider/mod.rs 注释）。 */
 const PRESET_BASE_URL: Record<string, string> = {
   qwen: "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic",
+  // 与 Rust catalog 同值：src-tauri/src/runtime/provider/strategy/deepseek.rs:9
+  deepseek: "https://api.deepseek.com/anthropic",
 };
 
 export interface ResolvedProviderEnv {

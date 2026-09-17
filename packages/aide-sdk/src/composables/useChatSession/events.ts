@@ -185,6 +185,9 @@ function blocksFromDisplay(
             result: b.content,
             isError: false,
             isPending: false,
+            // @目录（两块 display 定义同形，漂移会静默降级）→ 头行出「目录」药丸。
+            // 与回看路径 transcriptMapping 必须同时带，否则重开历史就变回文件卡。
+            ...(b.isDir ? { isDir: true } : {}),
           };
         default:
           return null;

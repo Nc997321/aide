@@ -10,6 +10,7 @@
 
 mod delete;
 mod events;
+mod index;
 mod parse;
 mod resolve;
 mod scan;
@@ -92,4 +93,15 @@ pub async fn memory_observatory_scan_all() -> Result<scan::ScanAllResult, String
     tokio::task::spawn_blocking(scan::scan_all)
         .await
         .map_err(|e| format!("memory_observatory_scan_all task panicked: {e}"))?
+}
+
+/// 按**目录**取该工作区的记忆索引原文（不是观测台 UI 要的）：供 `@目录` 的当轮注入
+/// 带上对方仓的记忆（单会话跨目录工作，判据与截断见 `index.rs`）。
+/// 与观测台共用解析与截断规则，所以落在这个模块；REGISTRY 不收录——mention 解析
+/// 是桌面独有路径（PWA/鸿蒙没有芯片条）。
+#[tauri::command]
+pub async fn memory_index_for_dir(dir: String) -> Result<Option<String>, String> {
+    tokio::task::spawn_blocking(move || index::for_dir(&dir))
+        .await
+        .map_err(|e| format!("memory_index_for_dir task panicked: {e}"))
 }

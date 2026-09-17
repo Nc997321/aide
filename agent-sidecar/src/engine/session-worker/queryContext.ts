@@ -17,6 +17,9 @@ export interface QueryContextDeps {
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
   cwd: string;
   trusted: boolean;
+  /** 本会话的 @目录账本（附加根）——只有 spawn 期这一条路进 system prompt，
+   *  中途 @ 的靠消息级目录段当轮送达（方案 F6 / D 段）。 */
+  attachedDirs?: string[];
   codegraphEnabled: boolean;
   processEnv: NodeJS.ProcessEnv;
   emit: (e: ChatEvent) => void;
@@ -64,13 +67,15 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
-  // CLAUDE.md 追加到 preset system prompt。settingSources 必须为空，否则 SDK
-  // 仍会去读 .claude/settings*.json，与 Aide 独立设置体系冲突。
-  const instructions = await loadAideInstructions(
-    deps.cwd,
-    deps.processEnv.CLAUDE_CONFIG_DIR ?? "",
-    deps.trusted,
-  );
+  // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，追加到 preset system prompt。
+  // settingSources 必须为空，否则 SDK 仍会去读 .claude/settings*.json，与 Aide
+  // 独立设置体系冲突。
+  const instructions = await loadAideInstructions({
+    cwd: deps.cwd,
+    configDir: deps.processEnv.CLAUDE_CONFIG_DIR ?? "",
+    trusted: deps.trusted,
+    attached: deps.attachedDirs,
+  });
   // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
   // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard
   // 按条件挂载。builtinHookManifest 经清单通道回传前端（Task 3 接线）。

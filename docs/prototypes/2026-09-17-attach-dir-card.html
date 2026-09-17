@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>@目录 引用卡 · 目录标识方案</title>
+<style>
+/* ── 主题 token（glass 默认主题实值，抄自 themes/glass） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.28);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-accent-subtle: rgba(165,184,255,.14);
+  --aide-success:#6ee7a8;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-radius-sm:5px;
+  --aide-radius-md:9px;
+  --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.04);
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,'Microsoft YaHei',monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC','Microsoft YaHei',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--aide-font-ui);
+  color:var(--aide-text-primary);
+  background:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    #0a0b11;
+  min-height:100vh;
+  padding:24px 28px 64px;
+}
+.page-head h1{font-size:16px;font-weight:600}
+.page-head p{margin-top:7px;font-size:12px;color:var(--aide-text-muted);line-height:1.75;max-width:940px}
+.page-head code{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-secondary);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+
+/* ── 下面这套全是 ToolCallBlock.vue 的实值（.tool-item / .ti-row / .ti-name / .ti-summary / .ti-relay / .relay-pill） ── */
+.tool-item{
+  font-size:11.5px;
+  border:1px solid var(--aide-border-subtle);
+  border-radius:var(--aide-radius-md);
+  background:var(--aide-bg-base);
+  overflow:hidden;
+  box-shadow:var(--aide-highlight-inset);
+  max-width:640px;
+}
+.tool-item + .tool-item{margin-top:10px}
+.ti-row{
+  display:flex;align-items:center;gap:9px;width:100%;
+  padding:4px 12px;background:none;border:none;text-align:left;
+  font-size:12px;color:var(--aide-text-secondary);font-family:inherit;cursor:pointer;
+}
+.ti-row:hover{background:var(--aide-surface-default)}
+.ti-dot{width:5px;height:5px;border-radius:50%;background:var(--aide-surface-active);flex-shrink:0}
+.ti-name{font-weight:600;color:var(--aide-text-primary);flex-shrink:0;min-width:38px;display:inline-flex;align-items:center;gap:5px}
+.ti-name svg{flex-shrink:0;color:var(--aide-text-muted)}
+.ti-summary{
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  direction:rtl;text-align:left;font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-muted);
+}
+.ti-relay{margin-left:auto;flex-shrink:0;display:inline-flex;align-items:center;gap:8px}
+.relay-pill{flex-shrink:0;font-size:10.5px;padding:1px 8px;border-radius:999px;white-space:nowrap}
+.relay-pill--dir{color:var(--aide-accent);background:var(--aide-accent-subtle);border:1px solid color-mix(in srgb, var(--aide-accent) 25%, transparent)}
+.ti-chev{color:var(--aide-text-muted);flex-shrink:0;margin-left:2px}
+.ti-body{border-top:1px solid var(--aide-border-subtle);background:var(--aide-bg-deep);padding:9px 12px 11px 26px}
+.ti-pre{font-family:var(--aide-font-mono);font-size:11px;line-height:1.65;color:var(--aide-text-secondary);white-space:pre-wrap;word-break:break-all}
+.ti-sub{margin-top:7px;font-size:10.5px;color:var(--aide-text-muted)}
+
+/* ── 输入区 chip 条（ChatInputBox.vue 实值，做上下文用） ── */
+.composer{
+  max-width:640px;margin-top:10px;border:1px solid var(--aide-border);border-radius:12px;
+  background:var(--aide-bg-base);padding:0 0 10px;
+}
+.attach-strip{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding:8px 12px 0}
+.attach-chip{
+  display:flex;align-items:center;gap:5px;max-width:260px;padding:3px 7px;
+  border-radius:var(--aide-radius-sm);border:1px solid var(--aide-border);
+  background:var(--aide-surface-default);font-size:11px;color:var(--aide-text-secondary);
+}
+.attach-chip-icon{flex-shrink:0;color:var(--aide-text-muted)}
+.attach-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.attach-chip-tag{flex-shrink:0;padding:0 4px;border-radius:var(--aide-radius-sm);background:var(--aide-accent-subtle);color:var(--aide-accent);font-size:10px}
+.composer .fake-input{padding:12px 12px 0;font-size:12px;color:var(--aide-text-muted)}
+
+/* ── 页面骨架 ── */
+section{margin-top:26px}
+section h2{font-size:12.5px;font-weight:600;color:var(--aide-text-primary)}
+section h2 .tag{margin-left:7px;font-size:10px;font-weight:400;padding:1px 7px;border-radius:999px;border:1px solid var(--aide-border);color:var(--aide-text-muted)}
+section p.note{margin:6px 0 10px;font-size:11.5px;color:var(--aide-text-muted);line-height:1.7;max-width:900px}
+.pick{margin-top:9px;font-size:11px;color:var(--aide-accent)}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>@目录 引用卡 · 目录标识（四个区块选一个）</h1>
+  <p>
+    卡的 CSS 全抄自 <code>src/components/ToolCallBlock.vue</code>（<code>.ti-row / .ti-name / .ti-summary / .ti-relay / .relay-pill</code>），chip 条抄自
+    <code>ChatInputBox.vue</code> 的 <code>.attach-chip</code>。每块都放了<strong>一张目录卡 + 一张文件卡做对照</strong>——要看的是"目录 vs 文件"在头行上是否一眼分得开。
+    数据不是真数据，是摆设；只判断长相。
+  </p>
+</div>
+
+<!-- ① 现状 -->
+<section>
+  <h2>① 现状（必改：目录和文件长得完全一样）<span class="tag">baseline</span></h2>
+  <p class="note">mention 一律合成 Read 卡，头行 <code>ti-name</code> 恒为 <code>Read</code>，路径就是目录路径。用户看不出这条引用是"给了整个仓的权限"。</p>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">C:\Users\<user>\IdeaProjects\backend-gateway</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">src/api/client.ts</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ② A 纯文字 -->
+<section>
+  <h2>A · 头行文字换「目录」<span class="tag">最小改动</span></h2>
+  <p class="note">只换 <code>ti-name</code> 的文案（<code>Read</code> → <code>目录</code>）。零新增视觉元素，宽度变化可忽略。</p>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">目录</span>
+      <span class="ti-summary">C:\Users\<user>\IdeaProjects\backend-gateway</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">src/api/client.ts</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ③ B 图标 + 文字 -->
+<section>
+  <h2>B · 文件夹图标 + 「目录」<span class="tag">与 chip 条同一套图形</span></h2>
+  <p class="note">图标就是 chip 条那个 <code>FOLDER_ICON_PATH</code>（13×13，<code>currentColor</code>），头行里同样走 muted 色。图形语言与输入区的「已授权」chip 一致。</p>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        目录
+      </span>
+      <span class="ti-summary">C:\Users\<user>\IdeaProjects\backend-gateway</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">src/api/client.ts</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ④ C 保留 Read + 药丸 -->
+<section>
+  <h2>C · 保留 <code>Read</code>，右侧加「目录」药丸<span class="tag">不动主文案</span></h2>
+  <p class="note">复用 <code>ti-relay</code> 那一格（<code>margin-left:auto</code>，钉在头行右侧）+ <code>relay-pill</code> 几何，accent 色。优点是与现有"接力徽章"同一套语言；缺点是同一个信息占了两个位置（左侧 Read、右侧 目录）。</p>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">C:\Users\<user>\IdeaProjects\backend-gateway</span>
+      <span class="ti-relay"><span class="relay-pill relay-pill--dir">目录</span></span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">Read</span>
+      <span class="ti-summary">src/api/client.ts</span>
+      <svg class="ti-chev" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+</section>
+
+<!-- ⑤ 展开态 + 输入区 -->
+<section>
+  <h2>⑤ 展开态长什么样（用 A 的头行）+ 输入区 chip 条<span class="tag">顺带确认</span></h2>
+  <p class="note">目录卡展开后是这次一并塞进去的内容：一级清单 + 对方仓的 <code>CLAUDE.md</code> + 它的记忆索引。这段本就是纯文本，只看排版读得下读不下。</p>
+  <div class="tool-item">
+    <div class="ti-row">
+      <span class="ti-dot"></span>
+      <span class="ti-name">目录</span>
+      <span class="ti-summary">C:\Users\<user>\IdeaProjects\backend-gateway</span>
+      <svg class="ti-chev ti-chev--open" width="8" height="12" viewBox="0 0 8 12" fill="none"><path d="M2 1l4 5-4 5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </div>
+    <div class="ti-body">
+      <div class="ti-pre">目录：C:\Users\<user>\IdeaProjects\backend-gateway（已授权访问，可直接 Read/Edit 其中文件）
+一级条目（7 个）：
+  cmd/
+  internal/
+  migrations/
+  scripts/
+  go.mod
+  Makefile
+  README.md
+
+本仓指令文件 …\backend-gateway\CLAUDE.md 原文（仅当操作该仓文件时适用）：
+# backend-gateway
+- 改任何 API 先跑 `make gen`（openapi 代码生成），否则 CI 红
+- 迁移脚本只增不改：migrations/ 里已有文件禁止编辑
+
+本仓记忆索引（auto memory，仅当操作该仓文件时适用）：
+# Memory
+- [鉴权中间件](auth-middleware.md) — 2026-08 换成 JWT 双 token，刷新走 cookie
+- [限流](rate-limit.md) — 令牌桶在 internal/mw/limiter.go，配置在 env</div>
+    </div>
+  </div>
+
+  <div class="composer">
+    <div class="attach-strip">
+      <div class="attach-chip">
+        <svg class="attach-chip-icon" width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M3 7c0-1.1.9-2 2-2h4.6L12 7h7c1.1 0 2 .9 2 2v8c0 1.1-.9 2-2 2H5c-1.1 0-2-.9-2-2V7z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="attach-chip-name">backend-gateway</span>
+        <span class="attach-chip-tag">已授权</span>
+      </div>
+    </div>
+    <div class="fake-input">把 A 仓调用方一起改掉…</div>
+  </div>
+</section>
+
+</body>
+</html>

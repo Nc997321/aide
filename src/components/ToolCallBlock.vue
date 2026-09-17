@@ -167,6 +167,10 @@ const readRange = computed(() =>
         >{{ relayPill.text }}</span>
         <span v-if="readRange" class="ti-range">{{ readRange }}</span>
       </span>
+      <!-- @目录 引用卡：右侧「目录」药丸（真 Read 恒缺省）。目录与文件在头行一眼可分。 -->
+      <span v-if="block.isDir" class="ti-dirpill">
+        <span class="relay-pill relay-pill--dir">目录</span>
+      </span>
       <span v-if="changeInfo" class="ti-diff">
         <span class="stat-add">+{{ changeInfo.addCount }}</span>
         <span v-if="changeInfo.delCount > 0" class="stat-del">-{{ changeInfo.delCount }}</span>
@@ -367,6 +371,21 @@ const readRange = computed(() =>
   color: var(--aide-warning);
   background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
   border: 1px solid color-mix(in srgb, var(--aide-warning) 25%, transparent);
+}
+/* @目录 引用卡（mention 合成卡）：头行右侧「目录」药丸，与上面接力徽章同一几何规格，
+   色走 accent——与输入区 chip 条的「已授权」标签同色系，读起来是"这条引用是授权"。
+   目录卡不会有 relayPill / readRange（mention 不参与 Read 接力、目录不管行号），
+   与上面那格互斥，两个 margin-left:auto 不会同框。 */
+.ti-dirpill {
+  margin-left: auto;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+}
+.relay-pill--dir {
+  color: var(--aide-accent);
+  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 25%, transparent);
 }
 .ti-range {
   flex-shrink: 0;

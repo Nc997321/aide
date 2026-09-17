@@ -28,6 +28,7 @@ import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionI
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
+import { memoryObservatoryApi } from "@aide/sdk/api";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -846,6 +847,9 @@ async function performSend() {
     // 宣告，不把清单和指令每轮重注一遍。
     listDir: api.listDirectory,
     attachedDirs: attachedDirs.value,
+    // 对方仓的 auto memory 索引（F6：query 只 spawn 一次，中途 @ 的记忆只有这条路
+    // 当轮可达）。memory 目录的 key 规则在 Rust，前端不抄——由命令按目录解析。
+    memoryIndex: (dir) => memoryObservatoryApi.indexForDir(dir),
   });
 
   // @目录 授权：本条 @ 的目录（剔主根、去重后）并上本端已知账本 —— **已知全量**语义
