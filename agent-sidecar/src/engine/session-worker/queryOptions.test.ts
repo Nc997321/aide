@@ -56,6 +56,20 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.strictMcpConfig).toBe(true);
   });
 
+  it("附加目录账本非空 → 落 additionalDirectories（@目录 授权在 spawn 期落地）", () => {
+    const o = buildSpawnQueryOptions(
+      parts({ workspace: { additionalDirs: ["C:\\repo", "D:\\other"] } }),
+    ) as Opts;
+    expect(o.additionalDirectories).toEqual(["C:\\repo", "D:\\other"]);
+  });
+
+  it("附加目录空数组 / 缺省 → 不落字段（与没有这个功能同形）", () => {
+    const empty = buildSpawnQueryOptions(parts({ workspace: { additionalDirs: [] } })) as Opts;
+    expect(empty.additionalDirectories).toBeUndefined();
+    const absent = buildSpawnQueryOptions(parts()) as Opts;
+    expect(absent.additionalDirectories).toBeUndefined();
+  });
+
   it("automation：skills+plugins 全关（前缀最小化）", () => {
     const cfg = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" };
     const auto = buildSpawnQueryOptions(parts({ branch: { automationConfig: cfg } })) as Opts;

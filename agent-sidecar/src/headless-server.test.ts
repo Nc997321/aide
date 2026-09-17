@@ -51,6 +51,26 @@ describe("validateInvokeBody", () => {
     expect(ok.command).toHaveProperty("cwd", "C:/x");
   });
 
+  it("send.additional_dirs 形状：字符串数组透传，非法/空串/缺席逐臂", () => {
+    const base = { cmd: "send", session_id: "s1", prompt: "p" };
+    // 缺席合法：旧端/无附加目录的发送照常
+    expect(validateInvokeBody(base).ok).toBe(true);
+    // 非数组 / 含非字符串 / 含空串 —— 拒绝
+    expect(validateInvokeBody({ ...base, additional_dirs: "C:/x" }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, additional_dirs: [1] }).ok).toBe(false);
+    expect(validateInvokeBody({ ...base, additional_dirs: [""] }).ok).toBe(false);
+    const ok = validateInvokeBody({
+      ...base,
+      additional_dirs: ["C:/repo", "D:/other"],
+      attach_rejected: ["C:/Windows"],
+    });
+    if (!ok.ok) throw new Error("expected ok");
+    expect(ok.command).toMatchObject({
+      additional_dirs: ["C:/repo", "D:/other"],
+      attach_rejected: ["C:/Windows"],
+    });
+  });
+
   it("send.metadata 非纯对象拒绝；纯对象/缺席透传", () => {
     const base = { cmd: "send", session_id: "s1", prompt: "p" };
     expect(validateInvokeBody({ ...base, metadata: "x" }).ok).toBe(false);

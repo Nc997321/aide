@@ -37,6 +37,8 @@ import {
 } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
+import { applyAttachExtension, decideAttach } from "./attachDirs.js";
+import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv } from "./cliEnv.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
@@ -137,6 +139,10 @@ export class SessionWorker {
   private currentEffort = "";
   /** Stop hook 读到的本轮实际 effort（含静默降级）；message_stop 盖戳后清零。 */
   private lastStopEffort = "";
+  /** 本会话已授权的附加目录（@目录）。**粘性账本，唯一主人是 worker 实例**——worker
+   *  销毁即清（会话内粘性）。spawn 时进 options.additionalDirectories；会话中走
+   *  applyFlagSettings 实时扩根（见 attachDirs.ts；实测有效见方案「spike 实测」S1）。 */
+  private additionalDirs: string[] = [];
   /** 可选模型名册（列表 + 真名/别名互译，见 modelRoster.ts）；currentModel 账面留 worker。 */
   private readonly modelRoster = new ModelRoster();
   /** 权限模式账本（清单常量与切换语义见 permissionModes.ts）。 */
@@ -315,6 +321,26 @@ export class SessionWorker {
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
     this.metadata = cmd.metadata ?? {};
     this.mcpHeaders = this.sanitizeMcpHeaders(cmd.mcp_headers);
+    this.applyAttachedDirs(cmd.additional_dirs, cmd.attach_rejected);
+  }
+
+  /** @目录 授权（方案 C 段）：账本合并 + 落地，与 applyEffort 同款分工——query 未起
+   *  只落账（startLoop 建 query 时经 options.additionalDirectories 带上），在跑走
+   *  applyFlagSettings 实时扩根。无变化且无回声时整条 no-op（不广播）。
+   *  接线点在 handleSend 入口，早于 !currentQuery 分支与 startLoop —— 首条消息带的
+   *  目录因此能在 spawn 时就落地。 */
+  private applyAttachedDirs(incoming?: string[], rejected?: string[]): void {
+    if (!incoming?.length && !rejected?.length) return;
+    applyAttachExtension(
+      this.currentQuery as FlagSettingsQuery | null,
+      decideAttach(this.additionalDirs, incoming ?? [], rejected ?? []),
+      {
+        emit: (e) => this.emit(e),
+        commit: (dirs) => {
+          this.additionalDirs = dirs;
+        },
+      },
+    );
   }
 
   /** set_effort 命令 / send env 通道共用的入口：query 未起存本地（startLoop
@@ -742,7 +768,14 @@ export class SessionWorker {
                 ctx: queryCtx,
                 cliEnv,
               },
-              workspace: { trusted, cwd: effectiveCwd, cwdParam: cwd, cwdWorker: this.cwd },
+              workspace: {
+                trusted,
+                cwd: effectiveCwd,
+                cwdParam: cwd,
+                cwdWorker: this.cwd,
+                // 账本在 spawn 时落地（中途 @ 的走 applyFlagSettings，见 applyAttachedDirs）
+                additionalDirs: this.additionalDirs,
+              },
               branch: {
                 automationConfig: this.automationConfig,
               },

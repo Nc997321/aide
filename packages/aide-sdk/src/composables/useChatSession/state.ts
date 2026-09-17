@@ -20,6 +20,7 @@ import type {
 import { useSessionState } from "../useSessionState";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionWorkspaces } from "../useSessionWorkspaces";
+import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useBtwSession } from "../useBtwSession";
 
@@ -448,6 +449,7 @@ export function disposeSession(sid: string): void {
   pageLedgers.delete(sid);
   useSessionNames().removeName(sid);
   useSessionWorkspaces().removeWorkspace(sid);
+  useSessionAttachedWorkspaces().removeWorkspace(sid);
   // P2-3：btw 问答记忆随 owner 收口（后台仍跑的 btw 完成时重建单轮条目，无害）
   useBtwSession().clearBtwHistory(sid);
 }
@@ -537,6 +539,8 @@ export async function finalizeSession(tempId: string, realId: string) {
   identityStore.migrateBinding(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
   useSessionWorkspaces().migrate(tempId, realId);
+  // 附加目录账本同样搬迁（首条消息就可能带 @目录，事件可能在临时 id 下到达）
+  useSessionAttachedWorkspaces().migrate(tempId, realId);
   // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，
   // ownerSid 记的是临时 id；不迁抽屉永久失绑）
   useBtwSession().rebindOwner(tempId, realId);
@@ -570,5 +574,6 @@ export function resetAllState(): void {
   const { state, removeSessionState } = useSessionState();
   for (const k of Object.keys(state)) removeSessionState(k);
   useSessionWorkspaces().clearAll(); // 归属注册表同属模块级状态，一并归零
+  useSessionAttachedWorkspaces().clearAll(); // 附加目录账本同上
   useSessionNames().clearPendingTitles(); // 待用标题同上
 }

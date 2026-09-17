@@ -43,6 +43,10 @@ export interface SendMessageParams {
   permissionMode?: string | null;
   /** 排队发送标记：sidecar 在安全边界自行 interrupt 后再发 */
   jumpQueue?: boolean | null;
+  /** **客户端已知的附加目录全量**（非"本条新增"）：Rust 裁定（只认已注册工作区）后下发
+   *  sidecar 做并集合并，幂等——重连/换端把已知全量再报一遍即可自愈（worker 账本随进程
+   *  消失，见方案 D9）。与 `workspaceRoot`（会话主根/归属）语义不同。 */
+  additionalDirs?: string[] | null;
 }
 
 /** permission_response 的完整负载（IPC 边界 DTO）。 */

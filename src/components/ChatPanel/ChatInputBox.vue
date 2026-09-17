@@ -13,7 +13,8 @@ import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/us
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
-import { resolveFileMentions, formatMentionPath } from "@/utils/fileMentions";
+import { resolveFileMentions, formatMentionPath, attachedDirsFrom } from "@/utils/fileMentions";
+import { useSessionAttachedWorkspaces } from "@/composables/useSessionAttachedWorkspaces";
 import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
@@ -572,6 +573,16 @@ const mentionName = pathBasename;
 const mentionIcon = getFileIcon;
 const folderIconPath = FOLDER_ICON_PATH;
 
+// ── 附加目录（@目录 授权）的粘性状态 ────────────────────────────────────────
+// 只读镜像：真相在 sidecar worker 的账本里，这里只认 `workspace_attached` 事件
+// （全量、幂等）。发送时把已知全量一起报上去（D9），重连自愈靠它。
+const attachStore = useSessionAttachedWorkspaces();
+const attachedDirs = computed(() => (props.sessionId ? attachStore.attachedOf(props.sessionId) : []));
+/** 被 Rust 判掉（未注册/非法）的目录——回声，不参与授权。 */
+const rejectedDirs = computed(() => (props.sessionId ? attachStore.rejectedOf(props.sessionId) : []));
+/** 活体扩根失败的原文（有值 = 本轮没扩成功，下条消息/新会话会再落）。 */
+const attachError = computed(() => (props.sessionId ? attachStore.errorOf(props.sessionId) : undefined));
+
 // ── 键盘 / 粘贴 / 拖放 ──
 function handleTabKey(e: KeyboardEvent) {
   // Shift+Tab = 循环权限模式（CLI 同款），与 slash 补全互斥
@@ -829,7 +840,18 @@ async function performSend() {
   // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
   // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
   // 自己打的字混在一个气泡里，读起来很差。
-  const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, api.readFileContent);
+  const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, {
+    readFile: api.readFileContent,
+    // 有 listDir 才认得目录（@目录 = 授权 + 一级清单）；attachedDirs 命中则只发一行
+    // 宣告，不把清单和指令每轮重注一遍。
+    listDir: api.listDirectory,
+    attachedDirs: attachedDirs.value,
+  });
+
+  // @目录 授权：本条 @ 的目录（剔主根、去重后）并上本端已知账本 —— **已知全量**语义
+  // （D9）：sidecar 侧并集合并幂等，杀 sidecar / 重连后重报一遍就自愈。
+  const newlyAttached = attachedDirsFrom(mentionResolution, props.workspacePath ?? null);
+  const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   const sendOpts: SendOptions = {
@@ -842,6 +864,7 @@ async function performSend() {
     initialEffort: selectedEffort.value || undefined,
     mentions: mentionResolution,
     permissionMode: selectedPermissionMode.value || undefined,
+    additionalDirs: allAttached.length ? allAttached : undefined,
   };
 
   // 发送前确认门控（变体 C）已上移到 ChatPanel（onSendRequest）：这里把本次发送
@@ -989,6 +1012,24 @@ const { actions: quickActions } = useQuickActions();
             {{ mentionName(m.path) }}<span v-if="m.range" class="mention-chip-range">:{{ m.range.start }}-{{ m.range.end }}</span>
           </span>
           <button class="mention-chip-remove" @click="pendingMentions.splice(i, 1)">×</button>
+        </div>
+      </div>
+      <!-- 已授权的附加目录（@目录，本会话内粘性）：只读——来源是 sidecar 的全量账本事件，
+           不做移除按钮（要解除就开新会话）。拒绝/失败同样在这里回声，不许静默。 -->
+      <div v-if="attachedDirs.length || rejectedDirs.length || attachError" class="attach-strip">
+        <div v-for="d in attachedDirs" :key="d" class="attach-chip" v-tooltip="d">
+          <svg class="attach-chip-icon" width="13" height="13" viewBox="0 0 24 24" fill="none">
+            <path :d="folderIconPath" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="attach-chip-name">{{ mentionName(d) }}</span>
+          <span class="attach-chip-tag">已授权</span>
+        </div>
+        <div v-if="rejectedDirs.length" class="attach-warn" v-tooltip="rejectedDirs.join('\n')">
+          未注册，已忽略：{{ mentionName(rejectedDirs[0])
+          }}<span v-if="rejectedDirs.length > 1"> 等 {{ rejectedDirs.length }} 个</span>
+        </div>
+        <div v-else-if="attachError" class="attach-warn" v-tooltip="attachError">
+          附加目录本轮未生效，下条消息会重试
         </div>
       </div>
       <div v-if="pendingImages.length" class="image-attachment-strip">
@@ -1446,6 +1487,58 @@ const { actions: quickActions } = useQuickActions();
 }
 
 .mention-chip-icon--folder {
+  color: var(--aide-text-muted);
+}
+
+/* ── 已授权附加目录（只读 · 粘性） ── */
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 0;
+}
+
+.attach-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 3px 7px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
+  background: var(--aide-surface-default);
+  font-size: 11px;
+  color: var(--aide-text-secondary);
+  user-select: none;
+}
+
+.attach-chip-icon {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+
+.attach-chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.attach-chip-tag {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-accent-subtle);
+  color: var(--aide-accent);
+  font-size: 10px;
+}
+
+.attach-warn {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
   color: var(--aide-text-muted);
 }
 

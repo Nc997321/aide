@@ -28,6 +28,7 @@ import { useBtwSession } from "../useBtwSession";
 import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
 import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
+import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
 import {
@@ -825,6 +826,20 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         timestamp: Date.now(),
       });
       setSessionState(sid, "stopped");
+      break;
+    }
+    case "workspace_attached": {
+      // 附加目录账本（@目录 授权的可见性来源）。sidecar 发的是**全量**账本，整份覆盖。
+      // rejected/error 是不参与授权的回声：Rust 判掉的未注册目录、活体扩根的失败原文
+      // ——"绝不静默"（方案 C 段的原则），没有它们用户分不清"授权成功"和"被丢弃"。
+      const strArray = (v: unknown): string[] =>
+        Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+      useSessionAttachedWorkspaces().setAll(
+        sid,
+        strArray(e["dirs"]),
+        strArray(e["rejected"]),
+        typeof e["error"] === "string" ? e["error"] : undefined,
+      );
       break;
     }
   }

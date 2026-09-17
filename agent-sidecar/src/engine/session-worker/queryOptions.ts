@@ -32,6 +32,8 @@ export interface QuerySpawnParts {
     cwdParam: string | undefined;
     /** worker.cwd（兜底）。 */
     cwdWorker: string | undefined;
+    /** 本会话已授权的附加目录（@目录 账本，见 attachDirs.ts）。空/缺省 = 不落字段。 */
+    additionalDirs?: string[];
   };
   branch: {
     automationConfig: AutomationConfig | undefined;
@@ -109,6 +111,11 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
         : { type: "disabled" },
     ...(p.workspace.cwdParam ? { cwd: p.workspace.cwdParam } : {}),
     ...(p.workspace.cwdWorker && !p.workspace.cwdParam ? { cwd: p.workspace.cwdWorker } : {}),
+    // 附加目录（@目录 账本，见 attachDirs.ts）：空/缺省不落字段。只给文件访问权、
+    // 不加载对方仓配置——这个性质挂在下面的 settingSources: [] 上（方案 F4 实测）。
+    ...(p.workspace.additionalDirs?.length
+      ? { additionalDirectories: p.workspace.additionalDirs }
+      : {}),
     ...(resolveClaudeExe()
       ? { pathToClaudeCodeExecutable: resolveClaudeExe() }
       : {}),

@@ -127,6 +127,10 @@ const sendCommand = z.looseObject({
   display: z.array(displayBlock).optional(),
   cwd: z.string().optional(),
   permission_mode: z.string().optional(),
+  // 附加目录授权（@目录）：**客户端已知全量**。headless 没有 Rust 那层裁定
+  // （工作区注册表在桌面侧）——授权由宿主网关负责，见方案 F9 / D4 的适用范围。
+  additional_dirs: z.array(z.string().min(1)).optional(),
+  attach_rejected: z.array(z.string().min(1)).optional(),
   provider_switched: z.boolean().optional(),
   jump_queue: z.boolean().optional(),
   automation: automationPayload.optional(),

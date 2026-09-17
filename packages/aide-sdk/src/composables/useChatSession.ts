@@ -75,6 +75,10 @@ export interface SendOptions {
    *  当前工作区，由 PaneGroup 注入；仅生成临时 sid 时消费（种进注册表），
    *  已有会话忽略（归属本来就在注册表里）。 */
   workspace?: SessionWorkspaceInfo;
+  /** 本会话**已知的附加目录全量**（@目录 授权；不是"本条新增"）。与 `workspace`
+   *  语义不同：workspace 是会话归属（1 个），这是本会话的附加授权（N 个，粘性）。
+   *  全量语义是有意的：sidecar 侧并集合并幂等，重连/换端重报一遍就自愈。 */
+  additionalDirs?: string[];
 }
 
 interface QueuedSend {
@@ -90,6 +94,9 @@ interface QueuedSend {
    *  为 initialEffort）。与 initialModel 同一条 env 通道（CLAUDE_CODE_EFFORT_LEVEL）。 */
   effort?: string;
   action?: { id: string; label: string; icon?: string };
+  /** 本会话已知的附加目录全量（见 SendOptions.additionalDirs）。排队消息必须带上：
+   *  插队/promote 走的是同一条 send 链路，不带就等于授权只对直发那条生效。 */
+  additionalDirs?: string[];
 }
 
 let globalUnlisten: (() => void) | null = null;
@@ -166,6 +173,8 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
           path: m.path,
           content: m.content,
           ...(m.range ? { range: m.range } : {}),
+          // 目录引用要把种类带出去，否则接收端只画得出"合成 Read 卡"（见 E 段）
+          ...(m.isDir ? { isDir: true } : {}),
         })),
       ];
 }
@@ -214,6 +223,8 @@ function sendQueued(
     // 排队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
     // 跑完）自己决定何时真正 interrupt——见 jumpQueue 分支的调用处。
     jumpQueue: opts.jumpQueue || null,
+    // 附加目录授权（D9：客户端已知全量）。Rust 裁定合法性 → sidecar 并集落账。
+    additionalDirs: item.additionalDirs?.length ? item.additionalDirs : null,
   }).catch((e) => {
     console.warn("send_message failed:", e);
     const rsid = resolveSid(sid);
@@ -303,6 +314,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       permissionMode: opts.permissionMode,
       effort: opts.initialEffort,
       action: opts.action,
+      additionalDirs: opts.additionalDirs,
     };
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）

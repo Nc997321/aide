@@ -48,6 +48,10 @@ struct SendMessageArgs {
     permission_mode: Option<String>,
     #[serde(default)]
     jump_queue: bool,
+    /// @目录 授权：客户端已知的附加目录全量。远程与桌面走**同一个** send_message，
+    /// 所以这里的裁定口径完全一致（未注册工作区照样被拒，见 workspace/attach.rs）。
+    #[serde(default)]
+    additional_dirs: Option<Vec<String>>,
 }
 
 pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
@@ -80,6 +84,7 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
                 permission_mode,
                 Some(a.jump_queue),
                 a.workspace_root,
+                a.additional_dirs,
                 a.provider,
                 runtime,
                 ws_state,

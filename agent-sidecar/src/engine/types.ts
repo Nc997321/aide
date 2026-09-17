@@ -82,8 +82,10 @@ export type UserMessageBlock =
   // 动作胶囊（/compact 等斜杠命令）：显示 label/icon，发给模型的仍是 prompt。
   | { type: "action"; actionId: string; label: string; icon?: string }
   // @引用：path 供展示标题，content 是展开内容（模型收到的那部分）。range 表示
-  // 只引用了这一段（编辑器选区），缺省=整文件。与 aide-sdk/src/types/chat.ts 同形。
-  | { type: "mention"; path: string; content: string; range?: { start: number; end: number } };
+  // 只引用了这一段（编辑器选区），缺省=整文件。isDir 表示引用的是目录（@目录 =
+  // 授权 + 一级清单，见 2026-09-17 跨目录方案）。与 aide-sdk/src/types/chat.ts 同形
+  // ——**两份必须同形，漂移会让 display 静默失效**（降级成纯文本，不报错）。
+  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与
  *  packages/aide-sdk/src/types/chat.ts 必须同形。 */
@@ -190,6 +192,10 @@ export type ChatEvent =
   // effort 切换的回执/同步广播——用户显式 set_effort 后由 sidecar 发出。成功带新值；
   // 失败（provider 驳回）带回滚后的旧值 + error。query 未起时本地落账也发（无 error）。
   | { type: "effort_changed"; effort: string; error?: string }
+  // 附加目录账本（@目录 授权）：**全量**账本、幂等，各端整份覆盖。dirs = 当前生效的
+  // 全部附加目录；rejected = 本次被 Rust 判掉（未注册/非法）的条目；error = 活体扩根
+  // （applyFlagSettings）失败的原文。后两者是"别静默"的回声，不参与授权。
+  | { type: "workspace_attached"; dirs: string[]; rejected?: string[]; error?: string }
   // 插队消息已登记、在等安全边界（当前工具调用跑完）才真正 interrupt——前端据此
   // 显示"待发出"提示条。prompt 供提示条展示原文。
   | { type: "jump_queued"; prompt: string }
@@ -415,6 +421,12 @@ export type SidecarCommand =
       display?: UserMessageBlock[];
       cwd?: string;
       permission_mode?: string;
+      // 附加目录：**客户端已知全量**（不是"本条新增"），Rust 已裁定过（只认已注册
+      // 工作区）。并集合并进 worker 账本 → spawn 落 options.additionalDirectories、
+      // 会话中落 applyFlagSettings。缺席（旧端/鸿蒙）与空数组等价：不动账本。
+      additional_dirs?: string[];
+      // 本次被 Rust 判掉、没进 additional_dirs 的条目——纯回声（前端显示"未注册，已忽略"）。
+      attach_rejected?: string[];
       // 供应商连接身份真的漂移了才带 true——下一次 query() 时 forkSession。
       provider_switched?: boolean;
       // 忙碌时的"插队"标记：不在当前轮立刻打断，等安全边界再 interrupt。

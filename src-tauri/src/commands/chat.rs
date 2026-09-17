@@ -82,6 +82,10 @@ struct SendOptions<'a> {
     /// 输出样式名（见 settings.rs 的 DEFAULT_OUTPUT_STYLE）。**非默认才落字段**——
     /// 空串与 `"default"` 都不落，sidecar 缺席即按默认处理（判据在 attach_output_style）。
     output_style: String,
+    /// @目录 授权：Rust 裁定结果（过闸的进 `additional_dirs`、被拒的进 `attach_rejected`，
+    /// 后者是给前端的回声）。None（本就没带）与两者皆空都不落字段。
+    /// 判定在 `workspace/attach.rs`，这里只搬运。
+    attach: Option<crate::commands::workspace::attach::AttachResolution>,
 }
 
 /// 构造 `send` 命令的 JSON（纯函数，可单测）。骨架目录：必填字段 + 逐项附件，
@@ -108,7 +112,24 @@ fn build_send_command(
     attach_flag(&mut cmd, "jump_queue", opts.jump_queue);
     attach_flag(&mut cmd, "provider_switched", opts.provider_switched);
     attach_output_style(&mut cmd, &opts.output_style);
+    attach_additional_dirs(&mut cmd, opts.attach.as_ref());
     cmd
+}
+
+/// @目录 授权：过闸的目录进 `additional_dirs`，被拒的进 `attach_rejected`（**回声**，
+/// 前端据此显示"未注册，已忽略"——fail-closed 不能静默）。两者皆空则不落字段，
+/// 与"没带这个功能"同形（旧端/鸿蒙缺席即此）。
+fn attach_additional_dirs(
+    cmd: &mut serde_json::Value,
+    resolution: Option<&crate::commands::workspace::attach::AttachResolution>,
+) {
+    let Some(resolution) = resolution else { return };
+    if !resolution.accepted.is_empty() {
+        cmd["additional_dirs"] = json!(resolution.accepted);
+    }
+    if !resolution.rejected.is_empty() {
+        cmd["attach_rejected"] = json!(resolution.rejected);
+    }
 }
 
 /// 只在样式**非默认**时落字段：`"default"`（设置里最常见的值）与空串都不落。
@@ -213,6 +234,9 @@ pub async fn send_message(
     permission_mode: Option<String>,
     jump_queue: Option<bool>,
     workspace_root: Option<String>,
+    // @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
+    // workspace/attach.rs 裁定（只认已注册工作区）。缺席/空 = 不动会话账本。
+    additional_dirs: Option<Vec<String>>,
     // 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
     // None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
     provider: Option<String>,
@@ -268,6 +292,17 @@ pub async fn send_message(
         .map(|s| s.output_style.clone())
         .unwrap_or_else(|| DEFAULT_OUTPUT_STYLE.to_string());
 
+    // @目录 授权：Rust 侧裁定后才下发——前端/远程客户端给什么都不作数（D4）。
+    // 读 state.json 是轻量 IO（同 is_path_trusted 的口径），不必 spawn_blocking。
+    let attach = additional_dirs
+        .as_deref()
+        .map(|dirs| crate::commands::workspace::attach::resolve_attach_dirs(dirs, &cwd_str));
+    // 被拒的条目：界面上有回声（attach_rejected → workspace_attached），这里再落一条日志，
+    // 方便对着"@ 了却没生效"的现场查是哪一环丢的（Rust 是唯一裁定入口）。
+    if let Some(rejected) = attach.as_ref().map(|a| &a.rejected).filter(|r| !r.is_empty()) {
+        tracing::warn!(?rejected, cwd = %cwd_str, "send_message: 附加目录被拒（未注册工作区/非法路径）");
+    }
+
     let mut cmd = build_send_command(
         &session_id,
         &prompt,
@@ -284,6 +319,7 @@ pub async fn send_message(
             provider_switched,
             thinking_enabled,
             output_style,
+            attach,
         },
     );
 
@@ -560,6 +596,65 @@ mod tests {
             thinking_enabled: true,
             ..Default::default()
         }
+    }
+
+    /// @目录 授权：过闸的进 `additional_dirs`（数组），被拒的进 `attach_rejected`
+    /// （**回声**——fail-closed 不能静默，前端据此显示"未注册，已忽略"）。
+    #[test]
+    fn build_send_command_carries_additional_dirs_and_rejections() {
+        let cmd = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                attach: Some(crate::commands::workspace::attach::AttachResolution {
+                    accepted: vec!["C:\\repo".to_string(), "D:\\other".to_string()],
+                    rejected: vec!["C:\\Windows".to_string()],
+                }),
+                ..base_opts()
+            },
+        );
+        assert_eq!(cmd["additional_dirs"], json!(["C:\\repo", "D:\\other"]));
+        assert_eq!(cmd["attach_rejected"], json!(["C:\\Windows"]));
+    }
+
+    /// 授权字段的缺席形态：没带（None）与两者皆空都不落字段——与"没有这个功能"
+    /// 同形（旧端/鸿蒙缺席即此）。全部被拒时只落回声、不落 additional_dirs。
+    #[test]
+    fn build_send_command_omits_attach_fields_when_empty() {
+        let absent = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(absent.get("additional_dirs").is_none());
+        assert!(absent.get("attach_rejected").is_none());
+
+        let empty = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                attach: Some(crate::commands::workspace::attach::AttachResolution::default()),
+                ..base_opts()
+            },
+        );
+        assert!(empty.get("additional_dirs").is_none());
+        assert!(empty.get("attach_rejected").is_none());
+
+        let all_rejected = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions {
+                attach: Some(crate::commands::workspace::attach::AttachResolution {
+                    accepted: vec![],
+                    rejected: vec!["C:\\Windows".to_string()],
+                }),
+                ..base_opts()
+            },
+        );
+        assert!(all_rejected.get("additional_dirs").is_none());
+        assert_eq!(all_rejected["attach_rejected"], json!(["C:\\Windows"]));
     }
 
     #[test]

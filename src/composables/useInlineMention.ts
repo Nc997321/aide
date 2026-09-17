@@ -1,6 +1,6 @@
 import { nextTick, type Ref } from "vue";
 import { api } from "../api";
-import { parseMentionPath } from "../utils/fileMentions";
+import { parseMentionPath, normalizeMentionPath } from "../utils/fileMentions";
 
 /**
  * 输入框的 `@path `→mention 小卡片转换层（唯一的转换机制，与来源无关）。
@@ -121,7 +121,14 @@ export function useInlineMention(opts: {
     const hits = matches.map((m, i) => {
       const t = typeByPath.get(candidates[i]);
       if (t === "file" || t === "dir") {
-        return { match: m, path: candidates[i], isDir: t === "dir", range: parsed[i].range };
+        // 入芯片前剥尾分隔符：`@C:\a\ ` 与 `@C:\a ` 是同一个目录，别生成两个芯片
+        // （芯片去重键是路径文本，见 ChatInputBox.mentionKey）。
+        return {
+          match: m,
+          path: normalizeMentionPath(candidates[i]),
+          isDir: t === "dir",
+          range: parsed[i].range,
+        };
       }
       return null;
     });

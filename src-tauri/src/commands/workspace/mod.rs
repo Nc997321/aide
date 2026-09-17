@@ -24,6 +24,11 @@ pub use registry::{
     normalize_registration_path, register_in_config, registered_path_for_key, unregister_in_config,
 };
 
+// attach：@目录 授权的裁定（只认已注册工作区本身或其子目录）。纯核心
+// `resolve_with_registry` 直喂注册表单测，IO 外壳 `resolve_attach_dirs` 读 state.json。
+// 落位与判据见 docs/superpowers/plans/2026-09-17-cross-directory-session.md
+pub mod attach;
+
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
 /// `~/.aide/claude/projects/` 目录命名一致。
 pub fn path_to_key(path: &str) -> String {

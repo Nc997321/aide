@@ -341,7 +341,8 @@ export interface ChatMessage {
  *  端无关：只描述"有什么"，不描述"怎么画"。mention 渲染成 Read 工具卡片是桌面端
  *  的选择，鸿蒙/PWA 可以渲染成折叠块或忽略。 */
 /** 引用文件的行号区间（1-based 闭区间）。只引用一段时才有，缺省 = 整文件。
- *  与 agent-sidecar/src/types.ts 的 mention 块同形（两份必须一致）。 */
+ *  与 agent-sidecar/src/engine/types.ts 的 mention 块同形（两份必须一致，
+ *  漂移会让 display 静默失效——降级成纯文本，不报错）。 */
 export interface MentionRange {
   start: number;
   end: number;
@@ -354,7 +355,7 @@ export type UserMessageBlock =
   | { type: "action"; actionId: string; label: string; icon?: string }
   /** @引用：path 供展示标题，content 是展开进 prompt 的那部分内容；
    *  range 表示该内容只是文件的这一段（编辑器选区引用），缺省=整文件。 */
-  | { type: "mention"; path: string; content: string; range?: MentionRange };
+  | { type: "mention"; path: string; content: string; range?: MentionRange; isDir?: boolean };
 
 export interface PermissionRequest {
   id: string;
