@@ -12,18 +12,33 @@ export interface Bookmark {
   id: string;
   title: string;
   url: string;
+  /** 目录路径，从外到内；空数组 = 根级散条（Rust `Bookmark::folders`）。分组见 `utils/browser.ts`。 */
+  folders: string[];
   added_at: number;
 }
 
 /** 导入结果（Rust `ImportReportDto`）——如实展示，不笼统说"导入完成"。 */
 export interface ImportReport {
   added: number;
+  /** 同 URL 已在库里但没目录 → 原位补上目录的条数（"再导一次就自愈"的那批）。 */
+  adopted: number;
   skipped: number;
   invalid: number;
+  /** 真的写进图标缓存的条数（"图标进来没有"的可见信号）。 */
+  icons: number;
 }
 
 /** 模块级单例状态：收藏条与（将来的）其它入口共用一份。 */
 const bookmarks = ref<Bookmark[]>([]);
+
+/**
+ * `url → data URI` 的图标表（Rust `browser_favicons`）。
+ *
+ * **`| undefined` 是签名级的诚实**：查不到的 url 就是没有键——不是"空字符串"也不是"忘了取"。
+ * 调用点（收藏条 / 下拉）据此渲染默认图标。
+ */
+const favicons = ref<Record<string, string | undefined>>({});
+
 const error = ref("");
 
 /**
@@ -40,11 +55,27 @@ export function useBrowserBookmarks() {
   async function refresh(): Promise<void> {
     try {
       bookmarks.value = await invoke<Bookmark[]>("browser_bookmarks_list");
+      await refreshFavicons();
       error.value = "";
     } catch (e) {
       error.value = typeof e === "string" ? e : String(e);
     }
   }
+
+  /**
+   * 拉一次图标表。**去重后批量问**：同一条 URL 可能挂在多个目录下（图标按 URL 存，只该问一次），
+   * 空收藏干脆不发请求。
+   *
+   * 图标**不进书签列表**是刻意的：那是几十 KB 的 base64，塞进每次列表返回里都要跟着走一遍 IPC
+   * （见 Rust `browser::favicons` 模块头）。
+   */
+  async function refreshFavicons(): Promise<void> {
+    const urls = [...new Set(bookmarks.value.map((b) => b.url))];
+    favicons.value = urls.length
+      ? await invoke<Record<string, string>>("browser_favicons", { urls })
+      : {};
+  }
+
 
   /** 加一条（幂等：同 URL 返回既有那条）。返回落库后的条目（url 是归一化形态）。 */
   async function add(title: string, url: string): Promise<Bookmark> {
@@ -78,5 +109,7 @@ export function useBrowserBookmarks() {
     return bookmarks.value.find((b) => looseKey(b.url) === key)?.id ?? null;
   }
 
-  return { bookmarks, error, refresh, add, remove, importFromFile, has, idOf };
+  // `favicons` 直接出表而不是包成 `faviconOf(url)`：两个消费方（收藏条、文件夹下拉）都要按 url 查，
+  // 下拉那边要的是**表本身**（当 prop 传下去）；包一层只会多一个消费方还得再拆开。
+  return { bookmarks, favicons, error, refresh, add, remove, importFromFile, has, idOf };
 }

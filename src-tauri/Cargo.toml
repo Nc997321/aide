@@ -71,6 +71,10 @@ percent-encoding = "2"
 url = "2.5"
 png = "0.17"
 base64 = "0.22"
+# favicon 缓存的键哈希（browser::favicons）。用真哈希而不是 std 的 DefaultHasher：**文件名要在磁盘上
+# 跨版本存活**，而 std 明确不保证 DefaultHasher 的算法稳定——换了算法，已缓存的图标会集体变成查不到
+# 的孤儿。已在依赖树（tauri-codegen 传递引入 0.10.9），提为直接依赖、同版本、零额外下载。
+sha2 = "0.10"
 # 文本文件编码兜底解码：read_file_content 原 fs::read_to_string 严格要求合法 UTF-8，
 # GBK/GB18030 的中文 .properties/.java 打不开（"stream did not contain valid UTF-8"）。
 # encoding_rs 纯 Rust、无 std 依赖，覆盖 GB18030/GBK/GB2312/Shift-JIS/Big5/UTF-16，

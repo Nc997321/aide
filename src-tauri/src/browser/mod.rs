@@ -24,6 +24,7 @@ pub mod bookmarks;
 pub mod core;
 pub mod dto;
 pub mod facade;
+pub mod favicons;
 pub mod port;
 pub mod state;
 

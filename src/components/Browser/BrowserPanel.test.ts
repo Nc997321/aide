@@ -15,6 +15,7 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import BrowserPanel from "./BrowserPanel.vue";
+import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
 import { useBrowserPanel } from "../../composables/useBrowserPanel";
 
 const VIEW_ID = "view-1";
@@ -57,7 +58,8 @@ let mounted: VueWrapper[] = [];
 function mountPanel(): VueWrapper {
   const w = mount(BrowserPanel, {
     global: {
-      stubs: { FilePickerDialog: FilePickerStub },
+      // 文件夹菜单真身 Teleport 到 body（躲开 `backdrop-filter` 的包含块）；测试里内联渲染。
+      stubs: { FilePickerDialog: FilePickerStub, teleport: true },
       directives: { tooltip: () => {} },
     },
   });
@@ -103,6 +105,8 @@ beforeEach(() => {
       };
     }
     if (cmd === "browser_bookmarks_list") return [];
+    // 图标回**空表**（不是 undefined/空数组）：回错类型会静默变成"所有图标都没有"。
+    if (cmd === "browser_favicons") return {};
     return undefined;
   });
   useBrowserPanel().openPanel();
@@ -158,5 +162,134 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     await flushPromises();
 
     expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);
+  });
+});
+
+describe("收藏夹目录", () => {
+  // 真机形状：顶层目录 → 二级目录，外加一条根级散条。
+  const ROWS = [
+    { id: "b1", title: "A 站", url: "https://a.com/", folders: ["工具"], added_at: 1 },
+    { id: "b2", title: "Z 站", url: "https://z.com/", folders: ["工具", "漳蒲"], added_at: 2 },
+    { id: "b3", title: "根级", url: "https://root.com/", folders: [], added_at: 3 },
+  ];
+
+  /** 让 `browser_bookmarks_list` 回这批数据、`browser_favicons` 回给定的图标表；其余命令沿用
+   *  beforeEach 装好的桩（wrap 一层而不是重写整份实现，免得漏掉 `browser_create` 那条）。 */
+  function seedBookmarks(favicons: Record<string, string> = {}) {
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "browser_bookmarks_list") return ROWS;
+      if (cmd === "browser_favicons") return favicons;
+      return base(cmd);
+    });
+  }
+
+  it("顶层目录成为收藏条上的按钮，根级书签仍是散条", async () => {
+    seedBookmarks();
+    const w = mountPanel();
+    await flushPromises();
+
+    expect(w.findAll(".bp-bm-folder").map((n) => n.text())).toEqual(["工具"]);
+    expect(w.findAll(".bp-bm-label").map((n) => n.text())).toEqual(["工具", "根级"]);
+  });
+
+  it("文件夹按钮用文件夹字形——不是 ▾，也不是书签那种真图标", async () => {
+    // 「文件夹该有文件夹的图标」是标准做法；▾ 是上一版没有图标时的占位，Edge/Chrome 都没有。
+    seedBookmarks();
+    const w = mountPanel();
+    await flushPromises();
+
+    const btn = w.find(".bp-bm-folder");
+    expect(btn.find(".bp-bm-glyph").exists()).toBe(true);
+    expect(btn.find(".bp-bm-icon").exists()).toBe(false);
+    expect(btn.text()).not.toContain("▾");
+  });
+
+  it("书签行渲染站点真图标", async () => {
+    // 根级那条是 root.com（见 ROWS）——图标按 URL 给，不是按"第几条"。
+    seedBookmarks({ "https://root.com/": "data:image/png;base64,ROOT" });
+    const w = mountPanel();
+    await flushPromises();
+
+    const rows = w.findAll(".bp-bm:not(.bp-bm-folder)");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].find(".bp-bm-icon").attributes("src")).toBe("data:image/png;base64,ROOT");
+  });
+
+  it("查不到图标 → 地球字形占位，不留空位", async () => {
+    seedBookmarks({});
+    const w = mountPanel();
+    await flushPromises();
+
+    const row = w.find(".bp-bm:not(.bp-bm-folder)");
+    expect(row.find(".bp-bm-glyph").exists()).toBe(true);
+    expect(row.find(".bp-bm-icon").exists()).toBe(false);
+  });
+
+  it("目录里的条目也带图标（下拉里查同一张表）", async () => {
+    seedBookmarks({ "https://a.com/": "data:image/png;base64,AAA" });
+    const w = mountPanel();
+    await flushPromises();
+
+    await w.find(".bp-bm-folder").trigger("click");
+    await flushPromises();
+
+    const items = w.findAll(".bp-fmenu__item");
+    expect(items[0].find(".bp-fmenu__icon").attributes("src")).toBe("data:image/png;base64,AAA");
+    // 「Z 站」没图标 → 地球字形。
+    expect(items[1].find(".bp-fmenu__glyph").exists()).toBe(true);
+  });
+
+  it("点目录按钮展开下拉；开着时原生视图让位（否则菜单被网页吃掉下半截）", async () => {
+    seedBookmarks();
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-folder").trigger("click");
+    await flushPromises();
+
+    const menu = w.findComponent(BookmarkFolderMenu);
+    expect(menu.exists()).toBe(true);
+    expect(menu.props("folder").name).toBe("工具");
+    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);
+  });
+
+  it("下拉里子目录出小标题、其书签跟着它（顺序沿用导出时的）", async () => {
+    seedBookmarks();
+    const w = mountPanel();
+    await flushPromises();
+
+    await w.find(".bp-bm-folder").trigger("click");
+    await flushPromises();
+
+    expect(w.findAll(".bp-fmenu__item").map((n) => n.text())).toEqual(["A 站", "Z 站"]);
+    expect(w.findAll(".bp-fmenu__group").map((n) => n.text())).toEqual(["漳蒲"]);
+  });
+
+  it("点下拉里的书签：先撤菜单（让位解除）再导航过去", async () => {
+    seedBookmarks();
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-folder").trigger("click");
+    await flushPromises();
+    await w.findAll(".bp-fmenu__item")[0].trigger("click");
+    await flushPromises();
+
+    expect(w.findComponent(BookmarkFolderMenu).exists()).toBe(false);
+    expect(lastArgsOf("browser_navigate")).toEqual([{ id: VIEW_ID, url: "https://a.com/" }]);
+    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: true }]);
+  });
+
+  it("弹菜单不改地址栏（菜单里点的那条才改）", async () => {
+    seedBookmarks();
+    const w = mountPanel();
+    await openView(w);
+    const before = (w.find(".bp-address").element as HTMLInputElement).value;
+
+    await w.find(".bp-bm-folder").trigger("click");
+    await flushPromises();
+
+    expect((w.find(".bp-address").element as HTMLInputElement).value).toBe(before);
   });
 });

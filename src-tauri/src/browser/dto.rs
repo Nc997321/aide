@@ -120,6 +120,8 @@ pub struct BookmarkDto {
     pub id: String,
     pub title: String,
     pub url: String,
+    /// 目录路径，从外到内；空数组 = 根级散条。前端按它还原收藏条的分组（只做分组，不裁剪）。
+    pub folders: Vec<String>,
     pub added_at: i64,
 }
 
@@ -129,26 +131,33 @@ impl From<&Bookmark> for BookmarkDto {
             id: b.id().to_string(),
             title: b.title().to_string(),
             url: b.url().to_string(),
+            folders: b.folders().to_vec(),
             added_at: b.added_at(),
         }
     }
 }
 
-/// 导入结果——**如实上报**：新增 / 跳过（URL 重复）/ 丢弃（没过 `url_guard`，如 `javascript:`）。
-/// 前端据此给一句真话（"导入 12 条，跳过 3 条重复，丢弃 1 条非法"），而不是笼统的"导入完成"。
+/// 导入结果——**如实上报**：新增 / 补目录（同 URL 已在库里但没目录）/ 跳过（URL 重复）/
+/// 丢弃（没过 `url_guard`，如 `javascript:`）。前端据此给一句真话
+/// （"导入 12 条，补目录 30 条，跳过 3 条重复，丢弃 1 条非法"），而不是笼统的"导入完成"。
 #[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
 pub struct ImportReportDto {
     pub added: usize,
+    pub adopted: usize,
     pub skipped: usize,
     pub invalid: usize,
+    /// 写进图标缓存的条数（"图标进来没有"的可见信号，见 Rust `ImportReport::icons`）。
+    pub icons: usize,
 }
 
 impl From<ImportReport> for ImportReportDto {
     fn from(r: ImportReport) -> Self {
         Self {
             added: r.added,
+            adopted: r.adopted,
             skipped: r.skipped,
             invalid: r.invalid,
+            icons: r.icons,
         }
     }
 }

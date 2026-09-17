@@ -79,6 +79,8 @@ export const GLYPHS: Record<string, string> = {
   session: '<path d="M3.5 3.5h9a1 1 0 0 1 1 1v5a1 1 0 0 1 -1 1H6l-2 2v-2H3.5a1 1 0 0 1 -1-1V4.5a1 1 0 0 1 1-1z"/>',
   /** 文件：带折角的页面 */
   file: '<path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/>',
+  /** 收藏夹目录：文件夹（带页签的直角轮廓，与 file / link 同族） */
+  folder: '<path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/>',
   /** 链接：跳转到定义（精确结构匹配） */
   link: '<rect x="2.5" y="5" width="7" height="4.5" rx="2.25"/><rect x="6.5" y="6.5" width="7" height="4.5" rx="2.25"/>',
   /** 搜索：放大镜（语义匹配） */

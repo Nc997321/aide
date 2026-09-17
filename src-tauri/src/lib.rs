@@ -344,6 +344,7 @@ pub fn run() {
             commands::browser::browser_bookmarks_add,
             commands::browser::browser_bookmarks_remove,
             commands::browser::browser_bookmarks_import,
+            commands::browser::browser_favicons,
             commands::shell::pty_write,
             commands::shell::pty_resize,
             commands::shell::pty_kill,

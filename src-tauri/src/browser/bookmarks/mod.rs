@@ -10,6 +10,10 @@
 //! 旧数据留在磁盘上可人工恢复，功能也不会因为一个坏文件彻底挂掉。
 //!
 //! **去重键 = URL**（归一化后比较，`https://a.com` 与 `https://a.com/` 是同一条）。
+//!
+//! **目录**（schema v2）：`folders` 是从外到内的路径分段，空 = 根级散条。v1 老文件靠
+//! `#[serde(default)]` 原样读成"根级、无目录"——**没有显式迁移代码**；那批条目由下次导入**认领**
+//! 目录（见 [`BookmarkStore::import`]，去重键是 URL，所以认领就是"按 URL 找到那条、补上目录"）。
 
 pub mod parse;
 
@@ -21,6 +25,7 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::browser::core::url_guard;
+use crate::browser::favicons::{self, FaviconStore};
 use crate::commands::our_config_dir;
 
 /// id 里的进程内序号（与毫秒时间戳合成，跨进程也几乎不可能撞）。
@@ -36,6 +41,10 @@ pub struct Bookmark {
     id: String,
     title: String,
     url: String,
+    /// 目录路径，从外到内（如 `["工作", "漳蒲"]`）；空 = 根级散条。
+    /// `#[serde(default)]` 就是 v1→v2 的全部迁移：老文件没这个字段 → 读成空 = 根级。
+    #[serde(default)]
+    folders: Vec<String>,
     added_at: i64,
 }
 
@@ -49,19 +58,24 @@ impl Bookmark {
     pub fn url(&self) -> &str {
         &self.url
     }
+    /// 目录路径（空 = 根级）。
+    pub fn folders(&self) -> &[String] {
+        &self.folders
+    }
     pub fn added_at(&self) -> i64 {
         self.added_at
     }
 }
 
-/// 落盘形态。带版本号：将来加目录/排序时能识别老文件，而不是猜。
+/// 落盘形态。带版本号：v1 = 扁平（无 `folders`）、v2 = 带目录。v1 文件靠 `#[serde(default)]`
+/// 直接读成 v2 形状，所以**没有单独的迁移代码**——版本号的意义是让磁盘上的文件自己说清是哪种。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BookmarkFile {
     version: u32,
     bookmarks: Vec<Bookmark>,
 }
 
-const FILE_VERSION: u32 = 1;
+const FILE_VERSION: u32 = 2;
 
 impl Default for BookmarkFile {
     fn default() -> Self {
@@ -72,12 +86,38 @@ impl Default for BookmarkFile {
     }
 }
 
-/// 导入结果——**如实上报**：新增多少、跳过多少（重复 URL）、丢弃多少（没过 `url_guard`）。
+/// 导入结果——**如实上报**：新增多少、补目录多少、跳过多少（重复 URL）、丢弃多少（没过 `url_guard`）、
+/// 图标落盘多少。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ImportReport {
     pub added: usize,
+    /// 同 URL 已存在、库里那条没目录而文件里有 → 原位补上了目录的条数（见 [`BookmarkStore::import`]）。
+    pub adopted: usize,
     pub skipped: usize,
     pub invalid: usize,
+    /// 真的写进图标缓存的条数。**这是"图标到底进来没有"的唯一可见信号**——2026-09-17 那次
+    /// 「导入后全是地球图标」排查，卡就卡在这条数当时不存在：写入失败被静默吞掉，UI 上看不出
+    /// 是"文件没带图标"还是"带了但没存进去"。
+    pub icons: usize,
+}
+
+/// 一条候选并进书签表的结局（[`merge_candidate`] 的返回，由 [`ImportReport::count`] 记账）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Merge {
+    Added,
+    Adopted,
+    Skipped,
+}
+
+impl ImportReport {
+    /// 记一笔结局——**并条只管改表、计数只管数数**，两件事分开（`merge_candidate` 的返回值直接落位）。
+    fn count(&mut self, outcome: Merge) {
+        match outcome {
+            Merge::Added => self.added += 1,
+            Merge::Adopted => self.adopted += 1,
+            Merge::Skipped => self.skipped += 1,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -100,28 +140,44 @@ impl std::fmt::Display for StoreError {
 
 impl std::error::Error for StoreError {}
 
-/// 书签存储。默认位置：`~/.aide/browser/bookmarks.json`。
+/// 书签存储。默认位置：`~/.aide/browser/bookmarks.json`；图标缓存与之同级。
+///
+/// 图标缓存是**注入进来的**、不在 `import` 里现取：导入时要往里种图标，测试必须能把它指到临时
+/// 目录——否则跑一次单测就往用户真实的 `~/.aide` 里写东西。
 #[derive(Debug, Clone)]
 pub struct BookmarkStore {
     path: PathBuf,
+    favicons: FaviconStore,
 }
 
 impl BookmarkStore {
     pub fn at_default_location() -> Self {
         Self {
             path: our_config_dir().join("browser").join("bookmarks.json"),
+            favicons: FaviconStore::at_default_location(),
         }
     }
 
     /// 指定路径。**只给测试用**：生产路径只有默认位置一条（否则"书签存哪"会有第二个答案）。
+    /// 图标缓存跟着落在书签文件旁边（同样不碰真实 `~/.aide`）。
     #[cfg(test)]
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
+        let favicons = FaviconStore::at(
+            path.parent()
+                .unwrap_or_else(|| Path::new("."))
+                .join("favicons"),
+        );
+        Self { path, favicons }
     }
 
     #[cfg(test)]
     pub fn path(&self) -> &Path {
         &self.path
+    }
+
+    #[cfg(test)]
+    pub fn favicons(&self) -> &FaviconStore {
+        &self.favicons
     }
 
     /// 全部收藏（按写入顺序；文件不存在 = 空库）。
@@ -150,6 +206,8 @@ impl BookmarkStore {
                 title.to_string()
             },
             url: normalized,
+            // ★ 收藏没有"选目录"这一步（UI 没这个入口）→ 落在根层，留着用户自己整理。
+            folders: Vec::new(),
             added_at: now_ms(),
         };
         file.bookmarks.push(bookmark.clone());
@@ -171,7 +229,12 @@ impl BookmarkStore {
     }
 
     /// 导入：解析（两种通用格式，按内容嗅探）→ 过 `url_guard` → 按 URL 去重**合并**。
-    /// **只增不删**：已有收藏不会被文件覆盖掉（导入是"搬进来"，不是"替换"）。
+    ///
+    /// 逐条三选一（**只增不删**：导入是"搬进来"，不是"替换"）：
+    /// - 新 URL → 新增，带文件里的目录；
+    /// - 同 URL 已存在、**库里那条没目录而文件里有** → 原位补目录（`adopted`）——这就是"不用删
+    ///   数据、把同一份文件再导一次就自愈"，v1 扁平导进来的那批靠它升级；
+    /// - 其余已存在 → 跳过，**什么都不改**（手动整理过的目录不会被文件冲掉）。
     pub fn import(&self, raw: &str) -> Result<ImportReport, StoreError> {
         let parsed = parse::parse_any(raw).map_err(|e| StoreError::Io(e.to_string()))?;
         let _guard = FILE_LOCK.lock().map_err(|_| StoreError::LockPoisoned)?;
@@ -184,24 +247,14 @@ impl BookmarkStore {
                 continue;
             };
             let normalized = url.as_str().to_string();
-            if file.bookmarks.iter().any(|b| b.url == normalized) {
-                report.skipped += 1;
-                continue;
+            if seed_icon(&self.favicons, &normalized, candidate.icon.as_deref()) {
+                report.icons += 1;
             }
-            file.bookmarks.push(Bookmark {
-                id: new_id(),
-                title: if candidate.title.trim().is_empty() {
-                    normalized.clone()
-                } else {
-                    candidate.title.trim().to_string()
-                },
-                url: normalized,
-                added_at: now_ms(),
-            });
-            report.added += 1;
+            report.count(merge_candidate(&mut file.bookmarks, normalized, candidate));
         }
 
-        if report.added > 0 {
+        // 认领也算写：否则刷新就回退成没目录。
+        if report.added > 0 || report.adopted > 0 {
             self.save(&file)?;
         }
         Ok(report)
@@ -238,6 +291,50 @@ impl BookmarkStore {
             .map_err(|e| StoreError::Io(format!("serialize: {e}")))?;
         write_atomic(&self.path, &json)
     }
+}
+
+/// 把导入文件里的 `ICON` 种进图标缓存（[`BookmarkStore::import`] 的逐条动作之一）。
+/// 返回**是否真的落盘**，计数进 `ImportReport::icons`。
+///
+/// 两件是刻意的：**不合法就丢**（校验在 `favicons::decode_data_uri`，唯一守门处）、**写失败不回滚
+/// 导入**（图标是装饰，下次导入会重来）。但失败**不再静默**——不计数，报告里那条就少，"图标进来
+/// 没有"在 UI 上直接看得见（这正是上次排查缺的那条线索）。
+fn seed_icon(store: &FaviconStore, url: &str, raw: Option<&str>) -> bool {
+    let Some(icon) = raw.and_then(favicons::decode_data_uri) else {
+        return false;
+    };
+    store.put(url, &icon).is_ok()
+}
+
+/// 把一条候选并进书签表（[`BookmarkStore::import`] 的逐条动作）。
+///
+/// **认领只认"库里那条没目录"**：已经有目录的不动——文件不该冲掉用户的选择（也冲不掉将来手动
+/// 整理的结果）。三条分支各自只改该改的东西，返回值交给调用方记账。
+fn merge_candidate(
+    bookmarks: &mut Vec<Bookmark>,
+    normalized: String,
+    candidate: parse::ParsedBookmark,
+) -> Merge {
+    if let Some(existing) = bookmarks.iter_mut().find(|b| b.url == normalized) {
+        if existing.folders.is_empty() && !candidate.folders.is_empty() {
+            existing.folders = candidate.folders;
+            return Merge::Adopted;
+        }
+        return Merge::Skipped;
+    }
+
+    bookmarks.push(Bookmark {
+        id: new_id(),
+        title: if candidate.title.trim().is_empty() {
+            normalized.clone()
+        } else {
+            candidate.title.trim().to_string()
+        },
+        url: normalized,
+        folders: candidate.folders,
+        added_at: now_ms(),
+    });
+    Merge::Added
 }
 
 /// 原子写：临时文件 + rename。**同 knowledge/marketplace 已有写法**（四处重复，将来若收成

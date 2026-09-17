@@ -7,6 +7,8 @@
 //! 必须跑在 tokio worker（非主线程），否则主线程死锁（见 adapter/webview2/mod.rs）。
 //! 用 `AppHandle`（`Send + 'static`，无生命周期）取状态，规避 async 命令里 `State<'_, T>` 的借用约束。
 
+use std::collections::HashMap;
+
 use tauri::AppHandle;
 
 use crate::browser::bookmarks::{parse, BookmarkStore};
@@ -14,6 +16,7 @@ use crate::browser::dto::{
     BookmarkDto, BoundsDto, BrowserViewDto, CreateBrowserDto, ImportReportDto,
 };
 use crate::browser::facade::BrowserFacade;
+use crate::browser::favicons::FaviconStore;
 
 type CmdResult<T> = Result<T, String>;
 
@@ -118,4 +121,17 @@ pub async fn browser_bookmarks_import(path: String) -> CmdResult<ImportReportDto
         .import(&text)
         .map(ImportReportDto::from)
         .map_err(|e| e.to_string())
+}
+
+/// 批量取站点图标：`url → data URI`。**查不到的 url 不会出现在结果里**（前端据此回落默认图标）。
+///
+/// 批量而不是逐条问：收藏条一屏几十条，一条一个来回太碎。查找链（精确 URL → 同主机）在
+/// `browser::favicons` 里实现，命令层不复制规则——跟书签一样是**薄壳**。
+#[tauri::command]
+pub async fn browser_favicons(urls: Vec<String>) -> CmdResult<HashMap<String, String>> {
+    let store = FaviconStore::at_default_location();
+    Ok(urls
+        .into_iter()
+        .filter_map(|url| store.get(&url).map(|icon| (url, icon)))
+        .collect())
 }

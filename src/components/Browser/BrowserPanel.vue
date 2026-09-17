@@ -28,11 +28,17 @@ import { useBrowserPanel } from "../../composables/useBrowserPanel";
 import { useBrowserBookmarks } from "../../composables/useBrowserBookmarks";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
+import Icon from "../Icon.vue";
+import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
 import {
+  buildBookmarkBar,
+  formatImportReport,
   navOfEvent,
   normalizeBrowserUrl,
   tabLabelOf,
   urlOfNav,
+  type BookmarkEntry,
+  type BookmarkFolder,
 } from "../../utils/browser";
 
 const { panelOpen, closePanel } = useBrowserPanel();
@@ -275,6 +281,7 @@ function activateTab(id: string) {
 
 const {
   bookmarks,
+  favicons,
   refresh: refreshBookmarks,
   add: addBookmark,
   remove: removeBookmark,
@@ -284,6 +291,33 @@ const {
 
 /** 导入用的文件选择器开没开（它自己会挂 `v-overlay-layer` 让原生视图让位，这里只管开关）。 */
 const pickerVisible = ref(false);
+
+/** 收藏条：扁平列表 → 按目录路径分组的条目（纯函数在 `utils/browser.ts`，这里只接线）。 */
+const bookmarkBar = computed(() => buildBookmarkBar(bookmarks.value));
+
+/** 展开的文件夹菜单（null = 没开）。开着时它登记浮层 → 原生视图让位（见「可见性总闸」）。 */
+const openFolder = ref<BookmarkFolder | null>(null);
+const folderMenuAnchor = ref({ left: 0, top: 0 });
+
+/** 收藏条的 key：文件夹按路径（同名不同父不撞），书签按 id。 */
+function entryKey(e: BookmarkEntry): string {
+  return e.kind === "folder" ? `f:${e.folder.path.join("/")}` : `b:${e.id}`;
+}
+
+/** 点栏上的文件夹按钮：菜单贴按钮下沿展开（坐标直接取按钮的 rect，不用另测一遍布局）。 */
+function openFolderMenu(folder: BookmarkFolder, ev: MouseEvent) {
+  const r = (ev.currentTarget as HTMLElement).getBoundingClientRect();
+  folderMenuAnchor.value = { left: r.left, top: r.bottom + 2 };
+  openFolder.value = folder;
+}
+
+/** 菜单里点了书签：**先撤菜单再导航**。菜单在册期间原生视图是隐藏的，直接导航会让新视图建出来
+ *  盖在菜单上（`create` 之后才轮到 watch 把它藏回去——中间那帧抢不回来）。 */
+async function onFolderPick(url: string) {
+  openFolder.value = null;
+  await nextTick();
+  await openBookmark(url);
+}
 
 /** ★ 的目标 URL：活动标签的当前 URL；空标签时用地址栏里已输入的内容。 */
 const starTarget = computed(() => active.value?.url || normalizeBrowserUrl(address.value));
@@ -322,13 +356,10 @@ async function openBookmark(url: string) {
   await go();
 }
 
-/** 导入：应用内文件选择器给路径 → Rust 解析合并 → 如实报告（新增/跳过/丢弃）。 */
+/** 导入：应用内文件选择器给路径 → Rust 解析合并 → 如实报告（新增/补目录/跳过/丢弃）。 */
 async function onImportFile(path: string) {
   try {
-    const report = await importFromFile(path);
-    setInfo(
-      `导入 ${report.added} 条，跳过 ${report.skipped} 条重复，丢弃 ${report.invalid} 条非法`,
-    );
+    setInfo(formatImportReport(await importFromFile(path)));
   } catch (e) {
     setError(e);
   }
@@ -457,13 +488,26 @@ onBeforeUnmount(() => {
       <button class="bp-btn bp-go" @click="go">打开</button>
     </div>
 
-    <!-- 收藏条：点标题直达、✕ 删除；右端是导入入口（空收藏时只剩导入按钮） -->
+    <!-- 收藏条：顶层文件夹点开下拉、根级散条点标题直达、✕ 删除；右端是导入入口 -->
     <div class="bp-bookmarks">
       <div class="bp-bm-list">
-        <div v-for="b in bookmarks" :key="b.id" class="bp-bm" :title="b.url">
-          <span class="bp-bm-label" @click="openBookmark(b.url)">{{ b.title }}</span>
-          <button class="bp-bm-x" title="删除收藏" @click="removeFromBar(b.id)">✕</button>
-        </div>
+        <template v-for="e in bookmarkBar" :key="entryKey(e)">
+          <button
+            v-if="e.kind === 'folder'"
+            class="bp-bm bp-bm-folder"
+            :title="`文件夹：${e.folder.name}`"
+            @click="openFolderMenu(e.folder, $event)"
+          >
+            <Icon name="folder" :size="13" class="bp-bm-glyph" />
+            <span class="bp-bm-label">{{ e.folder.name }}</span>
+          </button>
+          <div v-else class="bp-bm" :title="e.url">
+            <img v-if="favicons[e.url]" class="bp-bm-icon" :src="favicons[e.url]" alt="" />
+            <Icon v-else name="globe" :size="13" class="bp-bm-glyph" />
+            <span class="bp-bm-label" @click="openBookmark(e.url)">{{ e.title }}</span>
+            <button class="bp-bm-x" title="删除收藏" @click="removeFromBar(e.id)">✕</button>
+          </div>
+        </template>
       </div>
       <button
         class="bp-bm-import"
@@ -473,6 +517,16 @@ onBeforeUnmount(() => {
         导入…
       </button>
     </div>
+
+    <!-- 文件夹下拉（自己 Teleport 到 body；在册期间原生视图让位——见「可见性总闸」） -->
+    <BookmarkFolderMenu
+      v-if="openFolder"
+      :folder="openFolder"
+      :anchor="folderMenuAnchor"
+      :favicons="favicons"
+      @open="onFolderPick"
+      @close="openFolder = null"
+    />
 
     <div v-if="message" class="bp-notice" :class="{ err: messageTone === 'error' }">
       {{ message }}
@@ -740,6 +794,28 @@ onBeforeUnmount(() => {
   padding: 0 2px 0 8px;
   border-radius: var(--aide-radius-sm);
   transition: background var(--aide-ease-t);
+}
+
+/* 文件夹按钮：与书签同一行同高，靠 ▾ 区分（不塞文件夹图标——收藏条本来就密）。 */
+.bp-bm-folder {
+  padding: 0 8px;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+/* 图标位：站点真图标 / 缺图标时的地球字形 / 目录的文件夹字形，都是 14px 见方且不参与收缩。 */
+.bp-bm-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  object-fit: contain;
+}
+
+.bp-bm-glyph {
+  flex: 0 0 auto;
+  color: var(--aide-text-muted);
 }
 .bp-bm:hover {
   background: var(--aide-surface-hover);

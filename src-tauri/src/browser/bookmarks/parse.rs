@@ -8,8 +8,12 @@
 //! 解析器只负责"文件里有什么"，**不管合不合法**：`javascript:` / `chrome://` 这类危险 scheme 的过滤
 //! 交给存储层过一遍 `url_guard`（唯一守门处，不在两个解析器里各写一份）。
 //!
-//! 目录结构 v1 **拍平**（Chromium JSON 的 folder 树 / Netscape 的 `<H3>` 都不保留），
-//! 去重按 URL——需要目录分组时再加字段，别现在猜。
+//! **目录（v2 起保留）**：两种格式都必须给出**同形**结果——`folders` 是从外到内的路径分段，
+//! 空数组 = 根级。跨格式同形是契约：换个浏览器导出，层级不该跟着变形状。
+//!
+//! 两个格式都有的一个陷阱：**「书签栏」本身是工具栏容器、不是文件夹**（Netscape 的
+//! `PERSONAL_TOOLBAR_FOLDER="true"` / Chromium 的 `roots.bookmark_bar`）。那一层要丢掉、子节点提升
+//! 到根层，否则导入进来每条都白挂一层「收藏夹栏」。
 
 use regex::Regex;
 
@@ -18,6 +22,14 @@ use regex::Regex;
 pub struct ParsedBookmark {
     pub title: String,
     pub url: String,
+    /// 目录路径，从外到内（如 `["工作", "漳蒲"]`）；空 = 根级。
+    /// **分段里不会有空串**——空名目录当透明层（见两处 `Transparent` 判据）。
+    pub folders: Vec<String>,
+    /// `ICON="data:…"` 的**原始字符串**（含 `data:` 前缀），没有则 `None`。
+    ///
+    /// 这里**不校验**——跟 url 一样，"文件里有什么"归解析器、"合不合法"归存储层（唯一守门处
+    /// 在 `favicons::decode_data_uri`）。Chromium 系导出会带它，Chrome 旧版导出不带。
+    pub icon: Option<String>,
 }
 
 /// 解析失败（目前只有"JSON 畸形"一种：HTML 格式宽松，解析不出条目就是空列表）。
@@ -54,6 +66,7 @@ pub fn parse_chromium_json(raw: &str) -> Result<Vec<ParsedBookmark>, ParseError>
     let v: serde_json::Value =
         serde_json::from_str(raw).map_err(|e| ParseError::Json(e.to_string()))?;
     let mut out = Vec::new();
+    let mut folders: Vec<String> = Vec::new();
     match &v {
         serde_json::Value::Object(map) => {
             // `roots` 是**命名容器**（`{"bookmark_bar": <folder>, "other": <folder>, ...}`）——
@@ -61,87 +74,237 @@ pub fn parse_chromium_json(raw: &str) -> Result<Vec<ParsedBookmark>, ParseError>
             // 一条都解析不出来（节点在容器下面一层）。
             match map.get("roots").and_then(|r| r.as_object()) {
                 Some(roots) => {
-                    for node in roots.values() {
-                        walk_json(node, &mut out);
+                    for (key, node) in roots {
+                        // 只有 `bookmark_bar` 是"书签栏本身"要丢层；`other`（其他书签）/`synced`/
+                        // `mobile` 是真的文件夹容器，名字保留成一层。
+                        if key == "bookmark_bar" {
+                            walk_json_children(node, &mut folders, &mut out);
+                        } else {
+                            walk_json(node, &mut folders, &mut out);
+                        }
                     }
                 }
-                None => walk_json(&v, &mut out),
+                None => walk_json(&v, &mut folders, &mut out),
             }
         }
-        other => walk_json(other, &mut out),
+        other => walk_json(other, &mut folders, &mut out),
     }
     Ok(out)
 }
 
-/// 递归走节点：`type=="url"` 收下，`children` 继续下钻。
-fn walk_json(node: &serde_json::Value, out: &mut Vec<ParsedBookmark>) {
+/// 递归走节点：`type=="url"` 收下，有名字的 `folder` 入栈一层，`children` 继续下钻。
+fn walk_json(
+    node: &serde_json::Value,
+    folders: &mut Vec<String>,
+    out: &mut Vec<ParsedBookmark>,
+) {
     match node {
         serde_json::Value::Array(items) => {
             for item in items {
-                walk_json(item, out);
+                walk_json(item, folders, out);
             }
         }
         serde_json::Value::Object(map) => {
-            let is_url = map.get("type").and_then(|t| t.as_str()) == Some("url");
-            if is_url {
-                if let Some(url) = map.get("url").and_then(|u| u.as_str()) {
-                    let title = map
-                        .get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    out.push(ParsedBookmark {
-                        title: if title.trim().is_empty() {
-                            url.to_string()
-                        } else {
-                            title
-                        },
-                        url: url.to_string(),
-                    });
-                }
+            if let Some(bookmark) = url_node(map, folders) {
+                out.push(bookmark);
             }
+            let pushed = push_folder(map, folders);
             if let Some(children) = map.get("children") {
-                walk_json(children, out);
+                walk_json(children, folders, out);
+            }
+            if pushed {
+                folders.pop();
             }
         }
         _ => {}
     }
 }
 
+/// 只走节点的 `children`（给「书签栏」容器用：它自己那一层要丢、子节点提升到根层）。
+fn walk_json_children(
+    node: &serde_json::Value,
+    folders: &mut Vec<String>,
+    out: &mut Vec<ParsedBookmark>,
+) {
+    match node {
+        serde_json::Value::Array(items) => {
+            for item in items {
+                walk_json(item, folders, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(children) = map.get("children") {
+                walk_json(children, folders, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// 节点若是一条 URL 书签就产出候选（路径 = 当前栈）。
+fn url_node(
+    map: &serde_json::Map<String, serde_json::Value>,
+    folders: &[String],
+) -> Option<ParsedBookmark> {
+    if map.get("type").and_then(|t| t.as_str()) != Some("url") {
+        return None;
+    }
+    let url = map.get("url").and_then(|u| u.as_str())?;
+    let title = map
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .trim();
+    Some(ParsedBookmark {
+        title: if title.is_empty() {
+            url.to_string()
+        } else {
+            title.to_string()
+        },
+        url: url.to_string(),
+        folders: folders.to_vec(),
+        // `Bookmarks` JSON **不带图标**：Chromium 把图标存在隔壁的 `Favicons` 库里（按 URL 索引），
+        // 跟书签文件是两回事。所以 JSON 导入拿不到图标——这是格式事实，不是我们漏读。
+        icon: None,
+    })
+}
+
+/// 有名字的 `folder` 入栈，返回**是否真的入栈**（调用方据此配套出栈，别弹掉别人的层）。
+/// 匿名/空名 folder 当透明层：它的子节点留在父层，不产出 `[""]` 这种空路径段。
+fn push_folder(
+    map: &serde_json::Map<String, serde_json::Value>,
+    folders: &mut Vec<String>,
+) -> bool {
+    if map.get("type").and_then(|t| t.as_str()) != Some("folder") {
+        return false;
+    }
+    let name = map
+        .get("name")
+        .and_then(|n| n.as_str())
+        .unwrap_or_default()
+        .trim();
+    if name.is_empty() {
+        return false;
+    }
+    folders.push(name.to_string());
+    true
+}
+
 // ── Netscape 书签 HTML ────────────────────────────────────────────────────
 
-/// Netscape 书签 HTML。**宽松解析**：只认 `<A HREF="…" …>标题</A>`，其余标签（`<DT>`/`<H3>`/`<DL>`）
-/// 一律忽略——目录不保留（见模块头）。href 支持双引号/单引号/无引号三种写法（老导出器会有无引号）。
+/// 目录栈的一格。
+///
+/// `Transparent` 存在的理由：工具栏根与空名目录**不贡献路径分段，但必须占栈的一格**——否则它
+/// 那个 `</DL>` 会把外层目录提前弹掉，后面所有条目集体错层。
+#[derive(Debug, Clone)]
+enum Level {
+    Folder(String),
+    Transparent,
+}
+
+/// Netscape 书签 HTML。**按 `<DL>` 嵌套走栈**提取目录路径。
+///
+/// v1 只扫 `<A HREF>`（目录信息只存在于它与 `<DL>` 的相对位置上，那样必然丢掉）。这里改成一趟
+/// 扫完、四种记号按文档顺序命中：开容器 / 闭容器 / 目录名 / 书签。
+/// href 支持双引号/单引号/无引号三种写法（老导出器会有无引号）。
 pub fn parse_netscape_html(raw: &str) -> Vec<ParsedBookmark> {
-    // 属性名大小写与空白都宽松；标题用非贪婪 + dot-all（标题里可能有换行）。
-    let re = Regex::new(
-        r#"(?is)<a\s[^>]*href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>(.*?)</a\s*>"#,
-    )
-    .expect("书签 HTML 正则写死在源码里，编译期常量");
+    // 各捕获组：1=`<DL>` 开、2=`</DL>` 闭、3=`<H3>` 属性、4=目录名、5=`<A>` 属性串、6=标题。
+    // **`<A>` 的整段属性一起抓**，href / icon 各自再去属性串里取——属性顺序不统一，把两个属性写进
+    // 同一条正则就只能认一种顺序。
+    // 属性名大小写与空白都宽松；名字/标题用非贪婪 + dot-all（里面可能有换行）。
+    let re = Regex::new(r#"(?is)(<dl[^>]*>)|(</dl\s*>)|<h3([^>]*)>(.*?)</h3\s*>|<a\s([^>]*)>(.*?)</a\s*>"#)
+        .expect("书签 HTML 正则写死在源码里，编译期常量");
+
+    let mut stack: Vec<Level> = Vec::new();
+    // 目录名先于它的容器出现（`<H3>工作</H3>` 在前、`<DL>` 在后）——名字先挂这儿，等 `<DL>` 开时入栈。
+    let mut pending: Option<Level> = None;
     let mut out = Vec::new();
+
     for cap in re.captures_iter(raw) {
-        let url = cap
-            .get(1)
-            .or_else(|| cap.get(2))
-            .or_else(|| cap.get(3))
-            .map(|m| m.as_str().trim())
-            .unwrap_or_default();
-        if url.is_empty() {
-            continue;
+        if cap.get(1).is_some() {
+            if let Some(level) = pending.take() {
+                stack.push(level);
+            }
+        } else if cap.get(2).is_some() {
+            // 多余的 `</DL>` 只会把栈弹到空，不 panic、不产生幽灵目录。
+            stack.pop();
+        } else if let Some(attrs) = cap.get(3) {
+            let name = decode_entities(cap.get(4).map_or("", |m| m.as_str()))
+                .trim()
+                .to_string();
+            pending = Some(level_of(attrs.as_str(), name));
+        } else {
+            // 剩下的只有 `<A>` 一支：5 = 属性串、6 = 标题。
+            let attrs = cap.get(5).map_or("", |m| m.as_str());
+            let text = cap.get(6).map_or("", |m| m.as_str());
+            if let Some(bookmark) = anchor(attrs, text, &stack) {
+                out.push(bookmark);
+            }
         }
-        let title = decode_entities(cap.get(4).map(|m| m.as_str()).unwrap_or_default())
-            .trim()
-            .to_string();
-        out.push(ParsedBookmark {
-            title: if title.is_empty() {
-                url.to_string()
-            } else {
-                title
-            },
-            url: url.to_string(),
-        });
     }
     out
+}
+
+/// `<H3>` 属性 + 名字 → 栈元素。工具栏根与空名目录都是透明层（见 [`Level`]）。
+fn level_of(attrs: &str, name: String) -> Level {
+    // 判据用属性**名**：值 `"true"` 只是常规形态，真机导出里引号/大小写都不保证。
+    if attrs.to_ascii_lowercase().contains("personal_toolbar_folder") || name.is_empty() {
+        Level::Transparent
+    } else {
+        Level::Folder(name)
+    }
+}
+
+/// `<A ` 的属性串 + 标题 → 候选书签（路径 = 当前栈，透明层滤掉）。没有 href / href 为空 → `None`。
+fn anchor(attrs: &str, text: &str, stack: &[Level]) -> Option<ParsedBookmark> {
+    let url = href_of(attrs)?;
+    if url.is_empty() {
+        return None;
+    }
+    let title = decode_entities(text).trim().to_string();
+    let folders = stack
+        .iter()
+        .filter_map(|level| match level {
+            Level::Folder(name) => Some(name.clone()),
+            Level::Transparent => None,
+        })
+        .collect();
+    Some(ParsedBookmark {
+        title: if title.is_empty() {
+            url.clone()
+        } else {
+            title
+        },
+        url,
+        folders,
+        // 空串当没有：别把空值送进缓存层让它去校验。
+        icon: icon_of(attrs).filter(|s| !s.is_empty()),
+    })
+}
+
+/// 从 `<A>` 的属性串里取 `href`（双引号/单引号/裸写三种写法，老导出器会有无引号）。
+fn href_of(attrs: &str) -> Option<String> {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?i)\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("属性正则写死")
+    });
+    let cap = re.captures(attrs)?;
+    let raw = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3))?;
+    Some(raw.as_str().trim().to_string())
+}
+
+/// 从 `<A>` 的属性串里取 `ICON`（站点图标的 data URI）。
+///
+/// `\b` 不是装饰：`LAST_ICON="…"` 里的 `ICON` 前面是 `_`（词字符），没有词边界，不会误命中；
+/// `ICON_URI="…"` 后面接的是 `_` 而不是 `=`，也过不了 `\s*=`。
+fn icon_of(attrs: &str) -> Option<String> {
+    static RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r#"(?i)\bicon\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))"#).expect("属性正则写死")
+    });
+    let cap = re.captures(attrs)?;
+    let raw = cap.get(1).or_else(|| cap.get(2)).or_else(|| cap.get(3))?;
+    Some(raw.as_str().trim().to_string())
 }
 
 /// 常见 HTML 实体解码（够用即可，不做完整实体表）。

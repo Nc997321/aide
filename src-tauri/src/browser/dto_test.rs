@@ -1,6 +1,10 @@
 //! DTO 边界转换单测：进边界 TryFrom 重建不变量、出边界 From 拍平（M3）。
 
-use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavEventDto, NavStateDto};
+use crate::browser::bookmarks::ImportReport;
+use crate::browser::dto::{
+    BookmarkDto, BoundsDto, BrowserViewDto, CreateBrowserDto, ImportReportDto, NavEventDto,
+    NavStateDto,
+};
 use crate::browser::port::types::{Bounds, BrowserView, BrowserViewId, NavState, Position, Size};
 
 // ── BoundsDto ↔ Bounds ──
@@ -134,4 +138,41 @@ fn view_dto_reflects_state_and_capabilities() {
     assert!(!dto.can_go_forward);
     assert!(dto.visible);
     assert!(matches!(dto.nav, NavStateDto::Loading { .. }));
+}
+
+// ── 书签 DTO：线上字段名就是前端的契约 ──
+
+#[test]
+fn bookmark_dto_serializes_folders_under_that_name() {
+    // 前端按 `folders` 分组。**改这个名字 = 静默失效**：前端收到 undefined → 收藏条悄悄退回扁平，
+    // 不报错、不抛异常（2026-09 那次「导入后全扁平」就是这一类无声降级）。所以钉在线上形状上。
+    let dto = BookmarkDto {
+        id: "bm-1".into(),
+        title: "A".into(),
+        url: "https://a.com/".into(),
+        folders: vec!["工作".into(), "漳蒲".into()],
+        added_at: 7,
+    };
+    let v = serde_json::to_value(&dto).expect("DTO 必须可序列化");
+    assert_eq!(v["folders"], serde_json::json!(["工作", "漳蒲"]));
+    assert_eq!(v["id"], "bm-1");
+    assert_eq!(v["added_at"], 7);
+}
+
+#[test]
+fn import_report_dto_serializes_adopted_and_icons_under_those_names() {
+    // 同理：前端要按 `adopted` 报「补目录 N 条」、按 `icons` 报「图标 N 条」——名字漂了就只剩一句
+    // 含糊的导入结果，而「图标进来没有」正是史上那次排查卡住的地方。
+    let v = serde_json::to_value(ImportReportDto::from(ImportReport {
+        added: 1,
+        adopted: 2,
+        skipped: 3,
+        invalid: 4, icons: 5,
+    }))
+    .expect("DTO 必须可序列化");
+    assert_eq!(v["added"], 1);
+    assert_eq!(v["adopted"], 2);
+    assert_eq!(v["skipped"], 3);
+    assert_eq!(v["invalid"], 4);
+    assert_eq!(v["icons"], 5);
 }
