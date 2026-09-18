@@ -7,9 +7,16 @@
 // 行语法与 ./KbTree 一致（名字占满、副信息在右、⋯ 悬停浮出）。**没有复用同一个
 // 组件**：空间没有层级、没有 kind，多出 key/可见性/角色三个字段，操作集也不同
 //（只有重命名）。硬凑成一个组件只会让两边都长出对方的分支。
-import { computed, ref } from "vue";
+import { ref } from "vue";
 import Icon from "@/components/Icon.vue";
+import { useContextMenu } from "@/composables/useContextMenu";
+import { useModal } from "@/composables/useModal";
+import { kbSpaceMenuItems } from "@/menus/contextMenus";
+import KbSpaceForm from "./KbSpaceForm.vue";
 import type { KbSpace } from "./kbClient";
+
+const { show: showMenu } = useContextMenu();
+const modal = useModal();
 
 const props = defineProps<{
   spaces: KbSpace[];
@@ -23,31 +30,21 @@ const emit = defineEmits<{
   rename: [id: string, name: string];
 }>();
 
-/** 当前打开 ⋯ 菜单的空间 id */
-const menuFor = ref<string | null>(null);
-/** 正在重命名的空间 id 与草稿 */
+/** 正在重命名的空间 id 与草稿。就地改名与树里是同一套，所以留在组件内。 */
 const renaming = ref<string | null>(null);
 const renameDraft = ref("");
-/** 新建浮层是否打开 */
-const creating = ref(false);
-const draftKey = ref("");
-const draftName = ref("");
-const draftVisibility = ref<"private" | "internal" | "public">("internal");
 
 /**
- * 标识的合法性，与后端 `spaces.rs::validate_key` 同规则。
- *
- * **只为省一次必然失败的往返**，服务端仍是唯一权威——规则若哪天变了，
- * 这里不同步的后果只是「客户端放过去、服务端 400」，不是数据损坏。
+ * ⋯ 菜单走应用统一的 `ContextMenu`（Teleport 到 body + fixed + 视口边缘翻转）。
+ * 侧栏的段落是 `overflow: auto` 的，行内绝对定位的浮层会被容器裁掉。
  */
-const KEY_RE = /^[a-z0-9-]{2,40}$/;
-
-const canCreate = computed(
-  () => KEY_RE.test(draftKey.value) && draftName.value.trim() !== "" && !props.busy,
-);
+function openMenu(e: MouseEvent, space: KbSpace): void {
+  const at = e.currentTarget as HTMLElement;
+  const r = at.getBoundingClientRect();
+  showMenu(r.right, r.bottom + 2, kbSpaceMenuItems(() => startRename(space)));
+}
 
 function startRename(space: KbSpace): void {
-  menuFor.value = null;
   renaming.value = space.id;
   renameDraft.value = space.name;
 }
@@ -61,18 +58,24 @@ function commitRename(): void {
   renaming.value = null;
 }
 
-function startCreate(): void {
-  menuFor.value = null;
-  creating.value = true;
-  draftKey.value = "";
-  draftName.value = "";
-  draftVisibility.value = "internal";
-}
-
-function commitCreate(): void {
-  if (!canCreate.value) return;
-  emit("create", draftKey.value.trim(), draftName.value.trim(), draftVisibility.value);
-  creating.value = false;
+/**
+ * 新建空间走应用统一的对话框（`ModalDialog` 的 custom 模式）。
+ *
+ * 不用侧栏里的浮层：三个字段在 220px 里塞不下，而且浮层会被 `overflow: auto`
+ * 的段落裁掉——实际表现就是只露出下半截。
+ */
+async function startCreate(): Promise<void> {
+  const payload = await modal.custom<{
+    key: string;
+    name: string;
+    visibility: "private" | "internal" | "public";
+  }>({
+    title: "新建空间",
+    component: KbSpaceForm,
+    width: "sm",
+  });
+  if (!payload) return; // 取消
+  emit("create", payload.key, payload.name, payload.visibility);
 }
 
 /** 父层用 expose 调用（分组标题旁的 + 在父层模板里）。 */
@@ -90,7 +93,7 @@ const vFocus = {
       v-for="s in props.spaces"
       :key="s.id"
       class="kb-spacerow"
-      :class="{ on: s.id === props.activeId, 'menu-open': menuFor === s.id }"
+      :class="{ on: s.id === props.activeId }"
       :data-space="s.id"
     >
       <input
@@ -108,48 +111,17 @@ const vFocus = {
       </span>
 
       <!-- 角色**常驻**：不操作时也要知道自己在各空间里是什么身份。
-           悬停时让位给 ⋯（见样式里的 .menu-open 规则）。 -->
+           悬停时让位给 ⋯（见样式里的 :hover 规则）。 -->
       <span class="kb-space-role">{{ s.role ?? "—" }}</span>
 
       <span class="kb-row-actions">
-        <button
-          class="kb-rowbtn"
-          data-kb-more
-          title="更多"
-          @click.stop="menuFor = menuFor === s.id ? null : s.id"
-        >
+        <button class="kb-rowbtn" data-kb-more title="更多" @click.stop="openMenu($event, s)">
           <Icon name="more" :size="11" />
         </button>
       </span>
-
-      <div v-if="menuFor === s.id" data-kb-menu class="kb-menu">
-        <!-- 只有重命名。key 改了会断链、可见性改动面太大，都不放进这个入口 -->
-        <button @click="startRename(s)">重命名</button>
-      </div>
     </div>
 
     <p v-if="props.spaces.length === 0" class="kb-none">还没有可见的空间</p>
-
-    <!-- 220px 塞不下「标识/名称/可见性」三个字段，所以 + 开的是浮层 -->
-    <div v-if="creating" data-space-form class="kb-popover">
-      <h4>新建空间</h4>
-      <label>标识（小写字母/数字/-，建后不可改）</label>
-      <input v-model="draftKey" class="kb-field" spellcheck="false" placeholder="eng-handbook" v-focus />
-      <label>名称</label>
-      <input v-model="draftName" class="kb-field" placeholder="工程手册" />
-      <label>可见性</label>
-      <select v-model="draftVisibility" class="kb-field">
-        <option value="private">私有（仅成员可见）</option>
-        <option value="internal">内部（登录可见）</option>
-        <option value="public">公开（所有人可读）</option>
-      </select>
-      <div class="kb-form-actions">
-        <button class="kb-btn" @click="creating = false">取消</button>
-        <button class="kb-btn primary" data-space-submit :disabled="!canCreate" @click="commitCreate">
-          创建
-        </button>
-      </div>
-    </div>
   </div>
 </template>
 
@@ -174,7 +146,6 @@ const vFocus = {
   background: color-mix(in srgb, var(--aide-accent) 16%, transparent);
   color: var(--aide-text-primary);
 }
-.kb-spacerow.menu-open { background: var(--aide-surface-hover); }
 
 .kb-space-name {
   flex: 1 1 auto;
@@ -192,13 +163,6 @@ const vFocus = {
   opacity: 0;
   transition: opacity var(--aide-ease-t, 0.16s ease);
 }
-.kb-spacerow:hover .kb-row-actions,
-.kb-spacerow.menu-open .kb-row-actions { opacity: 1; }
-
-/* ⚠️ `.menu-open` 必须与 `:hover` 同规则：菜单一打开，鼠标就移到菜单上了，
-   行本身不再是 :hover——只写 :hover 的话角色会冒回来跟 ⋯ 叠住。 */
-.kb-spacerow:hover .kb-space-role,
-.kb-spacerow.menu-open .kb-space-role { visibility: hidden; }
 
 .kb-rowbtn {
   border: none;
@@ -224,92 +188,6 @@ const vFocus = {
   border-radius: 4px;
   outline: none;
 }
-
-.kb-menu {
-  position: absolute;
-  right: 4px;
-  top: 26px;
-  z-index: 20;
-  min-width: 120px;
-  padding: 4px;
-  background: rgba(20, 22, 32, 0.96);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm, 8px);
-  box-shadow: var(--aide-shadow-md);
-}
-.kb-menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  border: none;
-  background: none;
-  padding: 6px 8px;
-  border-radius: 4px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-}
-.kb-menu button:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-
-.kb-popover {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  z-index: 30;
-  padding: 10px;
-  background: rgba(20, 22, 32, 0.97);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-sm, 8px);
-  box-shadow: var(--aide-shadow-md);
-}
-.kb-popover h4 {
-  margin: 0 0 8px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--aide-text-secondary);
-}
-.kb-popover label {
-  display: block;
-  font-size: 10px;
-  color: var(--aide-text-muted);
-  margin: 0 0 3px;
-}
-.kb-field {
-  width: 100%;
-  height: 26px;
-  margin-bottom: 8px;
-  padding: 0 7px;
-  font: inherit;
-  font-size: 12px;
-  color: var(--aide-text-primary);
-  background: var(--aide-bg-primary);
-  border: 1px solid var(--aide-border);
-  border-radius: 5px;
-  outline: none;
-}
-.kb-field:focus { border-color: var(--aide-accent); }
-
-.kb-form-actions { display: flex; justify-content: flex-end; gap: 6px; }
-.kb-btn {
-  padding: 5px 10px;
-  font: inherit;
-  font-size: 12px;
-  border-radius: 5px;
-  border: 1px solid var(--aide-border);
-  background: none;
-  color: var(--aide-text-secondary);
-  cursor: pointer;
-}
-.kb-btn:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.kb-btn.primary {
-  border-color: transparent;
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-  font-weight: 500;
-}
-.kb-btn.primary:disabled { opacity: 0.45; cursor: default; }
 
 .kb-none {
   margin: 4px 6px;

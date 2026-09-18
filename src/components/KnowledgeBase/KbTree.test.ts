@@ -2,6 +2,10 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import KbTree from "./KbTree.vue";
+// 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
+// 那里不套 tsconfig 的 paths——用 `@/` 会满屏 "Cannot find module"（假的）。
+// 同目录的 PermissionDialog.test.ts 也是这个写法。
+import { useContextMenu } from "../../composables/useContextMenu";
 import type { KbDocumentSummary } from "./kbClient";
 
 // 内存备忘：带全局监听的组件测试必须 enableAutoUnmount，否则残留监听器吞后续事件
@@ -28,7 +32,6 @@ function mountTree(over: Partial<{ activeId: string | null; collapsed: Set<strin
     props: {
       documents: DOCS,
       activeId: null,
-      spaceId: "s1",
       busy: false,
       collapsed: new Set<string>(),
       ...over,
@@ -37,11 +40,24 @@ function mountTree(over: Partial<{ activeId: string | null; collapsed: Set<strin
   });
 }
 
-/** 按文字取菜单项——不按下标取，菜单项的顺序不是契约，措辞才是。 */
-function menuItem(w: ReturnType<typeof mountTree>, text: string) {
-  const hit = w.findAll("[data-kb-menu] button").find((b) => b.text() === text);
-  if (!hit) throw new Error(`菜单里没有「${text}」`);
-  return hit;
+// ⋯ 菜单走应用统一的 ContextMenu 单例（Teleport 到 body + fixed），不再是组件 DOM 的
+// 一部分。所以断言落在**菜单状态**上——那才是这个组件真正的产物。
+const { items: menuItems, hide: hideMenu } = useContextMenu();
+afterEach(() => hideMenu());
+
+const menuLabels = () => menuItems.value.filter((i) => !i.separator).map((i) => i.label);
+
+/** 点开某行的 ⋯，再执行菜单里那一项——走的都是真事件处理。 */
+async function useMenuItem(
+  w: ReturnType<typeof mountTree>,
+  nodeId: string,
+  label: string,
+): Promise<void> {
+  await w.find(`[data-kb-node='${nodeId}'] [data-kb-more]`).trigger("click");
+  const hit = menuItems.value.find((i) => i.label === label);
+  if (!hit) throw new Error(`菜单里没有「${label}」：${menuLabels().join(" / ")}`);
+  hit.action?.();
+  await w.vm.$nextTick();
 }
 
 describe("KbTree", () => {
@@ -75,33 +91,6 @@ describe("KbTree", () => {
     expect(w.find("[data-kb-node='a'] [data-kb-add]").exists()).toBe(false);
   });
 
-  it("文件夹的 ⋯ 菜单四项", async () => {
-    const w = mountTree();
-    await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    expect(w.findAll("[data-kb-menu] button").map((b) => b.text())).toEqual([
-      "新建子文件夹",
-      "重命名",
-      "移动到…",
-      "删除",
-    ]);
-  });
-
-  it("文档的 ⋯ 菜单少「新建子文件夹」", async () => {
-    const w = mountTree();
-    await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
-    expect(w.findAll("[data-kb-menu] button").map((b) => b.text())).toEqual([
-      "重命名",
-      "移动到…",
-      "删除",
-    ]);
-  });
-
-  it("空文件夹带「空」标记，有子节点的文件夹没有", () => {
-    const w = mountTree();
-    expect(w.find("[data-kb-node='g'] [data-kb-empty]").exists()).toBe(true);
-    expect(w.find("[data-kb-node='f'] [data-kb-empty]").exists()).toBe(false);
-  });
-
   it("折叠箭头只在「文件夹且有子节点」时渲染——空文件夹给个按不动的箭头是骗人", () => {
     const w = mountTree();
     expect(w.find("[data-kb-node='f'] [data-kb-caret]").exists()).toBe(true); // 有子节点
@@ -109,10 +98,35 @@ describe("KbTree", () => {
     expect(w.find("[data-kb-node='a'] [data-kb-caret]").exists()).toBe(false); // 文档
   });
 
-  it("重命名走内联输入：Enter 提交并发 patch（只带 title，不动父级）", async () => {
+  it("空文件夹带「空」标记，有子节点的文件夹没有", () => {
+    const w = mountTree();
+    expect(w.find("[data-kb-node='g'] [data-kb-empty]").exists()).toBe(true);
+    expect(w.find("[data-kb-node='f'] [data-kb-empty]").exists()).toBe(false);
+  });
+});
+
+describe("KbTree 的 ⋯ 菜单", () => {
+  it("文件夹的菜单四项（含新建子文件夹）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    await menuItem(w, "重命名").trigger("click");
+    expect(menuLabels()).toEqual(["新建子文件夹", "重命名", "移动到…", "删除"]);
+  });
+
+  it("文档的菜单少「新建子文件夹」", async () => {
+    const w = mountTree();
+    await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
+  });
+
+  it("删除是危险项（红色）", async () => {
+    const w = mountTree();
+    await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
+    expect(menuItems.value.find((i) => i.label === "删除")?.danger).toBe(true);
+  });
+
+  it("重命名走内联输入：Enter 提交并发 patch（只带 title，不动父级）", async () => {
+    const w = mountTree();
+    await useMenuItem(w, "f", "重命名");
     await w.find("[data-kb-rename]").setValue("新名字");
     await w.find("[data-kb-rename]").trigger("keydown.enter");
     expect(w.emitted("patch")?.[0]).toEqual(["f", { title: "新名字" }]);
@@ -120,13 +134,37 @@ describe("KbTree", () => {
 
   it("重命名 Esc 取消，不发 patch", async () => {
     const w = mountTree();
-    await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    await menuItem(w, "重命名").trigger("click");
+    await useMenuItem(w, "f", "重命名");
     await w.find("[data-kb-rename]").trigger("keydown.esc");
     expect(w.emitted("patch")).toBeFalsy();
     expect(w.find("[data-kb-rename]").exists()).toBe(false);
   });
 
+  it("删除发 remove", async () => {
+    const w = mountTree();
+    await useMenuItem(w, "a", "删除");
+    expect(w.emitted("remove")?.[0]).toEqual(["a"]);
+  });
+
+  it("移动到… 把菜单换成目标列表：根目录可选，自己与自己的子树置灰", async () => {
+    const w = mountTree();
+    await useMenuItem(w, "f", "移动到…");
+    const byLabel = new Map(menuItems.value.map((i) => [i.label.trim(), i]));
+    // 自己（f）与自己的子树（g）都必须**在列表里**且禁用——置灰不隐藏
+    expect(byLabel.get("f")?.disabled).toBe(true);
+    expect(byLabel.get("g")?.disabled).toBe(true);
+    expect(byLabel.get("根目录")?.disabled).toBeUndefined();
+  });
+
+  it("移动到… 选中目标后发 patch.parentId", async () => {
+    const w = mountTree();
+    await useMenuItem(w, "a", "移动到…");
+    menuItems.value.find((i) => i.label === "根目录")?.action?.();
+    expect(w.emitted("patch")?.[0]).toEqual(["a", { parentId: null }]);
+  });
+});
+
+describe("KbTree 的新建", () => {
   it("＋ 开内联输入，Enter 提交并发 create（带父 id、类型、标题）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
@@ -135,25 +173,11 @@ describe("KbTree", () => {
     expect(w.emitted("create")?.[0]).toEqual(["f", "doc", "新文档"]);
   });
 
-  it("删除发 remove", async () => {
+  it("「新建子文件夹」发的是 folder 类型", async () => {
     const w = mountTree();
-    await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
-    await menuItem(w, "删除").trigger("click");
-    expect(w.emitted("remove")?.[0]).toEqual(["a"]);
-  });
-
-  it("移动到… 的候选里，自己与自己的子树置灰（不是隐藏——隐藏会让人以为列表坏了）", async () => {
-    const w = mountTree();
-    await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    await menuItem(w, "移动到…").trigger("click");
-    const opts = w.findAll("[data-kb-move] button");
-    // 根目录 + f（自己）+ g（自己的子树），f 与 g 都必须存在且禁用
-    const byText = new Map(opts.map((b) => [b.text().trim(), b]));
-    expect(byText.has("f")).toBe(true);
-    expect(byText.has("g")).toBe(true);
-    expect(byText.get("f")!.attributes("disabled")).toBeDefined();
-    expect(byText.get("g")!.attributes("disabled")).toBeDefined();
-    // 「根目录」永远可选
-    expect(byText.get("根目录")!.attributes("disabled")).toBeUndefined();
+    await useMenuItem(w, "f", "新建子文件夹");
+    await w.find("[data-kb-new]").setValue("新文件夹");
+    await w.find("[data-kb-new]").trigger("keydown.enter");
+    expect(w.emitted("create")?.[0]).toEqual(["f", "folder", "新文件夹"]);
   });
 });

@@ -96,7 +96,10 @@ function longTurnBlocks(): ContentBlock[] {
 }
 
 describe("ChatMessage 渲染规模守卫", () => {
-  it("长回合的过程胶囊真的在收拢：平铺 ≥ 收拢的 10 倍", () => {
+  // 这个用例一回合就是 200+ 个块、要渲染两遍，**单独跑约 3.7s**——贴着默认的 5s
+  // 预算。全量跑时同时挂载的文件多，它会被挤出界（表现为 Test timed out）。
+  // 这里给的是与它实际成本相称的预算，不是把失败掩盖掉。
+  it("长回合的过程胶囊真的在收拢：平铺 ≥ 收拢的 10 倍", { timeout: 30_000 }, () => {
     const blocks = longTurnBlocks();
     const flat = measure(makeMessage(blocks, true)); // 流式期 = 平铺
     const folded = measure(makeMessage(blocks, false)); // 定稿后 = 过程胶囊（默认折叠）

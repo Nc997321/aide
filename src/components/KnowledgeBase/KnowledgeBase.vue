@@ -258,7 +258,6 @@ onMounted(() => k.init());
               ref="treeRef"
               :documents="k.documents.value"
               :active-id="activeDocId"
-              :space-id="k.activeSpaceId.value"
               :collapsed="collapsed"
               :busy="k.loading.value"
               @open="(id) => void openDoc(id)"

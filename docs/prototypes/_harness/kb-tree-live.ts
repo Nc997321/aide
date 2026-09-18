@@ -5,9 +5,9 @@
  *
  *   npx vite --port 5199 → http://localhost:5199/docs/prototypes/_harness/kb-tree-live.html
  *
- * 菜单/重命名/新建是组件内部状态，外部调不到，所以挂载后用 DOM 点击真按钮把它们点开
- * （走的就是真实事件处理）。侧栏真实宽度 220px，夹具按真实比例渲染——否则缩进与
- * 截断都看不准。
+ * 菜单（ContextMenu）与对话框（ModalDialog）都是**应用级单例**（Teleport 到 body），
+ * 夹具必须一并挂上，且同一时刻只能开一个——所以这里只演示一个开着的菜单。
+ * 侧栏真实宽度 220px，夹具按真实比例渲染，否则缩进与截断都看不准。
  */
 import { createApp, h, ref, type VNodeRef } from "vue";
 import "../../../src/styles/global.css";
@@ -15,6 +15,8 @@ import { applyTheme } from "../../../src/themes/apply";
 import { glass } from "../../../src/themes/glass";
 import KbTree from "../../../src/components/KnowledgeBase/KbTree.vue";
 import KbSpaceList from "../../../src/components/KnowledgeBase/KbSpaceList.vue";
+import ContextMenu from "../../../src/components/ContextMenu.vue";
+import ModalDialog from "../../../src/components/ModalDialog.vue";
 import type { KbDocumentSummary, KbSpace } from "../../../src/components/KnowledgeBase/kbClient";
 
 applyTheme(glass);
@@ -38,6 +40,10 @@ const SPACES: KbSpace[] = [
 const pane = (label: string, child: unknown, probe: string) =>
   h("div", { class: "pane", "data-probe": probe }, [h("h2", null, label), child as never]);
 
+/** 与 KnowledgeBase.vue 的 `.kb-sidesec.grow` 同款：定高 + `overflow: auto`。 */
+const clipped = (child: unknown, probe: string) =>
+  h("div", { class: "sec grow", "data-probe": probe }, [child as never]);
+
 const spaceRef = ref<InstanceType<typeof KbSpaceList> | null>(null);
 
 const app = createApp({
@@ -45,36 +51,44 @@ const app = createApp({
     const collapsedAll = ref<ReadonlySet<string>>(new Set<string>());
     const collapsedOne = ref<ReadonlySet<string>>(new Set(["f4"]));
     const tree = (over: Record<string, unknown>) =>
-      h(KbTree, {
-        documents: DOCS,
-        activeId: null,
-        spaceId: "s1",
-        busy: false,
-        ...over,
-      } as never);
+      h(KbTree, { documents: DOCS, activeId: null, busy: false, ...over } as never);
 
     return () =>
       h("div", { class: "wrap" }, [
+        // 菜单与对话框都是应用级单例（Teleport 到 body），夹具必须一并挂上
+        h(ContextMenu),
+        h(ModalDialog),
         h("h1", null, "知识库目录树 · 真实组件（KbTree.vue / KbSpaceList.vue）"),
         h("p", null, "跑的是组件自己的 scoped 样式与真实主题 token；侧栏按真实宽度 220px 渲染。"),
 
         h("div", { class: "row" }, [
+          pane("① 全展开", tree({ collapsed: collapsedAll.value, activeId: "d1" }), "p1"),
+          pane("② 折叠由父层传入（产品档案已折叠）", tree({ collapsed: collapsedOne.value }), "p2"),
+          pane("③ 就地重命名", tree({ collapsed: collapsedAll.value }), "p3"),
+          pane("④ 就地新建", tree({ collapsed: collapsedAll.value }), "p4"),
+        ]),
+
+        h("div", { class: "row" }, [
           pane(
-            "① 全展开 · 文件夹的 ⋯ 菜单",
-            tree({ collapsed: collapsedAll.value, activeId: "d1" }),
-            "p1",
-          ),
-          pane(
-            "② 折叠由父层传入 · 文档的 ⋯ 菜单",
-            tree({ collapsed: collapsedOne.value }),
-            "p2",
-          ),
-          pane("③ 就地重命名 / 新建", tree({ collapsed: collapsedAll.value }), "p3"),
-          pane(
-            "④ 空间列表 · ⋯ 菜单",
+            "⑤ 空间列表",
             h(KbSpaceList, { spaces: SPACES, activeId: "s1", busy: false, ref: spaceRef as VNodeRef } as never),
-            "p4",
+            "p5",
           ),
+          h("div", { class: "pane" }, [
+            h("h2", null, "⑥ 真实侧栏容器（120px 高 + overflow:auto）· 末行开 ⋯"),
+            h("p", {
+              class: "note",
+            }, "菜单走应用统一的 ContextMenu（Teleport 到 body + fixed），所以不会被容器裁掉——这正是它换掉行内浮层的原因。"),
+            clipped(
+              h(KbTree, {
+                documents: DOCS,
+                activeId: null,
+                collapsed: collapsedAll.value,
+                busy: false,
+              } as never),
+              "p6",
+            ),
+          ]),
         ]),
       ]);
   },
@@ -89,36 +103,41 @@ style.textContent = `
   .row { display: flex; gap: 26px; margin-top: 22px; align-items: flex-start; }
   .pane { width: 220px; }
   .pane h2 { font-size: 12px; font-weight: 600; color: var(--aide-text-secondary); margin-bottom: 9px; min-height: 32px; }
+  .note { font-size: 11px; color: var(--aide-text-muted); line-height: 1.6; margin: 0 0 9px; }
+  .sec.grow { height: 120px; overflow: auto; border: 1px dashed rgba(255,255,255,.18); border-radius: 6px; padding: 4px; }
 `;
 document.head.appendChild(style);
 
 app.mount("#app");
 
-/** 菜单项按文字找——不按下标，顺序不是契约，措辞才是。 */
-function clickMenuItem(scope: Element, text: string): void {
-  const hit = [...scope.querySelectorAll("[data-kb-menu] button")].find(
+/** 点开 ContextMenu 里某一项（它在 body 上，不在组件子树里）。 */
+function clickMenuItem(text: string): void {
+  const hit = [...document.querySelectorAll(".context-menu .ctx-item")].find(
     (b) => b.textContent?.trim() === text,
   );
   (hit as HTMLElement | undefined)?.click();
 }
 
-requestAnimationFrame(() => {
-  const p1 = document.querySelector('[data-probe="p1"]')!;
-  p1.querySelector<HTMLElement>('[data-kb-node="f1"] [data-kb-more]')?.click();
+const probe = (p: string) => document.querySelector(`[data-probe="${p}"]`)!;
+const rowBtn = (p: string, id: string, attr: string) =>
+  probe(p).querySelector<HTMLElement>(`[data-kb-node="${id}"] [${attr}]`);
 
-  const p2 = document.querySelector('[data-probe="p2"]')!;
-  p2.querySelector<HTMLElement>('[data-kb-node="d4"] [data-kb-more]')?.click();
+// ⚠️ 严格一帧一步。菜单是**全局单例**：一次点击只能开一个，而 `clickMenuItem` 点的
+// 永远是「当前开着的那个菜单」——所以「点开 → 选一项」必须紧邻，中间不能插别的开菜单动作
+// （之前把 ⑥ 的开菜单夹在中间，结果 ③ 的「重命名」点到了 ⑥ 的菜单上）。
+const steps: Array<() => void> = [
+  // ③ 就地重命名
+  () => rowBtn("p3", "d3", "data-kb-more")?.click(),
+  () => clickMenuItem("重命名"),
+  // ④ 就地新建
+  () => rowBtn("p4", "f2", "data-kb-add")?.click(),
+  // ⑥ 末行的 ⋯ —— 放在最后，让菜单留在屏幕上供截图
+  () => rowBtn("p6", "d4", "data-kb-more")?.click(),
+];
 
-  // ③ 同一棵树上先后点开：新建输入占住标题位，接着让另一个节点进入重命名，
-  //    两个状态一起看（重命名会关掉新建，所以分两次 rAF 做）
-  const p3 = document.querySelector('[data-probe="p3"]')!;
-  p3.querySelector<HTMLElement>('[data-kb-node="f2"] [data-kb-add]')?.click();
-  requestAnimationFrame(() => {
-    const d3 = p3.querySelector<HTMLElement>('[data-kb-node="d3"] [data-kb-more]');
-    d3?.click();
-    requestAnimationFrame(() => clickMenuItem(p3, "重命名"));
-  });
-
-  const p4 = document.querySelector('[data-probe="p4"]')!;
-  p4.querySelector<HTMLElement>('[data-space="s1"] [data-kb-more]')?.click();
-});
+let i = 0;
+const tick = (): void => {
+  steps[i++]?.();
+  if (i < steps.length) requestAnimationFrame(tick);
+};
+requestAnimationFrame(tick);

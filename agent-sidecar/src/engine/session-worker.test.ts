@@ -428,9 +428,10 @@ describe("SessionWorker — 一次性会话回合结束自毁（automation）", 
           session_dir: regDir,
         },
       } as any);
-      await flushPromises();
-      await flushPromises();
-      await flushPromises();
+      // ⚠️ 别写成「flushPromises 刷三次然后断言」——那是靠次数赌时序：机器一忙
+      //    （全量跑时并行文件多）三次就不够，表现为偶发的 expected null。
+      //    这里等的是**条件**而不是次数，超时上限由 vi.waitFor 兜。
+      await vi.waitFor(() => expect(selfStopped).toBe(worker));
 
       expect(selfStopped).toBe(worker);
       expect(existsSync(entry)).toBe(false); // 本会话条目已清

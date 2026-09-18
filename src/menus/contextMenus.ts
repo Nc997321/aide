@@ -298,6 +298,59 @@ export function workspaceMenuItems(
   ];
 }
 
+// ── 知识库：目录树与空间 ──
+//
+// 这两组菜单用 `ContextMenu.vue`（Teleport 到 body + fixed + 视口边缘翻转），
+// 不是行内绝对定位的浮层——侧栏的段落是 `overflow: auto` 的，行内浮层会被**裁掉**。
+
+/** 知识库节点（文件夹或文档）的 ⋯ 菜单。 */
+export function kbNodeMenuItems(
+  node: { id: string; title: string; isFolder: boolean },
+  h: {
+    onNewFolder: (id: string) => void;
+    onRename: (id: string, title: string) => void;
+    onMove: (id: string) => void;
+    onDelete: (id: string) => void;
+  },
+): MenuItem[] {
+  return [
+    // 文档是叶子，没有「在文档下新建」这回事
+    ...(node.isFolder
+      ? [{ label: "新建子文件夹", action: () => h.onNewFolder(node.id) }]
+      : []),
+    { label: "重命名", action: () => h.onRename(node.id, node.title) },
+    { label: "移动到…", action: () => h.onMove(node.id) },
+    sep(),
+    { label: "删除", danger: true, action: () => h.onDelete(node.id) },
+  ];
+}
+
+/**
+ * 「移动到…」的目标选择。
+ *
+ * `blocked` 里的项**置灰而不是隐藏**——隐藏会让人以为列表坏了，置灰能让他明白
+ * 「这个不能选」（移进自己的子树会被服务端拒）。
+ */
+export function kbMoveMenuItems(
+  folders: { id: string; label: string }[],
+  blocked: ReadonlySet<string>,
+  onPick: (parentId: string | null) => void,
+): MenuItem[] {
+  return [
+    { label: "根目录", action: () => onPick(null) },
+    ...folders.map((f) => ({
+      label: f.label,
+      disabled: blocked.has(f.id),
+      action: () => onPick(f.id),
+    })),
+  ];
+}
+
+/** 知识库空间的 ⋯ 菜单。目前只有重命名——删除空间与改可见性改动面太大，没做。 */
+export function kbSpaceMenuItems(onRename: () => void): MenuItem[] {
+  return [{ label: "重命名", action: onRename }];
+}
+
 // ── Pane tab context menu（聊天区分屏组的 tab 右键） ──
 
 export function paneTabMenuItems(groupId: string, tabId: string): MenuItem[] {

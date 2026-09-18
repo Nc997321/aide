@@ -1,11 +1,19 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import KbSpaceList from "./KbSpaceList.vue";
+// 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
+// 那里不套 tsconfig 的 paths——用 `@/` 会满屏 "Cannot find module"（假的）。
+import { useContextMenu } from "../../composables/useContextMenu";
 import type { KbSpace } from "./kbClient";
 
 // 内存备忘：带全局监听的组件测试必须 enableAutoUnmount，否则残留监听器吞后续事件
 enableAutoUnmount(afterEach);
+
+// 新建空间走应用统一的对话框。这里只验**接线**（确实交给 modal.custom、载荷取回后
+// emit create），表单本身的校验另有 KbSpaceForm.test.ts 覆盖。
+const customFn = vi.hoisted(() => vi.fn());
+vi.mock("../../composables/useModal", () => ({ useModal: () => ({ custom: customFn }) }));
 
 const SPACES: KbSpace[] = [
   { id: "s1", key: "eng", name: "工程手册", description: null, visibility: "internal", role: "owner" },
@@ -19,12 +27,20 @@ function mountList() {
   });
 }
 
-/**
- * 打开新建浮层。**走的是父层真实调用路径**：`+` 按钮在分组标题旁（属于
- * KnowledgeBase.vue），它调的就是这个 expose 出来的方法。
- */
-async function openCreateForm(w: ReturnType<typeof mountList>): Promise<void> {
-  (w.vm as unknown as { startCreate: () => void }).startCreate();
+// ⋯ 菜单走 ContextMenu 单例（Teleport 到 body + fixed），不是组件 DOM 的一部分
+const { items: menuItems, hide: hideMenu } = useContextMenu();
+
+beforeEach(() => {
+  customFn.mockReset();
+});
+afterEach(() => hideMenu());
+
+/** 点开某行的 ⋯，再执行菜单里那一项——走的都是真事件处理。 */
+async function useMenuItem(w: ReturnType<typeof mountList>, spaceId: string, label: string) {
+  await w.find(`[data-space='${spaceId}'] [data-kb-more]`).trigger("click");
+  const hit = menuItems.value.find((i) => i.label === label);
+  if (!hit) throw new Error(`菜单里没有「${label}」`);
+  hit.action?.();
   await w.vm.$nextTick();
 }
 
@@ -46,13 +62,12 @@ describe("KbSpaceList", () => {
   it("⋯ 只给一个「重命名」（评审只勾了这一项）", async () => {
     const w = mountList();
     await w.find("[data-space='s1'] [data-kb-more]").trigger("click");
-    expect(w.findAll("[data-kb-menu] button").map((b) => b.text())).toEqual(["重命名"]);
+    expect(menuItems.value.filter((i) => !i.separator).map((i) => i.label)).toEqual(["重命名"]);
   });
 
   it("重命名走内联输入：Enter 提交并发 rename", async () => {
     const w = mountList();
-    await w.find("[data-space='s1'] [data-kb-more]").trigger("click");
-    await w.find("[data-kb-menu] button").trigger("click");
+    await useMenuItem(w, "s1", "重命名");
     await w.find("[data-space-rename]").setValue("工程手册（新）");
     await w.find("[data-space-rename]").trigger("keydown.enter");
     expect(w.emitted("rename")?.[0]).toEqual(["s1", "工程手册（新）"]);
@@ -60,46 +75,38 @@ describe("KbSpaceList", () => {
 
   it("重命名 Esc 取消，不发 rename", async () => {
     const w = mountList();
-    await w.find("[data-space='s1'] [data-kb-more]").trigger("click");
-    await w.find("[data-kb-menu] button").trigger("click");
+    await useMenuItem(w, "s1", "重命名");
     await w.find("[data-space-rename]").trigger("keydown.esc");
     expect(w.emitted("rename")).toBeFalsy();
     expect(w.find("[data-space-rename]").exists()).toBe(false);
   });
+});
 
-  it("＋ 开浮层，填标识与名称后发 create", async () => {
+describe("KbSpaceList 的新建接线", () => {
+  it("＋ 交给应用统一的对话框（不是侧栏里的浮层）", async () => {
+    customFn.mockResolvedValue(null); // 用户取消
     const w = mountList();
-    await openCreateForm(w);
-    const inputs = w.findAll("[data-space-form] input");
-    await inputs[0]!.setValue("eng2");
-    await inputs[1]!.setValue("工程手册二");
-    await w.find("[data-space-form] [data-space-submit]").trigger("click");
+    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
+
+    expect(customFn).toHaveBeenCalledTimes(1);
+    const req = customFn.mock.calls[0]![0] as { title: string; width: string; component: unknown };
+    expect(req.title).toBe("新建空间");
+    expect(req.width).toBe("sm");
+    expect(req.component).toBeTruthy();
+    expect(w.emitted("create")).toBeFalsy();
+  });
+
+  it("对话框返回载荷后发 create", async () => {
+    customFn.mockResolvedValue({ key: "eng2", name: "工程手册二", visibility: "internal" });
+    const w = mountList();
+    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
     expect(w.emitted("create")?.[0]).toEqual(["eng2", "工程手册二", "internal"]);
   });
 
-  it("标识不合法时创建按钮禁用（只为省一次往返，服务端仍是唯一权威）", async () => {
+  it("对话框取消（null）不发 create", async () => {
+    customFn.mockResolvedValue(null);
     const w = mountList();
-    await openCreateForm(w);
-    const inputs = w.findAll("[data-space-form] input");
-
-    // 空标识
-    expect(w.find("[data-space-submit]").attributes("disabled")).toBeDefined();
-
-    // 大写 + 空格：后端 validate_key 会 400，前端先挡下来
-    await inputs[0]!.setValue("Bad Key!");
-    await inputs[1]!.setValue("名字");
-    expect(w.find("[data-space-submit]").attributes("disabled")).toBeDefined();
-
-    // 合法
-    await inputs[0]!.setValue("eng-2");
-    expect(w.find("[data-space-submit]").attributes("disabled")).toBeUndefined();
-  });
-
-  it("名字为空时创建按钮也禁用", async () => {
-    const w = mountList();
-    await openCreateForm(w);
-    const inputs = w.findAll("[data-space-form] input");
-    await inputs[0]!.setValue("eng2");
-    expect(w.find("[data-space-submit]").attributes("disabled")).toBeDefined();
+    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
+    expect(w.emitted("create")).toBeFalsy();
   });
 });
