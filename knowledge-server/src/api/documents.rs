@@ -9,6 +9,7 @@ use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use serde::{Deserialize, Serialize};
+use sqlx::PgConnection;
 use uuid::Uuid;
 
 use super::AppState;
@@ -39,6 +40,29 @@ pub struct UpdateDocumentBody {
 #[serde(rename_all = "camelCase")]
 pub struct RevertBody {
     pub version_no: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchDocumentBody {
+    pub title: Option<String>,
+    /// 三态，缺一不可：缺省 = 不动父级；`null` = 移到根；有值 = 移到该文件夹。
+    ///
+    /// serde 默认把「字段缺失」和「显式 null」都折叠成 `None`，那样「移到根」就
+    /// 无法表达（和「不改」撞成同一个值）。所以外面再包一层 Option，用
+    /// `double_option` 把三种情形分开。
+    #[serde(default, deserialize_with = "double_option")]
+    pub parent_id: Option<Option<Uuid>>,
+}
+
+/// `T?` → `Option<Option<T>>`：缺失 → `None`，null → `Some(None)`，有值 → `Some(Some(v))`。
+/// 配合 `#[serde(default)]` 使用（`default` 负责缺失那一档）。
+fn double_option<'de, D, T>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::Deserialize<'de>,
+{
+    Option::<T>::deserialize(de).map(Some)
 }
 
 #[derive(Debug, Serialize)]
@@ -145,6 +169,115 @@ fn validate_new_node(title: &str, kind: DocumentKind, content: Option<&str>) -> 
     if kind.is_folder() && content.is_some_and(|c| !c.trim().is_empty()) {
         return Err(AppError::BadRequest("文件夹没有正文".into()));
     }
+    Ok(())
+}
+
+/// 改节点的元数据：重命名、移动。**不产生版本**——这正是标题上移之后
+/// 「改名是节点元数据、不是内容变更」这条语义的落点。
+pub async fn patch(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<PatchDocumentBody>,
+) -> AppResult<Json<SaveResult>> {
+    let mut tx = state.db.begin().await?;
+    require(&mut tx, user.id, id, Permission::Write).await?;
+
+    let node = node_identity(&mut *tx, id).await?;
+
+    if let Some(target) = body.parent_id {
+        move_node(&mut tx, user.id, id, &node, target).await?;
+    }
+    if let Some(title) = body.title.as_deref() {
+        rename_node(&mut *tx, id, title).await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(Json(SaveResult {
+        document_id: id,
+        // 元数据操作不产生版本。回零值与文件夹同口径（见 versioning::create_node）
+        revision_id: Uuid::nil(),
+        version_no: 0,
+        merged: false,
+    }))
+}
+
+/// 节点的位置身份：所在空间、当前父、当前标题。移动要用到前两个，重算 slug 要用第三个。
+struct NodeIdentity {
+    space_id: Uuid,
+    parent_id: Option<Uuid>,
+    title: String,
+}
+
+async fn node_identity(conn: &mut PgConnection, id: Uuid) -> AppResult<NodeIdentity> {
+    let row: Option<(Uuid, Option<Uuid>, String)> =
+        sqlx::query_as("SELECT space_id, parent_id, title FROM documents WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    let Some((space_id, parent_id, title)) = row else {
+        return Err(AppError::NotFound("节点不存在".into()));
+    };
+    Ok(NodeIdentity {
+        space_id,
+        parent_id,
+        title,
+    })
+}
+
+/// 重命名。文件夹与文档走同一条：两边都只是「节点叫什么」。
+async fn rename_node(conn: &mut PgConnection, id: Uuid, title: &str) -> AppResult<()> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(AppError::BadRequest("标题不能为空".into()));
+    }
+    sqlx::query("UPDATE documents SET title = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(title)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
+/// 移动。**顺序即正确性**，别调换：
+///   1. 判**目标位置**的写权限（不是源节点——只判源节点就能把文档搬进没权限的文件夹）
+///   2. 目标必须是同空间的文件夹
+///   3. 目标不能在自己的子树里
+///   4. slug 在新父下重算（用户移动时不该关心 slug）
+async fn move_node(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    id: Uuid,
+    node: &NodeIdentity,
+    target: Option<Uuid>,
+) -> AppResult<()> {
+    // 目标就是当前父 → 空操作。不早退的话下面的 slug 重算会把节点自己算成冲突，
+    // 白白把它改成 foo-2
+    if target == node.parent_id {
+        return Ok(());
+    }
+
+    if !permission::may_write_under(&mut **tx, user_id, node.space_id, target).await? {
+        return Err(AppError::Forbidden);
+    }
+    if let Some(pid) = target {
+        tree::ensure_parent_is_folder(&mut **tx, node.space_id, pid).await?;
+        if tree::would_cycle(&mut **tx, id, pid).await? {
+            return Err(AppError::BadRequest("不能把节点移动到它自己的子树里".into()));
+        }
+    }
+
+    let slug =
+        crate::domain::ingest::unique_slug(&mut **tx, node.space_id, target, &node.title).await?;
+
+    sqlx::query("UPDATE documents SET parent_id = $2, slug = $3, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(target)
+        .bind(&slug)
+        .execute(&mut **tx)
+        .await?;
+
     Ok(())
 }
 
@@ -407,7 +540,7 @@ pub async fn release_lock(
 /// 权限前置检查。抽出来是为了保证每个写接口都走同一段逻辑——
 /// 散落在各处理器里的判权迟早会漏掉一个。
 async fn require(
-    conn: &mut sqlx::PgConnection,
+    conn: &mut PgConnection,
     user_id: Uuid,
     document_id: Uuid,
     need: Permission,
