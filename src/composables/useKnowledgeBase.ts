@@ -55,7 +55,18 @@ export function useKnowledgeBase() {
 
   // 竞态护栏：切空间/搜词都要丢弃过期响应，否则后发先至会把界面写错。
   // 与 useMemoryObservatory 的 loadSeq 同思路。
-  let loadSeq = 0;
+  //
+  // ⚠️ **一个计数器只守一个状态**。曾经的写法是单一 `loadSeq` 给空间列表与文档列表
+  // 共用，而 `loadSpaces` 会 await `loadDocuments` —— 后者递增了同一个计数器，
+  // 导致 `loadSpaces` 自己的 `finally` 判断失败、`loading` 永久停在 true
+  //（「创建空间」与标题栏「刷新」两个按钮一起变灰）。
+  //
+  // `docSeq` 被三个调用点递增是刻意的：`openDocument` 发起请求，`selectSpace`
+  // 与 `deleteDocument` 负责**作废在途请求**，否则上一空间那篇文档的响应会落进
+  // 已经切走的视图。这不是「每个函数一个计数器」，而是「每个被写入的状态一个」。
+  let spacesSeq = 0;
+  let treeSeq = 0;
+  let docSeq = 0;
   let searchSeq = 0;
 
   /** 统一错误文案：KbError 带服务端给的中文 message，直接显示。 */
@@ -224,6 +235,8 @@ export function useKnowledgeBase() {
     user.value = null;
     spaces.value = [];
     documents.value = [];
+    // 作废在途的 openDocument：退出后它落回来会把正文重新填上
+    docSeq++;
     activeDoc.value = null;
     searchResult.value = null;
     users.value = [];
@@ -231,27 +244,32 @@ export function useKnowledgeBase() {
   }
 
   async function loadSpaces(): Promise<void> {
-    const seq = ++loadSeq;
+    const seq = ++spacesSeq;
     loading.value = true;
     try {
       const list = await kb.listSpaces();
-      if (seq !== loadSeq) return;
+      if (seq !== spacesSeq) return;
       spaces.value = list;
       // 未选空间或原空间已不可见 → 落到第一个
       if (!activeSpaceId.value || !list.some((s) => s.id === activeSpaceId.value)) {
         activeSpaceId.value = list[0]?.id ?? null;
       }
+      // 这里 await loadDocuments 是合法的：它走 treeSeq，不会碰 spacesSeq
       if (activeSpaceId.value) await loadDocuments(activeSpaceId.value);
     } catch (e) {
-      if (seq === loadSeq) fail(e, "加载空间失败");
+      if (seq === spacesSeq) fail(e, "加载空间失败");
     } finally {
-      if (seq === loadSeq) loading.value = false;
+      // 带护栏的复位：并发的两个 loadSpaces 里只有后发的那次归位，
+      // 先发的提前结束时不会把后发那次正在进行的状态抹掉
+      if (seq === spacesSeq) loading.value = false;
     }
   }
 
   async function selectSpace(id: string): Promise<void> {
     if (activeSpaceId.value === id) return;
     activeSpaceId.value = id;
+    // 作废在途的 openDocument：上一空间的正文不该落进新空间的视图
+    docSeq++;
     activeDoc.value = null;
     await loadDocuments(id);
   }
@@ -276,25 +294,25 @@ export function useKnowledgeBase() {
   }
 
   async function loadDocuments(spaceId: string): Promise<void> {
-    const seq = ++loadSeq;
+    const seq = ++treeSeq;
     try {
       const list = await kb.listDocuments(spaceId);
-      if (seq !== loadSeq) return;
+      if (seq !== treeSeq) return;
       documents.value = list;
     } catch (e) {
-      if (seq === loadSeq) fail(e, "加载文档失败");
+      if (seq === treeSeq) fail(e, "加载文档失败");
     }
   }
 
   async function openDocument(id: string): Promise<void> {
-    const seq = ++loadSeq;
+    const seq = ++docSeq;
     activeDoc.value = null;
     try {
       const doc = await kb.getDocument(id);
-      if (seq !== loadSeq) return;
+      if (seq !== docSeq) return;
       activeDoc.value = doc;
     } catch (e) {
-      if (seq === loadSeq) fail(e, "打开文档失败");
+      if (seq === docSeq) fail(e, "打开文档失败");
     }
   }
 
@@ -312,7 +330,11 @@ export function useKnowledgeBase() {
       fail(e, "删除文档失败");
       return false;
     }
-    if (activeDoc.value?.id === id) activeDoc.value = null;
+    if (activeDoc.value?.id === id) {
+      // 与 selectSpace 同理：这篇已经不存在了，在途的 openDocument 不能再把它写回来
+      docSeq++;
+      activeDoc.value = null;
+    }
     const spaceId = activeSpaceId.value;
     if (spaceId) await loadDocuments(spaceId);
     return true;
