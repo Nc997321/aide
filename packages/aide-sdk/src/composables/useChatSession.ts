@@ -9,7 +9,12 @@ import type {
 } from "../types/chat";
 import type { PermissionRuleDraft } from "../types/permissions";
 import { useSessionState } from "./useSessionState";
-import { useSessionWorkspaces, type SessionWorkspaceInfo } from "./useSessionWorkspaces";
+import {
+  useSessionWorkspaces,
+  ensureWorkspaceKnown,
+  persistWorkspaceIfDirty,
+  type SessionWorkspaceInfo,
+} from "./useSessionWorkspaces";
 import { useProviders } from "./useProviders";
 import { useBtwSession } from "./useBtwSession";
 import type { FileMentionResolution } from "../utils/fileMentions";
@@ -238,6 +243,20 @@ function sendQueued(
   });
 }
 
+/**
+ * 发送前的归属对账（cwd 的唯一来源就是注册表，所以这里是对账时机）：
+ *  - 未知 → 先读档案补种，**必须 await**：这条消息的 `workspaceRoot` 就取它，
+ *    不等就等于带着 null 出门、由 Rust 回落当前活动工作区（串档事故）；
+ *  - 真实 id → 顺手把归属落盘对账（fire-and-forget，失败只留痕）；
+ *  - 临时号 → 两件都不做：盘上不可能有它，也不许写（孤儿档案会让定名后的正式
+ *    档案被误判「已落盘」而跳过写入）。
+ */
+async function ensureSendWorkspace(sid: string): Promise<void> {
+  if (isPendingSession(sid)) return;
+  if (!useSessionWorkspaces().workspaceOf(sid)) await ensureWorkspaceKnown(sid);
+  void persistWorkspaceIfDirty(sid);
+}
+
 // ── useChatSession（App.vue 顶层单例 + 各分屏组各调一次）─────────────────────
 
 export function useChatSession(sessionId: Ref<string | null>) {
@@ -252,7 +271,13 @@ export function useChatSession(sessionId: Ref<string | null>) {
   watch(
     sessionId,
     (sid) => {
-      if (sid) void hydrate(sid);
+      if (!sid) return;
+      void hydrate(sid);
+      // 打开/切到这条会话 = 归属对账时机：注册表可能因关 tab / 重载而空
+      // （disposeSession 会显式删条目），此时从档案补种，别让 tab 后缀 /
+      // 相对路径基准 / 下一条消息的 cwd 落到"当前活动工作区"上。
+      // 临时号挡掉：盘上不可能有它。
+      if (!pendingSids.has(sid)) void ensureWorkspaceKnown(sid);
     },
     { immediate: true },
   );
@@ -323,6 +348,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // provider 绑定由 ChatPanel.onSendRequest 的 settleOnSend 在 emit send 前确保
     // （setProvider + 落盘），到这里 providerOf(sid) 已就绪。不再在此 stampProvider。
     const status = sessionState[sid];
+
+    // 归属对账：cwd 取自注册表，未知时在这里补读档案（见 ensureSendWorkspace）
+    await ensureSendWorkspace(sid);
 
     // 派发三阶段（各自 ≤4 输入，调用点全具名）：prepareSend 本地状态就绪并判定
     // 忙碌（忙碌 → "queued" 排队，直发 → "direct"）；renderSendBubble 渲染气泡；

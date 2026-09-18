@@ -327,6 +327,41 @@ pub(crate) fn our_session_provider_field(session_id: &str) -> Option<String> {
     None
 }
 
+/// 会话档案里记的工作区归属（`wsPath` / `wsKey`）。两个字段由同一次
+/// `set_session_workspace` 成对落盘，所以也成对读取——拆成两个 getter 只会让
+/// "读一半"（有 path 没 key）成为可能。空串视为未记（filter）。
+///
+/// 这是「会话属于哪个工作区」的**权威源**：send_message 的 cwd 兜底
+/// （显式 workspace_root 缺席时）与前端 `session_workspace` 命令共用此口径。
+/// 只读不推断：档案里没有就是没有，调用方自己决定兜底与留痕。
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct SessionWorkspaceRef {
+    #[serde(rename = "wsPath")]
+    pub path: Option<String>,
+    #[serde(rename = "wsKey")]
+    pub key: Option<String>,
+}
+
+pub(crate) fn our_session_workspace(session_id: &str) -> SessionWorkspaceRef {
+    let path = our_sessions_dir().join(format!("{}.json", session_id));
+    let Ok(content) = fs::read_to_string(&path) else {
+        return SessionWorkspaceRef::default();
+    };
+    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return SessionWorkspaceRef::default();
+    };
+    let field = |k: &str| {
+        v.get(k)
+            .and_then(|s| s.as_str())
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string())
+    };
+    SessionWorkspaceRef {
+        path: field("wsPath"),
+        key: field("wsKey"),
+    }
+}
+
 /// 会话是否是自动化运行产物（tags 含 "automation"）。
 /// 运行转录仍是普通 session JSONL（查看器直接复用），但不进正常会话列表——
 /// 一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。tags 由

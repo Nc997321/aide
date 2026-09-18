@@ -19,7 +19,7 @@ import type {
 } from "../../types/chat";
 import { useSessionState } from "../useSessionState";
 import { useSessionNames } from "../useSessionNames";
-import { useSessionWorkspaces } from "../useSessionWorkspaces";
+import { useSessionWorkspaces, persistWorkspaceIfDirty } from "../useSessionWorkspaces";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useBtwSession } from "../useBtwSession";
@@ -545,8 +545,11 @@ export async function finalizeSession(tempId: string, realId: string) {
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   identityStore.migrateBinding(tempId, realId);
-  // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照）
+  // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照），并当场落盘：
+  // 归属是会话自身属性，重开/重载后要从档案接回来（否则 Rust 侧回落活动工作区）。
+  // 定名之后才写 = 盘上永远是正式 id，不会留临时号孤儿档案（与 provider 同纪律）。
   useSessionWorkspaces().migrate(tempId, realId);
+  void persistWorkspaceIfDirty(realId);
   // 附加目录账本同样搬迁（首条消息就可能带 @目录，事件可能在临时 id 下到达）
   useSessionAttachedWorkspaces().migrate(tempId, realId);
   // btw 支线抽屉绑定/支线记忆 key 跟随定名（git-commit 可从 pending 会话发起，

@@ -244,7 +244,7 @@ pub async fn send_message(
     workspace_state: State<'_, WorkspaceState>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
 ) -> Result<(), String> {
-    let cwd = session_cwd(&workspace_root, &workspace_state);
+    let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
     // 显式注册：会话 cwd 在发送前幂等落账进工作区注册表（新装首聊回落 home
@@ -507,15 +507,76 @@ pub async fn btw_ask(
     runtime_mgr.send_to_runtime(&cmd).await
 }
 
-/// 会话工作目录
+/// cwd 的取值来源（只服务两件事：回落留痕，以及纯核可单测）。
+#[derive(Debug, PartialEq, Eq)]
+enum CwdSource {
+    /// 客户端传的 workspace_root：会话归属的断言值，最高优先。
+    Explicit,
+    /// 会话档案 `<id>.json` 的 wsPath：会话自持的归属。
+    Recorded,
+    /// 当前活动工作区：前两者都缺席时的最后兜底。
+    ActiveWorkspace,
+}
+
+/// cwd 的三个候选。具名而非三个位置参数：三者同为路径，靠位置区分就是
+/// "交换即静默错位"的典型（把 recorded 传成 explicit 会让未授权的路径直接生效）。
+struct CwdCandidates {
+    /// 客户端传的 workspace_root：会话归属的断言值，最高优先。
+    explicit: Option<PathBuf>,
+    /// 会话档案 `<id>.json` 的 wsPath（存在性由调用方先判）。
+    recorded: Option<PathBuf>,
+    /// 当前活动工作区：前两者都缺席时的最后兜底。
+    active: PathBuf,
+}
+
+/// 纯核：按优先级取第一个可用者。
+fn pick_cwd(c: CwdCandidates) -> (PathBuf, CwdSource) {
+    if let Some(p) = c.explicit {
+        return (p, CwdSource::Explicit);
+    }
+    if let Some(p) = c.recorded {
+        return (p, CwdSource::Recorded);
+    }
+    (c.active, CwdSource::ActiveWorkspace)
+}
+
+fn explicit_root(workspace_root: &Option<String>) -> Option<PathBuf> {
+    match workspace_root {
+        Some(root) if !root.is_empty() => Some(PathBuf::from(root)),
+        _ => None,
+    }
+}
+
+/// 档案里的归属路径。目录不存在（换了机器 / 已删）等同没记——回落链继续往下走。
+fn recorded_root(session_id: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(crate::commands::our_session_workspace(session_id).path?);
+    p.is_dir().then_some(p)
+}
+
+/// 会话工作目录：显式 workspace_root → 档案 wsPath → 当前活动工作区。
+///
+/// 最后那条**必须留痕**：前两条都缺席时，会话会整个跑在"此刻看着的工作区"里
+/// （cwd / 记忆目录 / CLAUDE.md / 转录落点全跟着变），而界面上没有任何提示——
+/// 2026-09-18 工作机的跨工作区串档正是这么发生的（历史会话重开后落进活动工作区）。
+/// 查不到就回落是既定策略，但不许无声。
 fn session_cwd(
+    session_id: &str,
     workspace_root: &Option<String>,
     workspace_state: &State<'_, WorkspaceState>,
 ) -> PathBuf {
-    match workspace_root {
-        Some(root) if !root.is_empty() => PathBuf::from(root),
-        _ => project_root_for_commands(workspace_state),
+    let (cwd, source) = pick_cwd(CwdCandidates {
+        explicit: explicit_root(workspace_root),
+        recorded: recorded_root(session_id),
+        active: project_root_for_commands(workspace_state),
+    });
+    if source == CwdSource::ActiveWorkspace {
+        tracing::warn!(
+            session_id,
+            fallback_cwd = %cwd.display(),
+            "send_message: 会话无工作区归属（客户端未传且档案无 wsPath），回落活动工作区"
+        );
     }
+    cwd
 }
 
 // ---- 静态数据（模型列表、权限模式） ----
@@ -589,6 +650,41 @@ pub fn get_default_permission_modes(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 会话 cwd 的优先级：显式 > 档案 > 活动工作区（2026-09-18 串档修复的纯核）。
+    #[test]
+    fn pick_cwd_prefers_explicit_then_recorded_then_active() {
+        let cand = |explicit: Option<&str>, recorded: Option<&str>| CwdCandidates {
+            explicit: explicit.map(PathBuf::from),
+            recorded: recorded.map(PathBuf::from),
+            active: PathBuf::from("C:/active"),
+        };
+
+        assert_eq!(
+            pick_cwd(cand(Some("C:/explicit"), Some("C:/recorded"))),
+            (PathBuf::from("C:/explicit"), CwdSource::Explicit)
+        );
+        assert_eq!(
+            pick_cwd(cand(None, Some("C:/recorded"))),
+            (PathBuf::from("C:/recorded"), CwdSource::Recorded)
+        );
+        // 两条都缺席 = 会在生产里留 warn 的那条路径
+        assert_eq!(
+            pick_cwd(cand(None, None)),
+            (PathBuf::from("C:/active"), CwdSource::ActiveWorkspace)
+        );
+    }
+
+    /// 空串 workspace_root 视同缺席（前端 `undefined` 与 `""` 同义，别当成路径）。
+    #[test]
+    fn explicit_root_treats_empty_as_absent() {
+        assert_eq!(explicit_root(&Some(String::new())), None);
+        assert_eq!(explicit_root(&None), None);
+        assert_eq!(
+            explicit_root(&Some("C:/proj".to_string())),
+            Some(PathBuf::from("C:/proj"))
+        );
+    }
 
     /// 默认开 thinking_enabled（与 send_message 生产路径的默认一致）。
     fn base_opts() -> SendOptions<'static> {

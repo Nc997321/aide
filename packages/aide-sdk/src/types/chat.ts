@@ -393,3 +393,25 @@ export interface SessionMetaPatch {
   model?: MetaField;
   effort?: MetaField;
 }
+
+/**
+ * 会话自持的工作区归属（`~/.aide/sessions/<id>.json` 的 `wsPath` / `wsKey`）。
+ *
+ * 会话「属于哪个工作区」是它自己的属性，不是 UI 当下看着哪个——丢了它，
+ * send_message 只能回落活动工作区，整个进程（cwd / 记忆目录 / CLAUDE.md /
+ * 转录落点）就跑到别的项目里去了（2026-09-18 跨工作区串档事故）。
+ *
+ * 两个字段成对：`wsPath` 是发送 cwd 的承重值，`wsKey` 是侧栏 / 布局快照 /
+ * 最近访问按它索引的编码键——只记一半会让下游静默丢条目。
+ */
+export interface SessionWorkspaceRef {
+  wsPath: string | null;
+  wsKey: string | null;
+}
+
+/** 工作区归属的写入 patch（两字段都走 MetaField 三态，与身份字段同语义；
+ *  成对下发，Rust 侧一次读、一次写、一把锁）。 */
+export interface SessionWorkspacePatch {
+  wsPath: MetaField;
+  wsKey: MetaField;
+}

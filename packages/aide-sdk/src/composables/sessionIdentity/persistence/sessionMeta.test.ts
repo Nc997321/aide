@@ -1,20 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SessionMetaPatch } from "../../../types/chat";
+import type {
+  SessionMetaPatch,
+  SessionWorkspacePatch,
+  SessionWorkspaceRef,
+} from "../../../types/chat";
 
 // ── api mock：sessionProvider/sessionModel 读受控；setSessionMeta 记录写回 ──
 const sessionProviderMock = vi.fn<(id: string) => Promise<string | null>>();
 const sessionModelMock = vi.fn<(id: string) => Promise<string | null>>();
 const setSessionMetaMock = vi.fn<(id: string, patch: SessionMetaPatch) => Promise<void>>();
+const sessionWorkspaceMock = vi.fn<(id: string) => Promise<SessionWorkspaceRef | null>>();
+const setSessionWorkspaceMock = vi.fn<(id: string, patch: SessionWorkspacePatch) => Promise<void>>();
 
 vi.mock("../../../api", () => ({
   api: {
     sessionProvider: (id: string) => sessionProviderMock(id),
     sessionModel: (id: string) => sessionModelMock(id),
     setSessionMeta: (id: string, patch: SessionMetaPatch) => setSessionMetaMock(id, patch),
+    sessionWorkspace: (id: string) => sessionWorkspaceMock(id),
+    setSessionWorkspace: (id: string, patch: SessionWorkspacePatch) =>
+      setSessionWorkspaceMock(id, patch),
   },
 }));
 
-import { readSessionMeta, writeSessionMeta } from "./sessionMeta";
+import {
+  readSessionMeta,
+  writeSessionMeta,
+  readSessionWorkspace,
+  writeSessionWorkspace,
+} from "./sessionMeta";
 
 describe("sessionMeta (L1 persistence)", () => {
   beforeEach(() => {
@@ -22,6 +36,9 @@ describe("sessionMeta (L1 persistence)", () => {
     sessionModelMock.mockReset();
     setSessionMetaMock.mockReset();
     setSessionMetaMock.mockResolvedValue(undefined);
+    sessionWorkspaceMock.mockReset();
+    setSessionWorkspaceMock.mockReset();
+    setSessionWorkspaceMock.mockResolvedValue(undefined);
   });
 
   describe("readSessionMeta", () => {
@@ -97,6 +114,49 @@ describe("sessionMeta (L1 persistence)", () => {
       setSessionMetaMock.mockRejectedValueOnce(new Error("disk full"));
       await expect(
         writeSessionMeta("s1", { provider: { op: "set", value: "p_a" } }),
+      ).rejects.toThrow("disk full");
+    });
+  });
+
+  // 工作区归属与身份字段同档（同一份 <sid>.json），但**分开读、分开写**：
+  // 并进 readSessionMeta 会悄悄改变身份解析的判据（"有档案" ≠ "记过供应商"）；
+  // 并进 setSessionMeta 会让那条命令变成 5 个同型 MetaField 的位置参数。
+  describe("readSessionWorkspace / writeSessionWorkspace", () => {
+    it("读回档案里的 { wsPath, wsKey }", async () => {
+      sessionWorkspaceMock.mockResolvedValue({ wsPath: "C:/proj/a", wsKey: "C--proj-a" });
+
+      expect(await readSessionWorkspace("s1")).toEqual({
+        wsPath: "C:/proj/a",
+        wsKey: "C--proj-a",
+      });
+    });
+
+    it("没记过（null）与 IPC 失败都降级为 null——读不到等于没有", async () => {
+      sessionWorkspaceMock.mockResolvedValue(null);
+      expect(await readSessionWorkspace("s1")).toBeNull();
+
+      sessionWorkspaceMock.mockRejectedValue(new Error("ipc"));
+      expect(await readSessionWorkspace("s1")).toBeNull();
+    });
+
+    it("写：patch 原样下发（成对，一次写入）", async () => {
+      await writeSessionWorkspace("s1", {
+        wsPath: { op: "set", value: "C:/proj/a" },
+        wsKey: { op: "set", value: "C--proj-a" },
+      });
+
+      expect(setSessionWorkspaceMock).toHaveBeenCalledWith("s1", {
+        wsPath: { op: "set", value: "C:/proj/a" },
+        wsKey: { op: "set", value: "C--proj-a" },
+      });
+      expect(setSessionMetaMock).not.toHaveBeenCalled(); // 身份命令不被打扰
+    });
+
+    it("写失败冒泡（落盘失败影响重开后的 cwd，L1 不吞错）", async () => {
+      setSessionWorkspaceMock.mockRejectedValueOnce(new Error("disk full"));
+
+      await expect(
+        writeSessionWorkspace("s1", { wsPath: { op: "set", value: "C:/a" }, wsKey: { op: "clear" } }),
       ).rejects.toThrow("disk full");
     });
   });

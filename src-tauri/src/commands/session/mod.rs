@@ -18,7 +18,8 @@ use serde::Deserialize;
 use serde::Serialize;
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use tauri::State;
 
 use super::{
@@ -210,30 +211,50 @@ pub async fn create_session(id: String, name: String) -> Result<Session, String>
 /// `session_init` 之后由 onSessionCreated 触发（App.vue），恰好压在会话起步的
 /// 繁忙点上。2026-09-05 一份 2.9 秒的主线程阻塞报告正卡在这个位置——当时它连
 /// trace 都没埋，是 `stuckCommand=None` 的结构性盲区。
+///
+/// 建档案走**合并写**（`write_session_created`）：同一条会话在 finalize 那一刻
+/// 还有别的写者（`settleOnSend` 的 provider、工作区归属），盲写整文件会把对方
+/// 刚落的键抹掉。
 fn create_session_blocking(id: String, name: String) -> Result<Session, String> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let dir = our_sessions_dir();
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
-
-    let timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as u64;
-
-    let meta =
-        serde_json::json!({ "id": id, "name": name, "createdAt": timestamp, "nameSource": "auto" });
-    let path = dir.join(format!("{}.json", id));
-    fs::write(
-        &path,
-        serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?,
-    )
-    .map_err(|e| format!("Failed to write session: {}", e))?;
-
+    let timestamp = crate::commands::recent::now_ms();
+    let path = our_sessions_dir().join(format!("{}.json", id));
+    write_session_created(&path, &id, &name, timestamp)?;
     Ok(Session {
         id,
         name,
         timestamp,
     })
+}
+
+/// 建档案落盘：只覆写本命令负责的四个键（id/name/createdAt/nameSource），
+/// 文件里已有的其余键原样保留。与 `write_session_meta_blocking` 共用一把锁，
+/// 保证与并发 patch 写者互不丢字段。
+fn write_session_created(path: &Path, id: &str, name: &str, timestamp: u64) -> Result<(), String> {
+    let _guard = lock_meta_write();
+    if let Some(dir) = path.parent() {
+        fs::create_dir_all(dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
+    }
+    let existing = fs::read_to_string(path).unwrap_or_default();
+    // 非空却解析不出：按空档案重建（本命令语义是"确保档案在"，报错会让会话创建
+    // 整个卡住），但绝不静默——留痕后再降级。
+    let mut v: Value = match serde_json::from_str(&existing) {
+        Ok(v) => v,
+        Err(e) => {
+            if !existing.is_empty() {
+                tracing::warn!(?e, %id, "create_session: 既有档案非法 JSON，按空档案重建");
+            }
+            serde_json::json!({})
+        }
+    };
+    v["id"] = serde_json::json!(id);
+    v["name"] = serde_json::json!(name);
+    v["createdAt"] = serde_json::json!(timestamp);
+    v["nameSource"] = serde_json::json!("auto");
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&v).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Failed to write session: {}", e))
 }
 
 #[tauri::command]
@@ -332,6 +353,14 @@ pub(crate) struct SessionMetaPatch {
     pub provider: MetaField,
     pub model: MetaField,
     pub effort: MetaField,
+    /// 会话自持的工作区归属（根路径）。会话「属于哪个工作区」是它自己的属性，
+    /// 不是 UI 当下看着哪个：丢了它，send_message 只能回落活动工作区，
+    /// 整个进程（cwd / 记忆目录 / CLAUDE.md / 转录落点）就跑到别的项目里去了。
+    /// 由前端在定名后（finalize）与每次发送时落盘，见 useSessionWorkspaces。
+    pub ws_path: MetaField,
+    /// 工作区编码 key：与 ws_path 成对落盘（侧栏分组 / 布局快照 / 最近访问
+    /// 都按 key 索引，缺 key 的条目会被静默丢弃）。
+    pub ws_key: MetaField,
 }
 
 fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
@@ -346,13 +375,25 @@ fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
     }
 }
 
+/// `<id>.json` 的读-改-写互斥：每次都读整个文件、改若干键、整体覆写，两个写者
+/// 交错就会丢字段（后写者拿的是旧快照）。写者分散在各自 spawn_blocking 的阻塞
+/// 线程上（create_session / rename / auto_rename / set_session_meta），只有一把
+/// 进程级锁能罩住。锁中毒（持锁线程 panic）不放大成后续全部写失败：取回内层
+/// 数据继续用——档案是缓存态的元数据，宁可继续写也不连锁瘫痪。
+static META_WRITE_LOCK: Mutex<()> = Mutex::new(());
+
+fn lock_meta_write() -> MutexGuard<'static, ()> {
+    META_WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 /// 会话元数据 `<id>.json` 的**唯一**写入路径：一次读、合并 patch、一次写。
 ///
 /// 此前每个命令（rename / set_session_model / set_session_provider / set_session_effort）
 /// 各自做一遍 read-modify-write，两个字段并发写会互相覆盖。收敛到这里之后：
 ///  - 多字段合并写入天然原子（同一份 Value 上改完一次落盘）；
-///  - 将来要加串行化/文件锁，只需改这一处。
+///  - 并发调用由 `META_WRITE_LOCK` 串行化（2026-09-08 讨论稿留的"只改这一处"）。
 fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(), String> {
+    let _guard = lock_meta_write();
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;
     let path = dir.join(format!("{}.json", id));
@@ -369,6 +410,8 @@ fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(),
     apply_field(&mut v, "provider", &patch.provider);
     apply_field(&mut v, "model", &patch.model);
     apply_field(&mut v, "effort", &patch.effort);
+    apply_field(&mut v, "wsPath", &patch.ws_path);
+    apply_field(&mut v, "wsKey", &patch.ws_key);
 
     fs::write(
         &path,
@@ -440,7 +483,8 @@ fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
     Ok(true)
 }
 
-/// 会话元数据的唯一写入命令：provider / model / effort 一次写齐（一次读、一次写）。
+/// 会话元数据的唯一写入命令：provider / model / effort / 工作区归属一次写齐
+/// （一次读、一次写、一把锁）。
 ///
 /// 取代 set_session_provider / set_session_model / set_session_effort 三个单字段命令：
 /// 它们各自对同一个 `<id>.json` 做一遍 read-modify-write，前端 L1 并发写两个字段时
@@ -469,6 +513,56 @@ pub async fn set_session_meta(
     })
     .await
     .map_err(|e| format!("set_session_meta task panicked: {}", e))?
+}
+
+/// 写会话自持的工作区归属（wsPath + wsKey 成对）。
+///
+/// 为什么不并进 `set_session_meta`：那会让它变成 id + 5 个同型 MetaField 的
+/// 六输入签名（相邻同型参数交换即静默错位），而工作区归属与
+/// provider/model/effort 的写入时机也不同源（前者 = 每次发送对账，后者 =
+/// 身份切换）——按职责分开，两条命令各自 ≤3 输入。
+///
+/// 两条命令共用 `write_session_meta_blocking`（同一把锁 + 合并写），所以拆开
+/// **不会**退回到 2026-09-08 修掉的 lost update：并发写者被串行化，各改各的键。
+#[tauri::command]
+pub async fn set_session_workspace(
+    id: String,
+    ws_path: MetaField,
+    ws_key: MetaField,
+) -> Result<(), String> {
+    tokio::task::spawn_blocking(move || {
+        write_session_meta_blocking(
+            &id,
+            &SessionMetaPatch {
+                ws_path,
+                ws_key,
+                ..Default::default()
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("set_session_workspace task panicked: {}", e))?
+}
+
+/// 读回会话自持的工作区归属（根路径 + 编码 key）；没记过 / 没档案 → None。
+///
+/// 与 `session_model` / `session_provider` 同族同口径（同一份 `<id>.json`），
+/// 值可能缺席是常态：存量会话（本字段落地前建的）就是没有。调用方按
+/// 「查不到就回落」处理，**不推断、不回写**。
+#[tauri::command]
+pub async fn session_workspace(
+    id: String,
+) -> Result<Option<super::SessionWorkspaceRef>, String> {
+    tokio::task::spawn_blocking(move || {
+        let ws = super::our_session_workspace(&id);
+        // wsPath 是承重字段（发送 cwd 用它）；只有 key 没有 path 视为没记过。
+        if ws.path.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(ws))
+    })
+    .await
+    .map_err(|e| format!("session_workspace task panicked: {}", e))?
 }
 
 /// 读回会话记住的模型选择；没有元数据文件或没记过 → None。
@@ -1147,6 +1241,159 @@ mod tests {
             session_effort(id.clone()).await.unwrap(),
             Some("high".to_string())
         );
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn set_session_workspace_round_trips_and_preserves_identity() {
+        // 工作区归属是会话自持属性、与身份字段同档：写它不许动别人（合并写）。
+        let id = "test-ws-roundtrip-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        create_session_blocking(id.clone(), "归属会话".to_string()).unwrap();
+        write_provider(
+            &id,
+            MetaField::Set {
+                value: "p_1".to_string(),
+            },
+        )
+        .await;
+        write_model(
+            &id,
+            MetaField::Set {
+                value: "m_1".to_string(),
+            },
+        )
+        .await;
+
+        set_session_workspace(
+            id.clone(),
+            MetaField::Set {
+                value: "C:/proj/a".to_string(),
+            },
+            MetaField::Set {
+                value: "C--proj-a".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        let ws = session_workspace(id.clone())
+            .await
+            .unwrap()
+            .expect("wsPath 已落盘则必须读得回来");
+        assert_eq!(ws.path.as_deref(), Some("C:/proj/a"));
+        assert_eq!(ws.key.as_deref(), Some("C--proj-a"));
+        // 身份字段原样活着（合并写而非整档覆写）
+        assert_eq!(
+            session_provider(id.clone()).await.unwrap(),
+            Some("p_1".to_string())
+        );
+        assert_eq!(
+            session_model(id.clone()).await.unwrap(),
+            Some("m_1".to_string())
+        );
+        assert_eq!(our_session_name(&id).as_deref(), Some("归属会话"));
+
+        // 清掉后读回 None：前端据此走「回落活动工作区 + 警告」分支
+        set_session_workspace(id.clone(), MetaField::Clear, MetaField::Clear)
+            .await
+            .unwrap();
+        assert!(session_workspace(id.clone()).await.unwrap().is_none());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[tokio::test]
+    async fn create_session_merge_keeps_fields_written_by_other_writers() {
+        // 回归（2026-09-18）：finalize 那一刻 create_session 与身份/归属写者并发
+        // （App.vue 不 await createSession，useChatSession 又 await finalizeSpawn）。
+        // 此前 create_session 盲写整个文件，后到者会把对方刚落下的 provider / wsPath
+        // 一起抹掉。改成读-合并-写后只覆写自己负责的四个键。
+        let id = "test-create-merge-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        write_provider(
+            &id,
+            MetaField::Set {
+                value: "p_x".to_string(),
+            },
+        )
+        .await;
+        set_session_workspace(
+            id.clone(),
+            MetaField::Set {
+                value: "C:/proj/b".to_string(),
+            },
+            MetaField::Set {
+                value: "C--proj-b".to_string(),
+            },
+        )
+        .await
+        .unwrap();
+
+        create_session_blocking(id.clone(), "合并写会话".to_string()).unwrap();
+
+        assert_eq!(
+            session_provider(id.clone()).await.unwrap(),
+            Some("p_x".to_string())
+        );
+        assert_eq!(
+            session_workspace(id.clone())
+                .await
+                .unwrap()
+                .and_then(|w| w.path),
+            Some("C:/proj/b".to_string())
+        );
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v.get("name").and_then(|x| x.as_str()), Some("合并写会话"));
+        assert_eq!(v.get("nameSource").and_then(|x| x.as_str()), Some("auto"));
+        assert!(v.get("createdAt").and_then(|x| x.as_u64()).is_some());
+
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn concurrent_meta_writes_do_not_lose_fields() {
+        // 锁的回归：并发写者各改各的键，全部必须活着。无锁时读-改-写交错会丢字段
+        // （2026-09-08 讨论稿留的 TODO，2026-09-18 补上）。
+        let id = "test-meta-lock-aa11bb22".to_string();
+        let path = our_sessions_dir().join(format!("{}.json", id));
+        let _ = fs::remove_file(&path);
+
+        let handles: Vec<_> = (0..16)
+            .map(|i| {
+                let id = id.clone();
+                std::thread::spawn(move || {
+                    let patch = if i % 2 == 0 {
+                        SessionMetaPatch {
+                            provider: MetaField::Set {
+                                value: "p_lock".to_string(),
+                            },
+                            ..Default::default()
+                        }
+                    } else {
+                        SessionMetaPatch {
+                            ws_path: MetaField::Set {
+                                value: "C:/lock".to_string(),
+                            },
+                            ..Default::default()
+                        }
+                    };
+                    write_session_meta_blocking(&id, &patch).unwrap();
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let v: Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(v.get("provider").and_then(|x| x.as_str()), Some("p_lock"));
+        assert_eq!(v.get("wsPath").and_then(|x| x.as_str()), Some("C:/lock"));
 
         let _ = fs::remove_file(&path);
     }

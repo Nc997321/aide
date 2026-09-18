@@ -16,7 +16,7 @@ import type {
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
   RemoteStatus,
 } from "./types";
-import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, IdentityDrift } from "./types/chat";
+import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
@@ -205,6 +205,21 @@ export const api = {
   },
   sessionModel(id: string): Promise<string | null> {
     return getTransport().invoke("session_model", { id });
+  },
+  /** 会话自持的工作区归属落盘。**独立于 setSessionMeta**：并进去会让那条命令变成
+   *  id + 5 个同型 MetaField 的六输入签名（相邻同型参数交换即静默错位），而两者
+   *  写入时机也不同源（归属 = 每次发送对账，身份 = 切换时坐实）。Rust 侧两条命令
+   *  共用同一个加锁的合并写，所以拆开不会退回 lost update。 */
+  setSessionWorkspace(id: string, patch: SessionWorkspacePatch): Promise<void> {
+    return getTransport().invoke("set_session_workspace", {
+      id,
+      wsPath: patch.wsPath,
+      wsKey: patch.wsKey,
+    });
+  },
+  /** 读回会话自持的工作区归属；没记过 / 无档案 → null（存量会话是常态）。 */
+  sessionWorkspace(id: string): Promise<SessionWorkspaceRef | null> {
+    return getTransport().invoke("session_workspace", { id });
   },
   /** 切换存活会话的 effort；返回 false = 无活进程（选择随下一条消息 env 通道
    *  生效，与 initialModel 同一语义）。 */

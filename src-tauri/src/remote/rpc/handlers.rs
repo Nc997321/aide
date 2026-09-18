@@ -389,6 +389,39 @@ pub fn set_session_meta(
     })
 }
 
+pub fn session_workspace(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: SessionIdOnlyArgs = parse(params)?;
+        to_json(crate::commands::session::session_workspace(a.id).await)
+    })
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetSessionWorkspaceArgs {
+    id: String,
+    /// 缺省 = keep（两字段都缺 = 什么都不改）。
+    #[serde(default)]
+    ws_path: MetaField,
+    #[serde(default)]
+    ws_key: MetaField,
+}
+
+pub fn set_session_workspace(
+    _app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: SetSessionWorkspaceArgs = parse(params)?;
+        to_json(
+            crate::commands::session::set_session_workspace(a.id, a.ws_path, a.ws_key).await,
+        )
+    })
+}
+
 pub fn session_model(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdOnlyArgs = parse(params)?;

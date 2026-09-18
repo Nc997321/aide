@@ -196,6 +196,73 @@ describe("useChatSession per-session store", () => {
     delete workspaces["sdk-uuid-ws"]; // 模块级注册表单例，清掉不污染其他测试
   });
 
+  /** 档案侧只对 `session_workspace` 回值，其余命令 resolve undefined。 */
+  function diskWorkspace(ref: { wsPath: string; wsKey: string } | null) {
+    invokeMock.mockImplementation((cmd: string) =>
+      Promise.resolve(cmd === "session_workspace" ? ref : undefined),
+    );
+  }
+
+  it("回归（2026-09-18 跨工作区串档）：注册表空 + 档案有归属 → 重开发送带档案里的 workspaceRoot，而非 null", async () => {
+    // 现场：会话从侧栏/快照重开，内存注册表已空（disposeSession 删过 / WebView 重载），
+    // 只剩档案 `~/.aide/sessions/<id>.json` 里记着的归属。此前这条消息会带
+    // workspaceRoot: null 出门，Rust 回落**当前活动工作区**——整个进程（cwd /
+    // 记忆目录 / CLAUDE.md / 转录落点）跑进别的项目。
+    diskWorkspace({ wsPath: "C:\\proj\\a", wsKey: "key-a" });
+
+    const sid = ref<string | null>("sdk-uuid-resumed-ws");
+    const chat = useChatSession(sid);
+    await flush();
+
+    await chat.sendMessage("继续");
+
+    const call = invokeMock.mock.calls.find((c) => c[0] === "send_message");
+    expect(call?.[1]).toMatchObject({
+      sessionId: "sdk-uuid-resumed-ws",
+      workspaceRoot: "C:\\proj\\a",
+    });
+    expect(useSessionWorkspaces().workspaceOf("sdk-uuid-resumed-ws")).toEqual({
+      wsKey: "key-a",
+      wsPath: "C:\\proj\\a",
+    });
+  });
+
+  it("打开会话即回种注册表：tab 工作区后缀 / @引用相对基准 与 cwd 同源", async () => {
+    diskWorkspace({ wsPath: "C:\\proj\\b", wsKey: "key-b" });
+    useSessionWorkspaces().clearAll();
+
+    const sid = ref<string | null>("sdk-uuid-open-b");
+    useChatSession(sid);
+    await flush();
+
+    expect(useSessionWorkspaces().workspaceOf("sdk-uuid-open-b")).toEqual({
+      wsKey: "key-b",
+      wsPath: "C:\\proj\\b",
+    });
+  });
+
+  it("归属落盘：定名后按正式 id 写一次，临时号阶段一次都不写（不留孤儿档案）", async () => {
+    const sid = ref<string | null>(null);
+    const chat = useChatSession(sid);
+    await flush();
+
+    const tempId = await chat.sendMessage("first", {
+      workspace: { wsKey: "key-a", wsPath: "C:\\proj\\a" },
+    });
+    expect(invokeMock.mock.calls.filter((c) => c[0] === "set_session_workspace")).toHaveLength(0);
+
+    emit({ type: "session_init", sdk_session_id: "sdk-uuid-persist", session_id: tempId as string });
+    await flush();
+
+    const writes = invokeMock.mock.calls.filter((c) => c[0] === "set_session_workspace");
+    expect(writes).toHaveLength(1);
+    expect(writes[0][1]).toEqual({
+      id: "sdk-uuid-persist",
+      wsPath: { op: "set", value: "C:\\proj\\a" },
+      wsKey: { op: "set", value: "key-a" },
+    });
+  });
+
   it("sessionId 为空时首次发送现场生成临时 key，不带 resume；session_init 后触发首次创建，alias 转发在途事件", async () => {
     const sid = ref<string | null>(null);
     const chat = useChatSession(sid);
