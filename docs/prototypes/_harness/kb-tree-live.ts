@@ -131,8 +131,11 @@ const steps: Array<() => void> = [
   () => clickMenuItem("重命名"),
   // ④ 就地新建
   () => rowBtn("p4", "f2", "data-kb-add")?.click(),
-  // ⑥ 末行的 ⋯ —— 放在最后，让菜单留在屏幕上供截图
+  // ⑥ 末行的 ⋯ —— 菜单开在 120px 容器之外，证明它不被裁剪
   () => rowBtn("p6", "d4", "data-kb-more")?.click(),
+  // 空间的新建对话框（原先那个挤在侧栏一小条里的浮层）。它是模态，会盖住整页，
+  // 所以放最后——想看菜单那版就把这两步注掉
+  () => spaceRef.value?.startCreate(),
 ];
 
 let i = 0;
