@@ -8,19 +8,33 @@ use tokio_tungstenite::tungstenite::Message;
 use super::protocol::{DesktopToPhone, PhoneToDesktop};
 use super::{read_remote_settings, rpc, RemoteGateway};
 
+/// 稳定连接判据：连接存活 ≥ 该时长才重置退避。短命连接（被同 device_id 的新
+/// register 顶替、注册后秒断）视同失败并入指数退避——2026-09-18 实测双实例
+/// （安装版 + dev 版共用同一 settings.json 的 device_id）在 relay 互踢，旧实现
+/// Ok 路径无 sleep 的立即重连把互踢放大成 ~500 注册/秒、六天 6.5GB 日志。
+const STABLE_CONN_SECS: u64 = 30;
+
 /// 主循环：连中继 → 注册 → 桥接；断开后指数退避重连（1s → 30s 封顶）。
+/// - 稳定连接断开（中继重启类瞬断）：退避重置，保持旧行为立即重连；
+/// - 短命连接 / 连接失败：至少停满当前退避再试，且退避照常翻倍——
+///   任何秒断病理都烧不成热循环。
 pub async fn run(gateway: Arc<RemoteGateway>) {
     let mut backoff = Duration::from_secs(1);
     loop {
+        let started = std::time::Instant::now();
         match connect_once(&gateway).await {
-            Ok(()) => backoff = Duration::from_secs(1),
+            Ok(()) if started.elapsed() >= Duration::from_secs(STABLE_CONN_SECS) => {
+                backoff = Duration::from_secs(1);
+                continue;
+            }
+            Ok(()) => {}
             Err(e) => {
                 eprintln!("[remote] relay error: {e}");
                 gateway.set_connected(false);
-                tokio::time::sleep(backoff).await;
-                backoff = (backoff * 2).min(Duration::from_secs(30));
             }
         }
+        tokio::time::sleep(backoff).await;
+        backoff = (backoff * 2).min(Duration::from_secs(30));
     }
 }
 

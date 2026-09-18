@@ -91,21 +91,23 @@ pub fn run() {
     }
 
     let builder = tauri::Builder::default();
-    // 聚合二次启动：资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起，
-    // 由首个实例接收 argv 并 emit 事件给前端预览。
+    // 单实例（release 与 dev 一视同仁）：二次启动唤出首实例窗口、转发 argv 后
+    // 立即退出。
     //
-    // 仅 release 启用：dev/debug 构建与已安装的 release 共用同一 identifier
-    // （com.aide.app），若 debug 也注册单实例，`pnpm tauri dev` 的新实例会被
-    // 转发给正在运行的安装版并立即退出，开发期无法与安装版并存。
-    #[cfg(not(debug_assertions))]
+    // 为什么 dev 不再豁免（推翻 2026-09 前的决策）：dev 与安装版共用同一
+    // identifier（com.aide.app）与同一 settings.json（remote device_id 同源），
+    // 双实例会在 relay 上互踢——2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，
+    // 手机每次桥接几毫秒内被顶断。要跑 `pnpm tauri dev`，先从托盘退出安装版。
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
+        // 唤出主窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
+        // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——set_focus
+        // 对隐藏窗口无效。
+        if let Some(w) = app.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        // 资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起：转发给首个实例。
         if let Some(p) = argv.get(1) {
-            if let Some(w) = app.get_webview_window("main") {
-                // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——
-                // set_focus 对隐藏窗口无效，否则从资源管理器唤起毫无反应。
-                let _ = w.show();
-                let _ = w.set_focus();
-            }
             let _ = app.emit("open-file-preview", p.clone());
         }
     }));

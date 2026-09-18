@@ -100,10 +100,29 @@ pub async fn handle_conn(stream: TcpStream, state: SharedState) -> Result<(), St
                 .get("pairing_code")
                 .and_then(|s| s.as_str())
                 .ok_or("register: missing pairing_code")?;
-            // 码路由只经宣告进出（register 是首次宣告）；桥接收尾不再删路由
-            lock_recover(&state).announce_code(&device_id, code);
+            // 顶替探测与码宣告同锁：探测必须落在 insert_device（park_device 内）
+            // 之前——旧登记被覆盖时其看守/桥接收 None 退出并丢弃连接，正是双实例
+            // 互踢战争的形态，日志要能一眼看出。探测与 insert 非原子（跨锁窗口），
+            // 日志用途可接受。码路由只经宣告进出（register 是首次宣告）；
+            // 桥接收尾不再删路由。
+            let superseded = {
+                let mut st = lock_recover(&state);
+                let superseded = st.devices.contains_key(&device_id);
+                st.announce_code(&device_id, code);
+                superseded
+            };
             park_device(&state, device_id.clone(), sink, stream);
-            eprintln!("registered device {device_id}");
+            // register 每次都是新连接新任务，限频器状态只能挂 RelayState（跨任务
+            // 存活）；文案恒含 registered device 指纹，与旧裸 eprintln 的 grep 兼容。
+            // 注意 RelayState 的 Instant 是 tokio 的（CodeEntry 同源），与本文件
+            // IdleDropLog 的 std Instant 不同族，此处全限定避免混用。
+            if let Some(line) = lock_recover(&state).note_register(
+                tokio::time::Instant::now(),
+                &device_id,
+                superseded,
+            ) {
+                eprintln!("relay: {line}");
+            }
             Ok(())
         }
         Some("connect") => connect_arm(&state, &v, &mut sink, &mut stream).await,
