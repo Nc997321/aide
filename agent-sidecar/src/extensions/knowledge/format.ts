@@ -99,11 +99,18 @@ export function formatDocumentList(docs: KbDocumentSummary[]): string {
   if (docs.length === 0) {
     return "This space has no documents yet.";
   }
-  const lines = docs.map(
-    (d) =>
-      `- ${d.title} — id ${d.id}${d.parentId ? ` (under ${d.parentId})` : ""}, v${d.versionNo}, updated ${d.updatedAt}`,
+  const lines = docs.map((d) => {
+    // 老服务端没有 kind 字段 → 按 doc 兜底（降级不能让节点看起来像文件夹）
+    const kind = d.kind === "folder" ? "folder" : "doc";
+    const under = d.parentId ? ` (under ${d.parentId})` : "";
+    // 文件夹不显示版本号：版本对容器没有意义，显示只会让模型以为它也有正文
+    const ver = kind === "folder" ? "" : `, v${d.versionNo}`;
+    return `- [${kind}] ${d.title} — id ${d.id}${under}${ver}, updated ${d.updatedAt}`;
+  });
+  return (
+    `Nodes in this space (${docs.length}) — [folder] is a container, [doc] holds the content:\n` +
+    lines.join("\n")
   );
-  return `Documents in this space (${docs.length}):\n${lines.join("\n")}`;
 }
 
 /** 人类可读的字节数（文案用；整数档位，不做小数）。 */

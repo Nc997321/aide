@@ -36,6 +36,8 @@ export interface KbSpace {
 export interface KbDocumentSummary {
   id: string;
   parentId?: string | null;
+  /** "doc" | "folder"。老服务端不带这个字段，消费方按 doc 兜底。 */
+  kind?: string;
   slug: string;
   title: string;
   versionNo: number;
@@ -96,7 +98,7 @@ export interface KbUpload {
 export interface KbClient {
   getJson<T>(path: string, query?: KbQuery): Promise<KbResult<T>>;
   /** DELETE 不带正文（body 省略 → 不发 Content-Type），其余方法一律 JSON 正文。 */
-  sendJson<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<KbResult<T>>;
+  sendJson<T>(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", body?: unknown): Promise<KbResult<T>>;
   sendFile<T>(path: string, query: KbQuery, file: KbUpload): Promise<KbResult<T>>;
 }
 
@@ -231,7 +233,7 @@ export function createKbClient(cfg: KbRuntimeConfig, fetchImpl: FetchLike = fetc
     async getJson<T>(path: string, query?: KbQuery): Promise<KbResult<T>> {
       return finish<T>(await raw("GET", withQuery(path, query), undefined, KB_HTTP_TIMEOUT_MS));
     },
-    async sendJson<T>(path: string, method: "POST" | "PUT" | "DELETE", body?: unknown): Promise<KbResult<T>> {
+    async sendJson<T>(path: string, method: "POST" | "PUT" | "PATCH" | "DELETE", body?: unknown): Promise<KbResult<T>> {
       // ⚠️ 不用 JSON.stringify(body)：body 省略时它返回 undefined 只是巧合（类型签名说的是
       // string），写成显式分支，DELETE 无正文这件事在代码里看得见。
       const payload = body === undefined ? undefined : JSON.stringify(body);

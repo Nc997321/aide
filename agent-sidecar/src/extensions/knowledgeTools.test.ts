@@ -67,11 +67,12 @@ function stubFetch(reply: { status: number; body: string }) {
 }
 
 describe("buildKnowledgeTools", () => {
-  it("P2 + 软删后暴露 4 读 + 5 写，顺序稳定", () => {
+  it("4 读 + 7 写，顺序稳定", () => {
     const names = (buildKnowledgeTools(credEnv, "/proj") as unknown as { name: string }[]).map((t) => t.name);
     expect(names).toEqual([
       "search", "read_document", "list_spaces", "list_documents",
-      "create_document", "append_document", "update_document", "ingest_file", "delete_document",
+      "create_document", "create_folder", "move_document",
+      "append_document", "update_document", "ingest_file", "delete_document",
     ]);
   });
 });
@@ -373,5 +374,82 @@ describe("写工具", () => {
     const r = await toolByName(credEnv, "delete_document").handler({ documentId: "gone" }, undefined);
     expect(methods).toEqual(["GET"]);
     expect(r.content[0]!.text).toContain("404");
+  });
+});
+
+describe("目录树工具（create_folder / move_document）", () => {
+  it("两个工具都在工具表里", () => {
+    expect(() => toolByName(credEnv, "create_folder")).not.toThrow();
+    expect(() => toolByName(credEnv, "move_document")).not.toThrow();
+  });
+
+  it("create_folder 发 POST，载荷带 kind=folder 与标题", async () => {
+    let sent: { url: string; body: unknown } | null = null;
+    vi.stubGlobal("fetch", async (url: string, init: RequestInit) => {
+      sent = { url: String(url), body: JSON.parse(String(init.body)) };
+      return {
+        status: 201,
+        text: async () =>
+          JSON.stringify({ documentId: "f1", revisionId: "00000000-0000-0000-0000-000000000000", versionNo: 0, merged: false }),
+      } as Response;
+    });
+    const r = await toolByName(credEnv, "create_folder").handler(
+      { title: "运维手册", spaceId: "s1", parentId: "p1" },
+      undefined,
+    );
+    expect(sent!.body).toMatchObject({ kind: "folder", title: "运维手册", spaceId: "s1", parentId: "p1" });
+    expect(r.content[0]!.text).toContain("f1");
+    // 回执必须点明「拿这个 id 当 parentId 用」——否则模型建完文件夹不知道下一步
+    expect(r.content[0]!.text).toContain("parentId");
+  });
+
+  it("move_document 先读后写，且 PATCH 用 camelCase 的 parentId", async () => {
+    const calls: { method: string; body: unknown }[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      const method = init.method ?? "GET";
+      calls.push({ method, body: init.body ? JSON.parse(String(init.body)) : null });
+      return {
+        status: 200,
+        text: async () =>
+          method === "GET"
+            ? JSON.stringify({ id: "d1", spaceId: "s1", parentId: null, slug: "d1", title: "回滚手册", content: "", versionNo: 1, status: "draft" })
+            : JSON.stringify({ documentId: "d1", revisionId: "00000000-0000-0000-0000-000000000000", versionNo: 0, merged: false }),
+      } as Response;
+    });
+    const r = await toolByName(credEnv, "move_document").handler({ documentId: "d1", parentId: "f9" }, undefined);
+    expect(calls.map((c) => c.method)).toEqual(["GET", "PATCH"]);
+    expect(calls[1]!.body).toEqual({ parentId: "f9" });
+    expect(r.content[0]!.text).toContain("回滚手册");
+  });
+
+  it("move_document 省略 parentId = 移到根（显式发 null，不是不发）", async () => {
+    const bodies: unknown[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      if (init.method === "PATCH") bodies.push(JSON.parse(String(init.body)));
+      return {
+        status: 200,
+        text: async () =>
+          init.method === "PATCH"
+            ? JSON.stringify({ documentId: "d1", revisionId: "00000000-0000-0000-0000-000000000000", versionNo: 0, merged: false })
+            : JSON.stringify({ id: "d1", spaceId: "s1", parentId: "f1", slug: "d1", title: "回滚手册", content: "", versionNo: 1, status: "draft" }),
+      } as Response;
+    });
+    await toolByName(credEnv, "move_document").handler({ documentId: "d1" }, undefined);
+    // 服务端用 double_option 三态区分「缺省」与「null」——这里必须发 null 才是「移到根」
+    expect(bodies[0]).toEqual({ parentId: null });
+  });
+
+  it("move_document：已经在目标位置 → 不发 PATCH，如实说没动", async () => {
+    const methods: string[] = [];
+    vi.stubGlobal("fetch", async (_url: string, init: RequestInit) => {
+      methods.push(init.method ?? "GET");
+      return {
+        status: 200,
+        text: async () => JSON.stringify({ id: "d1", spaceId: "s1", parentId: "f1", slug: "d1", title: "回滚手册", content: "", versionNo: 1, status: "draft" }),
+      } as Response;
+    });
+    const r = await toolByName(credEnv, "move_document").handler({ documentId: "d1", parentId: "f1" }, undefined);
+    expect(methods).toEqual(["GET"]);
+    expect(r.content[0]!.text).toContain("nothing moved");
   });
 });

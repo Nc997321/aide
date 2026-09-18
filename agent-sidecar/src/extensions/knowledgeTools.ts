@@ -36,8 +36,10 @@ import {
 import {
   appendToDocument,
   createDocument,
+  createFolder,
   deleteDocument,
   ingestFile,
+  moveDocument,
   resolveWriteTarget,
   updateDocument,
 } from "./knowledge/operations.js";
@@ -138,7 +140,7 @@ function buildListSpacesTool(env: NodeJS.ProcessEnv) {
 function buildListDocumentsTool(env: NodeJS.ProcessEnv) {
   return tool(
     "list_documents",
-    "List the documents in one knowledge base space (flat tree: id / parentId / title / versionNo / updatedAt). Use it to browse what exists when the user has not named a document.",
+    "List the nodes in one knowledge base space as a flat tree (id / parentId / title / versionNo / updatedAt). Each line is tagged [folder] or [doc]: a [folder] is a container that holds no content, a [doc] holds the content — pass a [folder] id as parentId to create or move things into it. Use it to browse what exists when the user has not named a document.",
     { spaceId: z.string().describe("Space id from list_spaces") },
     (args) =>
       kbCall<KbDocumentSummary[]>(
@@ -157,7 +159,7 @@ function buildCreateDocumentTool(env: NodeJS.ProcessEnv) {
       title: z.string().describe("Document title (also becomes the URL slug)"),
       content: z.string().describe("Document body in markdown"),
       spaceId: z.string().optional().describe("Target space id from list_spaces. Omit only when the user's target is unambiguous."),
-      parentId: z.string().optional().describe("Parent document id to nest under. Omit for a top-level document."),
+      parentId: z.string().optional().describe("Parent FOLDER id to nest under. Omit for a top-level document. Only folders can hold children."),
     },
     (args) =>
       kbWrite(env, async (client) => {
@@ -170,6 +172,46 @@ function buildCreateDocumentTool(env: NodeJS.ProcessEnv) {
           ...(args.parentId ? { parentId: args.parentId } : {}),
         });
       }),
+  );
+}
+
+function buildCreateFolderTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "create_folder",
+    "Create a knowledge base FOLDER — a container node that holds no content. Use it to build a directory structure before filing documents into it; then pass the folder's id as parentId to create_document or ingest_file. Folders can be nested inside other folders, but a [doc] can never hold children.",
+    {
+      title: z.string().describe("Folder name, e.g. '运维手册'"),
+      spaceId: z.string().optional().describe("Target space id from list_spaces. Omit only when the user's target is unambiguous."),
+      parentId: z.string().optional().describe("Parent FOLDER id to nest under. Omit for a top-level folder."),
+    },
+    (args) =>
+      kbWrite(env, async (client) => {
+        const target = await resolveWriteTarget(client, args.spaceId);
+        if (target.kind === "ask") return target.text;
+        return createFolder(client, {
+          spaceId: target.id,
+          title: args.title,
+          ...(args.parentId ? { parentId: args.parentId } : {}),
+        });
+      }),
+  );
+}
+
+function buildMoveDocumentTool(env: NodeJS.ProcessEnv) {
+  return tool(
+    "move_document",
+    "Move an existing knowledge base node (document or folder) to another folder, or back to the top level. This changes where it sits in the tree — it does not change its content or its id. Call list_documents first to find the destination folder's id.",
+    {
+      documentId: z.string().describe("Id of the node to move (document or folder)"),
+      parentId: z.string().optional().describe("Destination FOLDER id. Omit to move it to the top level of its space."),
+    },
+    (args) =>
+      kbWrite(env, (client) =>
+        moveDocument(client, {
+          documentId: args.documentId,
+          ...(args.parentId ? { parentId: args.parentId } : {}),
+        }),
+      ),
   );
 }
 
@@ -222,7 +264,7 @@ function buildIngestFileTool(env: NodeJS.ProcessEnv, cwd: string) {
     {
       filePath: z.string().describe("Path to the file on disk (absolute, or relative to the session working directory)"),
       spaceId: z.string().optional().describe("Target space id from list_spaces. Omit only when the user's target is unambiguous."),
-      parentId: z.string().optional().describe("Parent document id to nest under. Omit for a top-level document."),
+      parentId: z.string().optional().describe("Parent FOLDER id to nest under. Omit for a top-level document. Only folders can hold children."),
     },
     (args) =>
       kbWrite(env, async (client) => {
@@ -240,7 +282,7 @@ function buildIngestFileTool(env: NodeJS.ProcessEnv, cwd: string) {
 function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
   return tool(
     "delete_document",
-    "Delete a knowledge base document together with every sub-document under it. This is a soft delete: it disappears from every list, search and read path, and the 知识库 panel has NO restore — use it only when the user explicitly names a document to delete, never to tidy up on your own.",
+    "Delete a knowledge base node together with everything under it (sub-folders and documents alike). This is a soft delete: it disappears from every list, search and read path, and the 知识库 panel has NO restore — use it only when the user explicitly names something to delete, never to tidy up on your own.",
     { documentId: z.string().describe("Document id (uuid) from search or list_documents") },
     (args) => kbWrite(env, (client) => deleteDocument(client, { documentId: args.documentId })),
   );
@@ -254,6 +296,8 @@ export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
     buildListSpacesTool(env),
     buildListDocumentsTool(env),
     buildCreateDocumentTool(env),
+    buildCreateFolderTool(env),
+    buildMoveDocumentTool(env),
     buildAppendDocumentTool(env),
     buildUpdateDocumentTool(env),
     buildIngestFileTool(env, cwd),

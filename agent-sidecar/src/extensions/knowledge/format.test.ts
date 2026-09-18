@@ -187,3 +187,38 @@ describe("写侧文案与尺寸常量", () => {
     expect(text).toContain(String(KB_READ_MAX_CHARS + 1)); // 旧文有多长要报出来
   });
 });
+
+describe("formatDocumentList 的节点类型标注", () => {
+  /** 摘要的最小构造：本组用例只关心 kind / 标题 / 版本。 */
+  function node(id: string, title: string, kind: string, versionNo = 1) {
+    return {
+      id,
+      parentId: null,
+      kind,
+      slug: id,
+      title,
+      versionNo,
+      status: "draft",
+      updatedAt: "2026-09-18T00:00:00Z",
+    };
+  }
+
+  it("文件夹标 [folder]，文档标 [doc] —— 模型据此知道哪个能当 parentId", () => {
+    const text = formatDocumentList([node("f1", "运维手册", "folder", 0), node("d1", "回滚手册", "doc")]);
+    expect(text).toContain("[folder] 运维手册");
+    expect(text).toContain("[doc] 回滚手册");
+  });
+
+  it("文件夹不显示版本号（版本对容器没有意义，显示只会误导）", () => {
+    const text = formatDocumentList([node("f1", "运维手册", "folder", 0)]);
+    expect(text).toContain("[folder] 运维手册");
+    expect(text).not.toContain("v0");
+  });
+
+  it("kind 缺省按 doc 兜底 —— 老服务端不带这个字段时不能把节点吞掉", () => {
+    const text = formatDocumentList([
+      { id: "d1", parentId: null, slug: "d1", title: "旧文档", versionNo: 1, status: "draft", updatedAt: "2026-09-18T00:00:00Z" },
+    ]);
+    expect(text).toContain("[doc] 旧文档");
+  });
+});

@@ -84,6 +84,63 @@ export async function createDocument(client: KbClient, doc: NewDocument): Promis
   return saved.ok ? formatSavedDocument(saved.data, "Created") : formatFailure(saved.failure);
 }
 
+export interface NewFolder {
+  spaceId: string;
+  title: string;
+  parentId?: string;
+}
+
+export interface MoveArgs {
+  documentId: string;
+  /** 省略 = 移到根 */
+  parentId?: string;
+}
+
+/**
+ * 建文件夹。与 `createDocument` 分开而不是加个 `kind` 开关：两者的入参不同
+ * （文件夹没有 content）、给模型看的工具描述也不同，塞进一个函数只会让两边的
+ * 差异藏进分支里。
+ */
+export async function createFolder(client: KbClient, args: NewFolder): Promise<string> {
+  const saved = await client.sendJson<KbSaveResult>("/api/documents", "POST", {
+    spaceId: args.spaceId,
+    title: args.title,
+    kind: "folder",
+    ...(args.parentId ? { parentId: args.parentId } : {}),
+  });
+  return saved.ok
+    ? `Created the knowledge base folder "${args.title}". documentId ${saved.data.documentId} — pass it as parentId to create_document or ingest_file to file things inside it.`
+    : formatFailure(saved.failure);
+}
+
+/**
+ * 移动节点。
+ *
+ * **先读一跳**，与 `deleteDocument` 同一条理由：回执要点名搬的是哪一个（用户得
+ * 核对），且 404/403 必须在这一步就如实返回。读回来的 `parentId` 还让「已经在
+ * 目标位置」能被识别成空操作——否则模型会以为搬成功了，而服务端那边其实什么
+ * 都没发生。
+ */
+export async function moveDocument(client: KbClient, args: MoveArgs): Promise<string> {
+  const cur = await client.getJson<KbDocument>(docPath(args.documentId));
+  if (!cur.ok) return formatFailure(cur.failure);
+
+  const target = args.parentId ?? null;
+  if ((cur.data.parentId ?? null) === target) {
+    return `"${cur.data.title}" is already ${target ? `under ${target}` : "at the top level"} — nothing moved.`;
+  }
+
+  // ⚠️ 必须显式发 parentId（null 也算发）：服务端用 double_option 三态区分
+  // 「字段缺省 = 不动」与「null = 移到根」，省掉这个键就变成前者了。
+  const res = await client.sendJson<unknown>(docPath(args.documentId), "PATCH", {
+    parentId: target,
+  });
+  if (!res.ok) return formatFailure(res.failure);
+
+  const where = target ? `under folder ${target}` : "to the top level of the space";
+  return `Moved "${cur.data.title}" ${where} (documentId ${args.documentId}).`;
+}
+
 /** 整篇替换。先读当前版本：既拿到沿用用的 title，也让 404/403 在读这一跳就如实返回。 */
 export async function updateDocument(client: KbClient, args: UpdateArgs): Promise<string> {
   // 只查「单次正文」上限——**刻意不查 KB_DOC_MAX_BYTES**：replace 的正文就是整篇，
