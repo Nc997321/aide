@@ -1,0 +1,928 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>知识库目录树 · 原型</title>
+<style>
+/* ─────────────────────────────────────────────────────────────
+   取自 src/themes/glass.ts 的真实 token。原型不发明视觉体系——
+   这是应用里的一个侧栏段落，配色必须与宿主一致。
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --bg-deep: rgba(8, 10, 16, .82);
+  --bg-base: rgba(17, 19, 29, .52);
+  --surface-default: rgba(255, 255, 255, .06);
+  --surface-hover: rgba(255, 255, 255, .1);
+  --surface-active: rgba(255, 255, 255, .14);
+  --text-primary: #eef0f8;
+  --text-secondary: #b9bdd0;
+  --text-muted: #7c8296;
+  --accent: #a5b8ff;
+  --accent-subtle: rgba(150, 170, 255, .16);
+  --border: rgba(255, 255, 255, .1);
+  --border-subtle: rgba(255, 255, 255, .06);
+  --danger: #f87171;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --ease: .16s cubic-bezier(.2, .8, .2, 1);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, .38);
+  --shadow-lg: 0 20px 60px rgba(0, 0, 0, .55);
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei",
+             "PingFang SC", "Hiragino Sans GB", system-ui, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: var(--font-ui);
+  color: var(--text-primary);
+  background:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%),
+    #0a0b11;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+}
+
+.stage {
+  display: flex;
+  gap: 40px;
+  align-items: flex-start;
+  padding: 32px;
+  min-height: 100%;
+}
+.stage-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin: 0 0 10px;
+}
+
+/* ── 应用面板外壳：只为给出真实比例，不是原型的一部分 ── */
+.panel {
+  width: 720px;
+  height: 620px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  backdrop-filter: blur(20px) saturate(150%);
+  overflow: hidden;
+  box-shadow: var(--shadow-lg);
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 16px 20px 12px;
+  font-size: 14px;
+  font-weight: 600;
+}
+.panel-head .glyph { color: var(--accent); }
+.panel-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  padding: 3px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+.panel-body { flex: 1; display: flex; min-height: 0; border-top: 1px solid var(--border); }
+.panel-main {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+/* ── 侧栏 ── */
+.side {
+  width: 220px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--border);
+  overflow: hidden;
+}
+.side-sec { padding: 10px 8px; border-bottom: 1px solid var(--border); }
+.side-sec.grow { flex: 1; border-bottom: none; overflow: auto; }
+.side-sec-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: var(--text-muted);
+  padding: 0 6px 6px;
+}
+.sec-add {
+  border: none;
+  background: none;
+  padding: 1px;
+  display: inline-flex;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.sec-add:hover { color: var(--text-primary); background: var(--surface-hover); }
+
+/* 空间行与文档树行共用一套行语法：同一个侧栏里两套 hover 规则会很脏 */
+.space-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 5px 6px 5px 8px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.space-row:hover { background: var(--surface-hover); color: var(--text-primary); }
+.space-row.on { background: var(--accent-subtle); color: var(--text-primary); }
+.space-row.menu-open { background: var(--surface-hover); }
+.space-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.space-role { flex: 0 0 auto; font-size: 10px; opacity: .55; }
+/* 角色与 ⋯ 同槽：角色是「不操作时也要看得到的信息」，所以它常驻，⋯ 悬停才挤进来 */
+.space-row .row-actions { position: absolute; right: 4px; }
+/* 菜单打开的行也算「悬停中」——否则角色和 ⋯ 会叠在一起（真实组件同样适用：
+   菜单开着但鼠标移到菜单上时，行本身已经不是 :hover 了） */
+.space-row:hover .space-role,
+.space-row.menu-open .space-role { visibility: hidden; }
+
+/* 新建空间：侧栏只有 220px，三个字段塞不进一行，用小浮层 */
+.popover {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 30px;
+  z-index: 30;
+  padding: 10px;
+  background: rgba(20, 22, 32, .97);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(20px) saturate(150%);
+  cursor: default;
+}
+.popover h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.popover label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin: 0 0 3px;
+}
+.popover .field { margin-bottom: 8px; }
+.popover input.field-input,
+.popover select {
+  width: 100%;
+  height: 26px;
+  padding: 0 7px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  outline: none;
+}
+.popover input.field-input:focus,
+.popover select:focus { border-color: var(--accent); }
+.popover .actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 2px; }
+.btn {
+  padding: 5px 10px;
+  font: inherit;
+  font-size: 12px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: none;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.btn:hover { background: var(--surface-hover); color: var(--text-primary); }
+.btn.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: #171a2b;
+  font-weight: 500;
+}
+.btn.primary:disabled { opacity: .45; cursor: default; }
+.btn.primary:hover:disabled { background: var(--accent); }
+.hint { font-size: 10px; color: var(--text-muted); margin: 0 0 8px; line-height: 1.6; }
+
+/* ─────────────────────────────────────────────────────────────
+   目录树
+   ───────────────────────────────────────────────────────────── */
+.tree { position: relative; }
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding-right: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.row:hover { background: var(--surface-hover); }
+.row.on { background: var(--accent-subtle); }
+
+/* 折叠箭头占固定槽位（14px）。文档没有它，槽位留白——
+   这就是「层级通道」与「类型通道」的分工：箭头只在文件夹上出现。 */
+.caret {
+  flex: 0 0 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: transform var(--ease), color var(--ease);
+}
+.caret.open { transform: rotate(90deg); }
+.row:hover .caret { color: var(--text-secondary); }
+.row.on .caret { color: var(--accent); }
+.caret-spacer { flex: 0 0 14px; }
+
+.node-glyph { flex: 0 0 auto; color: var(--text-secondary); opacity: .75; }
+.row.is-folder .node-glyph { opacity: 1; }
+.row.on .node-glyph { color: var(--accent); opacity: 1; }
+
+/* ⚠️ 类型走「字形 + 字重」，不走明度差。
+   早先给文档用 --text-muted，实际渲染出来像被禁用（读起来费劲），
+   而把文件夹提亮到 text-primary 又会跟选中态抢信号——那等于用同一条通道
+   同时表类型和状态。字重是这里唯一不打架的区分手段。 */
+.title {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row.is-folder > .title { font-weight: 500; }
+.row.on > .title { color: var(--text-primary); }
+/* 悬停时标题提亮：让「指针在哪一行」不靠背景色也看得出来 */
+.row:hover > .title { color: var(--text-primary); }
+
+/* 空文件夹的词标：回答「为什么这个展不开」。不占箭头槽（那里留白）。 */
+.empty-mark {
+  flex: 0 0 auto;
+  font-size: 10px;
+  color: var(--text-secondary);
+  opacity: .6;
+  padding-right: 2px;
+}
+
+/* 行动作占固定槽位，标题不会因悬停而位移 */
+.row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 1px;
+  opacity: 0;
+  transition: opacity var(--ease);
+}
+.row:hover .row-actions,
+.row.menu-open .row-actions { opacity: 1; }
+.rowbtn {
+  border: none;
+  background: none;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-radius: 4px;
+}
+.rowbtn:hover { color: var(--text-primary); background: var(--surface-active); }
+
+/* 就地编辑：输入框占住标题位，行不跳 */
+.inline-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 20px;
+  padding: 0 5px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-deep);
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  outline: none;
+}
+.inline-input::placeholder { color: var(--text-muted); }
+
+/* ⋯ 菜单 */
+.menu {
+  position: absolute;
+  right: 4px;
+  top: 24px;
+  z-index: 20;
+  min-width: 132px;
+  padding: 4px;
+  background: rgba(20, 22, 32, .96);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+.menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.menu button:hover { background: var(--surface-hover); color: var(--text-primary); }
+.menu button.danger { color: var(--danger); }
+.menu button.danger:hover { background: rgba(248, 113, 113, .12); }
+.menu-sep { height: 1px; margin: 4px 6px; background: var(--border-subtle); }
+
+/* 移动到… */
+.mover {
+  position: absolute;
+  right: 4px;
+  top: 24px;
+  z-index: 20;
+  width: 168px;
+  padding: 6px;
+  background: rgba(20, 22, 32, .96);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  backdrop-filter: blur(20px) saturate(150%);
+}
+.mover-title {
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 2px 6px 6px;
+}
+.mover button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 5px 6px;
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mover button:hover:not(:disabled) { background: var(--surface-hover); color: var(--text-primary); }
+.mover button:disabled { color: var(--text-muted); opacity: .45; cursor: default; }
+
+/* ── 右侧：状态清单（静态陈列，评审用） ── */
+.gallery { display: flex; flex-direction: column; gap: 22px; }
+.card {
+  width: 260px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-base);
+  backdrop-filter: blur(20px) saturate(150%);
+  padding: 10px;
+}
+.card h3 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.card p {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.7;
+  color: var(--text-muted);
+}
+
+/* 键盘可达性：焦点环走 accent ring */
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-radius: 4px; }
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; }
+}
+</style>
+</head>
+<body>
+<div class="stage">
+
+  <!-- ═══ 交互版：真的能点 ═══ -->
+  <div>
+    <p class="stage-label">交互版 —— 折叠、悬停、菜单、就地重命名、移动到… 都能真点</p>
+    <div class="panel">
+      <div class="panel-head">
+        <span class="glyph">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/></svg>
+        </span>
+        知识库
+        <span class="panel-search">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="6.5" cy="6.5" r="3.8"/><path d="M9.2 9.2L13 13"/></svg>
+          检索文档…
+        </span>
+      </div>
+      <div class="panel-body">
+        <aside class="side">
+          <div class="side-sec">
+            <div class="side-sec-title">指南</div>
+            <button class="space-row" type="button">使用指南</button>
+          </div>
+          <div class="side-sec">
+            <div class="side-sec-title">
+              <span>空间</span>
+              <button class="sec-add" type="button" data-act="new-space" title="新建空间">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
+              </button>
+            </div>
+            <div class="tree" id="spaces"></div>
+          </div>
+          <div class="side-sec grow">
+            <div class="side-sec-title">
+              <span>文档</span>
+              <button class="sec-add" type="button" title="在根目录新建文档">
+                <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
+              </button>
+            </div>
+            <div class="tree" id="tree"></div>
+          </div>
+        </aside>
+        <div class="panel-main">从左侧选一篇文档</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ 静态状态陈列 ═══ -->
+  <div class="gallery">
+    <p class="stage-label">四种关键状态（静态）</p>
+
+    <div class="card">
+      <h3>空间段：+ 与 ⋯（原本埋在「成员」页里）</h3>
+      <div class="tree" style="padding-bottom:186px">
+        <div class="space-row" style="position:relative">
+          <span class="space-name">产品档案</span>
+          <span class="space-role">editor</span>
+        </div>
+        <!-- 带菜单的行放最后：菜单是浮层，放中间会盖住下一行，静态陈列里看着像那行自带按钮 -->
+        <div class="space-row menu-open" style="position:relative">
+          <span class="space-name">工程手册</span>
+          <span class="space-role">owner</span>
+          <span class="row-actions" style="opacity:1;position:absolute;right:4px">
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></svg></button>
+          </span>
+          <div class="menu" style="left:auto;right:4px;top:26px">
+            <button type="button">重命名</button>
+          </div>
+        </div>
+        <div class="popover" style="position:static;margin-top:52px">
+          <h4>新建空间</h4>
+          <div class="field">
+            <label>标识（建后不可改）</label>
+            <input class="field-input" value="product-archive" spellcheck="false" />
+          </div>
+          <div class="field">
+            <label>名称</label>
+            <input class="field-input" placeholder="产品档案" />
+          </div>
+          <div class="field">
+            <label>可见性</label>
+            <select><option selected>内部（登录可见）</option></select>
+          </div>
+          <div class="actions">
+            <button class="btn" type="button">取消</button>
+            <button class="btn primary" type="button">创建</button>
+          </div>
+        </div>
+      </div>
+      <p>与文档树同一套行语法。唯一的差别：<b>角色常驻</b>（不操作时也要知道自己在各空间里的身份），
+         悬停时把角色让位给 ⋯。<br>
+         侧栏只有 220px，标识/名称/可见性三字段塞不进一行，所以「+」开的是小浮层。</p>
+    </div>
+
+    <div class="card">
+      <h3>文件夹 / 文档 / 空文件夹</h3>
+      <div class="tree">
+        <div class="row is-folder" style="padding-left:6px">
+          <button class="caret open" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4L10.5 8L6.5 12"/></svg></button>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/></svg></span>
+          <span class="title">运维手册</span>
+        </div>
+        <div class="row" style="padding-left:20px;background:var(--surface-hover)">
+          <span class="caret-spacer"></span>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/></svg></span>
+          <span class="title">回滚手册</span>
+          <span class="row-actions" style="opacity:1">
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></svg></button>
+          </span>
+        </div>
+        <div class="row is-folder" style="padding-left:20px">
+          <span class="caret-spacer"></span>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/></svg></span>
+          <span class="title">演练记录</span>
+          <span class="empty-mark">空</span>
+        </div>
+      </div>
+      <p>三条通道各管一件事：<b>折叠箭头 + 缩进</b>管层级，<b>字形 + 字重</b>管类型，
+         <b>色相</b>只给选中。拿颜色同时表类型和状态是树侧栏最常见的毛病。<br>
+         悬停浮出 <b>+</b> 与 <b>⋯</b>：两个槽位常驻，标题不因悬停而位移。<br>
+         空文件夹不给按不动的箭头，改标「空」——先回答「为什么展不开」。</p>
+    </div>
+
+    <div class="card">
+      <h3>⋯ 菜单展开</h3>
+      <div class="tree" style="padding-bottom:116px">
+        <div class="row is-folder menu-open" style="padding-left:6px">
+          <button class="caret open" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4L10.5 8L6.5 12"/></svg></button>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/></svg></span>
+          <span class="title">运维手册</span>
+          <span class="row-actions" style="opacity:1">
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button>
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></svg></button>
+          </span>
+          <div class="menu">
+            <button type="button">新建子文件夹</button>
+            <button type="button">重命名</button>
+            <button type="button">移动到…</button>
+            <div class="menu-sep"></div>
+            <button class="danger" type="button">删除</button>
+          </div>
+        </div>
+      </div>
+      <p>文档行的菜单少一项「新建子文件夹」（文档是叶子），其余三项不变。</p>
+    </div>
+
+    <div class="card">
+      <h3>就地重命名 / 新建</h3>
+      <div class="tree">
+        <div class="row is-folder" style="padding-left:6px">
+          <button class="caret open" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4L10.5 8L6.5 12"/></svg></button>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/></svg></span>
+          <input class="inline-input" value="运维手册" />
+        </div>
+        <div class="row" style="padding-left:20px">
+          <span class="caret-spacer"></span>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/></svg></span>
+          <input class="inline-input" placeholder="文档标题" />
+        </div>
+      </div>
+      <p>输入框占住标题位，行高与位置都不变；Enter 提交、Esc 取消、失焦即提交。</p>
+    </div>
+
+    <div class="card">
+      <h3>移动到…</h3>
+      <div class="tree" style="padding-bottom:152px">
+        <div class="row menu-open" style="padding-left:20px">
+          <span class="caret-spacer"></span>
+          <span class="node-glyph"><svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/></svg></span>
+          <span class="title">回滚手册</span>
+          <span class="row-actions" style="opacity:1">
+            <button class="rowbtn" type="button"><svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></svg></button>
+          </span>
+          <div class="mover">
+            <div class="mover-title">移动到…</div>
+            <button type="button">根目录</button>
+            <button type="button">运维手册</button>
+            <button type="button">　部署</button>
+            <button type="button" disabled>　演练记录</button>
+          </div>
+        </div>
+      </div>
+      <p>目标在自己子树里的项<b>置灰而不是隐藏</b>——隐藏会让人以为列表坏了。</p>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── 假数据：三层 + 空文件夹 + 超长标题 + 中英混排 ──
+const DOCS = [
+  { id: 'f1', parentId: null, kind: 'folder', title: '运维手册' },
+  { id: 'f2', parentId: 'f1', kind: 'folder', title: '部署' },
+  { id: 'd1', parentId: 'f2', kind: 'doc', title: '回滚手册' },
+  { id: 'd2', parentId: 'f2', kind: 'doc', title: '灰度发布 checklist（含 DB migration）' },
+  { id: 'f3', parentId: 'f1', kind: 'folder', title: '演练记录' },        // 空文件夹
+  { id: 'd3', parentId: 'f1', kind: 'doc', title: '值班表' },
+  { id: 'd4', parentId: null, kind: 'doc', title: 'Engineering Handbook' },
+  { id: 'f4', parentId: null, kind: 'folder', title: '产品档案' },
+  { id: 'd5', parentId: 'f4', kind: 'doc', title: '2026 Q3 路线图' },
+];
+
+const GLYPH = {
+  caret: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6.5 4L10.5 8L6.5 12"/></svg>',
+  folder: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/></svg>',
+  file: '<svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"><path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/></svg>',
+  plus: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>',
+  more: '<svg width="11" height="11" viewBox="0 0 16 16" fill="currentColor"><circle cx="4" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12" cy="8" r="1.1"/></svg>',
+};
+
+// ── 空间（与文档树同一套行语法） ──
+const SPACES = [
+  { id: 's1', key: 'eng-handbook', name: '工程手册', visibility: 'internal', role: 'owner' },
+  { id: 's2', key: 'product-archive', name: '产品档案', visibility: 'private', role: 'editor' },
+];
+let activeSpaceId = 's1';
+let spaceMenuFor = null;
+let spaceRenaming = null;
+let creatingSpace = false;
+
+const INDENT = 14;
+const collapsed = new Set(['f4']);
+let activeId = 'd1';
+let menuFor = null;
+let renaming = null;
+let creating = null;   // { parentId }
+let movingFor = null;
+
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+/** 与 docTree.buildTree 同规则：文件夹优先 + 名称，孤儿提升，成环保护（原型里省略后者）。 */
+function buildTree() {
+  const byId = new Map(DOCS.map((d) => [d.id, d]));
+  const kids = new Map();
+  const roots = [];
+  for (const d of DOCS) {
+    const p = d.parentId == null ? null : byId.get(d.parentId);
+    if (!p) { roots.push(d); continue; }
+    if (!kids.has(p.id)) kids.set(p.id, []);
+    kids.get(p.id).push(d);
+  }
+  const cmp = (a, b) => {
+    const af = a.kind === 'folder', bf = b.kind === 'folder';
+    if (af !== bf) return af ? -1 : 1;
+    return a.title.localeCompare(b.title, 'zh');
+  };
+  const node = (d) => ({ ...d, children: (kids.get(d.id) ?? []).sort(cmp).map(node) });
+  return roots.sort(cmp).map(node);
+}
+
+function flatten(nodes, depth, out = []) {
+  for (const n of nodes) {
+    out.push({ ...n, depth });
+    if (!collapsed.has(n.id)) flatten(n.children, depth + 1, out);
+  }
+  return out;
+}
+
+function rowHtml(r) {
+  const isFolder = r.kind === 'folder';
+  const hasKids = r.children.length > 0;
+  const pad = 6 + r.depth * INDENT;
+  const cls = ['row', isFolder ? 'is-folder' : '', r.id === activeId ? 'on' : '',
+               menuFor === r.id || movingFor === r.id ? 'menu-open' : ''].filter(Boolean).join(' ');
+
+  const caret = isFolder && hasKids
+    ? `<button class="caret ${collapsed.has(r.id) ? '' : 'open'}" data-act="toggle" data-id="${r.id}" aria-label="${collapsed.has(r.id) ? '展开' : '折叠'}">${GLYPH.caret}</button>`
+    : '<span class="caret-spacer"></span>';
+
+  const label = renaming === r.id
+    ? `<input class="inline-input" data-act="rename-input" data-id="${r.id}" value="${esc(r.title)}" />`
+    : `<span class="title" data-act="open" data-id="${r.id}">${esc(r.title)}</span>`;
+
+  const emptyMark = isFolder && !hasKids ? '<span class="empty-mark">空</span>' : '';
+
+  const addBtn = isFolder
+    ? `<button class="rowbtn" data-act="new-doc" data-id="${r.id}" title="在这个文件夹里新建文档">${GLYPH.plus}</button>`
+    : '';
+  const moreBtn = `<button class="rowbtn" data-act="menu" data-id="${r.id}" title="更多">${GLYPH.more}</button>`;
+
+  let pop = '';
+  if (menuFor === r.id) {
+    pop = `<div class="menu">
+      ${isFolder ? '<button data-act="menu-new-folder" data-id="' + r.id + '">新建子文件夹</button>' : ''}
+      <button data-act="menu-rename" data-id="${r.id}">重命名</button>
+      <button data-act="menu-move" data-id="${r.id}">移动到…</button>
+      <div class="menu-sep"></div>
+      <button class="danger" data-act="menu-delete" data-id="${r.id}">删除</button>
+    </div>`;
+  }
+  if (movingFor === r.id) {
+    const self = new Set([r.id, ...r.children.flatMap(function walk(c) { return [c.id, ...c.children.flatMap(walk)]; })]);
+    const opts = flatten(buildTree(), 0)
+      .filter((x) => x.kind === 'folder')
+      .map((x) => `<button data-act="move-to" data-id="${r.id}" data-target="${x.id}"
+        ${self.has(x.id) ? 'disabled' : ''}>${'　'.repeat(x.depth)}${esc(x.title)}</button>`)
+      .join('');
+    pop = `<div class="mover"><div class="mover-title">移动到…</div>
+      <button data-act="move-to" data-id="${r.id}" data-target="">根目录</button>${opts}</div>`;
+  }
+
+  return `<div class="${cls}" style="padding-left:${pad}px" data-row="${r.id}">
+    ${caret}
+    <span class="node-glyph">${isFolder ? GLYPH.folder : GLYPH.file}</span>
+    ${label}${emptyMark}
+    <span class="row-actions">${addBtn}${moreBtn}</span>
+    ${pop}
+  </div>`;
+}
+
+// ── 空间段 ──
+// 行语法与文档树一致：名字在左、副信息在右、⋯ 悬停浮出。区别只有一个——
+// 空间的「副信息」是角色，而且它**常驻**（不操作时也要看得到自己在哪些空间里是什么身份），
+// 所以悬停时是把角色藏起来给 ⋯ 让位，而不是让两者挤在一起。
+function spaceRowHtml(s) {
+  const cls = ['space-row', s.id === activeSpaceId ? 'on' : '', spaceMenuFor === s.id ? 'menu-open' : '']
+    .filter(Boolean).join(' ');
+  const label = spaceRenaming === s.id
+    ? `<input class="inline-input" data-act="space-rename-input" data-id="${s.id}" value="${esc(s.name)}" />`
+    : `<span class="space-name">${esc(s.name)}</span>`;
+  const actions = `<span class="row-actions"><button class="rowbtn" data-act="space-menu" data-id="${s.id}" title="更多">${GLYPH.more}</button></span>`;
+  const menu = spaceMenuFor === s.id
+    ? `<div class="menu"><button data-act="space-rename" data-id="${s.id}">重命名</button></div>`
+    : '';
+  return `<div class="${cls}" data-space="${s.id}" style="position:relative">
+    ${label}<span class="space-role">${s.role}</span>${actions}${menu}</div>`;
+}
+
+function spaceFormHtml() {
+  const auto = 'eng-handbook-2';
+  return `<div class="popover">
+    <h4>新建空间</h4>
+    <div class="field">
+      <label>标识（小写字母/数字/-，用于对外引用，建后不可改）</label>
+      <input class="field-input" value="${auto}" spellcheck="false" />
+    </div>
+    <div class="field">
+      <label>名称</label>
+      <input class="field-input" placeholder="工程手册" />
+    </div>
+    <div class="field">
+      <label>可见性</label>
+      <select>
+        <option>私有（仅成员可见）</option>
+        <option selected>内部（登录可见）</option>
+        <option>公开（所有人可读）</option>
+      </select>
+    </div>
+    <div class="actions">
+      <button class="btn" data-act="space-create-cancel" type="button">取消</button>
+      <button class="btn primary" data-act="space-create-ok" type="button">创建</button>
+    </div>
+  </div>`;
+}
+
+function renderSpaces() {
+  let html = SPACES.map(spaceRowHtml).join('');
+  if (creatingSpace) html += spaceFormHtml();
+  document.getElementById('spaces').innerHTML = html;
+  const el = document.querySelector('[data-act="space-rename-input"], .popover input[placeholder]');
+  if (el) { el.focus(); el.select?.(); }
+}
+
+function render() {
+  renderSpaces();
+  const rows = flatten(buildTree(), 0);
+  let html = rows.map(rowHtml).join('');
+  if (creating) {
+    const parent = creating.parentId;
+    const depth = parent ? (rows.find((r) => r.id === parent)?.depth ?? 0) + 1 : 0;
+    html += `<div class="row" style="padding-left:${6 + depth * INDENT}px">
+      <span class="caret-spacer"></span>
+      <span class="node-glyph">${GLYPH.file}</span>
+      <input class="inline-input" data-act="create-input" placeholder="文档标题" />
+    </div>`;
+  }
+  document.getElementById('tree').innerHTML = html;
+
+  const focusEl = document.querySelector('[data-act="rename-input"], [data-act="create-input"]');
+  if (focusEl) { focusEl.focus(); focusEl.select(); }
+}
+
+function commitNewSpace() {
+  const inputs = document.querySelectorAll('.popover input');
+  const key = inputs[0]?.value.trim();
+  const name = inputs[1]?.value.trim();
+  if (key && name) {
+    const id = 's' + Date.now();
+    SPACES.push({ id, key, name, visibility: 'internal', role: 'owner' });
+    activeSpaceId = id; // 建完就选中——建它就是为了马上往里放东西
+  }
+  creatingSpace = false;
+}
+
+// 侧栏里所有「+」位置相同、含义相同：新建。挂在 document 上是因为
+// 「新建空间」那个 + 在 #spaces 容器之外（分组标题行里）。
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('[data-act="new-space"]')) return;
+  creatingSpace = true;
+  spaceMenuFor = null;
+  renderSpaces();
+});
+
+document.getElementById('spaces').addEventListener('click', (e) => {
+  const btn = e.target.closest('button[data-act]');
+  const act = btn?.dataset.act;
+  const id = btn?.dataset.id;
+
+  // ① 浮层里的两个按钮
+  if (act === 'space-create-cancel') { creatingSpace = false; render(); return; }
+  if (act === 'space-create-ok') { commitNewSpace(); render(); return; }
+  // ② 浮层里的其它点击（输入框、label）不能当成「点了空间行」
+  if (e.target.closest('.popover')) return;
+  // ③ 行上的按钮
+  if (act === 'space-menu') { spaceMenuFor = spaceMenuFor === id ? null : id; render(); return; }
+  if (act === 'space-rename') { spaceRenaming = id; spaceMenuFor = null; render(); return; }
+  // ④ 剩下的 = 选中这个空间
+  const row = e.target.closest('.space-row');
+  if (!row) return;
+  activeSpaceId = row.dataset.space;
+  spaceMenuFor = null;
+  render();
+});
+
+document.getElementById('spaces').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && e.target.dataset.act === 'space-rename-input') {
+    const s = SPACES.find((x) => x.id === e.target.dataset.id);
+    if (s && e.target.value.trim()) s.name = e.target.value.trim();
+    spaceRenaming = null; render();
+  } else if (e.key === 'Escape') { spaceRenaming = null; render(); }
+});
+
+document.getElementById('tree').addEventListener('click', (e) => {
+  const el = e.target.closest('[data-act]');
+  if (!el) return;
+  const act = el.dataset.act;
+  const id = el.dataset.id;
+
+  if (act === 'toggle') { collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); }
+  else if (act === 'open') { activeId = id; menuFor = null; }
+  else if (act === 'menu') { menuFor = menuFor === id ? null : id; movingFor = null; }
+  else if (act === 'menu-rename') { renaming = id; menuFor = null; }
+  else if (act === 'menu-move') { movingFor = id; menuFor = null; }
+  else if (act === 'menu-delete') { menuFor = null; alert('（原型）删除确认弹窗：连同 N 个项目'); }
+  else if (act === 'menu-new-folder') { menuFor = null; alert('（原型）就地新建子文件夹'); }
+  else if (act === 'new-doc') { creating = { parentId: id }; collapsed.delete(id); }
+  else if (act === 'move-to') {
+    const t = el.dataset.target;
+    const doc = DOCS.find((d) => d.id === id);
+    if (doc) doc.parentId = t || null;
+    movingFor = null;
+  }
+  render();
+});
+
+function commitRename(input) {
+  const doc = DOCS.find((d) => d.id === input.dataset.id);
+  if (doc && input.value.trim()) doc.title = input.value.trim();
+  renaming = null; render();
+}
+
+function commitCreate(input) {
+  const t = input.value.trim();
+  if (t) DOCS.push({ id: 'n' + Date.now(), parentId: creating.parentId, kind: 'doc', title: t });
+  creating = null; render();
+}
+
+document.getElementById('tree').addEventListener('keydown', (e) => {
+  const act = e.target.dataset.act;
+  if (e.key === 'Enter' && act === 'rename-input') commitRename(e.target);
+  else if (e.key === 'Enter' && act === 'create-input') commitCreate(e.target);
+  else if (e.key === 'Escape') { renaming = null; creating = null; render(); }
+});
+
+// 失焦即提交——但点到树里别的控件（⋯ 菜单、折叠箭头）不算「离开」，
+// 否则一次点击会先提交、然后目标被重渲染掉，点了个寂寞。
+document.getElementById('tree').addEventListener('focusout', (e) => {
+  const act = e.target.dataset?.act;
+  if (act !== 'rename-input' && act !== 'create-input') return;
+  if (e.relatedTarget && e.relatedTarget.closest?.('#tree')) return;
+  if (act === 'rename-input') commitRename(e.target); else commitCreate(e.target);
+});
+
+render();
+</script>
+</body>
+</html>
