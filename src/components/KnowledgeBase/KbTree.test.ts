@@ -102,6 +102,13 @@ describe("KbTree", () => {
     expect(w.find("[data-kb-node='f'] [data-kb-empty]").exists()).toBe(false);
   });
 
+  it("折叠箭头只在「文件夹且有子节点」时渲染——空文件夹给个按不动的箭头是骗人", () => {
+    const w = mountTree();
+    expect(w.find("[data-kb-node='f'] [data-kb-caret]").exists()).toBe(true); // 有子节点
+    expect(w.find("[data-kb-node='g'] [data-kb-caret]").exists()).toBe(false); // 空文件夹
+    expect(w.find("[data-kb-node='a'] [data-kb-caret]").exists()).toBe(false); // 文档
+  });
+
   it("重命名走内联输入：Enter 提交并发 patch（只带 title，不动父级）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
