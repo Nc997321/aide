@@ -295,23 +295,25 @@ else
   echo "  (跳过：拿不到容器内的 /app/storage —— 远程 BASE 时正常)"
 fi
 
-say "软删：删父文档连同整棵子树"
-# 刻意造三层（父→子→孙）：只删一层的实现能过「删子」的断言，但过不了递归。
-# 关键词「貔貅」只出现在这一棵树里，供下面的检索断言用。
-body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟父文档\",\"content\":\"父文档。关键词：貔貅。\"}" "$TOKEN_B")"
+say "软删：删文件夹连同整棵子树"
+# 刻意造三层（文件夹→文件夹→文档）：只删一层的实现能过「删子」的断言，但过不了递归。
+# 用文件夹而不是「文档套文档」搭这棵树，是因为后者在「文档是叶子」落地后会被 400 拒掉
+#（spec §4.1）；而且穿过两层文件夹才够得着叶子，对递归的要求比原来更强。
+# 关键词「貔貅」只出现在最里层那篇文档上——文件夹没有正文，放不了关键词。
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟删除根\",\"kind\":\"folder\"}" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "201" "建父文档 → 201"
+expect "$STATUS" "201" "建删除测试根文件夹 → 201"
+DEL_ROOT="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$DEL_ROOT\",\"title\":\"冒烟中间层\",\"kind\":\"folder\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建中间层文件夹 → 201"
+DEL_MID="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$DEL_MID\",\"title\":\"冒烟父文档\",\"content\":\"父文档。关键词：貔貅。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建最里层文档 → 201"
 DEL_DOC_ID="$(field "$body" documentId)"
-
-body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$DEL_DOC_ID\",\"title\":\"冒童子文档\",\"content\":\"子文档。关键词：貔貅。\"}" "$TOKEN_B")"
-STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "201" "建子文档 → 201"
-CHILD_ID="$(field "$body" documentId)"
-
-body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$CHILD_ID\",\"title\":\"冒烟孙文档\",\"content\":\"孙文档。关键词：貔貅。\"}" "$TOKEN_B")"
-STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "201" "建孙文档 → 201"
-GRAND_ID="$(field "$body" documentId)"
 
 # 先钉一条**正向基线**：只断言「删后检索为空」的话，jieba 万一把这个生僻词切成别的
 # 东西（或 simple 兜底把整句当一个词元），那条负向断言会因为「本来就搜不到」而假绿。
@@ -332,29 +334,29 @@ esac
 #    锁行确实消失要另用 SQL 核对，别指望这里。
 body="$(api POST "/api/documents/$DEL_DOC_ID/lock" "" "$TOKEN_E")"
 STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "200" "E 取父文档的编辑锁"
+expect "$STATUS" "200" "E 取最里层文档的编辑锁"
 
-body="$(api DELETE "/api/documents/$DEL_DOC_ID" "" "$TOKEN_B")"
+body="$(api DELETE "/api/documents/$DEL_ROOT" "" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
 expect "$STATUS" "200" "DELETE /api/documents/{id} → 200"
-expect "$(field "$body" deletedCount)" "3" "deletedCount = 3（父+子+孙）"
+expect "$(field "$body" deletedCount)" "3" "deletedCount = 3（根文件夹+中间层+文档）"
 
 body="$(api GET "/api/spaces/$SPACE_ID/documents" "" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
 expect "$STATUS" "200" "删除后列空间文档 → 200"
 case "$body" in
-  *"$DEL_DOC_ID"*|*"$CHILD_ID"*|*"$GRAND_ID"*)
-    echo "  ✗ 已删文档仍在空间列表里（级联没走全）" >&2; exit 1 ;;
-  *) echo "  ✓ 父/子/孙三篇都已从空间列表消失" ;;
+  *"$DEL_ROOT"*|*"$DEL_MID"*|*"$DEL_DOC_ID"*)
+    echo "  ✗ 已删节点仍在空间列表里（级联没走全）" >&2; exit 1 ;;
+  *) echo "  ✓ 根文件夹/中间层/文档三层都已从空间列表消失" ;;
 esac
 
 body="$(api GET "/api/documents/$DEL_DOC_ID" "" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "404" "直接读已删父文档 → 404"
+expect "$STATUS" "404" "直接读已删文档 → 404"
 
-body="$(api GET "/api/documents/$GRAND_ID" "" "$TOKEN_B")"
+body="$(api GET "/api/documents/$DEL_MID" "" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "404" "直接读已删孙文档 → 404"
+expect "$STATUS" "404" "直接读已删中间层文件夹 → 404"
 
 # 检索是另一条读路径，README 声称「全部读路径都已过滤 deleted_at」——在这兑现
 body="$(printf '%s' '貔貅' | curl -sS --max-time 15 -G "$BASE/api/search" \
@@ -366,10 +368,106 @@ body="${body%$'\n'*}"
 expect "$STATUS" "200" "删除后检索 → 200"
 expect "$(field "$body" hits)" "[]" "已删文档检索不到"
 
-# slug 是部分唯一索引（WHERE deleted_at IS NULL），删后重建同名必须放行
-body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟父文档\",\"content\":\"重建。\"}" "$TOKEN_B")"
+# slug 是部分唯一索引（WHERE deleted_at IS NULL），删后重建同名必须放行。
+# 用**同名的根文件夹**来验：它与刚被删的 DEL_ROOT 落在同一个
+# (space_id, parent=NULL, slug) 三元组上，是这条索引最直接的考验。
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"冒烟删除根\",\"kind\":\"folder\"}" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
-expect "$STATUS" "201" "删后重建同名文档 → 201（slug 部分唯一索引生效）"
+expect "$STATUS" "201" "删后重建同名根文件夹 → 201（slug 部分唯一索引生效）"
+NEW_ROOT="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$NEW_ROOT\",\"title\":\"冒烟中间层\",\"kind\":\"folder\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "同名中间层也能重建 → 201（三元组换了父但同样在测索引）"
+
+say "目录树：建 / 移 / 改名"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"目录树根\",\"kind\":\"folder\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "建文件夹 → 201"
+TREE_FOLDER="$(field "$body" documentId)"
+expect "$(field "$body" versionNo)" "0" "文件夹没有版本（versionNo=0）"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$TREE_FOLDER\",\"title\":\"目录树子层\",\"kind\":\"folder\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "文件夹下建子文件夹（多层）→ 201"
+TREE_SUB="$(field "$body" documentId)"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$TREE_SUB\",\"title\":\"目录树叶子\",\"content\":\"# 正文\\n\\n内容。\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "201" "文件夹下建文档 → 201"
+TREE_DOC="$(field "$body" documentId)"
+
+# 列表要带 kind、标题取 documents.title、同级文件夹排在文档之前
+body="$(api GET "/api/spaces/$SPACE_ID/documents" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "拉目录树 → 200"
+# ⚠️ 数据走 **argv** 而不是 stdin：`python - <<'EOF'` 把 stdin 占给了脚本本身，
+#    再管道喂数据会拿到空串。`field()` 用的是同一条路子。
+"$PY" -c '
+import sys, json
+docs = json.loads(sys.argv[1])
+by_id = {d["id"]: d for d in docs}
+folder, sub, doc = sys.argv[2], sys.argv[3], sys.argv[4]
+assert by_id[folder]["kind"] == "folder", "文件夹的 kind 不是 folder"
+assert by_id[doc]["kind"] == "doc", "文档的 kind 不是 doc"
+assert by_id[folder]["title"] == "目录树根", "标题没有取 documents.title"
+assert by_id[doc]["parentId"] == sub, "parentId 不对"
+assert by_id[doc]["versionNo"] == 1, "文档的 versionNo 不是 1"
+siblings = [d["kind"] for d in docs if d["parentId"] == folder]
+assert siblings == sorted(siblings, key=lambda k: 0 if k == "folder" else 1), \
+    "同级里文件夹没有排在文档之前"
+print("  ✓ kind / 标题取 documents.title / 同级排序")
+' "$body" "$TREE_FOLDER" "$TREE_SUB" "$TREE_DOC"
+
+body="$(api PATCH "/api/documents/$TREE_DOC" "{\"parentId\":\"$TREE_FOLDER\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "移动文档 → 200"
+body="$(api GET "/api/documents/$TREE_DOC" "" "$TOKEN_B")"
+expect "$(field "$body" parentId)" "$TREE_FOLDER" "移动后 parentId 变了"
+
+# 重命名**不产生新版本**——标题上移之后改名是节点元数据，不是内容变更
+body="$(api PATCH "/api/documents/$TREE_DOC" '{"title":"目录树叶子（旧）"}' "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "重命名 → 200"
+body="$(api GET "/api/documents/$TREE_DOC" "" "$TOKEN_B")"
+expect "$(field "$body" title)" "目录树叶子（旧）" "重命名后标题变了"
+expect "$(field "$body" versionNo)" "1" "重命名没有产生新版本"
+
+say "目录树：非法操作必须被拒"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"parentId\":\"$TREE_DOC\",\"title\":\"非法子节点\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "400" "文档下不许建子节点 → 400"
+
+body="$(api POST "/api/documents" "{\"spaceId\":\"$SPACE_ID\",\"title\":\"非法文件夹\",\"content\":\"x\",\"kind\":\"folder\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "400" "文件夹不许带正文 → 400"
+
+body="$(api PATCH "/api/documents/$TREE_FOLDER" "{\"parentId\":\"$TREE_SUB\"}" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "400" "不能把节点移进自己的子树 → 400"
+
+body="$(api PUT "/api/documents/$TREE_FOLDER" '{"title":"x","content":"y"}' "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "400" "文件夹不能保存正文 → 400"
+
+body="$(api POST "/api/documents/$TREE_FOLDER/lock" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "400" "文件夹不能取编辑锁 → 400"
+
+say "目录树：文件夹不进检索"
+
+# 文件夹没有 revision 因而没有 tsv，拿它的完整标题搜必须一条都命中不了。
+# 中文走 stdin（argv 在 Windows git-bash 下会被转成 GBK，见本文件开头的说明）
+body="$(printf '%s' '目录树根' | curl -sS --max-time 15 -G "$BASE/api/search" \
+  --data-urlencode 'q@-' \
+  -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
+  -w $'\n%{http_code}')"
+STATUS="${body##*$'\n'}"
+body="${body%$'\n'*}"
+expect "$STATUS" "200" "按文件夹标题检索 → 200"
+expect "$(field "$body" hits)" "[]" "文件夹不进检索结果"
 
 say "登出"
 body="$(api POST /api/auth/logout "" "$TOKEN_E")"

@@ -494,7 +494,7 @@ pub async fn acquire_lock(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<LockView>> {
     let mut tx = state.db.begin().await?;
-    require(&mut *tx, user.id, id, Permission::Write).await?;
+    require_doc(&mut *tx, user.id, id, Permission::Write).await?;
 
     let holder = locking::acquire(&mut *tx, &state.config, id, user.id).await?;
     tx.commit().await?;
@@ -515,7 +515,7 @@ pub async fn heartbeat_lock(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let mut tx = state.db.begin().await?;
-    require(&mut *tx, user.id, id, Permission::Write).await?;
+    require_doc(&mut *tx, user.id, id, Permission::Write).await?;
 
     let renewed = locking::heartbeat(&mut *tx, &state.config, id, user.id).await?;
     tx.commit().await?;
@@ -529,7 +529,7 @@ pub async fn release_lock(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<serde_json::Value>> {
     let mut tx = state.db.begin().await?;
-    require(&mut *tx, user.id, id, Permission::Write).await?;
+    require_doc(&mut *tx, user.id, id, Permission::Write).await?;
 
     let released = locking::release(&mut *tx, id, user.id).await?;
     tx.commit().await?;
@@ -552,4 +552,27 @@ async fn require(
         // 完全不可见 → 与「不存在」同码，避免用响应码探测文档是否存在
         None => Err(AppError::NotFound("文档不存在或已被删除".into())),
     }
+}
+
+/// 正文类操作的前置检查：权限之外还要挡住文件夹。
+///
+/// 与 `require` 的分工：`require` 只管权限（读接口也用它），这里多一道类型闸。
+/// 保存/回滚不经过这里——它们走 `versioning::save_revision` 里那条领域层校验；
+/// 三个锁接口不落版本，所以单独挡。
+async fn require_doc(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    document_id: Uuid,
+    need: Permission,
+) -> AppResult<()> {
+    require(conn, user_id, document_id, need).await?;
+    let kind: Option<String> =
+        sqlx::query_scalar("SELECT kind FROM documents WHERE id = $1 AND deleted_at IS NULL")
+            .bind(document_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if kind.as_deref() == Some("folder") {
+        return Err(AppError::BadRequest("文件夹没有正文，不能编辑".into()));
+    }
+    Ok(())
 }

@@ -31,9 +31,10 @@ pub async fn save_revision(
     config: &Config,
     input: SaveInput,
 ) -> AppResult<(Uuid, i32)> {
-    // FOR UPDATE 锁文档行：两个并发保存不能算出同一个 version_no
-    let current: Option<(Option<Uuid>,)> = sqlx::query_as(
-        "SELECT current_revision_id
+    // FOR UPDATE 锁文档行：两个并发保存不能算出同一个 version_no。
+    // 顺手把 kind 带出来——文件夹没有正文，不能进这条路径。
+    let current: Option<(Option<Uuid>, String)> = sqlx::query_as(
+        "SELECT current_revision_id, kind
            FROM documents
           WHERE id = $1 AND deleted_at IS NULL
           FOR UPDATE",
@@ -42,9 +43,15 @@ pub async fn save_revision(
     .fetch_optional(&mut *conn)
     .await?;
 
-    let Some((current_revision_id,)) = current else {
+    let Some((current_revision_id, kind)) = current else {
         return Err(AppError::NotFound("文档不存在或已被删除".into()));
     };
+
+    // 领域层自己守这条不变量，不依赖调用方先判——`update` 与 `revert_to` 两条路径
+    // 都从这里过，将来再多一条也不会漏
+    if DocumentKind::try_from(kind.as_str()) == Ok(DocumentKind::Folder) {
+        return Err(AppError::BadRequest("文件夹没有正文，不能保存版本".into()));
+    }
 
     // 合并窗口：同一作者的连续保存改写当前版本而不是新建，
     // 否则边写边存会在版本历史里堆出一串无意义的 v2/v3/v4。
