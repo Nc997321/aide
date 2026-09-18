@@ -304,6 +304,10 @@ export const kb = {
   }): Promise<KbSpace> {
     return request<KbSpace>("POST", "/api/spaces", input);
   },
+  /** 改空间元数据。**只有 name**——key 改了会断链，可见性改动面太大，服务端也不收。 */
+  patchSpace(id: string, input: { name: string }): Promise<KbSpace> {
+    return request<KbSpace>("PATCH", `/api/spaces/${id}`, input);
+  },
   listDocuments(spaceId: string): Promise<KbDocumentSummary[]> {
     return request<KbDocumentSummary[]>("GET", `/api/spaces/${spaceId}/documents`);
   },

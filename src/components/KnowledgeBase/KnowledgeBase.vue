@@ -14,12 +14,15 @@ import KbGuide from "./KbGuide.vue";
 import KbDocumentView from "./KbDocumentView.vue";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
+import KbSpaceList from "./KbSpaceList.vue";
 import { depthOf as depthOfMap, subtreeSize } from "./docTree";
 
 const emit = defineEmits<{ close: [] }>();
 
 const k = useKnowledgeBase();
 const activeDocId = ref<string | null>(null);
+/** 空间段的「+」在父层模板里（分组标题旁），所以只能这样够到它的 startCreate */
+const spaceRef = ref<InstanceType<typeof KbSpaceList> | null>(null);
 
 // 视图分流只有一条轴：登录与否。未登录直接是 KbLogin 表单（模式由服务端
 // initialized 决定：空库 → 创建管理员，否则 → 口令登录/邀请链接），
@@ -102,14 +105,6 @@ async function onDeleteDoc(id: string): Promise<void> {
   // 只有真删掉了才把视图切走：403 / 断网时留在原地，否则用户既丢了阅读位置、
   // 文档又还在（错误提示由 k.error 显示在正文区）
   if (await k.deleteDocument(id)) activeDocId.value = null;
-}
-
-async function onCreateSpace(
-  key: string,
-  name: string,
-  visibility: "private" | "internal" | "public",
-): Promise<void> {
-  await k.createSpace({ key, name, visibility });
 }
 
 // 搜索防抖：中文输入每敲一个字都发请求既浪费又会让结果闪烁
@@ -195,18 +190,26 @@ onMounted(() => k.init());
           </div>
 
           <div class="kb-sidesec">
-            <div class="kb-sec-title">空间</div>
-            <button
-              v-for="s in k.spaces.value"
-              :key="s.id"
-              class="kb-space"
-              :class="{ on: s.id === k.activeSpaceId.value }"
-              @click="k.selectSpace(s.id)"
-            >
-              <span class="kb-space-name">{{ s.name }}</span>
-              <span class="kb-space-role">{{ s.role ?? "—" }}</span>
-            </button>
-            <p v-if="k.spaces.value.length === 0" class="kb-none">还没有可见的空间</p>
+            <div class="kb-sec-title kb-sec-title-row">
+              <span>空间</span>
+              <!-- 创建本该在这里：埋进成员页之后，建空间得先想到去一个管理员才看得到的入口 -->
+              <button class="kb-iconbtn" v-tooltip="'新建空间'" @click="spaceRef?.startCreate()">
+                <Icon name="plus" :size="11" />
+              </button>
+            </div>
+            <KbSpaceList
+              ref="spaceRef"
+              :spaces="k.spaces.value"
+              :active-id="k.activeSpaceId.value"
+              :busy="k.loading.value"
+              @select="(id) => void k.selectSpace(id)"
+              @create="
+                (key, name, vis) => {
+                  void k.createSpace({ key, name, visibility: vis });
+                }
+              "
+              @rename="(id, name) => void k.renameSpace(id, name)"
+            />
           </div>
 
           <div class="kb-sidesec grow">
@@ -250,7 +253,6 @@ onMounted(() => k.init());
             :error="null"
             :current-user-id="k.user.value.id"
             :last-invite="k.lastInvite.value"
-            :last-created-space="k.lastCreatedSpace.value"
             @invite="
               (u, n, a, sid, role) => {
                 void k.invite({ username: u, displayName: n, isAdmin: a, spaceId: sid, spaceRole: role });
@@ -259,11 +261,6 @@ onMounted(() => k.init());
             @revoke="
               (id) => {
                 void k.revokeUser(id);
-              }
-            "
-            @create-space="
-              (key, name, vis) => {
-                void onCreateSpace(key, name, vis);
               }
             "
             @refresh="k.loadUsers()"
@@ -373,7 +370,12 @@ onMounted(() => k.init());
   color: var(--aide-text-muted);
   padding: 0 6px 6px;
 }
-.kb-space,
+/* 分组标题带操作按钮时（空间/文档的 +）：标题左、按钮右 */
+.kb-sec-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
 .kb-docitem {
   display: block;
   width: 100%;
@@ -389,15 +391,11 @@ onMounted(() => k.init());
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.kb-space:hover,
 .kb-docitem:hover { background: var(--aide-bg-deep); }
-.kb-space.on,
 .kb-docitem.on {
   background: color-mix(in srgb, var(--aide-accent) 16%, transparent);
   color: var(--aide-text-primary);
 }
-.kb-space { display: flex; justify-content: space-between; gap: 6px; }
-.kb-space-role { font-size: 10px; opacity: 0.6; }
 
 .kb-none {
   margin: 4px 6px;

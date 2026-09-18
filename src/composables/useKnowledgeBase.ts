@@ -42,8 +42,6 @@ export function useKnowledgeBase() {
   const lastInvite = ref<KbInvite | null>(null);
   const spaces = ref<KbSpace[]>([]);
   const activeSpaceId = ref<string | null>(null);
-  /** 最近一次创建成功的空间。KbMembers 的表单靠它感知"可以清空了"（与 lastInvite 同模式）。 */
-  const lastCreatedSpace = ref<KbSpace | null>(null);
   const documents = ref<KbDocumentSummary[]>([]);
   const activeDoc = ref<KbDocument | null>(null);
   const loading = ref(false);
@@ -283,7 +281,6 @@ export function useKnowledgeBase() {
     error.value = null;
     try {
       const s = await kb.createSpace(input);
-      lastCreatedSpace.value = s;
       activeSpaceId.value = s.id;
       await loadSpaces();
       return true;
@@ -291,6 +288,19 @@ export function useKnowledgeBase() {
       fail(e, "创建空间失败");
       return false;
     }
+  }
+
+  /** 重命名空间。服务端只收 name 字段——key 改了会断链，可见性改动面太大。 */
+  async function renameSpace(id: string, name: string): Promise<boolean> {
+    error.value = null;
+    try {
+      await kb.patchSpace(id, { name });
+    } catch (e) {
+      fail(e, "重命名失败");
+      return false;
+    }
+    await loadSpaces();
+    return true;
   }
 
   async function loadDocuments(spaceId: string): Promise<void> {
@@ -376,7 +386,6 @@ export function useKnowledgeBase() {
     lastInvite,
     spaces,
     activeSpaceId,
-    lastCreatedSpace,
     documents,
     activeDoc,
     loading,
@@ -395,6 +404,7 @@ export function useKnowledgeBase() {
     loadSpaces,
     selectSpace,
     createSpace,
+    renameSpace,
     loadDocuments,
     openDocument,
     deleteDocument,

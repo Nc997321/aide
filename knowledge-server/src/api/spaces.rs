@@ -14,7 +14,7 @@ use super::AppState;
 use super::auth::is_unique_violation;
 use crate::domain::permission;
 use crate::error::{AppError, AppResult};
-use crate::types::{CurrentUser, DocumentKind, Role, Visibility};
+use crate::types::{CurrentUser, DocumentKind, Permission, Role, Visibility};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -223,6 +223,67 @@ pub async fn documents(
             )
             .collect(),
     ))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PatchSpaceBody {
+    pub name: String,
+}
+
+/// 改空间元数据。**只开放 name**，另外两个字段各自有理由不放在这儿：
+/// `key` 是对外标识（邀请链接的定位、将来的 URL 都用它），改了会断链；
+/// `visibility` 的改动面比它看起来大得多（改 public = 全实例可读，
+/// 改 private = 非成员立刻看不见），不该顺手搭在一个重命名入口上。
+pub async fn patch(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(space_id): Path<Uuid>,
+    Json(body): Json<PatchSpaceBody>,
+) -> AppResult<Json<SpaceView>> {
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err(AppError::BadRequest("空间名称不能为空".into()));
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    // 判**空间内**的角色，不是全局 is_admin——空间是权限边界，改它的名字该由
+    // 这个空间的管理者决定，而不是任何一个全局管理员。用 base_permission()
+    // 而不是 matches!(Owner | Admin)：角色到权限的映射只在 types.rs 有一份。
+    let role = permission::space_role(&mut *tx, user.id, space_id).await?;
+    let allowed = role
+        .map(|r| r.base_permission().at_least(Permission::Admin))
+        .unwrap_or(false);
+    if !allowed {
+        return Err(AppError::Forbidden);
+    }
+
+    let updated: Option<(String, String, Option<String>, String)> = sqlx::query_as(
+        r#"UPDATE spaces SET name = $2, updated_at = now()
+            WHERE id = $1
+        RETURNING key, name, description, visibility"#,
+    )
+    .bind(space_id)
+    .bind(name)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((key, name, description, visibility)) = updated else {
+        return Err(AppError::NotFound("空间不存在".into()));
+    };
+
+    tx.commit().await?;
+
+    Ok(Json(SpaceView {
+        id: space_id,
+        key,
+        name,
+        description,
+        visibility,
+        // 上面刚确认过调用者在这个空间里至少是 admin
+        role,
+    }))
 }
 
 fn validate_key(key: &str) -> AppResult<()> {

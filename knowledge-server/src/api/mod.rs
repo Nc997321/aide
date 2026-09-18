@@ -10,7 +10,7 @@ use axum::Router;
 use axum::Json;
 use axum::extract::{DefaultBodyLimit, State};
 use axum::http::{HeaderValue, Method, header};
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use serde_json::json;
 use sqlx::PgPool;
 use tower_http::cors::{AllowOrigin, CorsLayer};
@@ -128,6 +128,7 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
         .route("/api/users/{id}/revoke", post(auth::revoke_user))
         // 空间
         .route("/api/spaces", get(spaces::list).post(spaces::create))
+        .route("/api/spaces/{id}", patch(spaces::patch))
         .route("/api/spaces/{id}/documents", get(spaces::documents))
         // 文档
         .route("/api/documents", post(documents::create))
