@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::error::{AppError, AppResult};
 use crate::port::Tokenizer;
+use crate::types::DocumentKind;
 
 pub struct SaveInput {
     pub document_id: Uuid,
@@ -129,41 +130,61 @@ pub async fn save_revision(
 pub struct CreateInput {
     pub space_id: Uuid,
     pub parent_id: Option<Uuid>,
+    pub kind: DocumentKind,
     pub slug: String,
     pub title: String,
     pub content: String,
     pub author_id: Uuid,
 }
 
-/// 新建文档。
+/// 新建节点。返回 `(document_id, revision_id, version_no)`。
 ///
-/// ⚠️ documents 与 revisions 互为外键（documents.current_revision_id → revisions.id，
-/// revisions.document_id → documents.id）构成循环，所以必须三步走：
-/// 先插 document 留空指针 → 插首个 revision → 回填指针。三步在同一事务内。
+/// 文件夹**没有** revision，此时 `revision_id` 为 `Uuid::nil()`、`version_no` 为 0，
+/// 调用方据此判断「这次没有产生版本」。不用 `Option` 包一层：那会让 `SaveResult`
+/// 的 `revision_id: Uuid` 跟着变可空，而那个字段在真实文档场景下永远是有的——
+/// 为一条分支污染整个 DTO 不划算。
 ///
 /// ⚠️ 这里维持了一条数据库表达不了的不变量：**文件夹没有 current_revision_id，
-/// 文档必须有**。加不上 CHECK 约束是因为上面这个三步舞本身（第一步的指针必然是
+/// 文档必须有**。加不上 CHECK 约束是因为下面这个三步舞本身（第一步的指针必然是
 /// NULL），而 PostgreSQL 的 CHECK 不支持 DEFERRABLE。详见 006 迁移的注释。
-pub async fn create_document(
+pub async fn create_node(
     conn: &mut PgConnection,
     tokenizer: &dyn Tokenizer,
     input: CreateInput,
-) -> AppResult<(Uuid, Uuid)> {
-    // title 与 revisions.title 同时写：上移之后 documents.title 是当前标题的
-    // 唯一真相，revisions.title 只是这一次写入的快照
+) -> AppResult<(Uuid, Uuid, i32)> {
+    let doc_id = insert_node(conn, &input).await?;
+    if input.kind.is_folder() {
+        return Ok((doc_id, Uuid::nil(), 0));
+    }
+    let rev_id = insert_first_revision(conn, tokenizer, doc_id, &input).await?;
+    Ok((doc_id, rev_id, 1))
+}
+
+/// 插节点行。title 与 kind 在这里落库——标题上移之后它不再只存在于 revisions。
+async fn insert_node(conn: &mut PgConnection, input: &CreateInput) -> AppResult<Uuid> {
     let (doc_id,): (Uuid,) = sqlx::query_as(
-        r#"INSERT INTO documents (space_id, parent_id, slug, title, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $5, $5)
+        r#"INSERT INTO documents (space_id, parent_id, kind, slug, title, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $6, $6)
            RETURNING id"#,
     )
-    .bind(input.space_id) // $1
-    .bind(input.parent_id) // $2
-    .bind(&input.slug) // $3
-    .bind(&input.title) // $4
-    .bind(input.author_id) // $5
+    .bind(input.space_id)
+    .bind(input.parent_id)
+    .bind(input.kind.as_str())
+    .bind(&input.slug)
+    .bind(&input.title)
+    .bind(input.author_id)
     .fetch_one(&mut *conn)
     .await?;
+    Ok(doc_id)
+}
 
+/// 首个版本 + 回填指针。文件夹不走这里（它没有版本历史）。
+async fn insert_first_revision(
+    conn: &mut PgConnection,
+    tokenizer: &dyn Tokenizer,
+    doc_id: Uuid,
+    input: &CreateInput,
+) -> AppResult<Uuid> {
     let (rev_id,): (Uuid,) = sqlx::query_as(
         r#"INSERT INTO revisions
              (document_id, version_no, title, content,
@@ -186,7 +207,7 @@ pub async fn create_document(
         .execute(&mut *conn)
         .await?;
 
-    Ok((doc_id, rev_id))
+    Ok(rev_id)
 }
 
 /// 回滚 = 把旧版本内容**复制成一个新版本**，而不是把指针往回指。

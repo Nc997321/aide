@@ -8,4 +8,5 @@ pub mod ingest;
 pub mod locking;
 pub mod permission;
 pub mod search;
+pub mod tree;
 pub mod versioning;

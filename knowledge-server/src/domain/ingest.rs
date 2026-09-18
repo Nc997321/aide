@@ -20,6 +20,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
+use crate::types::DocumentKind;
 // 依赖的是**端口**而不是注册表本体：ingest 不知道有几个后端、
 // 不知道注册表存在，更不知道背后是 docx-to-md 还是别的什么。
 use crate::port::{
@@ -124,12 +125,14 @@ pub async fn ingest_parsed(
 
     let slug = unique_slug(&mut *conn, input.space_id, input.parent_id, &parsed.title).await?;
 
-    let (document_id, revision_id) = versioning::create_document(
+    // 导入产出的永远是文档，不可能是文件夹（文件夹没有正文可导入）
+    let (document_id, revision_id, _) = versioning::create_node(
         &mut *conn,
         tokenizer,
         versioning::CreateInput {
             space_id: input.space_id,
             parent_id: input.parent_id,
+            kind: DocumentKind::Doc,
             slug,
             title: parsed.title.clone(),
             content: parsed.markdown,

@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::AppState;
-use crate::domain::{deletion, locking, permission, versioning};
+use crate::domain::{deletion, locking, permission, tree, versioning};
 use crate::error::{AppError, AppResult};
 use crate::types::{CurrentUser, DocumentKind, DocumentStatus, Permission, RevisionSummary};
 
@@ -23,6 +23,8 @@ pub struct CreateDocumentBody {
     pub parent_id: Option<Uuid>,
     pub title: String,
     pub content: Option<String>,
+    /// 缺省 = 普通文档。文件夹是纯容器：不建 revision、不接受 content
+    pub kind: Option<DocumentKind>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -85,27 +87,19 @@ pub async fn create(
     user: CurrentUser,
     Json(body): Json<CreateDocumentBody>,
 ) -> AppResult<(StatusCode, Json<SaveResult>)> {
+    let kind = body.kind.unwrap_or(DocumentKind::Doc);
     let title = body.title.trim();
-    if title.is_empty() {
-        return Err(AppError::BadRequest("标题不能为空".into()));
-    }
+    validate_new_node(title, kind, body.content.as_deref())?;
 
     let mut tx = state.db.begin().await?;
 
-    // 有父文档就继承父文档的权限，否则看 space 角色。
-    // 继承父级而不是只查 space，是因为子文档可能被单独授权过。
-    let allowed = match body.parent_id {
-        Some(parent_id) => permission::effective_permission(&mut *tx, user.id, parent_id)
-            .await?
-            .map(|p| p.at_least(Permission::Write))
-            .unwrap_or(false),
-        None => permission::space_role(&mut *tx, user.id, body.space_id)
-            .await?
-            .map(|r| r.base_permission().at_least(Permission::Write))
-            .unwrap_or(false),
-    };
+    if let Some(parent_id) = body.parent_id {
+        tree::ensure_parent_is_folder(&mut tx, body.space_id, parent_id).await?;
+    }
 
-    if !allowed {
+    // 判权放在结构校验之后：结构不对（父不是文件夹）时该报 400 而不是 403——
+    // 用户要知道的是「这里不能放东西」，不是「你没权限」
+    if !permission::may_write_under(&mut *tx, user.id, body.space_id, body.parent_id).await? {
         return Err(AppError::Forbidden);
     }
 
@@ -113,12 +107,13 @@ pub async fn create(
     let slug = crate::domain::ingest::unique_slug(&mut *tx, body.space_id, body.parent_id, title)
         .await?;
 
-    let (document_id, revision_id) = versioning::create_document(
+    let (document_id, revision_id, version_no) = versioning::create_node(
         &mut *tx,
         state.tokenizer.as_ref(),
         versioning::CreateInput {
             space_id: body.space_id,
             parent_id: body.parent_id,
+            kind,
             slug,
             title: title.to_string(),
             content: body.content.unwrap_or_default(),
@@ -134,10 +129,23 @@ pub async fn create(
         Json(SaveResult {
             document_id,
             revision_id,
-            version_no: 1,
+            version_no,
             merged: false,
         }),
     ))
+}
+
+/// 新建节点的入参校验。抽出来是因为它同时服务文档与文件夹两条路径，
+/// 而两者的差别（文件夹不许带正文）恰恰最容易在复制粘贴里丢。
+fn validate_new_node(title: &str, kind: DocumentKind, content: Option<&str>) -> AppResult<()> {
+    if title.is_empty() {
+        return Err(AppError::BadRequest("标题不能为空".into()));
+    }
+    // 不接受静默忽略：传了正文却建出没有正文的文件夹，是用户没被告知的丢失
+    if kind.is_folder() && content.is_some_and(|c| !c.trim().is_empty()) {
+        return Err(AppError::BadRequest("文件夹没有正文".into()));
+    }
+    Ok(())
 }
 
 pub async fn get(

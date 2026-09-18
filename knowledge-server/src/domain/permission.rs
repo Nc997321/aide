@@ -128,3 +128,24 @@ pub async fn space_role(
 
     Ok(role.as_deref().and_then(|r| Role::try_from(r).ok()))
 }
+
+/// 「在某个位置建/放节点」的写权限：有父判父，无父判 space 角色。
+///
+/// 建新节点（`api::documents::create`）与移动已有节点（`api::documents::patch`）
+/// 共用这一条判据——两处各写一遍迟早漂移，而这类漂移的表现是「能建但不能移」，
+/// 或者更糟的反向：**只判源节点不判目标位置**，于是能把自己的文档搬进一个
+/// 自己没有写权限的文件夹。
+pub async fn may_write_under(
+    conn: &mut PgConnection,
+    user_id: Uuid,
+    space_id: Uuid,
+    parent_id: Option<Uuid>,
+) -> AppResult<bool> {
+    let perm = match parent_id {
+        Some(pid) => effective_permission(conn, user_id, pid).await?,
+        None => space_role(conn, user_id, space_id)
+            .await?
+            .map(Role::base_permission),
+    };
+    Ok(perm.map(|p| p.at_least(Permission::Write)).unwrap_or(false))
+}
