@@ -19,6 +19,10 @@ import {
   type KbUserRow,
 } from "@/components/KnowledgeBase/kbClient";
 import { pushKnowledgeRuntime } from "@/components/KnowledgeBase/kbRuntime";
+import { ancestorIds } from "@/components/KnowledgeBase/docTree";
+
+/** 未见过的空间 = 没折叠过任何东西 = 全展开。共享同一个空集，避免每次渲染新建对象。 */
+const NO_COLLAPSE: ReadonlySet<string> = new Set();
 
 /** 主区面板开关（模块级单例，与 useMemoryObservatory 同范式）：
  *  true 时 App.vue 用 KnowledgeBase 盖住 PaneLayout，PaneLayout v-show 保活。 */
@@ -248,6 +252,11 @@ export function useKnowledgeBase() {
       const list = await kb.listSpaces();
       if (seq !== spacesSeq) return;
       spaces.value = list;
+      // 折叠状态在这里装载（此刻才知道有哪些空间），而不是在 collapsedFor 里懒加载——
+      // 那个函数会被 computed 在渲染期调用，渲染期写状态会触发递归更新告警
+      for (const s of list) {
+        if (!(s.id in collapsed.value)) collapsed.value[s.id] = readStoredCollapsed(s.id);
+      }
       // 未选空间或原空间已不可见 → 落到第一个
       if (!activeSpaceId.value || !list.some((s) => s.id === activeSpaceId.value)) {
         activeSpaceId.value = list[0]?.id ?? null;
@@ -290,6 +299,69 @@ export function useKnowledgeBase() {
     }
   }
 
+  // ── 目录树：展开 / 折叠 ──
+  //
+  // 按空间各记一份。localStorage 是持久层，`collapsed` 是内存态（渲染读它）。
+  // 存的是**被折叠**的节点而不是展开的——默认全展开，新节点自动可见，
+  // 不需要每次加载后补写状态。
+  //
+  // ⚠️ 载入必须在 `loadSpaces` 里做（那时才知道有哪些空间），**不能**在
+  // `collapsedFor` 里懒加载：那个函数会被 computed 在渲染期调用，
+  // 渲染期写状态会触发 Vue 的递归更新告警。
+  const collapsed = ref<Record<string, Set<string>>>({});
+
+  function readStoredCollapsed(spaceId: string): Set<string> {
+    try {
+      const raw = localStorage.getItem(`aide.kb.collapsed.${spaceId}`);
+      const parsed: unknown = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return new Set();
+      return new Set(parsed.filter((x): x is string => typeof x === "string"));
+    } catch {
+      // 存的东西坏了就当没折叠过——读状态失败不能拦住整个面板
+      return new Set();
+    }
+  }
+
+  function persistCollapsed(spaceId: string): void {
+    try {
+      localStorage.setItem(
+        `aide.kb.collapsed.${spaceId}`,
+        JSON.stringify([...(collapsed.value[spaceId] ?? [])]),
+      );
+    } catch {
+      // 写不进去（配额 / 隐私模式）只影响「记住折叠状态」，不该打断交互
+    }
+  }
+
+  /** 纯读，渲染期安全。没见过的空间返回空集（= 全展开）。 */
+  function collapsedFor(spaceId: string | null): ReadonlySet<string> {
+    if (!spaceId) return NO_COLLAPSE;
+    return collapsed.value[spaceId] ?? NO_COLLAPSE;
+  }
+
+  function toggleCollapsed(spaceId: string | null, id: string): void {
+    if (!spaceId) return;
+    if (!(spaceId in collapsed.value)) collapsed.value[spaceId] = readStoredCollapsed(spaceId);
+    const set = collapsed.value[spaceId]!;
+    if (set.has(id)) set.delete(id);
+    else set.add(id);
+    persistCollapsed(spaceId);
+  }
+
+  /** 展开某个节点**自己**与它的整条祖先链（搜索跳转、在折叠的文件夹里新建时用）。 */
+  function revealNode(id: string): void {
+    const spaceId = activeSpaceId.value;
+    if (!spaceId) return;
+    if (!(spaceId in collapsed.value)) collapsed.value[spaceId] = readStoredCollapsed(spaceId);
+    const set = collapsed.value[spaceId]!;
+
+    let changed = set.delete(id);
+    for (const ancestor of ancestorIds(documents.value, id)) {
+      if (set.delete(ancestor)) changed = true;
+    }
+    if (changed) persistCollapsed(spaceId);
+  }
+
   /** 重命名空间。服务端只收 name 字段——key 改了会断链，可见性改动面太大。 */
   async function renameSpace(id: string, name: string): Promise<boolean> {
     error.value = null;
@@ -300,6 +372,61 @@ export function useKnowledgeBase() {
       return false;
     }
     await loadSpaces();
+    return true;
+  }
+
+  /** 建文件夹。`createNode` 的两个薄包装——调用点写起来更直白，语义更醒目。 */
+  async function createFolder(name: string, parentId: string | null): Promise<string | null> {
+    return createNode(name, parentId, "folder");
+  }
+
+  /** 建文档。 */
+  async function createDocument(title: string, parentId: string | null): Promise<string | null> {
+    return createNode(title, parentId, "doc");
+  }
+
+  /**
+   * 建节点。文件夹与文档走同一条载荷，只有 kind 不同。
+   * 返回新节点 id（失败返回 null，错误已进 `error`）。
+   */
+  async function createNode(
+    title: string,
+    parentId: string | null,
+    kind: "doc" | "folder",
+  ): Promise<string | null> {
+    const spaceId = activeSpaceId.value;
+    if (!spaceId) return null;
+    error.value = null;
+    try {
+      const r = await kb.createDocument({
+        spaceId,
+        title,
+        kind,
+        ...(parentId ? { parentId } : {}),
+      });
+      await loadDocuments(spaceId);
+      return r.documentId;
+    } catch (e) {
+      fail(e, kind === "folder" ? "创建文件夹失败" : "创建文档失败");
+      return null;
+    }
+  }
+
+  /** 重命名 / 移动。成功后刷新列表；改的若是当前打开的那篇，正文区的标题也要跟着变。 */
+  async function patchNode(
+    id: string,
+    input: { title?: string; parentId?: string | null },
+  ): Promise<boolean> {
+    error.value = null;
+    try {
+      await kb.patchDocument(id, input);
+    } catch (e) {
+      fail(e, "修改失败");
+      return false;
+    }
+    const spaceId = activeSpaceId.value;
+    if (spaceId) await loadDocuments(spaceId);
+    if (input.title !== undefined && activeDoc.value?.id === id) await openDocument(id);
     return true;
   }
 
@@ -406,6 +533,13 @@ export function useKnowledgeBase() {
     createSpace,
     renameSpace,
     loadDocuments,
+    createNode,
+    createFolder,
+    createDocument,
+    patchNode,
+    collapsedFor,
+    toggleCollapsed,
+    revealNode,
     openDocument,
     deleteDocument,
     search,

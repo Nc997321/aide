@@ -6,7 +6,7 @@
  *
  * 第一版不做：编辑保存、版本回滚、编辑锁、文件上传导入。
  */
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useKnowledgeBase } from "@/composables/useKnowledgeBase";
 import KbLogin from "./KbLogin.vue";
@@ -15,14 +15,16 @@ import KbDocumentView from "./KbDocumentView.vue";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
 import KbSpaceList from "./KbSpaceList.vue";
-import { depthOf as depthOfMap, subtreeSize } from "./docTree";
+import KbTree from "./KbTree.vue";
+import { subtreeSize } from "./docTree";
 
 const emit = defineEmits<{ close: [] }>();
 
 const k = useKnowledgeBase();
 const activeDocId = ref<string | null>(null);
-/** 空间段的「+」在父层模板里（分组标题旁），所以只能这样够到它的 startCreate */
+/** 两段的「+」都在父层模板里（分组标题旁），只能这样够到组件的 startCreate */
 const spaceRef = ref<InstanceType<typeof KbSpaceList> | null>(null);
+const treeRef = ref<InstanceType<typeof KbTree> | null>(null);
 
 // 视图分流只有一条轴：登录与否。未登录直接是 KbLogin 表单（模式由服务端
 // initialized 决定：空库 → 创建管理员，否则 → 口令登录/邀请链接），
@@ -50,9 +52,8 @@ watch(innerView, (v) => {
   if (v === "members" && isAdmin.value) void k.loadUsers();
 });
 
-/** 文档树的层级（沿 parentId 往上数，最多 3 层）。树的算法都在 ./docTree，
- *  与删除确认弹窗算的子树篇数共用同一份实现。 */
-const depthOf = computed<Record<string, number>>(() => depthOfMap(k.documents.value));
+/** 折叠集由父层持有：只有它知道 localStorage 与当前空间（KbTree 是受控组件）。 */
+const collapsed = computed<ReadonlySet<string>>(() => k.collapsedFor(k.activeSpaceId.value));
 
 // 正在编辑的文档 id。openDoc 切换前检查它，避免编辑中的草稿被侧栏一次点击冲掉
 // （编辑内容本身在 KbDocumentView 里，组件卸载即丢——所以要在卸载前问一句）。
@@ -72,6 +73,31 @@ async function openDoc(id: string): Promise<void> {
   await k.openDocument(id);
 }
 
+/**
+ * 搜索命中跳转：打开文档之后要**把它的祖先链展开并滚到那一行**。
+ * 少了这一步，用户在树里找不到自己刚打开的那篇——文档一多就是常态。
+ */
+async function openFromSearch(id: string): Promise<void> {
+  await openDoc(id);
+  k.revealNode(id);
+  await nextTick();
+  treeRef.value?.scrollToNode(id);
+}
+
+/** 新建节点：标题在树组件的内联输入里收集，随 emit 一起交出来。 */
+async function onCreateNode(
+  parentId: string | null,
+  kind: "doc" | "folder",
+  title: string,
+): Promise<void> {
+  const id = await k.createNode(title, parentId, kind);
+  if (!id) return;
+  // 新建文档 → 直接打开它（建完就是要写）；新建文件夹 → 什么都不做
+  if (kind === "doc") await openDoc(id);
+  // 在折叠着的文件夹里新建 → 把它展开，否则新节点看不见
+  if (parentId) k.revealNode(parentId);
+}
+
 /** 保存/回滚后刷新正文与侧栏（侧栏要反映新的 versionNo 与 updatedAt）。
  *  保存请求进行期间用户可能已切走文档——那时只刷列表，不把用户拉回来。 */
 async function refreshDoc(id: string): Promise<void> {
@@ -85,18 +111,21 @@ function onEditing(on: boolean): void {
 }
 
 /**
- * 删除（软删；服务端把子文档一并删掉）。
+ * 删除（软删；服务端把整棵子树一并删掉）。
  *
- * 确认弹窗放在**父层**而不是按钮旁边：只有这里手里有整份文档列表，「会连带删掉几篇」
- * 才算得出来（与侧栏缩进共用 ./docTree）。篇数点明是必要的——用户点的是
- * 一篇文档，实际消失的可能是一棵树。
+ * 确认弹窗放在**父层**而不是按钮旁边：只有这里手里有整份文档列表，「会连带删掉几个」
+ * 才算得出来（与侧栏渲染共用 ./docTree）。数量点明是必要的——用户点的是一个节点，
+ * 实际消失的可能是一棵树。
+ *
+ * 量词是「个项目」不是「篇子文档」：`subtreeSize` 把文件夹也数进去了，说「篇」
+ * 会让用户以为文件夹不在其中。
  *
  * 不做「已删除」的成功提示：那一行从侧栏消失、正文区回落空态，本身就是回执。
  */
 async function onDeleteDoc(id: string): Promise<void> {
   const title = k.documents.value.find((d) => d.id === id)?.title ?? id;
   const total = subtreeSize(k.documents.value, id);
-  const subs = total > 1 ? `，连同 ${total - 1} 篇子文档` : "";
+  const subs = total > 1 ? `，连同 ${total - 1} 个项目` : "";
   const ok = window.confirm(
     `删除「${title}」${subs}？\n删除后它不再出现在任何列表、检索与正文，且没有恢复入口。`,
   );
@@ -213,18 +242,40 @@ onMounted(() => k.init());
           </div>
 
           <div class="kb-sidesec grow">
-            <div class="kb-sec-title">文档</div>
-            <button
-              v-for="d in k.documents.value"
-              :key="d.id"
-              class="kb-docitem"
-              :class="{ on: d.id === activeDocId }"
-              :style="{ paddingLeft: `${8 + depthOf[d.id] * 12}px` }"
-              @click="openDoc(d.id)"
-            >
-              {{ d.title }}
-            </button>
-            <p v-if="k.documents.value.length === 0" class="kb-none">这个空间还没有文档</p>
+            <div class="kb-sec-title kb-sec-title-row">
+              <span>文档</span>
+              <button
+                class="kb-iconbtn"
+                v-tooltip="'在根目录新建文档'"
+                :disabled="!k.activeSpaceId.value"
+                @click="treeRef?.startCreate(null, 'doc')"
+              >
+                <Icon name="plus" :size="11" />
+              </button>
+            </div>
+            <KbTree
+              v-if="k.documents.value.length"
+              ref="treeRef"
+              :documents="k.documents.value"
+              :active-id="activeDocId"
+              :space-id="k.activeSpaceId.value"
+              :collapsed="collapsed"
+              :busy="k.loading.value"
+              @open="(id) => void openDoc(id)"
+              @toggle="(id) => k.toggleCollapsed(k.activeSpaceId.value, id)"
+              @create="
+                (parentId, kind, title) => {
+                  void onCreateNode(parentId, kind, title);
+                }
+              "
+              @patch="
+                (id, input) => {
+                  void k.patchNode(id, input);
+                }
+              "
+              @remove="(id) => void onDeleteDoc(id)"
+            />
+            <p v-else class="kb-none">这个空间还没有文档</p>
           </div>
 
           <div class="kb-user">
@@ -269,7 +320,7 @@ onMounted(() => k.init());
             v-else-if="k.searchResult.value || k.searching.value"
             :result="k.searchResult.value"
             :busy="k.searching.value"
-            @open="(id) => openDoc(id)"
+            @open="(id) => void openFromSearch(id)"
           />
           <KbDocumentView
             v-else-if="k.activeDoc.value"

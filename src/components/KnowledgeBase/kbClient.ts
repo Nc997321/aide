@@ -321,8 +321,20 @@ export const kb = {
     parentId?: string | null;
     title: string;
     content?: string;
+    /** 缺省 = 普通文档 */
+    kind?: "doc" | "folder";
   }): Promise<{ documentId: string; revisionId: string; versionNo: number; merged: boolean }> {
     return request("POST", "/api/documents", input);
+  },
+  /** 改节点元数据：重命名、移动。**不产生版本**（标题上移之后改名是节点元数据）。
+   *
+   *  `parentId` 是三态：**缺省 = 不动父级**；`null` = 移到根；有值 = 移到该文件夹。
+   *  服务端用 double_option 分档，所以传 `{ title }` 不会误把节点移到根。 */
+  patchDocument(
+    id: string,
+    input: { title?: string; parentId?: string | null },
+  ): Promise<{ documentId: string; revisionId: string; versionNo: number; merged: boolean }> {
+    return request("PATCH", `/api/documents/${id}`, input);
   },
   updateDocument(
     id: string,
