@@ -32,7 +32,7 @@ services:
 
   knowledge:
     # 默认钉在当前发布版本（交付时随版本更新这个标签）；客户可用 .env 的 KB_IMAGE 覆盖。
-    image: ${KB_IMAGE:-registry.example.com/aide/aide-knowledge:0.3.0}
+    image: ${KB_IMAGE:-registry.example.com/aide/aide-knowledge:0.4.0}
     restart: unless-stopped
     depends_on:
       db:

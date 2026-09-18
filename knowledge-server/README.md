@@ -101,6 +101,19 @@ curl -s http://127.0.0.1:8788/api/health
   **能不能直接退，看这次发布有没有动 `migrations/`**：没动（纯 API / 客户端修正）可以直接退；
   动了就要意识到 schema 已经前进了——迁移在服务启动时执行（`src/main.rs` 的 `db::migrate`），
   sqlx 不会自己往回走。
+
+  ⚠️ **0.4.0 → 0.3.0 退不回去**（006 带来的第一条硬约束）：006 把 `documents.title` 设成
+  `NOT NULL`，而 0.3.0 的建文档 INSERT 压根不写这一列——退回旧镜像后**新建文档会直接失败**
+  （NOT NULL 违例），而读文档不受影响，所以症状很迷惑：老文档都能打开、就是建不了新的。
+  `kind` 那列没事（有 `DEFAULT 'doc'`）。要退就得连数据库一起退——升级前的 `pg_dump` 就是为此。
+
+  升级**前**值得跑一次这条（只读，看一眼有没有会让 006 失败的孤儿行）：
+  ```bash
+  docker compose exec -T db psql -U aide -d aide_kb -t -c \
+    "SELECT count(*) FROM documents WHERE current_revision_id IS NULL"
+  ```
+  结果是 `0` 就能升；非 `0` 说明库里有打不开的孤儿行，006 的 `SET NOT NULL` 会**故意让迁移
+  整体失败**（服务起不来），先查清那些行是怎么来的。
 - 升级前顺手备份（可选，两秒）：`docker compose exec -T db pg_dump -U aide aide_kb > kb-$(date +%F).sql`
 
 **怎么确认新版真的生效**：health 端点只报 status / parsers / tokenizer，**不报版本**——判据
