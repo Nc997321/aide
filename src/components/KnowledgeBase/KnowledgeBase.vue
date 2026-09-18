@@ -244,11 +244,13 @@ onMounted(() => k.init());
           <div class="kb-sidesec grow">
             <div class="kb-sec-title kb-sec-title-row">
               <span>文档</span>
+              <!-- 二选一（新建文件夹 / 新建文档）。早先这里写死新建文档，
+                   结果是根目录根本建不出文件夹 -->
               <button
                 class="kb-iconbtn"
-                v-tooltip="'在根目录新建文档'"
+                v-tooltip="'新建'"
                 :disabled="!k.activeSpaceId.value"
-                @click="treeRef?.startCreate(null, 'doc')"
+                @click="treeRef?.openCreateMenu($event, null)"
               >
                 <Icon name="plus" :size="11" />
               </button>

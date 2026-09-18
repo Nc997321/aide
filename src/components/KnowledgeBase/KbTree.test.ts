@@ -47,6 +47,14 @@ afterEach(() => hideMenu());
 
 const menuLabels = () => menuItems.value.filter((i) => !i.separator).map((i) => i.label);
 
+/** 执行菜单里的某一项并等一次 tick——动作本身是同步的，不 tick 的话 DOM 还是旧的。 */
+async function pickMenuItem(w: ReturnType<typeof mountTree>, label: string): Promise<void> {
+  const hit = menuItems.value.find((i) => i.label === label);
+  if (!hit) throw new Error(`菜单里没有「${label}」：${menuLabels().join(" / ")}`);
+  hit.action?.();
+  await w.vm.$nextTick();
+}
+
 /** 点开某行的 ⋯，再执行菜单里那一项——走的都是真事件处理。 */
 async function useMenuItem(
   w: ReturnType<typeof mountTree>,
@@ -106,14 +114,11 @@ describe("KbTree", () => {
 });
 
 describe("KbTree 的 ⋯ 菜单", () => {
-  it("文件夹的菜单四项（含新建子文件夹）", async () => {
+  it("文件夹与文档的 ⋯ 菜单一致：都是「对这个节点」的操作（新建有自己的入口）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    expect(menuLabels()).toEqual(["新建子文件夹", "重命名", "移动到…", "删除"]);
-  });
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
 
-  it("文档的菜单少「新建子文件夹」", async () => {
-    const w = mountTree();
     await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
     expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
   });
@@ -165,19 +170,43 @@ describe("KbTree 的 ⋯ 菜单", () => {
 });
 
 describe("KbTree 的新建", () => {
-  it("＋ 开内联输入，Enter 提交并发 create（带父 id、类型、标题）", async () => {
+  it("＋ 开的是「新建文件夹 / 新建文档」二选一", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
+    expect(menuLabels()).toEqual(["新建文件夹", "新建文档"]);
+  });
+
+  it("在文件夹行点「新建文档」→ create 带该文件夹 id 与 doc 类型", async () => {
+    const w = mountTree();
+    await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
+    await pickMenuItem(w, "新建文档");
     await w.find("[data-kb-new]").setValue("新文档");
     await w.find("[data-kb-new]").trigger("keydown.enter");
     expect(w.emitted("create")?.[0]).toEqual(["f", "doc", "新文档"]);
   });
 
-  it("「新建子文件夹」发的是 folder 类型", async () => {
+  it("在文件夹行点「新建文件夹」→ create 带 folder 类型", async () => {
     const w = mountTree();
-    await useMenuItem(w, "f", "新建子文件夹");
+    await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
+    await pickMenuItem(w, "新建文件夹");
     await w.find("[data-kb-new]").setValue("新文件夹");
     await w.find("[data-kb-new]").trigger("keydown.enter");
     expect(w.emitted("create")?.[0]).toEqual(["f", "folder", "新文件夹"]);
+  });
+
+  it("★ 根目录也能建文件夹：openCreateMenu(…, null) 选文件夹 → create 的 parentId 是 null", async () => {
+    // 这条钉的是一个真实缺口：早先两个 + 都写死新建文档，「新建子文件夹」只藏在
+    // ⋯ 菜单里，于是**根目录根本建不出文件夹**——而这是知识库的核心能力。
+    const w = mountTree();
+    const btn = w.find("[data-kb-node='f'] [data-kb-add]").element;
+    (w.vm as unknown as { openCreateMenu: (e: unknown, p: string | null) => void }).openCreateMenu(
+      { currentTarget: btn } as unknown as MouseEvent,
+      null,
+    );
+    await w.vm.$nextTick();
+    await pickMenuItem(w, "新建文件夹");
+    await w.find("[data-kb-new]").setValue("顶层文件夹");
+    await w.find("[data-kb-new]").trigger("keydown.enter");
+    expect(w.emitted("create")?.[0]).toEqual([null, "folder", "顶层文件夹"]);
   });
 });

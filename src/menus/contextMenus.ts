@@ -303,25 +303,42 @@ export function workspaceMenuItems(
 // 这两组菜单用 `ContextMenu.vue`（Teleport 到 body + fixed + 视口边缘翻转），
 // 不是行内绝对定位的浮层——侧栏的段落是 `overflow: auto` 的，行内浮层会被**裁掉**。
 
-/** 知识库节点（文件夹或文档）的 ⋯ 菜单。 */
+/**
+ * 知识库节点的 ⋯ 菜单：都是**对这个节点本身**的操作。
+ *
+ * 「新建」不在这里——它有自己的入口（分组标题旁与文件夹行上的 `+`），两边各开一个
+ * 二选一菜单（见 `kbCreateItems`）。同一个动作留两个入口只会让人猜哪个才是对的。
+ */
 export function kbNodeMenuItems(
-  node: { id: string; title: string; isFolder: boolean },
+  node: { id: string; title: string },
   h: {
-    onNewFolder: (id: string) => void;
     onRename: (id: string, title: string) => void;
     onMove: (id: string) => void;
     onDelete: (id: string) => void;
   },
 ): MenuItem[] {
   return [
-    // 文档是叶子，没有「在文档下新建」这回事
-    ...(node.isFolder
-      ? [{ label: "新建子文件夹", action: () => h.onNewFolder(node.id) }]
-      : []),
     { label: "重命名", action: () => h.onRename(node.id, node.title) },
     { label: "移动到…", action: () => h.onMove(node.id) },
     sep(),
     { label: "删除", danger: true, action: () => h.onDelete(node.id) },
+  ];
+}
+
+/**
+ * 「新建」的二选一。挂两处：分组标题旁的 `+`（建在根），以及文件夹行上的 `+`
+ * （建在该文件夹里）。
+ *
+ * ⚠️ 之前把「新建文件夹」锁在 ⋯ 菜单里、两个 `+` 写死新建文档，结果是**根目录
+ * 根本建不出文件夹**——而这正是知识库这次要提供的能力。
+ */
+export function kbCreateItems(h: {
+  onNewFolder: () => void;
+  onNewDoc: () => void;
+}): MenuItem[] {
+  return [
+    { label: "新建文件夹", action: h.onNewFolder },
+    { label: "新建文档", action: h.onNewDoc },
   ];
 }
 

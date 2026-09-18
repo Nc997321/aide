@@ -45,6 +45,7 @@ const clipped = (child: unknown, probe: string) =>
   h("div", { class: "sec grow", "data-probe": probe }, [child as never]);
 
 const spaceRef = ref<InstanceType<typeof KbSpaceList> | null>(null);
+const treeRef = ref<InstanceType<typeof KbTree> | null>(null);
 
 const app = createApp({
   setup() {
@@ -64,7 +65,7 @@ const app = createApp({
         h("div", { class: "row" }, [
           pane("① 全展开", tree({ collapsed: collapsedAll.value, activeId: "d1" }), "p1"),
           pane("② 折叠由父层传入（产品档案已折叠）", tree({ collapsed: collapsedOne.value }), "p2"),
-          pane("③ 就地重命名", tree({ collapsed: collapsedAll.value }), "p3"),
+          pane("③ 就地重命名 / 新建（＋ 的二选一菜单）", tree({ collapsed: collapsedAll.value, ref: treeRef as VNodeRef }), "p3"),
           pane("④ 就地新建", tree({ collapsed: collapsedAll.value }), "p4"),
         ]),
 
@@ -133,9 +134,8 @@ const steps: Array<() => void> = [
   () => rowBtn("p4", "f2", "data-kb-add")?.click(),
   // ⑥ 末行的 ⋯ —— 菜单开在 120px 容器之外，证明它不被裁剪
   () => rowBtn("p6", "d4", "data-kb-more")?.click(),
-  // 空间的新建对话框（原先那个挤在侧栏一小条里的浮层）。它是模态，会盖住整页，
-  // 所以放最后——想看菜单那版就把这两步注掉
-  () => spaceRef.value?.startCreate(),
+  // 「＋」的二选一：点文件夹行上的 +，菜单应是「新建文件夹 / 新建文档」
+  () => rowBtn("p3", "f2", "data-kb-add")?.click(),
 ];
 
 let i = 0;

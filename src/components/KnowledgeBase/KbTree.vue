@@ -13,7 +13,7 @@
 import { computed, ref } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useContextMenu } from "@/composables/useContextMenu";
-import { kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
+import { kbCreateItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
 import { buildTree, flatten, type KbTreeNode } from "./docTree";
 import type { KbDocumentSummary } from "./kbClient";
 
@@ -96,14 +96,32 @@ function openRowMenu(e: MouseEvent, row: { doc: KbDocumentSummary; isFolder: boo
     x,
     y,
     kbNodeMenuItems(
-      { id: row.doc.id, title: row.doc.title, isFolder: row.isFolder },
+      { id: row.doc.id, title: row.doc.title },
       {
-        onNewFolder: (id) => startCreate(id, "folder"),
         onRename: (id, title) => startRename(id, title),
         onMove: (id) => openMover(id, x, y),
         onDelete: (id) => emit("remove", id),
       },
     ),
+  );
+}
+
+/**
+ * 「新建」的二选一菜单。挂在两处：分组标题旁的 `+`（`parentId = null`，建在根）
+ * 与文件夹行上的 `+`（建在该文件夹里）。
+ *
+ * 父层（KnowledgeBase.vue）通过 expose 调它时得把点击事件传进来——菜单要贴着
+ * 那个按钮开。
+ */
+function openCreateMenu(e: MouseEvent, parentId: string | null): void {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  showMenu(
+    r.right,
+    r.bottom + 2,
+    kbCreateItems({
+      onNewFolder: () => startCreate(parentId, "folder"),
+      onNewDoc: () => startCreate(parentId, "doc"),
+    }),
   );
 }
 
@@ -165,8 +183,8 @@ function scrollToNode(id: string): void {
     ?.scrollIntoView({ block: "nearest" });
 }
 
-// 分组标题旁那个 + 在父层模板里，只能这样够到
-defineExpose({ startCreate, scrollToNode });
+// 「新建」的两个 + 里，分组标题旁那个在父层模板里，只能靠 expose 够到
+defineExpose({ openCreateMenu, scrollToNode });
 
 // 输入框挂载即聚焦
 const vFocus = {
@@ -222,8 +240,8 @@ const vFocus = {
           v-if="row.isFolder"
           data-kb-add
           class="kb-rowbtn"
-          title="在这个文件夹里新建文档"
-          @click.stop="startCreate(row.doc.id, 'doc')"
+          title="新建"
+          @click.stop="openCreateMenu($event, row.doc.id)"
         >
           <Icon name="plus" :size="11" />
         </button>
