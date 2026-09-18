@@ -43,7 +43,9 @@
 **规则**：任何"某个客户端做了操作"要反映到其他客户端（或驱动本端状态机），必须由 sidecar 广播事件。新增一个会改变对话状态的命令时，问一句"别的客户端怎么知道？"——答不上来就是漏了广播。
 （三类已实锤事故：权限 resolve 不广播 / send 不广播用户消息 / 标题早于 `session_init` 写到临时 id。）
 
-- **会话元数据落盘时机**：任何"按会话 id 写元数据"（名字/模型/档位/provider 绑定）都必须等 `session_init` 定名（`finalizeSession` → `onSessionCreated`）。早到的值暂存、定名时随注册表搬迁（pendingTitles / `identity.migrateBinding` / `useSessionWorkspaces().migrate` 同一范式）；判据用 `finalizedSids`，**不要用「本端是否 pending」判断**。
+- **会话元数据落盘时机**：任何"按会话 id 写元数据"（名字/模型/档位/provider 绑定/工作区归属）都必须等 `session_init` 定名（`finalizeSession` → `onSessionCreated`）。早到的值暂存、定名时随注册表搬迁（pendingTitles / `identity.migrateBinding` / `useSessionWorkspaces().migrate` 同一范式）；判据用 `finalizedSids`，**不要用「本端是否 pending」判断**。
+- **会话工作区归属是会话自持属性**：`wsPath`/`wsKey` 落 `~/.aide/sessions/<id>.json`，唯一读写入口 `set_session_workspace` / `session_workspace`（与身份字段分开但共用同一个加锁的合并写）。send 的 cwd 解析链只有三级：客户端 `workspaceRoot` → 档案 `wsPath`（须 `exists`）→ **活动工作区 + `tracing::warn`**；最后一级就是"跑错项目"的来源，**不许无声**。前端 `useSessionWorkspaces` 只是**可回种的缓存**（缺条目由 `ensureWorkspaceKnown` 从档案补，且绝不覆盖已有值），新增客户端 / 新功能一律走这条链，别再造第三份只读内存的来源。
+  （已实锤事故 2026-09-18：归属只在内存里，关 tab / WebView 重载即失 → 静默回落活动工作区 → 进程 cwd、记忆目录、CLAUDE.md、转录落点全跑错项目。）
 - **用户气泡单一渲染来源**：三端都只认 sidecar 广播的 `user_message`，不本地渲染。已知代价（本地发送多一个 RTT 才出气泡）已接受，**禁止加"超时兜底本地渲染"**（jumpQueue 排队消息会误触发）。插队消息在 promote 时广播。
 - **事件到远程客户端全量转发无过滤**（`relay_client.rs` subscribe 即发）；白名单（REGISTRY）只管入站 invoke。
 
