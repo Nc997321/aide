@@ -114,6 +114,8 @@ export interface KbSpace {
 export interface KbDocumentSummary {
   id: string;
   parentId: string | null;
+  /** "doc" | "folder"。老服务端不带这个字段，消费方按 doc 兜底。 */
+  kind?: "doc" | "folder";
   slug: string;
   title: string;
   versionNo: number;
