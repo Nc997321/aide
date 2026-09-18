@@ -14,7 +14,7 @@ use super::AppState;
 use super::auth::is_unique_violation;
 use crate::domain::permission;
 use crate::error::{AppError, AppResult};
-use crate::types::{CurrentUser, Role, Visibility};
+use crate::types::{CurrentUser, DocumentKind, Role, Visibility};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -42,6 +42,8 @@ pub struct CreateSpaceBody {
 pub struct DocumentSummary {
     pub id: Uuid,
     pub parent_id: Option<Uuid>,
+    /// doc 有正文与版本历史，folder 是纯容器。前端据此决定图标与「点击是否开正文」
+    pub kind: DocumentKind,
     pub slug: String,
     pub title: String,
     pub version_no: i32,
@@ -175,37 +177,48 @@ pub async fn documents(
         return Ok(Json(Vec::new()));
     }
 
-    let rows: Vec<(Uuid, Option<Uuid>, String, String, i32, String, DateTime<Utc>)> = sqlx::query_as(
-        r#"SELECT d.id, d.parent_id, d.slug,
-                  COALESCE(r.title, '(无版本)') AS title,
-                  COALESCE(r.version_no, 0)     AS version_no,
-                  d.status,
-                  d.updated_at
-             FROM documents d
-             LEFT JOIN revisions r ON r.id = d.current_revision_id
-            WHERE d.space_id = $1
-              AND d.deleted_at IS NULL
-              AND d.id = ANY($2::uuid[])
-            ORDER BY d.parent_id NULLS FIRST, r.title"#,
-    )
-    .bind(space_id)
-    .bind(&readable)
-    .fetch_all(&mut *tx)
-    .await?;
+    // title 取 d.title（标题已从 revisions 上移到节点本身）；version_no 仍需
+    // LEFT JOIN revisions，文件夹没有 revision → COALESCE 成 0。
+    //
+    // ⚠️ ORDER BY 只提供**稳定**顺序，真正的节点顺序由前端组装树时决定（同一条规则
+    // 写两遍：文件夹优先、名称升序）。让 SQL 与前端一致的意义是不会出现「SQL 排了
+    // 一种、前端排了另一种」的错位。
+    let rows: Vec<(Uuid, Option<Uuid>, String, String, String, i32, String, DateTime<Utc>)> =
+        sqlx::query_as(
+            r#"SELECT d.id, d.parent_id, d.kind, d.slug, d.title,
+                      COALESCE(r.version_no, 0) AS version_no,
+                      d.status,
+                      d.updated_at
+                 FROM documents d
+                 LEFT JOIN revisions r ON r.id = d.current_revision_id
+                WHERE d.space_id = $1
+                  AND d.deleted_at IS NULL
+                  AND d.id = ANY($2::uuid[])
+                ORDER BY (d.kind = 'folder') DESC, d.title, d.id"#,
+        )
+        .bind(space_id)
+        .bind(&readable)
+        .fetch_all(&mut *tx)
+        .await?;
 
     tx.commit().await?;
 
     Ok(Json(
         rows.into_iter()
             .map(
-                |(id, parent_id, slug, title, version_no, status, updated_at)| DocumentSummary {
-                    id,
-                    parent_id,
-                    slug,
-                    title,
-                    version_no,
-                    status,
-                    updated_at,
+                |(id, parent_id, kind, slug, title, version_no, status, updated_at)| {
+                    DocumentSummary {
+                        id,
+                        parent_id,
+                        // DB 里是 text + CHECK，理论上只可能两个合法值之一；
+                        // 万一出现意外值，退化成 doc 而不是让整个请求 500
+                        kind: DocumentKind::try_from(kind.as_str()).unwrap_or(DocumentKind::Doc),
+                        slug,
+                        title,
+                        version_no,
+                        status,
+                        updated_at,
+                    }
                 },
             )
             .collect(),

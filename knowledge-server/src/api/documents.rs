@@ -14,7 +14,7 @@ use uuid::Uuid;
 use super::AppState;
 use crate::domain::{deletion, locking, permission, versioning};
 use crate::error::{AppError, AppResult};
-use crate::types::{CurrentUser, DocumentStatus, Permission, RevisionSummary};
+use crate::types::{CurrentUser, DocumentKind, DocumentStatus, Permission, RevisionSummary};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +45,7 @@ pub struct DocumentDetail {
     pub id: Uuid,
     pub space_id: Uuid,
     pub parent_id: Option<Uuid>,
+    pub kind: DocumentKind,
     pub slug: String,
     pub title: String,
     pub content: String,
@@ -147,6 +148,7 @@ pub async fn get(
     let mut tx = state.db.begin().await?;
     require(&mut tx, user.id, id, Permission::Read).await?;
 
+    // title 取 d.title（标题已从 revisions 上移到节点本身），正文仍来自当前版本
     let row: Option<(
         Uuid,
         Uuid,
@@ -154,11 +156,12 @@ pub async fn get(
         String,
         String,
         String,
+        String,
         i32,
         String,
     )> = sqlx::query_as(
-        r#"SELECT d.id, d.space_id, d.parent_id, d.slug,
-                  r.title, r.content, r.version_no, d.status
+        r#"SELECT d.id, d.space_id, d.parent_id, d.kind, d.slug,
+                  d.title, r.content, r.version_no, d.status
              FROM documents d
              JOIN revisions r ON r.id = d.current_revision_id
             WHERE d.id = $1"#,
@@ -167,7 +170,7 @@ pub async fn get(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some((id, space_id, parent_id, slug, title, content, version_no, status)) = row else {
+    let Some((id, space_id, parent_id, kind, slug, title, content, version_no, status)) = row else {
         return Err(AppError::NotFound("文档没有可读取的版本".into()));
     };
 
@@ -175,6 +178,7 @@ pub async fn get(
         id,
         space_id,
         parent_id,
+        kind: DocumentKind::try_from(kind.as_str()).unwrap_or(DocumentKind::Doc),
         slug,
         title,
         content,

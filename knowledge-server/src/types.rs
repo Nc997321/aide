@@ -175,3 +175,63 @@ pub struct RevisionSummary {
     pub change_note: Option<String>,
     pub created_at: DateTime<Utc>,
 }
+
+/// 节点类型。`doc` 有正文与版本历史，`folder` 是纯容器。
+///
+/// ⚠️ 「文件夹没有 current_revision_id、文档必须有」这条不变量**不是数据库约束**，
+/// 原因见 migrations/006_documents_tree.sql 的注释（CHECK 不支持 DEFERRABLE，而
+/// documents/revisions 的循环外键要求三步写入）。它由 domain/versioning.rs 维持。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentKind {
+    Doc,
+    Folder,
+}
+
+impl DocumentKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            DocumentKind::Doc => "doc",
+            DocumentKind::Folder => "folder",
+        }
+    }
+
+    pub fn is_folder(self) -> bool {
+        matches!(self, DocumentKind::Folder)
+    }
+}
+
+impl TryFrom<&str> for DocumentKind {
+    type Error = ();
+    fn try_from(s: &str) -> Result<Self, ()> {
+        match s {
+            "doc" => Ok(DocumentKind::Doc),
+            "folder" => Ok(DocumentKind::Folder),
+            _ => Err(()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DocumentKind;
+
+    #[test]
+    fn document_kind_round_trips() {
+        for k in [DocumentKind::Doc, DocumentKind::Folder] {
+            assert_eq!(DocumentKind::try_from(k.as_str()), Ok(k));
+        }
+    }
+
+    #[test]
+    fn unknown_kind_is_rejected() {
+        assert!(DocumentKind::try_from("chapter").is_err());
+        assert!(DocumentKind::try_from("").is_err());
+    }
+
+    #[test]
+    fn only_folder_is_folder() {
+        assert!(DocumentKind::Folder.is_folder());
+        assert!(!DocumentKind::Doc.is_folder());
+    }
+}

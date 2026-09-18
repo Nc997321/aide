@@ -72,9 +72,12 @@ pub async fn save_revision(
 
             if let Some(row) = merged {
                 sqlx::query(
-                    "UPDATE documents SET updated_by = $2, updated_at = now() WHERE id = $1",
+                    "UPDATE documents
+                        SET title = $2, updated_by = $3, updated_at = now()
+                      WHERE id = $1",
                 )
                 .bind(input.document_id)
+                .bind(&input.title)
                 .bind(input.author_id)
                 .execute(&mut *conn)
                 .await?;
@@ -110,11 +113,12 @@ pub async fn save_revision(
 
     sqlx::query(
         "UPDATE documents
-            SET current_revision_id = $2, updated_by = $3, updated_at = now()
+            SET current_revision_id = $2, title = $3, updated_by = $4, updated_at = now()
           WHERE id = $1",
     )
     .bind(input.document_id)
     .bind(rev_id)
+    .bind(&input.title)
     .bind(input.author_id)
     .execute(&mut *conn)
     .await?;
@@ -136,20 +140,27 @@ pub struct CreateInput {
 /// ⚠️ documents 与 revisions 互为外键（documents.current_revision_id → revisions.id，
 /// revisions.document_id → documents.id）构成循环，所以必须三步走：
 /// 先插 document 留空指针 → 插首个 revision → 回填指针。三步在同一事务内。
+///
+/// ⚠️ 这里维持了一条数据库表达不了的不变量：**文件夹没有 current_revision_id，
+/// 文档必须有**。加不上 CHECK 约束是因为上面这个三步舞本身（第一步的指针必然是
+/// NULL），而 PostgreSQL 的 CHECK 不支持 DEFERRABLE。详见 006 迁移的注释。
 pub async fn create_document(
     conn: &mut PgConnection,
     tokenizer: &dyn Tokenizer,
     input: CreateInput,
 ) -> AppResult<(Uuid, Uuid)> {
+    // title 与 revisions.title 同时写：上移之后 documents.title 是当前标题的
+    // 唯一真相，revisions.title 只是这一次写入的快照
     let (doc_id,): (Uuid,) = sqlx::query_as(
-        r#"INSERT INTO documents (space_id, parent_id, slug, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $4)
+        r#"INSERT INTO documents (space_id, parent_id, slug, title, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $5)
            RETURNING id"#,
     )
-    .bind(input.space_id)
-    .bind(input.parent_id)
-    .bind(&input.slug)
-    .bind(input.author_id)
+    .bind(input.space_id) // $1
+    .bind(input.parent_id) // $2
+    .bind(&input.slug) // $3
+    .bind(&input.title) // $4
+    .bind(input.author_id) // $5
     .fetch_one(&mut *conn)
     .await?;
 
