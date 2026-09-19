@@ -426,6 +426,10 @@ pub async fn lsp_call_hierarchy(
         crate::lsp::manager::RequestOutcome::NotReady => {
             return Ok(empty_result(JumpStatus::NotReady))
         }
+        // server 拒答：与「没就绪」同类——空结果不是「没有子节点」的证据。
+        crate::lsp::manager::RequestOutcome::ServerError(_) => {
+            return Ok(empty_result(JumpStatus::NotReady))
+        }
         crate::lsp::manager::RequestOutcome::ServerGone => {
             return Ok(empty_result(JumpStatus::Gone))
         }
@@ -452,6 +456,10 @@ pub async fn lsp_call_hierarchy(
             (JumpStatus::Timeout, serde_json::Value::Null)
         }
         crate::lsp::manager::RequestOutcome::NotReady => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        // server 拒答：同 NotReady（空结果不是证据）。
+        crate::lsp::manager::RequestOutcome::ServerError(_) => {
             (JumpStatus::NotReady, serde_json::Value::Null)
         }
         crate::lsp::manager::RequestOutcome::ServerGone => {
@@ -1310,17 +1318,26 @@ mod tests {
         assert!(!hints[1].padding_right);
     }
 
+    /// 把 mock server 的帧读进来，直到 waiter 结算。
+    /// `WaiterReply` 里的 `Err`（server 拒答）在这里**直接判用例失败**：这些用例全走
+    /// happy path，真收到拒答就是链路坏了——错误原文比 `unwrap()` 的 panic 更能说明问题。
     async fn pump_until(
         reader: &mut tokio::io::BufReader<Box<dyn tokio::io::AsyncRead + Send + Unpin>>,
         framer: &mut crate::lsp::transport::Framer,
         table: &std::sync::Arc<tokio::sync::Mutex<crate::lsp::transport::RequestTable>>,
-        mut rx: tokio::sync::oneshot::Receiver<serde_json::Value>,
+        mut rx: tokio::sync::oneshot::Receiver<crate::lsp::transport::WaiterReply>,
     ) -> Result<serde_json::Value, ()> {
         use tokio::io::AsyncReadExt;
         let mut buf = [0u8; 8192];
         loop {
             tokio::select! {
-                r = &mut rx => { return r.map_err(|_| ()); }
+                r = &mut rx => {
+                    return match r {
+                        Ok(Ok(v)) => Ok(v),
+                        Ok(Err(msg)) => panic!("mock server refused the request: {msg}"),
+                        Err(_) => Err(()),
+                    };
+                }
                 n = reader.read(&mut buf) => {
                     let n = n.map_err(|_| ())?;
                     if n == 0 { tokio::task::yield_now().await; continue; }

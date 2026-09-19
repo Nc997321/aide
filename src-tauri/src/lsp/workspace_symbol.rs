@@ -93,6 +93,8 @@ pub async fn lsp_workspace_symbol(
             }
             crate::lsp::manager::RequestOutcome::Timeout => status = JumpStatus::Timeout,
             crate::lsp::manager::RequestOutcome::NotReady => status = JumpStatus::NotReady,
+            // server 拒答（如 tsserver 未加载工程时的 `No Project.`）：**不是「没有候选」**。
+            crate::lsp::manager::RequestOutcome::ServerError(_) => status = JumpStatus::NotReady,
             crate::lsp::manager::RequestOutcome::ServerGone => status = JumpStatus::Gone,
         }
     }

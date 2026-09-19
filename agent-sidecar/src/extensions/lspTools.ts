@@ -27,10 +27,10 @@ export const LSP_TOOL_NAMES = [
  * 本 server 的价值在符号名有歧义时（编译器级精确，不含注释/字符串里的同名文本）。
  */
 export const LSP_INSTRUCTIONS = `This environment has a LANGUAGE SERVER for the current workspace, exposed as the aide-lsp MCP tools. Read the returned status before trusting a result:
-1. Semantic questions — "who defines X", "who references X", "what implements X" — use these tools. They are compiler-precise: a match is a real reference, not a mention in a comment or a string. When a symbol name is common (get, run, handle) or several types define it, one call replaces a grep-then-read fan-out.
-2. Plain-text / config / log / string-literal lookups are still Grep's job. Do not use these tools to find text.
-3. The language server starts lazily and may still be indexing (rust-analyzer takes 40-70s on a large project). Every result carries a status: only status "ready" with zero results is a CONFIRMED negative. Any other status means the question was not answered — retry, or fall back to Grep and say the result is unverified. Never report "no references" from a non-ready status.
-4. The TypeScript server does not parse \`.vue\` files, so its reference results miss usages inside them — a "ready + empty" answer is confirmed only for \`.ts\`/\`.js\` callers. Cover \`.vue\` with Grep.`;
+1. Semantic questions — "where is X defined", "who references X", "what implements X" — start here, not with Grep. The answer is compiler-precise: a match is a real reference, not a mention in a comment or a string, and a common name (\`get\`, \`run\`) returns its true call sites instead of every textual hit. One call replaces a grep-then-read fan-out.
+2. Grep keeps its own job: text, strings, config, logs, comments, file names — anything you would search by characters rather than by symbol.
+3. The language server starts lazily and may still be indexing (rust-analyzer takes 40-70s on a large project). Every result carries a status: only status "ready" with zero results is a CONFIRMED negative. Any other status means the question was not answered — retry, or fall back to Grep and say the result is unverified. Never report "no references" from a non-ready status. An "indexing" status that names specific languages means exactly that: those languages were not searched at all.
+4. Two known blind spots: (a) \`.vue\` usages ARE included in reference results from \`.ts\`/\`.js\` files (the TS server loads the Vue plugin) — only anchoring a query ON a \`.vue\` file is unsupported, so anchor on the \`.ts\` side; (b) files excluded from the TS project (tsconfig \`exclude\`, commonly \`*.test.ts\`) are not searched at all — cover test files with Grep.`;
 
 export interface LspToolsDeps extends LspGate {
   cwd: string;
@@ -78,19 +78,19 @@ export function lspMcpRegistration(
     tools: [
       tool(
         "lsp_symbols",
-        "Find a symbol's definition by NAME across the workspace via the language server. Prefer this over Grep when the name is common or several types define it — the language server resolves owners and overloads, Grep cannot. Returns file:line candidates; when more than one matches, Read them to disambiguate.",
+        "Find where a symbol is defined, by NAME, across the whole workspace. This is the tool for \"where is X\" when you know the name — it resolves the owner of the name, so you don't grep and read a dozen files to find out which of them defines it. Names match exactly (fuzzy near-misses are filtered out), so a miss really means the name is absent. Returns file:line candidates; if several symbols share the name it lists them and you must pick one with lsp_references/lsp_definition at that position. Grep is for text, not for names.",
         nameOrPosition(),
         async (args) => run("symbols", args as Record<string, unknown>),
       ),
       tool(
         "lsp_references",
-        "Find every call site of a symbol via the language server — compiler-precise, so it excludes mentions in comments, strings and same-named members of other types. Use it when you need the real callers of an ambiguous name (e.g. `get`). Plain-text lookups stay Grep's job.",
+        "Find every real call site of a symbol via the language server — compiler-precise, so it excludes mentions in comments, strings and same-named members of other types. Use it for any \"who calls / who uses X\" question once you know where X is (or pass a position directly); plain-text lookups stay Grep's job.",
         nameOrPosition(),
         async (args) => run("references", args as Record<string, unknown>),
       ),
       tool(
         "lsp_definition",
-        "Jump to where a symbol is defined, via the language server. Same trade-off as lsp_symbols: use it for ambiguous names, not for text search.",
+        "Jump from a use site to where the symbol is defined, via the language server. Pass {file, line, character} when you have a position, or a `name` to resolve it first. Not for text search — that stays Grep's job.",
         nameOrPosition(),
         async (args) => run("definition", args as Record<string, unknown>),
       ),

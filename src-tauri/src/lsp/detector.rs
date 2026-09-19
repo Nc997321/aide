@@ -77,6 +77,106 @@ impl LanguageId {
     }
 }
 
+/// 有界遍历跳过的目录名（顶层与下钻**共用一份**：顶层的 `node_modules/` 与
+/// `src/node_modules/` 一样不该当靶子，`target/` 那种上百 GB 的更不该走进去）。
+fn is_skip_dir(name: &str) -> bool {
+    const SKIP: [&str; 7] = ["node_modules", "target", "dist", "build", ".venv", "vendor", "out"];
+    name.starts_with('.') || SKIP.contains(&name)
+}
+
+/// **每个顶层目录各取一个**该语言的源文件（根自身排最后），最多 `max` 个。
+///
+/// 为什么不是「全仓取第一个」（2026-09-19 实测）：工程是**按文件归属**加载的。本仓库根层的
+/// `vite.config.ts` 属于 `tsconfig.node.json`（只含它一个文件）——先打开它，加载的就是那个
+/// 只有一个文件的工程，`workspace/symbol` 永远看不见 `src/` 里的符号（**20s 重试也没用**）；
+/// 而打开 `src/` 下任意一个文件，主工程才会加载。代表文件必须按目录摊开，不能撞上谁算谁。
+///
+/// 取哪几个目录：**按该语言的文件数排序取前 `max` 个**，不是 readdir 撞上谁算谁。
+/// 真实一跑就证明了前者是撞运气：本仓库按 readdir 顺序取到的前四个是
+/// `agent-sidecar / docs / ohos / packages`——**主工程在 `src/`，一个都没沾上**。
+/// 「代码最多的地方」是语言无关且稳定的判据，正好对应「工程住在哪」。
+pub fn representative_sources(
+    root: &Path,
+    lang: LanguageId,
+    max: usize,
+) -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<(usize, std::path::PathBuf)> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for e in entries.flatten() {
+            let name = e.file_name().to_string_lossy().to_string();
+            let p = e.path();
+            if !p.is_dir() || is_skip_dir(&name) {
+                continue;
+            }
+            let (count, first) = count_and_first(&p, lang);
+            if let Some(f) = first {
+                dirs.push((count, f));
+            }
+        }
+    }
+    // 多的在前；同数按路径定序，免得结果随 readdir 抖动。
+    dirs.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut out: Vec<std::path::PathBuf> = dirs.into_iter().take(max).map(|(_, f)| f).collect();
+    // 根自身兜底（单目录项目 / 源码就在根层）——放最后：根层文件常常属于边角工程。
+    if let Some(f) = find_source_file(root, lang) {
+        if out.len() < max && !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// 名字像测试的文件（各语言通行的那几种写法）。见 `count_and_first` 里的用法。
+fn is_test_file(name: &str) -> bool {
+    let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
+    [".test", ".spec", "_test", "_spec"]
+        .iter()
+        .any(|suffix| stem.ends_with(suffix))
+}
+
+/// 有界遍历一个目录：数该语言的源文件个数，并返回遇到的第一个（当代表）。
+/// `COUNT_CAP` 封顶——只为排名，数到够分辨大小就行，不必数完（`target/` 那种目录
+/// 本来就被 `is_skip_dir` 挡在外面）。
+fn count_and_first(dir: &Path, lang: LanguageId) -> (usize, Option<std::path::PathBuf>) {
+    const MAX_DEPTH: usize = 4;
+    const COUNT_CAP: usize = 5_000;
+    let mut count = 0usize;
+    let mut first: Option<std::path::PathBuf> = None;
+    let mut stack = vec![(dir.to_path_buf(), 0usize)];
+    while let Some((d, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                if depth < MAX_DEPTH && !is_skip_dir(&name) {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            if is_test_file(&name) {
+                // 测试文件**不当代表、也不计入排名**：工程配置十有八九把它们排除在外
+                // （本仓库 `tsconfig.json` 的 exclude 就排除 `src/**/*.test.ts`），
+                // 递一个不属于任何工程的孤文件 = 工程没加载（实测踩过两次）。
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()).and_then(LanguageId::from_ext) == Some(lang)
+            {
+                count += 1;
+                if first.is_none() {
+                    first = Some(path);
+                }
+                if count >= COUNT_CAP {
+                    return (count, first);
+                }
+            }
+        }
+    }
+    (count, first)
+}
+
 /// 探测某工作区涉及的语言集合（去重，无序）。
 /// 先用项目 marker 探测器链（Tauri→{rust,ts,vue} 等），再用一层目录扩展名频次兜底。
 pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
@@ -139,7 +239,6 @@ pub fn lang_from_id_str(s: &str) -> Option<LanguageId> {
 /// 同步（`fs::read_dir` 循环）：重场景的调用方（`agent_query::first_source_file`）自己
 /// 放进 `spawn_blocking`；只做一次 `is_some()` 判定的调用方（TS profile）直接同步调。
 pub fn find_source_file(root: &Path, lang: LanguageId) -> Option<std::path::PathBuf> {
-    const SKIP: [&str; 7] = ["node_modules", "target", "dist", "build", ".venv", "vendor", "out"];
     const MAX_DEPTH: usize = 4;
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
@@ -150,7 +249,7 @@ pub fn find_source_file(root: &Path, lang: LanguageId) -> Option<std::path::Path
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
-                if depth < MAX_DEPTH && !name.starts_with('.') && !SKIP.contains(&name.as_str()) {
+                if depth < MAX_DEPTH && !is_skip_dir(&name) {
                     stack.push((path, depth + 1));
                 }
                 continue;
@@ -160,7 +259,9 @@ pub fn find_source_file(root: &Path, lang: LanguageId) -> Option<std::path::Path
                 .and_then(|e| e.to_str())
                 .and_then(LanguageId::from_ext)
                 == Some(lang);
-            if matches {
+            // 测试文件不当靶子：它常被工程配置排除在外（见 `representative_sources`），
+            // 递它等于递了一个不属于任何工程的孤文件。
+            if matches && !is_test_file(&name) {
                 return Some(path);
             }
         }
@@ -287,6 +388,51 @@ mod tests {
             found.as_deref().is_some_and(|f| f.ends_with("real.rs")),
             "got {found:?}"
         );
+    }
+
+    /// 代表文件要**按顶层目录摊开**，且重目录不当代表。
+    /// 本仓库实测：只递根层的 `vite.config.ts`（属于只含它一个文件的 `tsconfig.node.json`），
+    /// `src/` 里的符号按名**永远**查不到（20s 重试也没用）。
+    #[test]
+    fn representative_sources_spread_across_top_level_dirs() {
+        let d = tmp_dir("reps");
+        fs::write(d.join("vite.config.ts"), "").unwrap(); // 根层：边角工程那种
+        fs::create_dir_all(d.join("src")).unwrap();
+        fs::write(d.join("src/a.ts"), "").unwrap();
+        fs::create_dir_all(d.join("pkg")).unwrap();
+        fs::write(d.join("pkg/b.ts"), "").unwrap();
+        let deep = d.join("node_modules").join("p");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("x.ts"), "").unwrap();
+
+        let got = representative_sources(&d, LanguageId::TypeScript, 4);
+        assert!(got.iter().any(|p| p.ends_with("src/a.ts")), "{got:?}");
+        assert!(got.iter().any(|p| p.ends_with("pkg/b.ts")), "{got:?}");
+
+        // 测试文件不当代表：它们常被工程配置排除在外（本仓库 `src/**/*.test.ts` 就是），
+        // 拿它当代表 = 递了一个不属于任何工程的孤文件。真机上栽在这上面两次。
+        let tdir = tmp_dir("reps_test");
+        fs::create_dir_all(tdir.join("src")).unwrap();
+        fs::write(tdir.join("src/a.test.ts"), "").unwrap();
+        fs::write(tdir.join("src/real.ts"), "").unwrap();
+        let got2 = representative_sources(&tdir, LanguageId::TypeScript, 4);
+        assert!(
+            got2.iter().all(|p| !p.ends_with("a.test.ts")),
+            "测试文件不许当代表：{got2:?}"
+        );
+        assert!(got2.iter().any(|p| p.ends_with("real.ts")), "{got2:?}");
+        fs::remove_dir_all(&tdir).ok();
+        assert!(
+            !got.iter().any(|p| p.to_string_lossy().contains("node_modules")),
+            "重目录不当代表：{got:?}"
+        );
+        assert!(got.len() <= 4, "上限要守住：{got:?}");
+        assert_eq!(
+            representative_sources(&d, LanguageId::TypeScript, 1).len(),
+            1,
+            "max 要真的封顶"
+        );
+        fs::remove_dir_all(&d).ok();
     }
 
     #[test]

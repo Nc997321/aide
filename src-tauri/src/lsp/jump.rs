@@ -81,6 +81,9 @@ pub(crate) fn map_outcome(
         }
         RequestOutcome::Timeout => (JumpStatus::Timeout, vec![]),
         RequestOutcome::NotReady => (JumpStatus::NotReady, vec![]),
+        // server 拒答（JSON-RPC error）与「没就绪」同类：**空结果不是证据**。
+        // 消费方若要原文（诊断用），在 `jump::issue` 那层就别把它映射掉。
+        RequestOutcome::ServerError(_) => (JumpStatus::NotReady, vec![]),
         RequestOutcome::ServerGone => (JumpStatus::Gone, vec![]),
     }
 }

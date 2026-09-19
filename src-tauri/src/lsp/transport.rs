@@ -80,8 +80,17 @@ pub async fn write_frame<W: AsyncWrite + Unpin>(
 
 // ── 请求/响应 oneshot 表（照 runtime/mod.rs 已移除的 image_probe_waiters 范式）──
 
+/// 一条请求的答复：拿到结果，或服务器**拒绝**了它。
+///
+/// **类型是 `Result` 而不是裸 `Value`**：JSON-RPC 的 `error` 一旦被折叠进
+/// `Value::Null`，「服务器拒绝了这条请求」就与「服务器答了：没有」长得一模一样
+/// ——那是本仓库红线（空 ≠ 没有）在传输层的落点。真机事故：tsserver 对没加载过
+/// 工程的 `workspace/symbol` 回 `No Project.`，被折叠成 null，一路变成
+/// 「index answered, but it has no symbol」的假否定（2026-09-19）。
+pub type WaiterReply = Result<serde_json::Value, String>;
+
 pub struct RequestTable {
-    waiters: HashMap<u64, oneshot::Sender<serde_json::Value>>,
+    waiters: HashMap<u64, oneshot::Sender<WaiterReply>>,
 }
 
 impl RequestTable {
@@ -90,10 +99,10 @@ impl RequestTable {
             waiters: HashMap::new(),
         }
     }
-    pub fn insert(&mut self, id: u64, tx: oneshot::Sender<serde_json::Value>) {
+    pub fn insert(&mut self, id: u64, tx: oneshot::Sender<WaiterReply>) {
         self.waiters.insert(id, tx);
     }
-    pub fn take(&mut self, id: u64) -> Option<oneshot::Sender<serde_json::Value>> {
+    pub fn take(&mut self, id: u64) -> Option<oneshot::Sender<WaiterReply>> {
         self.waiters.remove(&id)
     }
     /// server EOF / 进程退出：丢弃所有 sender，所有 await 的 receiver 收到 RecvError。

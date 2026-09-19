@@ -86,6 +86,51 @@ describe("formatLspResponse —— 空 ≠ 没有（红线）", () => {
     expect(text).toMatch(/disambiguat|which one|explicit/i);
   });
 
+  /// 按名查询在「有的语言没答上」时把**逐语言明细**放进 `error`（见 Rust 侧
+  /// `agent_query::unverified_outcome`）——这层明细必须贴到模型眼前：它据此才知道该用
+  /// Grep 兜哪一部分（也是 2026-09-19 假否定事故的唯一补救线索）。
+  it("indexing 带上后端给的逐语言明细，不吞掉", () => {
+    const text = call("indexing", {
+      error:
+        "no symbol named `useInlineMention` from rust answered (empty); " +
+        "vue: its language server failed to start — those languages were NOT checked, " +
+        "so this is not a confirmed negative.",
+    });
+    expect(text).toContain("vue: its language server failed to start");
+    expect(text).toMatch(/not a confirmed negative/);
+  });
+
+  /// 明细只在后端真给了的时候出现——不许凭空写个 "Detail: undefined"。
+  it("indexing 没带明细时不写 Detail", () => {
+    expect(call("indexing")).not.toMatch(/Detail:/);
+  });
+
+  /// 消歧指示必须指向**吃坐标的**工具：`lsp_symbols` 只吃名字，照旧文案带坐标重查会
+  /// 撞上 Rust 侧 `unknown tool \`symbols\`` 的死路。
+  it("ambiguous 的消歧指示指向吃坐标的工具", () => {
+    const text = formatLspResponse(
+      "references",
+      {
+        ok: true,
+        status: "ready",
+        ambiguous: true,
+        candidates: [{ name: "get", kind: 6, file_path: "/p/a.rs", line: 1, column: 1, lang: "rust" }],
+      },
+      { name: "get" }
+    );
+    expect(text).toContain("lsp_definition");
+    expect(text).toContain("lsp_references");
+  });
+
+  /// `no_symbol` 目前没有产出点（按名查询不再给确认否定），措辞**不许再断言「确认没有」**
+  /// ——哪天它真回来了，那句话我们给不起。
+  it("no_symbol 不说「确认没有」，只给未验证 + Grep 退路", () => {
+    const text = call("no_symbol");
+    expect(text).not.toMatch(/\bis a confirmed negative\b/i);
+    expect(text).toMatch(/not a confirmed negative/i);
+    expect(text).toMatch(/grep/i);
+  });
+
   /// 状态词表必须与 Rust 侧 src-tauri/src/lsp/agent_status.rs 的 as_str() 逐字一致：
   /// 漂移的后果是模型读到未知状态走兜底分支——**静默降级**，不报错。
   it("状态词表与 Rust 侧逐字一致（冻结点）", () => {

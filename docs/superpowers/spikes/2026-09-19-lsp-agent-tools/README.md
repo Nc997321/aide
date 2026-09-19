@@ -313,3 +313,196 @@ TS 就是那个反例，条件已到（`908` 落地）。
 3. ~~Volar 在本仓库上为何不响应（装置问题 vs 配置问题）。~~ **已定案，见 §4/§5**：
    不是装置问题，是 `vue-language-server` 的 proxy 架构 + TLS 的 syntax server 不加载插件。
 4. `LSP` 未列入 aide 的 `allowedTools`（`agent-sidecar/src/engine/session-worker/queryOptions.ts:76`）——但 `Grep`/`Read` 也不在，两者同属内置只读工具，**推测无实际影响，未验证**。
+
+### 7. 按名查询（navto）与 references 同病：工程没加载（2026-09-19 后续，已修）
+
+§6 修完 references 之后真机复跑，发现**按名查询仍然全灭**：`lsp_symbols {name}` 对
+`useInlineMention` / `parseMentionPath` / `applyTheme` / `pathTypes` / `scanPluginSkills`
+一律回 `no symbol named X`，每次都烧 ~31s（30s = `probe_ready` 预算）。而**同一个会话里**
+拿坐标查 references 却精确命中——server 活着、符号在，只有按名这条路是死的。
+
+复跑 `probe-navto.mjs`（最小客户端，只变 didOpen 这一个变量）：
+
+| 步骤 | 结果 |
+|---|---|
+| didOpen 之前 | **JSON-RPC error：`No Project.`**（`navto` → `ThrowNoProject`） |
+| didOpen 目标文件 +500ms | **count=1**，`useInlineMention` 精确命中（该文件就是定义处） |
+| 对照组（不存在的名字） | count=0 空数组——与 error 可区分 |
+
+```bash
+node probe-navto.mjs --server node \
+  --args "<node>/node_modules/typescript-language-server/lib/cli.mjs,--stdio" \
+  --root <repo> --file src/composables/useInlineMention.ts --query useInlineMention
+```
+
+**结论：navto 与 references 是同一个病**——tsserver 只认它加载过的工程，didOpen 才触发加载；
+908 那招（按需递文件）当时只治了 references 那条路。
+
+三层各降级一次，最后拼出一句自信的假否定：
+
+1. **rpc 层把 error 折叠成 null**：`rpc.rs::dispatch` 只读 `result` 字段，`error` 整个丢掉 →
+   `Ok(Value::Null)`。「服务器拒答」与「服务器答了：没有」从此无法区分。（顺带发现：握手期
+   那句 `result.get("error")` 校验**从来没触发过**——它检查的正是被丢掉的那个字段。）
+2. **裁决跨语言合成**：`lookup_symbol` 拿任一语言的「ready + 空」当整个工作区的「确认没有」
+   ——RA 对 `useInlineMention` 回空是天经地义的，却成了「TS 里也没有」的证据。
+3. **提示词反向发许可证**：`LSP_INSTRUCTIONS` 第 4 条当时还说「TS 看不见 .vue，用 Grep 兜底」
+   ——已过期：Vue 插件生效后，从 `.ts` 查 references **能**看见 `.vue` 用法（实测 2 条，全在
+   `ChatInputBox.vue` 里）。
+
+**本批改动**：`rpc.rs`/`transport.rs` 携带 `Result<Value, String>`（`RequestOutcome::ServerError`）；
+`agent_query.rs` 逐语言裁决（`Absent` 需每个候选语言都被问到且都可信地回空，否则 `Unverified`
++ 点名谁没答）；按名查询前先递文件（`prime_project`）；sidecar 文案三处（删过期 .vue 条、
+触发条件改成「问 where/who 就用」、歧义指示指向吃坐标的工具）。
+
+**真机验收（待补）**：重启 app 后开新会话，问「`useInlineMention` 在哪定义、谁在用它」——
+期望 `lsp_symbols` 一次命中（不再 30s 空转），references 结果里出现 `.vue` 里的调用点；
+问一个**不存在**的名字，期望拿到 `indexing` + 逐语言明细，而不是 `no symbol`。
+
+**仍未修**（下一步）：`.vue` 作为**查询目标**仍走 `vue-language-server` → 那个必崩的进程
+每次查询被拉起一次（日志里每 30s 一条 `TypeError: ... ts.server.protocol`），既拖红面板
+也让按名查询多一个「没答上的语言」。正解是让它也走 tsserver + Vue 插件。
+
+### 8. 首轮真机测试暴露的两条（2026-09-19，两次独立会话）
+
+**A. 按名查询是模糊的 → 假阳性（已修）**
+
+两次会话各自撞上同一个坑：`lsp_symbols {name:"run_jump"}` 报「2 symbols」，第二处
+`lsp/manager.rs` 的真身是 `answer_server_request_non_java_lang_returns_empty_settings`
+——名字里根本没有 `run_jump`。隔离实验（一次会话提出，另一次复现）：查一个绝不存在的名字
+`rnjmp`，rust-analyzer 回了 **11 个「符号」**，是子序列 `r…n…j…m…p` 凑出来的，其中还
+包括真正的 `run_jump`。tsserver 的 `navto` 同样是前缀/子串打分。
+
+**危害方向与假阴性相反且更贵**：问一个不存在的名字却拿到坐标，模型照着读，读到的是别人的
+函数（假阴性只是绕路，假阳性是给错地址）。歧义文案还断言「N symbols named `X`」——那些
+模糊候选根本不是这个名字。
+
+改法：`agent_query::exact_matches` 在裁决前逐条对名字（剥掉参数表 `(...)` 与限定路径
+`::`/`.` 后精确比较）。编辑器侧的 `lsp_workspace_symbol` **故意不过滤**——搜索框要的就是
+模糊；同一份解析、两种语义，分界在 agent 那一层。
+
+**B. 测试文件系统性缺席（记录为已知边界，改不了）**
+
+`tsconfig.json:23` 排除 `src/**/*.test.ts` ⇒ 这些文件不在 TS project 里 ⇒ references 看不见
+它们。实测**热索引下依然如此**：`useInlineMention` 的 references 只有 2 条（都在
+`ChatInputBox.vue`），而文本层真值另有 `useInlineMention.test.ts` 7 处 + `ChatPanel.test.ts:67`。
+这是项目配置决定的，只能在提示词里如实告知：已写进 `LSP_INSTRUCTIONS` 第 4 条（测试文件用
+Grep 兜）。
+
+**C. 判据修正：行号不是真值**
+
+首轮测试 prompt 的期望表钉了行号（`useInlineMention.ts:82`、`ChatInputBox.vue:578`），当天就
+烂了：仓库里**有别的会话在并行改代码并提交**（`82→69`、`578→580`，git 树干净=已提交）。两次
+会话报的行号各自都正确，只是时刻不同。以后判据只给**文件名 + 数量**，不给行号。
+
+**「这个会话跑的是哪个构建」的判据**：问一个不存在的名字——
+「The index answered, but it has no symbol for …」= 旧构建；
+带逐语言明细（谁答了、谁没答、为什么）的 `indexing` = 新构建。
+
+### 9. 新构建首跑（2026-09-19）：修复生效，但暴露三条新事实
+
+同一段测试 prompt 在新构建下的三条 `lsp_symbols`：
+
+| 查询 | 结果（原文摘录） |
+|---|---|
+| `useInlineMention` | `failed (status: error): session stopped` —— 被会话收尾取消（`cancelAllLspQueries`），不是缺陷；**但这一问因此没测到** |
+| `run_jump` | `no symbol named run_jump from typescript, javascript answered (empty); rust: it did not answer within the budget; vue: its server refused the query: Unhandled method workspace/symbol (code -32601)` |
+| `zzzNotASymbolXyz` | 同形（TS/JS 空、rust 超时、vue 拒绝） |
+
+1. **TS 侧按名查询这次作答了**（旧构建里它「始终没作答」——`No Project.` 被折叠成 null）。
+   与 §7 的 `prime_project` 预期一致；**不能排他归因**（编辑器此刻也可能已打开过文件），
+   但方向对。
+2. **vue 不是「坏了」，是协议上没有这个能力**：`-32601 MethodNotFound`，而它的握手应答
+   本来就没声明 `workspaceSymbolProvider`。改法：能力问询
+   （`manager::declares_workspace_symbol`）——没声明就不发问，记为 `CannotAnswer`：
+   **不参与裁决，但留一条披露备注**（`vue does not implement symbol search`）。
+   不这样做的话，Vue 仓库的每次按名查询永远是「未验证」，确认否定这条价值归零。
+   这是**刻意的取舍**：备注披露「谁的符号搜不到」，换回可用的否定。
+3. **rust-analyzer 的 `workspace/symbol` 稳定超出 8s**（本轮 1 次 + 首轮会话 4/4 + 复现）
+   → 专用 `SYMBOL_SEARCH_TIMEOUT = 20s`（只管这条查询，定义/引用仍是 8s）。
+   **不是万能药**：RA 重建索引时更久也答不上，那时仍如实回「未验证」。
+
+**仍未验证**：`useInlineMention` 那一问（TS 符号按名命中）被取消，没有结果。复跑只需这一条。
+
+### 10. 第三跑：两个新 bug，其中一个把「查到了」说成「确认没有」（2026-09-19）
+
+**A. `lsp_symbols` 的 happy path 一直是坏的**（已修）
+
+名字解析**成功**之后（`run_jump` 定义已找到），代码把 `tool = "symbols"` 交给 `run_jump`，
+而那里的 match 只认 references/definition/implementations —— `symbols` 掉进 `other` 分支回
+`unknown tool`。于是 `lsp_symbols` 只有「查不到」和「同名多义」两条路能走，**真查到反而报错**；
+更糟的是它当时用 `NoSymbol` 状态返回，侧车照 status 渲染成「confirmed negative」——
+**一句内部错误被当成语义否定播给模型**。
+
+修：`"symbols" | "definition"` 同路（名字已解析成坐标，落点就是 definition）；未知工具的状态
+改成 `Error`（内部错误 ≠ 语义否定）。
+**暴露它的正是上一批的模糊过滤**：过滤前 `run_jump` 是「2 candidates」走歧义分支，过滤后只剩
+1 个真定义 → 撞进那条坏路。修一个 bug 逼出另一个，这是好事。
+
+**B. navto 的空是竞态，不是「没有」**（已修）
+
+`probe-navto.mjs --open` 序列（本仓库，`--query useInlineMention`）：
+
+| 打开的文件 | 结果 |
+|---|---|
+| （什么都没开） | error `No Project.` |
+| `vite.config.ts`（根层，tsconfig.node.json 只含它） | **0** |
+| `src/composables/useMentionSuggest.ts` +4s | **0** |
+| 同上 +20s | **1** |
+| `src/composables/useInlineMention.ts`（目标本身） | **1** |
+
+⇒ tsserver 打开工程内文件后，**配置工程仍在异步加载**，期间 navto 回**空数组而不是错误**；
+加载窗口随机器负载浮动（复跑时 4s 就命中）。而 `probe_ready`（documentSymbol 探刚打开的那个
+文件）一秒就过 ⇒ **加载中的空被认证成「确认没有」**——自信的假否定，比原 bug 更贵。
+
+**顺带证伪一个候选判据**：`--peek`（对从没打开过的文件问 documentSymbol）两轮都是 0，
+而同一轮 navto 已经命中 ⇒「peek 能证明工程加载好了」不成立，别再走这条路。
+
+修：`search_symbol` 空结果每 2s 重试，预算 `SYMBOL_SEARCH_TIMEOUT`（20s）。
+**这是概率收敛，不是证明**：工程加载慢于预算时仍可能假阴性——如实记在这里，别当它已经解决。
+
+**C. 顺带**：RA 那个 `unusable payload` 是它回 `null`（JSON-RPC 合法的「无结果」），
+与空数组同义 → 改成按空处理（仍要过就绪探针），真·畸形应答才报错。
+
+### 11. 自己写的 E2E 推翻了 §10 的一半结论（2026-09-19 深夜）
+
+`real_tsserver_finds_a_symbol_by_name_in_an_unopened_file`（`#[ignore]`；起真 tsserver 跑
+`prime_project` + `search_symbol`，即 aide 自己的代码路径）**三次里空两次**：
+
+| 递的代表文件 | 结果 |
+|---|---|
+| `find_source_file` 全仓第一个（= 根层 `vite.config.ts`，属只含它一个文件的工程） | 20s 空 |
+| readdir 顺序前四个顶层目录（含测试文件） | **命中**（13s） |
+| 按文件数排序 + 跳过测试文件 → 含 `src/api.ts`（正经主工程文件） | 20s 空 |
+
+**结论：我们证明不了「符号索引覆盖了整个工作区」。** 空可能是「那个文件所在的工程没加载」，
+而**没有任何 LSP 信号能证明加载完成**——就绪探针 `documentSymbol` 探的是「已递过的那个文件」，
+工程没加载它照样过（三次全过）。既证明不了，就不许说「没有」：
+
+- **按名查询的「确认没有」退掉了**：`SymbolLookup` 只剩 Found/Ambiguous/Unverified，
+  空 → `indexing` + 逐语言原因 + 明说 not a confirmed negative。
+  `AgentLspStatus::NoSymbol` 因此**没有产出点**（八个词是两侧冻结的契约，留着不删）。
+- 递代表文件（每个顶层目录一个、按文件数排序、跳重目录、跳测试文件）**保留但降级**：
+  它只影响**命中率**，不再影响结论。
+
+**仍未解决**：tsserver 在多工程仓库里究竟何时把主工程加载进来。下一步只能靠
+`probe-navto.mjs --open` 序列继续实测（单开 vs 多开、等多久、开哪个），**别再靠推理**。
+
+### 12. 真凶是「多递文件」——一个自己也差点被当成未解之谜的坑（2026-09-20）
+
+§11 那三次 E2E 空，根因不在 tsserver，在**我们自己递了几个文件**。同机同分钟的对照
+（`probe-navto.mjs --open`，20s settle）：
+
+| 预热的文件 | `workspace/symbol {useInlineMention}` |
+|---|---|
+| 只开 `src/api.ts` | **1**（命中） |
+| 依次开 `src/api.ts` → `agent-sidecar/…` → `packages/aide-sdk/src/api.ts` → `ohos/hvigorfile.ts` | 1 → 1 → **0** → 1 |
+
+**多工程并发加载时，navto 的答案随"那一刻哪些工程加载好了"抖动**——开得越多越抖。
+只递一个（该语言文件最多的顶层目录里的第一个非测试文件）则稳：探针 4/4 命中，
+E2E 改回单文件后 **2/2 命中，耗时 3.5s / 5.5s**（此前两连败是 20.9s / 22.5s）。
+
+改法：`MAX_PRIMED = 1`。**"多递几个更保险"是反效果**——这条实验是本次最值钱的一课：
+代表文件不是越多越好，多了反而互相干扰。
+
+顺带确认：按名查询的**答案**现在只走两条路——命中（精确坐标）或**未验证**（逐语言原因）。
+`no_symbol`（确认否定）没有产出点，等哪天有「工程已加载」的正向信号再接回来。

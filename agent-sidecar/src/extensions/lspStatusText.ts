@@ -43,9 +43,14 @@ function notReadyText(resp: LspQueryResponse, what: string): string {
   const subject = what ? ` for \`${what}\`` : "";
   switch (resp.status) {
     case "indexing":
-      return `The language server is still building its index, so the ${subject.trim() || "query"} was not answered. An empty result now does NOT mean the reference does not exist — it means nobody looked yet. Retry in ~30s, or use Grep and say the result is unverified.`;
+      return `The ${subject.trim() || "query"} was not answered — the language server is still building its index, or some languages could not be asked at all. An empty result does NOT mean the reference does not exist; it means nobody looked yet.${detail(resp)} Retry in ~30s, or use Grep and say the result is unverified.`;
     case "no_symbol":
-      return `The index answered, but it has no symbol${subject}. Check the spelling, or drop any \`Type::\` qualifier and search the bare name. If you expected a hit, cross-check with Grep and say the result is unverified.`;
+      // **目前 Rust 侧没有产出点**：按名查询已不再给「确认没有」（证明不了符号索引覆盖整个
+      // 工作区，见 agent_query::SymbolLookup::Unverified）。词表是两侧冻结的契约所以留着，
+      // 措辞按「没能回答」写——免得哪天它真回来了，又带一句我们给不起的断言。
+      // 句式：**不许用 "No ..." 开头**——那是 ready 形态（「已确认的否定」）的专属句式，
+      // 混用会让「确认没有」与「没能回答」在措辞上分不开（见上面那条红线用例）。
+      return `Name search found nothing${subject}. That is not a confirmed negative — check the spelling, and cross-check with Grep before relying on the absence.`;
     case "no_server":
       // 刻意不用 "No ..." 开头：那个句式是 ready 形态的专属（见测试的判据），
       // 混用会让「已确认的否定」与「没能回答」在措辞上无法区分。
@@ -58,6 +63,14 @@ function notReadyText(resp: LspQueryResponse, what: string): string {
     default:
       return `LSP query${subject} failed (status: ${resp.status})${resp.error ? `: ${resp.error}` : ""}. Treat the result as unverified and use Grep.`;
   }
+}
+
+/** 后端带来的**逐语言明细**。Rust 侧的按名查询在「有的语言没答上」时把
+ *  「谁答了、谁没答、为什么」写进 `error`（见 agent_query::unverified_outcome）——
+ *  **别吞掉**：模型据此才知道该用 Grep 兜哪一部分，也才知道这句「查不到」不算数。 */
+function detail(resp: LspQueryResponse): string {
+  const d = resp.error?.trim();
+  return d ? ` Detail: ${d}` : "";
 }
 
 /** 结果条目的真实形状（`QueryResult.symbol`，见 src-tauri/src/lsp/protocol.rs 的
@@ -101,7 +114,7 @@ function ambiguousText(what: string, cands: SymbolCandidateLike[]): string {
   const lines = cands.map((c) =>
     c.file_path ? `  ${c.file_path}:${c.line ?? 1}:${c.column ?? 1}` : "  (candidate missing path)"
   );
-  return `${cands.length} symbols named \`${what}\` — which one you mean cannot be decided from the name alone. Read the candidates and re-query with an explicit {file, line, character} for the one you want:\n${clamp(lines.join("\n"), cands.length)}`;
+  return `${cands.length} symbols named \`${what}\` — which one you mean cannot be decided from the name alone. Read the candidates and re-query **with an explicit {file, line, character}** for the one you want, using \`lsp_references\` or \`lsp_definition\` (those two take a position; \`lsp_symbols\` takes a name only):\n${clamp(lines.join("\n"), cands.length)}`;
 }
 
 /** 截断要如实说——结果进上下文，超预算就是每一轮的长期成本。 */

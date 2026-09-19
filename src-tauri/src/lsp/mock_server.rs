@@ -48,6 +48,66 @@ pub fn spawn_mock_lsp_silent() -> MockLsp {
     }
 }
 
+/// 带剧本的 mock：`workspace/symbol` 每次调用依次取 `responses` 的下一项（用完了沿用最后
+/// 一项），`documentSymbol` 固定回 `document_symbol`。
+///
+/// 固定应答的 mock 表达不了「第一次回空、第二次命中」——而**空要重试**这条行为恰恰只在
+/// 「第几次调用」上体现（真机：tsserver 工程还在加载时回空，20s 后才命中）。
+pub fn spawn_mock_lsp_scripted(
+    responses: Vec<serde_json::Value>,
+    document_symbol: serde_json::Value,
+) -> MockLsp {
+    let (a_write, a_read) = tokio::io::duplex(8 * 1024);
+    let (b_write, b_read) = tokio::io::duplex(8 * 1024);
+    let join = tokio::spawn(async move {
+        scripted_responder(a_read, b_write, responses, document_symbol).await;
+    });
+    MockLsp {
+        transport_stdin: Box::new(a_write),
+        transport_stdout: Box::new(b_read),
+        join,
+    }
+}
+
+async fn scripted_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(
+    mut reader: R,
+    mut writer: W,
+    responses: Vec<serde_json::Value>,
+    document_symbol: serde_json::Value,
+) {
+    let mut framer = Framer::new();
+    let mut buf = [0u8; 4096];
+    let mut nth = 0usize;
+    loop {
+        let n = match reader.read(&mut buf).await {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        for msg in framer.feed(&buf[..n]) {
+            let method = msg.get("method").and_then(|v| v.as_str()).unwrap_or("");
+            let id = msg.get("id").cloned();
+            let result = match method {
+                "workspace/symbol" => {
+                    let r = responses
+                        .get(nth)
+                        .or_else(|| responses.last())
+                        .cloned()
+                        .unwrap_or(serde_json::json!([]));
+                    nth += 1;
+                    Some(r)
+                }
+                "textDocument/documentSymbol" => Some(document_symbol.clone()),
+                _ => Some(serde_json::Value::Null),
+            };
+            if let (Some(i), Some(r)) = (id, result) {
+                let resp = serde_json::json!({"jsonrpc":"2.0","id":i,"result":r});
+                let _ = writer.write_all(&format_frame(&resp)).await;
+            }
+        }
+    }
+}
+
 async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader: R, mut writer: W) {
     let mut framer = Framer::new();
     let mut buf = [0u8; 4096];
@@ -135,6 +195,12 @@ async fn mock_responder<R: AsyncRead + Unpin, W: AsyncWrite + Unpin>(mut reader:
                          "label":"usize","paddingLeft":true},
                         {"position":{"line":4,"character":0},"kind":9,"label":"skip"}
                     ]
+                })),
+                // 按名查询：**回 JSON-RPC error**，复刻真机 tsserver 在工程未加载时的
+                // `No Project.`（2026-09-19 实测）。用来钉死「error 不是空结果」这条链。
+                "workspace/symbol" => Some(serde_json::json!({
+                    "jsonrpc":"2.0","id":id,
+                    "error":{"code":-32000,"message":"No Project."}
                 })),
                 _ => id.map(|i| serde_json::json!({"jsonrpc":"2.0","id":i,"result":null})),
             };

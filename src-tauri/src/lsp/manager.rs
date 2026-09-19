@@ -35,6 +35,29 @@ pub const REQUEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 /// 且无「跳转中…」重启。详见 composables/definitionResolver。
 pub const DEFINITION_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(8);
 
+/// `workspace/symbol`（按名搜索）的预算，**比 DEFINITION_TIMEOUT 宽**。
+///
+/// 这条查询在 server 侧是模糊打分 + 全符号索引扫描，比按坐标的定义/引用贵得多：真机实测
+/// rust-analyzer 在本仓库（5GB 索引）**8s 内 3 次没答上来**（2026-09-19 三次独立会话，
+/// 其余查询同一时刻是答的）。sidecar 侧预算是 120s，20s 仍在预算内。
+///
+/// **不是万能药**：RA 正在重建索引时更久也答不上——那仍然如实回「未验证」，不加时
+/// （加时只是让 agent 多等，不改变结论）。
+pub const SYMBOL_SEARCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// server 在 initialize 里声明了 `workspaceSymbolProvider` 吗（`true` 或带 options 的对象都算）。
+///
+/// **能力问询，不是语言特判**——语言无关层不许出现 `if lang == Vue`。事实是：Volar 的
+/// vue-language-server 对 `workspace/symbol` 回 `-32601 MethodNotFound`，而它的握手应答里
+/// 本来就没声明这个能力（实测 2026-09-19）。那就别发这一问，也别把「它结构上答不了」
+/// 记成「它没答上」——后者会让 Vue 仓库的每次按名查询永远拿不到确认否定。
+pub fn declares_workspace_symbol(caps: &serde_json::Value) -> bool {
+    matches!(
+        caps.get("workspaceSymbolProvider"),
+        Some(serde_json::Value::Bool(true)) | Some(serde_json::Value::Object(_))
+    )
+}
+
 // ── 请求结果：区分「server 慢/未就绪/挂了」与「server 确认无结果」──
 // 旧实现把 NotReady/Timeout/ServerGone 三种和 Ok(空) 都返 Null，前端只看 length>0
 // 一律 fallback codegraph → jdtls 渐进解析时同符号在「直跳」与「多结果弹框」间漂移。
@@ -48,6 +71,10 @@ pub enum RequestOutcome {
     ServerGone,
     /// 收到响应（可能是 null/空数组——那是 server 确认无结果，与上面三种本质不同）。
     Ok(serde_json::Value),
+    /// server 用 JSON-RPC error **拒绝**了这条请求（带原文+code）。与 `Ok(空数组)` 本质不同：
+    /// 那是「确认没有」，这是「没答上来」。真机实例：tsserver 对没加载过工程的
+    /// `workspace/symbol` 回 `No Project.`（2026-09-19，见 spike 的 probe-navto.mjs）。
+    ServerError(String),
 }
 
 // ── ServerHandle ──
@@ -118,6 +145,7 @@ impl ServerHandle {
     /// 让调用方区分四种情况（旧实现统统返 Null，前端无法区分慢与空）：
     /// - NotReady：ready=false（jdtls 索引期等）→ 不发请求不挂起。
     /// - Ok(v)：收到响应（v 可能 null/空数组=server 确认无结果，与 NotReady/Timeout/Gone 本质不同）。
+    /// - ServerError：server 用 JSON-RPC error 拒了这条请求——**不是空结果**（见该 variant）。
     /// - Timeout / ServerGone：预算内未响应 / server 退出。调用方据 status 决定重试或 fallback。
     /// send 失败（broken pipe）保持外层 Err(String)——传输层故障不同于「server 没响应」。
     pub async fn request(
@@ -133,7 +161,9 @@ impl ServerHandle {
         self.transport.table.lock().await.insert(id, tx);
         self.transport.send(&msg).await.map_err(|e| e.to_string())?;
         match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(result)) => Ok(RequestOutcome::Ok(result)),
+            Ok(Ok(Ok(v))) => Ok(RequestOutcome::Ok(v)),
+            // server 拒答（JSON-RPC error）——不许混进 Ok 里当空结果。
+            Ok(Ok(Err(msg))) => Ok(RequestOutcome::ServerError(msg)),
             Ok(Err(_)) => Ok(RequestOutcome::ServerGone), // channel closed（server 退出）
             Err(_) => Ok(RequestOutcome::Timeout),        // 预算内未响应
         }
@@ -835,7 +865,15 @@ async fn init_handshake(
     // 握手判活超时按语言档案（Java 30s：jdtls 首次启动 OSGi + 索引 10-30s；其余 5s）
     let handshake_timeout = crate::lsp::profiles::profile(lang).handshake_timeout();
     let result = match tokio::time::timeout(handshake_timeout, rx).await {
-        Ok(Ok(v)) => v,
+        Ok(Ok(Ok(v))) => v,
+        // server 侧解析/处理失败时（如 jdtls 对非法 capabilities 报 -32700）必须判握手失败，
+        // 否则面板假 ✓ 而后续请求全挂。**旧实现这里永远不触发**：error 早在 dispatch 就被
+        // 折叠成 `result: null`，那句 `result.get("error")` 从来没命中过。
+        Ok(Ok(Err(msg))) => {
+            return Err(EnsureError::HandshakeFailed(format!(
+                "initialize rejected: {msg}"
+            )));
+        }
         Ok(Err(_)) => return Err(EnsureError::HandshakeFailed("channel closed".into())),
         Err(_) => {
             return Err(EnsureError::HandshakeFailed(
@@ -843,14 +881,6 @@ async fn init_handshake(
             ));
         }
     };
-    // 校验响应是 result 而非 error——server 侧解析/处理失败时（如 jdtls 对非法
-    // capabilities 报 -32700）必须判握手失败，否则面板假 ✓ 而后续请求全挂。
-    if let Some(err) = result.get("error") {
-        let msg = err["message"].as_str().unwrap_or("initialize error");
-        return Err(EnsureError::HandshakeFailed(format!(
-            "initialize rejected: {msg}"
-        )));
-    }
     // 保存 server capabilities：前端按语言查 implementationProvider/documentSymbolProvider
     // 决定是否启用「跳转到实现」gutter 标记等可选能力。rx 返回的是 JSON-RPC 的 result 字段值
     //（dispatch 只剥 result），即 {"capabilities":{...}}。
@@ -869,7 +899,7 @@ async fn init_handshake(
 // ── Tests ──
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// 「agent 打开的文档不往编辑器 UI 漏诊断」是这次隔离的**全部意义**——三种来源都钉住。
@@ -1020,7 +1050,9 @@ mod tests {
     use crate::lsp::mock_server;
     use crate::lsp::transport::LspTransport;
 
-    fn make_handle(transport: LspTransport, ready: bool) -> Arc<ServerHandle> {
+    /// 用真传输层（mock server 的管道）搭一个 handle。**跨模块共用**：agent_query 的
+    /// 用例也靠它把「重试/过滤」跑在真实 request→dispatch→table 这条链上，而不是只测纯函数。
+    pub(crate) fn make_handle(transport: LspTransport, ready: bool) -> Arc<ServerHandle> {
         Arc::new(ServerHandle {
             transport,
             docs: Arc::new(TokioMutex::new(OpenDocs::new())),
@@ -1037,7 +1069,7 @@ mod tests {
 
     /// 简化 reader：只处理 ResolveWaiter（把响应送回 tx），忽略 diagnostics/log 等
     /// （测试 mock 也会推 publishDiagnostics，这里忽略）。EOF 时 reject_all 模拟 server 退出。
-    fn start_test_reader(handle: Arc<ServerHandle>) {
+    pub(crate) fn start_test_reader(handle: Arc<ServerHandle>) {
         use tokio::io::{AsyncReadExt, BufReader};
         let table = handle.transport.table_handle();
         tokio::spawn(async move {
@@ -1098,6 +1130,56 @@ mod tests {
             .await
             .unwrap();
         assert!(matches!(outcome, RequestOutcome::Ok(_)), "got {outcome:?}");
+    }
+
+    /// 能力问询：`true` 与带 options 的对象都算声明；`false` / 缺字段 / `null` 都不算
+    /// （说不上「没声明」就发问，会换来 `-32601` 并污染裁决——见 `declares_workspace_symbol`）。
+    #[test]
+    fn workspace_symbol_capability_is_read_from_capabilities() {
+        use serde_json::json;
+        assert!(declares_workspace_symbol(
+            &json!({"workspaceSymbolProvider": true})
+        ));
+        assert!(declares_workspace_symbol(
+            &json!({"workspaceSymbolProvider": {"resolveProvider": true}})
+        ));
+        assert!(!declares_workspace_symbol(
+            &json!({"workspaceSymbolProvider": false})
+        ));
+        assert!(
+            !declares_workspace_symbol(&json!({"definitionProvider": true})),
+            "缺字段 = 没声明"
+        );
+        assert!(!declares_workspace_symbol(
+            &json!({"workspaceSymbolProvider": null})
+        ));
+    }
+
+    /// **JSON-RPC error 不许变成「空」。** 复刻真机：tsserver 对未加载工程的
+    /// `workspace/symbol` 回 `No Project.`，旧 dispatch 把它折叠成 `result: null`——
+    /// 于是「服务器拒答」在整条链路上伪装成「服务器答了：没有」，最终吐出假否定。
+    #[tokio::test]
+    async fn request_server_error_is_not_an_empty_result() {
+        let mock = mock_server::spawn_mock_lsp();
+        let transport =
+            LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        start_test_reader(h.clone());
+        let outcome = h
+            .request(
+                "workspace/symbol",
+                serde_json::json!({"query": "useInlineMention"}),
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .unwrap();
+        match outcome {
+            RequestOutcome::ServerError(msg) => {
+                assert!(msg.contains("No Project."), "原文要留着：{msg}");
+                assert!(msg.contains("-32000"), "code 也要留着：{msg}");
+            }
+            other => panic!("error 响应必须是 ServerError，got {other:?}"),
+        }
     }
 
     #[tokio::test]

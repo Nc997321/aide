@@ -22,9 +22,10 @@ impl IdAllocator {
 #[derive(Debug)]
 pub enum Action {
     /// 响应：关联到某 waiter。table 里无此 id → 调方静默丢（不崩）。
+    /// `Err` = 服务器用 JSON-RPC error **拒绝**了这条请求——不是结果（见 `WaiterReply`）。
     ResolveWaiter {
         id: u64,
-        result: serde_json::Value,
+        result: crate::lsp::transport::WaiterReply,
     },
     /// server 推诊断 → manager emit("lsp-diagnostics")。
     EmitDiagnostics {
@@ -143,16 +144,29 @@ pub fn dispatch(msg: &serde_json::Value) -> Action {
     }
 
     if has_id {
-        // response（result 或 error）
+        // response：**result 与 error 分道走**。error 曾被折叠成 `result: null`，
+        // 于是「服务器拒答」在整条链路上伪装成「服务器答了：空」。
         let id = msg_id_u64(obj.get("id"));
-        let result = obj
-            .get("result")
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
+        let result = match obj.get("error") {
+            Some(err) => Err(error_message(err)),
+            None => Ok(obj.get("result").cloned().unwrap_or(serde_json::Value::Null)),
+        };
         return Action::ResolveWaiter { id, result };
     }
 
     Action::Ignore
+}
+
+/// JSON-RPC error → 可读消息。**带 code**：排查时一眼看出是谁拒的、拒的是什么。
+fn error_message(err: &serde_json::Value) -> String {
+    let msg = err
+        .get("message")
+        .and_then(|m| m.as_str())
+        .unwrap_or("language server returned an error");
+    match err.get("code").and_then(|c| c.as_i64()) {
+        Some(code) => format!("{msg} (code {code})"),
+        None => msg.to_string(),
+    }
 }
 
 fn msg_id_u64(id: Option<&serde_json::Value>) -> u64 {
@@ -182,8 +196,8 @@ impl Router {
     ) -> (
         serde_json::Value,                    // 要发的消息体
         u64,                                  // id（调用方 insert 用）
-        oneshot::Sender<serde_json::Value>,   // 注册进 table
-        oneshot::Receiver<serde_json::Value>, // 调用方 await
+        oneshot::Sender<crate::lsp::transport::WaiterReply>, // 注册进 table
+        oneshot::Receiver<crate::lsp::transport::WaiterReply>, // 调用方 await
     ) {
         let id = self.ids.next();
         let (tx, rx) = oneshot::channel();
@@ -219,9 +233,32 @@ mod tests {
         match dispatch(&msg) {
             Action::ResolveWaiter { id, result } => {
                 assert_eq!(id, 5);
-                assert_eq!(result["x"], 1);
+                assert_eq!(result.expect("result 型响应")["x"], 1);
             }
             other => panic!("expected ResolveWaiter, got {other:?}"),
+        }
+    }
+
+    /// **error 不是结果。** 真机事故：折叠成 `null` 之后，「服务器拒答」在整条链路上
+    /// 与「服务器确认没有」无法区分，于是吐出假否定（红线「空 ≠ 没有」在传输层的落点）。
+    #[test]
+    fn dispatch_error_response_is_not_a_result() {
+        let msg =
+            json!({"jsonrpc":"2.0","id":7,"error":{"code":-32000,"message":"No Project."}});
+        match dispatch(&msg) {
+            Action::ResolveWaiter { id, result } => {
+                assert_eq!(id, 7);
+                let err = result.expect_err("error 响应不许落到 Ok");
+                assert!(err.contains("No Project."), "原文要留着，got {err}");
+                assert!(err.contains("-32000"), "code 也要留着：一眼看出是谁拒的，got {err}");
+            }
+            other => panic!("expected ResolveWaiter, got {other:?}"),
+        }
+        // 无 result 字段的 error（code 也缺）→ 仍是 Err，不能退化成 result:null
+        let only_error = json!({"jsonrpc":"2.0","id":8,"error":{"message":"boom"}});
+        match dispatch(&only_error) {
+            Action::ResolveWaiter { result, .. } => assert_eq!(result.unwrap_err(), "boom"),
+            other => panic!("got {other:?}"),
         }
     }
 
@@ -323,7 +360,7 @@ mod tests {
             }
             other => panic!("got {other:?}"),
         }
-        let got = rx.await.unwrap();
+        let got = rx.await.unwrap().expect("result 型响应");
         assert!(got.as_array().unwrap().len() == 1);
     }
 }
