@@ -161,6 +161,52 @@ lsp_workspace_symbol(workspace_root, query, lang?) -> LspSymbolSearchResult { st
 - **C1（先做）**：桥 + 就绪探测 + 预热 + `lsp_symbols` + `lsp_references`。以 spike 的歧义任务端到端验收。
 - **C2**：`lsp_definition` + `lsp_implementations`；`call_hierarchy` 视使用情况再定。
 
+## C3：退役内置 LSP 通道（选项 B，待实施）
+
+**为什么必须做**：C1 建了新路，**从没把旧路退掉**——spec 架构节里写的「agent 不再走
+Claude Code 内置 LSP 工具，因此不会再起第二个语言服务器进程」至今是空头承诺。
+
+真机实测的后果（2026-09-19）：同一个问题，agent 会**并排调用** `mcp__aide-lsp__lsp_references`
+与内置 `LSP` 工具。两个危害：
+
+1. **双份语言服务器**：内置工具是 CLI 懒启动的自己的 rust-analyzer（实测进程父级为
+   `claude.exe`），aide 的 `LspManager` 是另一份。同仓库两份 RA，各约 5GB。
+2. **答案互相矛盾**：我们在冷窗口说「索引未就绪，空不等于没有」；内置工具在同一时刻
+   平铺直叙回 **"No references found"**。模型拿到两个矛盾信号，很可能采信更简洁的那个
+   ——**我们建的诚实性被并排的工具直接抵消**。
+
+### 方案
+
+`--plugin-dir` 那份列表是 **aide 自己拼的**（已核对进程命令行），所以 aide 可以在拼列表时
+把提供 `.lsp.json` 的插件剔掉。判据与挂载闸门同一数据源：该工作区有配得上 LSP 的语言。
+
+### 已知的时序问题（实施前必须想清）
+
+`--plugin-dir` 在 **CLI spawn** 时确定，而语言列表要到 **send** 时才由
+`lsp_languages_for_path(app, cwd)` 算出。两者不同时。
+
+候选解法：
+- **(a) 按工作区预判**：CLI spawn 时该会话的工作区已知，可直接跑一次
+  `detect_languages` ∩ `registry::resolve`，不必等 send。缺点是 CLI 可能跨工作区复用
+  （需确认：`--plugin-dir` 是 per-CLI-process 的，而 CLI 是 per-session 的，故大概率可行）。
+- **(b) 全局退役**：装了 aide-lsp 能力就一律剔掉 `*-lsp` 插件，不看工作区。简单，
+  但在没配 LSP 的工作区也剔——那些地方本来也不该有内置工具，所以**其实可接受**。
+
+**倾向 (b)**：简单、无时序问题，且「同一个能力不该有两个入口」本来就是全局原则而非
+逐工作区的。若日后发现需要按工作区保留，再升级到 (a)。
+
+### 验收
+
+- 新会话里问「你有哪些 LSP 工具」→ **只有 `mcp__aide-lsp__*` 四个**，没有内置 `LSP`。
+- 任务管理器里同一仓库**只有一个** rust-analyzer（不是两个）。
+- 回归：某个语言没配 LSP 时，`*-lsp` 插件被剔掉不会造成能力缺口（那种工作区本来也没有 LSP）。
+
+=== 未定案 ===
+
+**要不要连 `enabled-plugins.json` 一起改？** 剔 `--plugin-dir` 是运行时抑制，插件本身
+仍显示为「已启用」。用户会困惑「我开着它为什么没有」。可接受（抑制是 aide 的行为，
+插件是用户的安装），但要在 UI 上或文档里说清。
+
 ## 未决问题
 
 本节只留**真正需要实测/查证**的项；设计选择已在正文定案（语言参数见「新增命令」，`OpenDocs` 方案见「风险 1」，预热开关见下）。
