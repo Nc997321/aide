@@ -60,14 +60,48 @@ function notReadyText(resp: LspQueryResponse, what: string): string {
   }
 }
 
+/** 结果条目的真实形状（`QueryResult.symbol`，见 src-tauri/src/lsp/protocol.rs 的
+ *  `location_to_query_result`）。**嵌套一层**——初版按扁平的 `file`/`line`/`column`
+ *  读，真机输出全是 `undefined:undefined:1`。夹具照假设写 = 测试只验证了假设。 */
+interface QueryResultLike {
+  symbol?: { file?: string; line?: number; column?: number };
+}
+
 /** 只有 status=ready 才允许说「没有」。 */
 function okText(tool: LspTool, resp: LspQueryResponse, what: string): string {
-  const results = (resp.results ?? []) as Array<Record<string, unknown>>;
+  if (resp.ambiguous) return ambiguousText(what, (resp.candidates ?? []) as SymbolCandidateLike[]);
+
+  const results = (resp.results ?? []) as QueryResultLike[];
   if (results.length === 0) {
     return `No ${LABELS[tool]} found for \`${what}\` — the language server's index is ready, so this is a confirmed negative (not a missing answer).`;
   }
-  const lines = results.map((r) => `  ${r.file_path}:${r.line}:${r.column ?? 1}`);
+  const lines = results.map((r) => {
+    const sym = r.symbol;
+    // 读不到路径 = 契约漂移。**如实说出**，不要打印 undefined 让模型对着一堆
+    // `undefined:undefined:1` 自己猜——那正是这次踩的坑。
+    if (!sym?.file) return "  (result missing path — protocol drift, report it)";
+    return `  ${sym.file}:${sym.line ?? 1}:${sym.column ?? 1}`;
+  });
   return `${results.length} ${LABELS[tool]} for \`${what}\`:\n${clamp(lines.join("\n"), results.length)}`;
+}
+
+/** 歧义候选是 `SymbolCandidate`（**扁平**：`file_path`/`line`/`column`/`lang`），
+ *  与 `results` 的 `QueryResult`（嵌套 `symbol.file`）**不是同一个形状**——同一个
+ *  payload 里并存两种，别互相套用（这里踩过一次，测试抓住了）。 */
+interface SymbolCandidateLike {
+  name?: string;
+  file_path?: string;
+  line?: number;
+  column?: number;
+  lang?: string;
+}
+
+/** 同名多义：列候选 + 明确要求模型自己定，**不替它选**（spec：不假装唯一）。 */
+function ambiguousText(what: string, cands: SymbolCandidateLike[]): string {
+  const lines = cands.map((c) =>
+    c.file_path ? `  ${c.file_path}:${c.line ?? 1}:${c.column ?? 1}` : "  (candidate missing path)"
+  );
+  return `${cands.length} symbols named \`${what}\` — which one you mean cannot be decided from the name alone. Read the candidates and re-query with an explicit {file, line, character} for the one you want:\n${clamp(lines.join("\n"), cands.length)}`;
 }
 
 /** 截断要如实说——结果进上下文，超预算就是每一轮的长期成本。 */

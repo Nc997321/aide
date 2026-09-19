@@ -49,20 +49,41 @@ describe("formatLspResponse —— 空 ≠ 没有（红线）", () => {
     expect(text.startsWith("No ")).toBe(false);
   });
 
-  it("有结果时列出行号，且截断到 2KB 以内并如实说明", () => {
+  /// **夹具必须照真实序列化形状写**。这里踩过：初版夹具用了扁平的
+  /// `{file_path, line, column}`（我假设的形状），而 Rust 侧 `QueryResult` 是
+  /// **嵌套**的 `{symbol: {file, line, column}, confidence, …}`——测试一直绿着，
+  /// 真机上却输出 `undefined:undefined:1`。夹具照假设写 = 测试只验证了假设。
+  it("有结果时读嵌套的 symbol.file/line/column，截断到 2KB 以内并如实说明", () => {
     const results = Array.from({ length: 200 }, (_, i) => ({
-      file_path: `/proj/src/a${i}.rs`,
-      line: i + 1,
-      column: 1,
+      symbol: { name: "get", kind: 6, file: `/proj/src/a${i}.rs`, line: i + 1, column: 1 },
+      confidence: "structure",
     }));
     const text = formatLspResponse(
       "references",
       { ok: true, status: "ready", results },
       { name: "get" }
     );
-    expect(text).toContain(":1:");
+    expect(text).toContain("/proj/src/a0.rs:1:1");
+    expect(text).not.toContain("undefined");
     expect(text.length).toBeLessThan(2048);
     expect(text).toMatch(/truncated|200/i);
+  });
+
+  /// 同名多义：不替模型选，把候选列出来并明确要求它自己定。
+  it("ambiguous → 列出候选并要求消歧，不假装唯一", () => {
+    const candidates = [
+      { name: "get", kind: 6, file_path: "/p/a.rs", line: 216, column: 18, lang: "rust" },
+      { name: "get", kind: 6, file_path: "/p/b.rs", line: 40, column: 12, lang: "rust" },
+    ];
+    const text = formatLspResponse(
+      "references",
+      { ok: true, status: "ready", ambiguous: true, candidates },
+      { name: "get" }
+    );
+    expect(text).toContain("/p/a.rs:216:18");
+    expect(text).toContain("/p/b.rs:40:12");
+    expect(text).toMatch(/2|two|multiple/i);
+    expect(text).toMatch(/disambiguat|which one|explicit/i);
   });
 
   /// 状态词表必须与 Rust 侧 src-tauri/src/lsp/agent_status.rs 的 as_str() 逐字一致：

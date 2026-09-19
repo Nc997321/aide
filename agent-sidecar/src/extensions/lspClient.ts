@@ -15,6 +15,9 @@ export interface LspQueryResponse {
   status: string;
   results?: unknown[];
   count?: number;
+  /** 同名多义：`candidates` 是候选清单，模型须自己读代码消歧（见 agent_query.rs）。 */
+  ambiguous?: boolean;
+  candidates?: unknown[];
   error?: string;
   timedOut?: boolean;
   cancelled?: boolean;
@@ -53,6 +56,8 @@ export function resolveLspResult(cmd: {
   status?: string;
   results?: unknown[];
   count?: number;
+  ambiguous?: boolean;
+  candidates?: unknown[];
   error?: string;
 }): void {
   const p = pending.get(cmd.request_id);
@@ -64,6 +69,8 @@ export function resolveLspResult(cmd: {
     status: cmd.status ?? (cmd.ok ? "ready" : "error"),
     results: cmd.results,
     count: cmd.count,
+    ambiguous: cmd.ambiguous,
+    candidates: cmd.candidates,
     error: cmd.error,
   });
 }

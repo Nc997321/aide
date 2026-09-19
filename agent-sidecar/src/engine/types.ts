@@ -580,6 +580,9 @@ export type SidecarCommand =
       status?: string;
       results?: unknown[];
       count?: number;
+      /** 同名多义：不替模型选，把候选交出去让它读代码定（见 agent_query.rs）。 */
+      ambiguous?: boolean;
+      candidates?: unknown[];
       error?: string;
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。

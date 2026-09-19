@@ -24,6 +24,16 @@ pub struct Position {
     pub character: usize,
 }
 
+/// 按名字解析的三种结局。**`Ambiguous` 必须与 `Found` 分开**：spec 明确要求
+/// 「同名多义时列出候选、要求先 Read 消歧，不假装唯一」——静默取第一个就是假装
+/// 唯一，实测已咬过人（`LspManager::get` 被解析成了另一个 `get`，回来 84 处引用
+/// 而非该符号的 15 处）。
+enum SymbolLookup {
+    Found(SymbolCandidate),
+    Ambiguous(Vec<SymbolCandidate>),
+    Absent,
+}
+
 pub struct AgentQueryOutcome {
     pub ok: bool,
     pub status: AgentLspStatus,
@@ -113,12 +123,15 @@ pub async fn run_agent_query(
                 return fail(AgentLspStatus::NoSymbol, "missing `name` or `{file,line,character}`");
             };
             match lookup_symbol(state, symbol_query_name(name), workspace_root).await {
-                Ok(Some(c)) => Position {
+                Ok(SymbolLookup::Found(c)) => Position {
                     file: c.file_path,
                     line: c.line,
                     character: c.column,
                 },
-                Ok(None) => {
+                Ok(SymbolLookup::Ambiguous(cands)) => {
+                    return ambiguous_outcome(symbol_query_name(name), cands)
+                }
+                Ok(SymbolLookup::Absent) => {
                     return fail(
                         AgentLspStatus::NoSymbol,
                         &format!("no symbol named `{}`", symbol_query_name(name)),
@@ -168,7 +181,7 @@ async fn lookup_symbol(
     state: &LspState,
     name: &str,
     workspace_root: &str,
-) -> Result<Option<SymbolCandidate>, AgentLspStatus> {
+) -> Result<SymbolLookup, AgentLspStatus> {
     let langs = crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root));
     if langs.is_empty() {
         return Err(AgentLspStatus::NoServer);
@@ -190,12 +203,14 @@ async fn lookup_symbol(
         else {
             continue;
         };
-        if let Some(hit) =
-            crate::lsp::workspace_symbol::parse_workspace_symbols(&v, lang_id.id_str())
-                .into_iter()
-                .next()
-        {
-            return Ok(Some(hit));
+        let hits =
+            crate::lsp::workspace_symbol::parse_workspace_symbols(&v, lang_id.id_str());
+        // **第一个给出候选的语言即定案**，不跨语言合并：`get` 在 Rust 与 TS 里
+        // 同时存在是常态，合并会把两个不同语言的同名符号当成「同一个符号的重载」。
+        match hits.len() {
+            0 => {}
+            1 => return Ok(SymbolLookup::Found(hits.into_iter().next().unwrap())),
+            _ => return Ok(SymbolLookup::Ambiguous(hits)),
         }
         let Some(probe_file) = first_source_file(workspace_root, lang_id).await else {
             continue; // 没靶子 → 无法证实
@@ -205,9 +220,31 @@ async fn lookup_symbol(
         }
     }
     if confirmed_absent {
-        Ok(None)
+        Ok(SymbolLookup::Absent)
     } else {
         Err(AgentLspStatus::Indexing)
+    }
+}
+
+/// 同名多义：**不替模型选**，把候选原样交出去 + 明确要求它先读再定。
+///
+/// `status` 仍是 `ready`——候选清单本身就是可信的答案；不可信的是「哪个才是你要的」，
+/// 而那必须由模型读代码决定（spec 的原话：不假装唯一）。
+fn ambiguous_outcome(name: &str, cands: Vec<SymbolCandidate>) -> AgentQueryOutcome {
+    let n = cands.len();
+    AgentQueryOutcome {
+        ok: true,
+        status: AgentLspStatus::Ready,
+        payload: json!({
+            "ok": true,
+            "status": "ready",
+            "ambiguous": true,
+            "count": n,
+            "candidates": cands,
+            "error": format!(
+                "{n} symbols named `{name}` — read them and re-query with an explicit                  {{file, line, character}} for the one you want"
+            ),
+        }),
     }
 }
 
@@ -294,7 +331,7 @@ async fn run_jump(
         Ok(o) => o,
         Err(e) => return fail(AgentLspStatus::Error, &e),
     };
-    let (status, results) = jump::map_outcome(outcome, "", workspace_root);
+    let (status, results) = jump::map_outcome_absolute(outcome, "");
     if status != crate::lsp::JumpStatus::Ok || !results.is_empty() {
         // 结果非空 → ready 铁证；status 非 Ok → 直接透传（不冒充 ready）。
         let agent_status = match status {

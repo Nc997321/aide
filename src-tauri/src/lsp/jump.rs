@@ -49,6 +49,20 @@ pub(crate) async fn issue(
     h.request(method, params, timeout).await
 }
 
+/// agent 视角的结果：**路径保持绝对**。
+///
+/// 与编辑器视角的差别是真实需求而非口味：模型要拿结果继续调工具（Read、下一次
+/// references、@引用），相对路径对它没有意义；而编辑器要相对路径（前端
+/// jumpToResult 自己拼 root）。用独立入口表达这个差异，**不靠调用方传空字符串
+/// 这种隐式约定**。
+pub(crate) fn map_outcome_absolute(
+    outcome: RequestOutcome,
+    word: &str,
+) -> (JumpStatus, Vec<QueryResult>) {
+    // 空 root ⇒ uri_to_rel_path 原样返回绝对路径（见 protocol.rs 的 root.is_empty() 分支）。
+    map_outcome(outcome, word, "")
+}
+
 /// `RequestOutcome` → (status, results)。**这是「空 ≠ 没有」在编辑器侧的落点**：
 /// `Ok(空数组)` 是 server 确认无结果，与 Timeout/NotReady/Gone 本质不同——
 /// 后者一律返回空 results，但 status 不同，前端据此决定等待还是回退。
