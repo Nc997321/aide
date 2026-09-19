@@ -122,25 +122,70 @@ pub async fn lsp_ensure_server(
             kind: None,
             error: None,
         }),
-        Err(EnsureError::ServerNotFound) => Ok(EnsureOutcome {
+        Err(e) => Ok(ensure_err_to_outcome(e)),
+    }
+}
+
+/// `ensure_server` 的 Err → `EnsureOutcome`。**命令与 agent 查询共用这段映射**
+/// ——两份实现迟早漂移，而"server_not_found 该不该报成 no_server"正是要一致的东西。
+pub(crate) fn ensure_err_to_outcome(e: EnsureError) -> EnsureOutcome {
+    match e {
+        EnsureError::ServerNotFound => EnsureOutcome {
             ok: false,
             ready: false,
             kind: Some("server_not_found"),
             error: None,
-        }),
-        Err(EnsureError::HandshakeFailed(e)) => Ok(EnsureOutcome {
+        },
+        EnsureError::HandshakeFailed(msg) => EnsureOutcome {
             ok: false,
             ready: false,
             kind: Some("handshake_failed"),
-            error: Some(e),
-        }),
-        Err(EnsureError::SpawnFailed(e)) => Ok(EnsureOutcome {
+            error: Some(msg),
+        },
+        EnsureError::SpawnFailed(msg) => EnsureOutcome {
             ok: false,
             ready: false,
             kind: Some("spawn_failed"),
-            error: Some(e),
-        }),
+            error: Some(msg),
+        },
     }
+}
+
+/// 一个(工作区, 语言)的 server 是否已可用——**带 ensure**，不是只看 `mgr.get()`。
+///
+/// 存在的理由：agent 查询可能先于编辑器到达（用户没打开过该语言的文件），
+/// 只 `get()` 会直接报 no_server，而正确行为是把 server 拉起来。
+/// 信任门在内：未信任工作区一律 untrusted，即便调用方忘了查。
+pub(crate) async fn ensure_lang(
+    state: &LspState,
+    app: &tauri::AppHandle,
+    workspace_root: &str,
+    lang_id: crate::lsp::detector::LanguageId,
+) -> Result<EnsureOutcome, String> {
+    use tauri::Manager;
+    if !crate::commands::workspace::is_path_trusted(workspace_root) {
+        return Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("untrusted"),
+            error: None,
+        });
+    }
+    let Some(svc) = app.try_state::<Arc<crate::settings::SettingsService>>() else {
+        return Err("settings service unavailable".into());
+    };
+    let settings = crate::commands::settings::public_settings(svc.inner())
+        .map_err(|e| e.to_string())?;
+    let mgr = state.0.lock().await;
+    Ok(match mgr.ensure_server(workspace_root, lang_id, app, &settings).await {
+        Ok(h) => EnsureOutcome {
+            ok: true,
+            ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
+            kind: None,
+            error: None,
+        },
+        Err(e) => ensure_err_to_outcome(e),
+    })
 }
 
 #[tauri::command]

@@ -15,6 +15,7 @@ use crate::lsp::workspace_symbol::SymbolCandidate;
 use crate::lsp::LspState;
 use serde_json::{json, Value};
 use std::sync::Arc;
+use tauri::{AppHandle, Manager};
 
 /// 已解析出的查询位置（1-based，与命令行/前端一致）。
 pub struct Position {
@@ -55,16 +56,50 @@ fn fail(status: AgentLspStatus, msg: &str) -> AgentQueryOutcome {
     }
 }
 
+/// 本次查询该为哪些语言准备 server：显式坐标 → 该文件的扩展名；只给名字 →
+/// 该工作区探测到的全部语言（agent 只拿得到一个名字，没有扩展名可据以分派）。
+fn target_languages(args: &Value, workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
+    if let Some(p) = resolve_position(args) {
+        return crate::lsp::lang_from_ext_of(&p.file).into_iter().collect();
+    }
+    crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root))
+}
+
 /// agent 语义查询入口。
 pub async fn run_agent_query(
-    state: &LspState,
+    app: &AppHandle,
     tool: &str,
     args: &Value,
     workspace_root: &str,
 ) -> AgentQueryOutcome {
-    if !crate::commands::workspace::is_path_trusted(workspace_root) {
-        return fail(AgentLspStatus::Untrusted, "workspace not trusted");
+    let Some(state) = app.try_state::<Arc<LspState>>() else {
+        return fail(AgentLspStatus::NoServer, "lsp state unavailable");
+    };
+    let state = state.inner();
+    // 1. **确保 server 起来**。agent 查询可能先于编辑器到达（用户没打开过该语言的
+    //    文件）——只 `mgr.get()` 会直接报 no_server，而正确行为是把它拉起来。
+    let langs = target_languages(args, workspace_root);
+    if langs.is_empty() {
+        return fail(AgentLspStatus::NoServer, "no language detected for this query");
     }
+    let mut warmed = AgentLspStatus::NoServer;
+    for lang_id in &langs {
+        match crate::lsp::ensure_lang(state, app, workspace_root, *lang_id).await {
+            Ok(o) => {
+                let s = AgentLspStatus::from_ensure(&o);
+                if matches!(s, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
+                    warmed = s;
+                    break;
+                }
+                warmed = s;
+            }
+            Err(e) => return fail(AgentLspStatus::Error, &e),
+        }
+    }
+    if !matches!(warmed, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
+        return fail(warmed, "no usable language server for this workspace");
+    }
+    // 2. 坐标
     let pos = match resolve_position(args) {
         Some(p) => p,
         None => {

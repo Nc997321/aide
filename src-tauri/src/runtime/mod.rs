@@ -13,6 +13,7 @@ pub mod browser_agent;
 pub mod env;
 #[cfg(windows)]
 pub mod job_object;
+pub mod lsp_agent;
 pub mod provider;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
@@ -336,6 +337,18 @@ impl AgentRuntimeManager {
                                     let mut g = stdin2.lock().await;
                                     let _ = g.write_all(line.as_bytes()).await;
                                 }
+                            });
+                            continue;
+                        }
+                        // agent LSP 查询：同 codegraph，是 Rust ↔ Runtime 的内部 request/response，
+                        // **不转发 Vue**。与 codegraph 的区别：查询本体**不跳 runner**——LspManager
+                        // 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
+                        // 「拦截 + 派发」，业务不内联（同 browser 的理由：本文件有 1000 行拆分线）。
+                        if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
+                            let app2 = app.clone();
+                            let stdin2 = stdin_for_agent.clone();
+                            tokio::spawn(async move {
+                                crate::runtime::lsp_agent::handle(app2, stdin2, req).await;
                             });
                             continue;
                         }
