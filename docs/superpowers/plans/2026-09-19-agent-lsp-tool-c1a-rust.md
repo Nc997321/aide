@@ -339,6 +339,16 @@ git commit -m "feat(lsp): agent 状态词表——空结果与未就绪可区分
 
 ### Task 3: 就绪探测 `lsp/agent_readiness.rs`
 
+> **⚠️ 执行期修正（2026-09-19，commit ded920cc）——本节下面的代码块已过时，
+> 以仓内实现为准：**
+> 1. 签名改为 `await_ready(initial, probe, budget: ReadinessBudget)`。原设计是
+>    `(…, budget: Duration, interval: Duration)`——两个 Duration 相邻同型，交换即
+>    静默错位（变成「每 90 秒探一次、5 秒超时」）。打包成结构体消除该风险。
+> 2. 测试的**间隔必须显著小于总预算**。原设计用生产常量 5s 间隔配 2s 预算，
+>    第一次轮询就睡掉整个预算，「第 3 次才返回 true」的断言永远不可能成立。
+>    测试改用 10ms 间隔（`fast(total_ms)` 辅助函数）。
+> 3. `Ready` 不短路的理由已写进 `from_ensure`/`await_ready` 的文档注释。
+
 **Files:**
 - Create: `src-tauri/src/lsp/agent_readiness.rs`
 - Modify: `src-tauri/src/lsp/mod.rs`
@@ -352,7 +362,15 @@ git commit -m "feat(lsp): agent 状态词表——空结果与未就绪可区分
   - `pub async fn await_ready<F, Fut>(initial: AgentLspStatus, probe: F, budget: Duration) -> AgentLspStatus`
     其中 `F: FnMut() -> Fut, Fut: Future<Output = bool>`——`probe` 返回 `true` 表示「语义层已可用」
 
-**为什么需要它**：`EnsureOutcome.ready` 对 Java 是对的、对 rust-analyzer 是错的（`lsp/mod.rs:26-27` 注释在案：其余语言握手成功即 true）。实测 rust-analyzer 握手后仍需 46–73 秒。直接信 `ready` 就是重犯内置工具那个错误。
+**为什么需要它**：`EnsureOutcome.ready` 只在 Java 方向可信。注释写明「Java 索引期
+ready=false；**其余语言握手成功即 ready=true**」——于是 rust-analyzer 在
+`ready=true` 的那一刻索引根本没建好（实测 46–73 秒）。
+
+> **⚠️ 实现时的关键点（计划初稿在这里是错的）**：绝**不能**对 `Ready` 短路返回。
+> `Ready` 正是 rust-analyzer 在索引期间报的状态，对它短路等于完全不探测，把本设计
+> 要消灭的 bug 原样复制一遍。**`Ready` 与 `Indexing` 一律探测**；只有硬失败态
+> （NoServer / Untrusted / Error / NoSymbol / Timeout / Gone）才短路——那些重试也不会变好。
+> 探测失败时 `Ready` 要**降级成 `Indexing`**：探测失败本身就是「不可用」的证据。
 
 - [ ] **Step 1: 写失败测试**
 
@@ -363,33 +381,57 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
 
+    /// 硬失败态短路：重试不会变好，且**不该白花一次探测**。
     #[tokio::test]
-    async fn ready_passes_through_without_probing() {
+    async fn hard_failures_short_circuit_without_probing() {
+        for s in [
+            AgentLspStatus::NoServer,
+            AgentLspStatus::Untrusted,
+            AgentLspStatus::Error,
+            AgentLspStatus::NoSymbol,
+            AgentLspStatus::Timeout,
+            AgentLspStatus::Gone,
+        ] {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let c = calls.clone();
+            let got = await_ready(
+                s,
+                move || {
+                    c.fetch_add(1, Ordering::SeqCst);
+                    async { true }
+                },
+                Duration::from_millis(50),
+            )
+            .await;
+            assert_eq!(got, s, "{:?} 应原样返回", s);
+            assert_eq!(calls.load(Ordering::SeqCst), 0, "{:?} 不该探测", s);
+        }
+    }
+
+    /// **本任务的核心回归测试**：`Ready` 也不可信。
+    /// rust-analyzer 握手即 ready=true 但索引还要几十秒——若这里短路，
+    /// 就退回「空冒充没有」了。
+    #[tokio::test]
+    async fn ready_is_still_probed_and_downgrades_on_failure() {
         let calls = Arc::new(AtomicUsize::new(0));
         let c = calls.clone();
         let got = await_ready(
             AgentLspStatus::Ready,
             move || {
                 c.fetch_add(1, Ordering::SeqCst);
-                async { true }
+                async { false }
             },
-            Duration::from_millis(50),
+            Duration::from_millis(120),
         )
         .await;
-        assert_eq!(got, AgentLspStatus::Ready);
-        assert_eq!(calls.load(Ordering::SeqCst), 0, "已 ready 不该再探测");
+        assert!(calls.load(Ordering::SeqCst) > 0, "Ready 必须被探测，不能短路");
+        assert_eq!(got, AgentLspStatus::Indexing, "探测失败要降级，不能保持 Ready");
     }
 
     #[tokio::test]
-    async fn non_ready_statuses_short_circuit() {
-        for s in [
-            AgentLspStatus::NoServer,
-            AgentLspStatus::Untrusted,
-            AgentLspStatus::Error,
-        ] {
-            let got = await_ready(s, || async { true }, Duration::from_millis(50)).await;
-            assert_eq!(got, s);
-        }
+    async fn ready_probe_success_stays_ready() {
+        let got = await_ready(AgentLspStatus::Ready, || async { true }, Duration::from_millis(50)).await;
+        assert_eq!(got, AgentLspStatus::Ready);
     }
 
     #[tokio::test]
@@ -410,7 +452,6 @@ mod tests {
     }
 
     /// 预算耗尽仍没就绪 → 保持 indexing（**不是** timeout：进程还活着，只是慢）。
-    /// 若返回一个「空结果可信」的状态，就退回了「空冒充没有」。
     #[tokio::test]
     async fn budget_exhausted_stays_indexing() {
         let got = await_ready(
@@ -435,11 +476,14 @@ Expected: 编译失败
 //! 就绪探测：把「进程在」升级成「语义层可用」。
 //!
 //! 存在的理由：`EnsureOutcome.ready` 只对 jdtls 有真实语义（见 lsp/mod.rs 注释），
-//! rust-analyzer 握手即 ready=true 但索引还要几十秒。调用方拿 ready 当闸门会
-//! 把「还没好」当成「没有」——那正是内置 LSP 工具的失败模式。
+//! rust-analyzer 握手即 ready=true 但索引还要几十秒。**调用方拿 ready 当闸门就是
+//! 把「还没好」当成「没有」**——那正是内置 LSP 工具的失败模式。
 //!
 //! 判定手段与工具无关：轮询一个**廉价语义查询**（调用方注入，通常是
 //! `documentSymbol`）直到非空。探测函数注入而非内联，是为了本模块可单测。
+//!
+//! 注意 `Ready` **也**要探测——状态词只表示「ensure 说它好了」，不表示索引建完了。
+//! C1 不做探测结果缓存：每次查询多一次廉价往返，换「永不说谎」。缓存是后续优化。
 
 use crate::lsp::agent_status::AgentLspStatus;
 use std::future::Future;
@@ -450,11 +494,10 @@ use tokio::time::{sleep, Instant};
 pub const READINESS_BUDGET: Duration = Duration::from_secs(90);
 pub const READINESS_POLL_INTERVAL: Duration = Duration::from_secs(5);
 
-/// 状态是 `Indexing` 时轮询 `probe` 直到成功或预算耗尽。
+/// `Ready` / `Indexing` 探测到成功为止；其余状态原样返回。
 ///
-/// 其它状态一律原样返回：`Ready` 无需探测，`NoServer`/`Untrusted`/`Error`
-/// 重试也不会变好。预算耗尽保持 `Indexing`——**进程还活着，只是慢**，
-/// 不能报成「可服务」（那会让空结果被当成可信的「没有」）。
+/// 预算耗尽一律返回 `Indexing`——**绝不返回 `Ready`**：没探测成功就没有
+/// 「空结果可信」的资格。`Ready` 传入但探测失败时同样降级，理由同上。
 pub async fn await_ready<F, Fut>(
     initial: AgentLspStatus,
     mut probe: F,
@@ -464,7 +507,7 @@ where
     F: FnMut() -> Fut,
     Fut: Future<Output = bool>,
 {
-    if initial != AgentLspStatus::Indexing {
+    if !matches!(initial, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
         return initial;
     }
     let deadline = Instant::now() + budget;
@@ -472,7 +515,11 @@ where
         if probe().await {
             return AgentLspStatus::Ready;
         }
-        sleep(READINESS_POLL_INTERVAL.min(deadline - Instant::now())).await;
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        sleep(READINESS_POLL_INTERVAL.min(left)).await;
     }
     AgentLspStatus::Indexing
 }
@@ -481,15 +528,17 @@ where
 - [ ] **Step 4: 跑测试确认通过**
 
 Run: `cd src-tauri && cargo test --lib lsp::agent_readiness`
-Expected: 4 passed
+Expected: 5 passed
 
-> 注：测试里用了 `tokio::test`。若本仓库 lib 测试未启 tokio 宏，改用 `#[test]` + `tokio::runtime::Runtime::new().unwrap().block_on(...)`（与 `lsp/manager.rs` 既有异步测试同形）。
+> 注：测试里用了 `tokio::test`。若本仓库 lib 测试未启 tokio 宏（先跑一次看是否报
+> `cannot find attribute`），改用 `#[test]` + `tokio::runtime::Runtime::new().unwrap().block_on(...)`
+> ——与 `lsp/manager.rs` 既有异步测试同形。
 
 - [ ] **Step 5: 提交**
 
 ```bash
 git add src-tauri/src/lsp/agent_readiness.rs src-tauri/src/lsp/mod.rs
-git commit -m "feat(lsp): 就绪探测——把「进程在」升级成「语义层可用」"
+git commit -m "feat(lsp): 就绪探测——Ready 也不可信，探测失败一律降级 Indexing"
 ```
 
 ---
@@ -1155,12 +1204,28 @@ git commit -m "feat(lsp): 挂载闸门数据源——该工作区配得上 LSP �
 
 ### didOpen 是否必需（Task 6 Step 1）
 
-| 变体 | 结果 | 调用点数 |
-|---|---|---|
-| 带 didOpen | 待填 | 待填 |
-| `--no-did-open` | 待填 | 待填 |
+| 变体 | 结果 | 调用点数 | 耗时 |
+|---|---|---|---|
+| 带 didOpen | ok | **19** | 73.1s |
+| `--no-did-open` | ok | **19** | 62.8s |
 
-结论：待填（「不需要」/「需要」→ Task 6 Step 2 做/不做）
+> 19 而非上次的 16：差值 3 恰是 C1a 自己新增的 `mgr.get()` 调用点
+> （`agent_query.rs` 的 `lookup_symbol` / `server_for` 等）。**LSP 把本次改动
+> 自己算了进去**——算是一次意外的交叉验证。
+
+**结论：不需要。** 两次的候选点逐条相同（`D1.json` / `D2.json`），rust-analyzer 对
+**未 didOpen 的文件**照样回答 `references`——它的工程图来自 `cargo metadata`，
+不依赖文档同步。
+
+⇒ **Task 6 Step 2（按需 didOpen）判定为不实施**，Step 3（串扰隔离）随之也不需要：
+agent 路径从不 `didOpen`，就没有「agent 打开的文档」需要挡在编辑器 UI 之外。
+Task 6 整体结案为「前提被实测否证，不实施」。
+
+**但这引出一条必须写下来的降级性质**：若将来换成确实需要 didOpen 的 server
+（jdtls / tsserver 的某些操作），`probe_ready` 会跟着失败 → 返回 `indexing`
+而不是假装 `ready`。也就是说**最坏情况是「LSP 不可用、退回 Grep」，绝不会是
+「拿空冒充没有」**。这正是本设计要保证的性质。届时实施按需 didOpen 的触发条件 =
+「在某个语言上观察到 references 恒为空且 probe 恒失败」。
 
 ### 串扰隔离落在哪个方案（Task 6 Step 3）
 

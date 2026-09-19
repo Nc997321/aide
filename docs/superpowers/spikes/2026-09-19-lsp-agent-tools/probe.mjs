@@ -40,10 +40,19 @@ const LANGUAGE_BY_EXT = {
 
 function parseArgs(argv) {
   const out = {};
-  for (let i = 0; i < argv.length; i += 2) {
+  for (let i = 0; i < argv.length; i++) {
     const key = argv[i];
     if (!key?.startsWith("--")) throw new Error(`unexpected arg: ${key}`);
-    out[key.slice(2)] = argv[i + 1];
+    const next = argv[i + 1];
+    // 裸开关（后一个 token 又是 --flag，或已到末尾）→ true。
+    // 键值对形式照旧。注意：值本身以 `--` 开头时要用键值对写法就得合并成一个 token
+    // （如 --args "a,--stdio"），否则会被当成裸开关——spike 工具可接受。
+    if (next === undefined || next.startsWith("--")) {
+      out[key.slice(2)] = true;
+    } else {
+      out[key.slice(2)] = next;
+      i++;
+    }
   }
   return out;
 }
@@ -199,9 +208,13 @@ async function main() {
 
   const text = readFileSync(file, "utf8");
   const uri = pathToFileURL(file).href;
-  t.notify("textDocument/didOpen", {
-    textDocument: { uri, languageId: language, version: 1, text },
-  });
+  // `--no-did-open` measures whether a server answers for a document it was never
+  // told about. Used to decide whether the agent path needs on-demand didOpen.
+  if (!a["no-did-open"]) {
+    t.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: language, version: 1, text },
+    });
+  }
 
   const params =
     op === "documentSymbol"

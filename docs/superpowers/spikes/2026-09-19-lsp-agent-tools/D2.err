@@ -1,0 +1,5 @@
+attempt 1: file not found: C:\Users\<user>\IdeaProjects\aide\src-tauri\src\lsp\manager.rs
+[server stderr] 2026-09-19T17:48:31.6760285+08:00  WARN notify error: Input watch path is neither a file nor a directory.
+[server stderr] 2026-09-19T17:48:36.3740153+08:00  WARN notify error: Input watch path is neither a file nor a directory.
+[server stderr] 2026-09-19T17:49:09.5521982+08:00  WARN overly long loop turn took 202.9112ms (event handling took 202.893ms): PrimeCaches(End { cancelled: false })
+attempt 5: content modified

@@ -1,0 +1,105 @@
+{
+  "ok": true,
+  "op": "references",
+  "file": "src-tauri/src/lsp/manager.rs",
+  "attempt": 7,
+  "elapsedMs": 73071,
+  "count": 19,
+  "items": [
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 254,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 286,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 317,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 358,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 414,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 499,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 539,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 573,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 609,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 644,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 695,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 724,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 775,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 806,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/mod.rs",
+      "line": 837,
+      "col": 23
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/agent_query.rs",
+      "line": 142,
+      "col": 27
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/agent_query.rs",
+      "line": 279,
+      "col": 9
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/workspace_symbol.rs",
+      "line": 78,
+      "col": 27
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/manager.rs",
+      "line": 216,
+      "col": 18
+    }
+  ]
+}
