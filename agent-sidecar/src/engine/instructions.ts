@@ -8,6 +8,10 @@
 // capped at 256 KiB; oversize or unreadable files yield a short diagnostics line
 // so the query is never aborted, and a missing file is silently skipped.
 //
+// One block does not come from a file at all: Aide's own LSP navigation hint
+// (lspHint.ts), injected only when the user actually has a language server —
+// see that module for why. It goes first so Aide's layer reads above user rules.
+//
 // 生效窗口（方案 F6）：本函数只在 query spawn 时跑，而 query 全会话只 spawn 一次
 // ⇒ 附加根的指令只在「首条消息带目录 / 新会话 / query 重启」进 system prompt；
 // 中途 @ 的目录靠消息级目录段当轮送达（见 @aide/sdk 的 fileMentions.ts）。
@@ -15,6 +19,7 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { memoryDirs } from "./memoryDirs.js";
+import { loadLspHint } from "./lspHint.js";
 
 const MAX_INSTRUCTION_FILE_BYTES = 256 * 1024;
 /** auto memory 索引（MEMORY.md）截断：前 200 行 / 25 KiB 先到先截——镜像 CLI 的加载
@@ -46,9 +51,10 @@ export interface InstructionSources {
  * `query()` is never blocked.
  */
 export async function loadAideInstructions(p: InstructionSources): Promise<string> {
+  const builtin = await loadLspHint(p.configDir);
   const base = await readBaseInstructions(p);
   const attached = await readAttachedInstructions(p.attached ?? [], p.configDir);
-  return [...base, ...attached].join("\n\n");
+  return [...(builtin ? [builtin] : []), ...base, ...attached].join("\n\n");
 }
 
 /** 主根两块：全局 CLAUDE.md 恒读；主根 CLAUDE.md 仅在 trusted 时读——不让不受信任
