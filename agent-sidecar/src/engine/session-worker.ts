@@ -47,6 +47,7 @@ import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
 import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
+import { cancelAllLspQueries } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
@@ -584,6 +585,7 @@ export class SessionWorker {
       this.permMgr.cancelAll();
       this.jumpQueueCtl.clear();
       cancelAllCodegraphQueries("interrupted");
+      cancelAllLspQueries("interrupted");
       // 内嵌浏览器挂起查询同理：用户已打断，继续等 Rust 回包没有意义（回包来了也会被静默丢弃）。
       cancelAllBrowserQueries("interrupted");
       // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
@@ -693,7 +695,12 @@ export class SessionWorker {
       // 开关兜底方向与「每工作区默认关」一致（=== true）：主进程四条下发路径
       // （chat send/btw + automation build/distill）都恒发该 key，缺 key =
       // 新路径忘了下发 → fail-closed 不挂 MCP，而不是静默开启。
-      this.startLoop(cmd.cwd ?? this.cwd, cmd.trusted !== false, cmd.codegraph_enabled === true);
+      this.startLoop(
+        cmd.cwd ?? this.cwd,
+        cmd.trusted !== false,
+        cmd.codegraph_enabled === true,
+        cmd.lsp_languages ?? [],
+      );
       this.pushUserMessage(cmd.prompt, images, cmd.display);
       this.turnActive = true;
       return;
@@ -736,7 +743,12 @@ export class SessionWorker {
 
   // ---- 主循环 ----
 
-  async startLoop(cwd?: string, trusted = true, codegraphEnabled = true): Promise<void> {
+  async startLoop(
+    cwd?: string,
+    trusted = true,
+    codegraphEnabled = true,
+    lspLanguages: string[] = [],
+  ): Promise<void> {
     // 本循环最后 spawn 的 query（代际守卫用，见 finally）。
     let loopQuery: Awaited<ReturnType<typeof query>> | null = null;
     try {
@@ -780,6 +792,7 @@ export class SessionWorker {
             // 目录段当轮送达）
             attachedDirs: this.additionalDirs,
             codegraphEnabled,
+            lspLanguages,
             processEnv: process.env,
             emit: (e) => this.emit(e),
             automationConfig: this.automationConfig,
@@ -1201,6 +1214,7 @@ export class SessionWorker {
     reapSessionSubprocess(this.routingKey);
     this.queue.close();
     cancelAllCodegraphQueries("session stopped");
+    cancelAllLspQueries("session stopped");
     cancelAllBrowserQueries("session stopped");
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();

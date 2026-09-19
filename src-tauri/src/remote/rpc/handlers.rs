@@ -89,6 +89,9 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
                 runtime,
                 ws_state,
                 settings,
+                // 远程路径同样下发 LSP 语言：工具挂载与否决定手机端会话里
+                // agent 能不能用语义查询（LspManager 始终跑在桌面）。
+                app.clone(),
             )
             .await,
         )

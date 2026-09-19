@@ -510,6 +510,9 @@ export type SidecarCommand =
       // MCP；false = 该工作区未开索引，不注册 codegraph MCP 工具（chat.rs /
       // automation scheduler 四处构造点下发）。
       codegraph_enabled?: boolean;
+      /** 该工作区配得上 LSP 的语言（主进程 lsp_languages_for_path 算好下发）。
+       *  空数组 = 不挂 aide-lsp 工具（见 extensions/lspTools.ts 的四档闸门）。 */
+      lsp_languages?: string[];
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
       // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;
@@ -565,6 +568,18 @@ export type SidecarCommand =
       results?: unknown[];
       candidates?: number;
       truncated?: boolean;
+      error?: string;
+    }
+  // LSP 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
+  // `status` 是八态状态词（见 lspStatusText 的 LSP_STATUS_WORDS，与 Rust 侧
+  // agent_status.rs 的 as_str() 逐字一致）——**模型据此判断空结果可不可信**。
+  | {
+      cmd: "lsp_result";
+      request_id: string;
+      ok: boolean;
+      status?: string;
+      results?: unknown[];
+      count?: number;
       error?: string;
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。

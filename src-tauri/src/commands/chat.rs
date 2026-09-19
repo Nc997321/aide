@@ -255,6 +255,9 @@ pub async fn send_message(
     runtime_mgr: State<'_, AgentRuntimeManager>,
     workspace_state: State<'_, WorkspaceState>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
+    // Tauri 注入（不是 IPC 参数）：lsp_languages_for_path 需要它解析捆绑 server 的
+    // 资源路径（registry::resolve）。同 lsp_ensure_server 的取用方式。
+    app: tauri::AppHandle,
 ) -> Result<(), String> {
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
@@ -342,6 +345,12 @@ pub async fn send_message(
     // （挂载条件与 trusted 并列，见 codegraphTools.ts codegraphMcpRegistration）。
     cmd["codegraph_enabled"] = json!(crate::commands::workspace::is_codegraph_enabled_for_path(
         &cwd_str
+    ));
+    // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
+    // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
+    // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
+    cmd["lsp_languages"] = json!(crate::commands::workspace::lsp_languages_for_path(
+        &app, &cwd_str
     ));
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can

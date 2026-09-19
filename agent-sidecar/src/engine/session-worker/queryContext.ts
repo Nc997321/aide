@@ -7,6 +7,7 @@ import { codegraphMcpRegistration } from "../../extensions/codegraphTools.js";
 import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
+import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
@@ -21,6 +22,8 @@ export interface QueryContextDeps {
    *  中途 @ 的靠消息级目录段当轮送达（方案 F6 / D 段）。 */
   attachedDirs?: string[];
   codegraphEnabled: boolean;
+  /** 该工作区配得上 LSP 的语言（空 = 不挂 aide-lsp 工具）。 */
+  lspLanguages: string[];
   processEnv: NodeJS.ProcessEnv;
   emit: (e: ChatEvent) => void;
   automationConfig: AutomationConfig | undefined;
@@ -65,6 +68,15 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // knowledge 直连 HTTP、docs 本地同步解析、codegraph 与本插件回主进程）。
   // headless 下**照挂**，由工具层发起前短路成引导文本（不在注册处摘除，理由见 browserMcp.ts）。
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
+  // agent LSP 工具：四档闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
+  // 闸门数据 lspLanguages 由主进程算好下发（同 codegraph_enabled 的政策值通道）。
+  const lspMcp = lspMcpRegistration({
+    cwd: deps.cwd,
+    emit: deps.emit,
+    env: deps.processEnv,
+    trusted: deps.trusted,
+    lspLanguages: deps.lspLanguages,
+  });
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，追加到 preset system prompt。
@@ -102,6 +114,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
       ...(docsMcp ?? {}),
       ...(knowledgeMcp ?? {}),
       ...(browserMcp ?? {}),
+      ...(lspMcp ?? {}),
     },
     userMcp,
   );

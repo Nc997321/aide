@@ -28,6 +28,8 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
     cwd: dir,
     trusted: false,
     codegraphEnabled: false,
+    // 默认无 LSP 语言 = aide-lsp 不挂载（与生产默认一致：主进程不给就为空）。
+    lspLanguages: [],
     processEnv: {} as NodeJS.ProcessEnv,
     emit: () => {},
     taskTools: undefined,

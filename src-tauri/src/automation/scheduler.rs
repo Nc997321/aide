@@ -367,6 +367,10 @@ impl AutomationService {
             // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
             // （与 chat.rs 的下发同语义；调用方按 cwd 查 state.json 注入）。
             "codegraph_enabled": codegraph_enabled,
+            // 自动化运行**刻意不发** LSP 语言：queryOptions 对 automation 的既有立场是
+            // 「全关：每次都是全新会话，精简基座 = 省钱 + 行为确定」，而挂 LSP 工具既加
+            // 工具 schema（每轮重发）又可能为一个无人值守的运行拉起 GB 级语言服务器。
+            "lsp_languages": Vec::<String>::new(),
             "automation": {
                 "task_id": task.id,
                 "run_id": run_id,
@@ -1018,6 +1022,8 @@ impl AutomationService {
             // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
             // （与 chat.rs 的下发同语义）。
             "codegraph_enabled": crate::commands::workspace::is_codegraph_enabled_for_path(&cwd),
+            // 同上（distill 支线同属自动化）：不发 LSP 语言。
+            "lsp_languages": Vec::<String>::new(),
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
             "auto_title": false,
             "resume_session_id": run.session_id,
