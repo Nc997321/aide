@@ -6,7 +6,7 @@ use tokio::sync::Mutex as TokioMutex;
 // ignore_dirs 已随 codegraph 迁至 codegraph-core（lsp 与 runner 共用同一份
 // 黑名单——数据唯一主人）。
 use crate::lsp::detector::LanguageId;
-use crate::lsp::docs::OpenDocs;
+use crate::lsp::docs::{DocOrigin, OpenDocs};
 use crate::lsp::registry::{self, ServerSource};
 use crate::lsp::rpc::{dispatch, Action, Router};
 use crate::lsp::transport::LspTransport;
@@ -79,6 +79,39 @@ pub struct ServerHandle {
 impl ServerHandle {
     pub fn is_alive(&self) -> bool {
         !self.dead.load(Ordering::Relaxed) && self.initialized.load(Ordering::Relaxed)
+    }
+
+    /// 登记本份文档并发 `textDocument/didOpen`。
+    ///
+    /// **编辑器与 agent 两条路唯一的区别是 `origin`**——所以组装只有这一份：编辑器那条
+    /// 传 `Editor`（用户真开着），agent 查询路径传 `Agent`（推送侧据此挡掉它的诊断）。
+    ///
+    /// 已打开（不论来源）→ 直接 `Ok`：不重发（jdtls 会报 "document already open"），
+    /// 也**不覆盖**编辑器里的未保存内容。
+    pub async fn open_doc(
+        &self,
+        uri: &str,
+        lang: &str,
+        text: String,
+        origin: DocOrigin,
+    ) -> Result<(), String> {
+        let notif = {
+            let mut docs = self.docs.lock().await;
+            match doc_action(docs.origin_of(uri), origin) {
+                DocAction::Open => {
+                    docs.open(uri.to_string(), text.clone(), origin);
+                    did_open_notif(uri, lang, &text)
+                }
+                // 编辑器后来打开了 agent 先前递过的文件：发 didChange 补上编辑器内容，
+                // 并把来源升级为 Editor——不升级的话它的诊断会被隔离规则一路挡着，
+                // 用户明明开着这个文件却看不到报错。
+                DocAction::ReplaceAsEditor => {
+                    did_change_notif(uri, docs.change(uri, text.clone()), &text)
+                }
+                DocAction::Skip => return Ok(()),
+            }
+        };
+        self.transport.send(&notif).await.map_err(|e| e.to_string())
     }
 
     /// 发一条 LSP request 并等响应，带「功能就绪 gate + 超时」兜底，返回 RequestOutcome
@@ -529,6 +562,53 @@ async fn spawn_test(
 
 // ── start_reader ──
 
+/// 该文档的诊断要不要发到编辑器 UI。
+///
+/// **agent 按需打开的文档不发**：那是它要查的文件，用户多半从没打开过——界面上冒出
+/// 「没打开过的文件在报错」只会让人莫名其妙。编辑器自己打开的照常发。
+/// 未登记的 uri **放行**：server 可能用别的形态推项目级诊断，宁可多发也不误挡。
+pub(crate) fn diagnostics_visible(origin: Option<DocOrigin>) -> bool {
+    origin != Some(DocOrigin::Agent)
+}
+
+/// `open_doc` 遇到「该 uri 已登记」时的三种处置。纯决策、无 IO，好钉。
+#[derive(Debug, PartialEq, Eq)]
+enum DocAction {
+    /// 没有登记过 → 正常 didOpen。
+    Open,
+    /// 已登记为 Agent、这次是编辑器 → 升级来源并同步编辑器内容。
+    ReplaceAsEditor,
+    /// 其余 → 不重发不覆盖（编辑器里的未保存内容是权威副本）。
+    Skip,
+}
+
+/// **来源升级规则**：agent 先递过的文件，编辑器后来打开时必须升级为 Editor，否则
+/// `diagnostics_visible` 会一直把它挡在 UI 之外——用户开着文件却看不到报错。
+/// 反过来（编辑器已开、agent 又来递）**不降级**，编辑器那份是权威。
+fn doc_action(existing: Option<DocOrigin>, incoming: DocOrigin) -> DocAction {
+    match existing {
+        None => DocAction::Open,
+        Some(DocOrigin::Agent) if incoming == DocOrigin::Editor => DocAction::ReplaceAsEditor,
+        Some(_) => DocAction::Skip,
+    }
+}
+
+fn did_open_notif(uri: &str, lang: &str, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc":"2.0","method":"textDocument/didOpen",
+        "params":{"textDocument":{"uri":uri,"languageId":lang,"version":1,"text":text}}
+    })
+}
+
+/// Full 同步：每次整份 text。编辑器与 agent 共用这一份帧形状。
+pub(crate) fn did_change_notif(uri: &str, version: i64, text: &str) -> serde_json::Value {
+    serde_json::json!({
+        "jsonrpc":"2.0","method":"textDocument/didChange",
+        "params":{"textDocument":{"uri":uri,"version":version},
+                  "contentChanges":[{"text":text}]}
+    })
+}
+
 fn start_reader<R: tauri::Runtime>(
     handle: Arc<ServerHandle>,
     lang: LanguageId,
@@ -564,15 +644,20 @@ fn start_reader<R: tauri::Runtime>(
                         diagnostics,
                         version,
                     } => {
-                        let _ = app.emit(
-                            "lsp-diagnostics",
-                            serde_json::json!({
-                                "workspaceRoot": "",
-                                "uri": uri,
-                                "diagnostics": diagnostics,
-                                "version": version
-                            }),
-                        );
+                        // **串扰隔离**：agent 按需递给 server 的文件（它要查的、用户
+                        // 多半从没打开过的）产生的诊断不进编辑器 UI——否则界面上会冒出
+                        // 「没打开过的文件在报错」。判据见 diagnostics_visible。
+                        if diagnostics_visible(handle.docs.lock().await.origin_of(&uri)) {
+                            let _ = app.emit(
+                                "lsp-diagnostics",
+                                serde_json::json!({
+                                    "workspaceRoot": "",
+                                    "uri": uri,
+                                    "diagnostics": diagnostics,
+                                    "version": version
+                                }),
+                            );
+                        }
                     }
                     Action::Log(s) => tracing::info!("[lsp] {}", s),
                     Action::ShowMessage(s) => {
@@ -786,6 +871,39 @@ async fn init_handshake(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 「agent 打开的文档不往编辑器 UI 漏诊断」是这次隔离的**全部意义**——三种来源都钉住。
+    #[test]
+    fn agent_opened_docs_never_leak_diagnostics_to_the_editor() {
+        assert!(
+            !diagnostics_visible(Some(DocOrigin::Agent)),
+            "agent 按需打开的文件，用户没开过——它的诊断冒到界面上会让人莫名其妙"
+        );
+        assert!(
+            diagnostics_visible(Some(DocOrigin::Editor)),
+            "编辑器自己开着的文件，诊断照常发"
+        );
+        assert!(
+            diagnostics_visible(None),
+            "未登记的 uri 放行：server 可能用别的 uri 形态推项目级诊断，不该被误挡"
+        );
+    }
+
+    /// **来源升级**：agent 先递过的文件、编辑器后来打开 → 必须升级为 Editor。
+    /// 丢了这条升级，那个文件的诊断会被隔离规则一直挡着——用户开着文件却看不到报错，
+    /// 而且是**静默**的（没有任何错误提示）。
+    #[test]
+    fn editor_reopening_an_agent_doc_upgrades_its_origin() {
+        use DocAction::*;
+        assert_eq!(doc_action(Some(DocOrigin::Agent), DocOrigin::Editor), ReplaceAsEditor);
+        // 没登记过 → 正常打开
+        assert_eq!(doc_action(None, DocOrigin::Agent), Open);
+        assert_eq!(doc_action(None, DocOrigin::Editor), Open);
+        // 编辑器已开着 → agent 再来递**不降级**，也不覆盖（编辑器那份是权威）
+        assert_eq!(doc_action(Some(DocOrigin::Editor), DocOrigin::Agent), Skip);
+        assert_eq!(doc_action(Some(DocOrigin::Editor), DocOrigin::Editor), Skip);
+        assert_eq!(doc_action(Some(DocOrigin::Agent), DocOrigin::Agent), Skip);
+    }
 
     #[test]
     fn answer_server_request_configuration_java_section() {

@@ -264,6 +264,44 @@ node probe.mjs --server node \
 6. **市场插件卡**：`rust-analyzer-lsp` / `typescript-lsp` 卡片上应出现
    「语言服务器已由 Aide 接管，此插件不会生效」一行。
 
+### 6. TS 上 references 恒为空的**真因**：没 didOpen（2026-09-19 后续，真机暴露）
+
+真机现象：右上角四个语言服务器全显示「就绪」，但 `mcp__aide-lsp__lsp_references`
+反复回「索引未就绪，空结果不代表没有」，agent 等了 40s、90s 再试还是一样。
+
+**面板没撒谎**：那个「就绪」是**握手就绪**——`src-tauri/src/lsp/mod.rs` 明写 Java 索引期
+`ready=false`、**其余语言握手完就是 true**。它证明不了索引好。
+
+真因是一组对比测出来的（同一配置、同一文件 `src/themes/apply.ts`）：
+
+| | 开过文档（didOpen） | **没开** |
+|---|---|---|
+| `documentSymbol`（就绪探测用的就是它） | 6.0s，返回 2 个符号 | **永远 `[]`** |
+| `references`（agent 发的那个） | **7 条**（含 5 条 `.vue`） | **永远 `[]`** |
+
+**tsserver 只回答它打开过的文档。** Aide 的 agent 路径从不 didOpen → 查询空 + 探测也空
+→ 恒报 `indexing`。服务器一直好得很，是没人给它递文件。
+
+**为什么 C1 没做这一步**：Task 6 Step 1 专门实测过「server 要不要 didOpen」——但**只测了
+rust-analyzer**（RA 的工程图来自 `cargo metadata`，未打开的文件照样答，实测确实不需要），
+于是「按需 didOpen」被判为不实施。计划书末尾把这条风险**写下来了**并给了触发条件：
+
+> 若将来换成确实需要 didOpen 的 server（jdtls / **tsserver 的某些操作**），`probe_ready`
+> 会跟着失败 → 返回 `indexing` 而不是假装 `ready`……届时实施按需 didOpen 的触发条件 =
+> 「在某个语言上观察到 references 恒为空且 probe 恒失败」。
+
+TS 就是那个反例，条件已到（`908` 落地）。
+
+**教训**：那次实测的结论是「RA 不需要」，而**被当成了「不需要」**。单语言实测推不出
+跨语言结论——plan 自己也写着「若将来换成…」，但触发条件要靠**真机观察**才发现，
+而它伪装成了「索引慢」这种随时会自愈的现象。**同类信号以后直接按触发条件处理，别再当偶发。**
+
+**修法**（`src-tauri/src/lsp/`）：agent 查询路径在发请求前 `ensure_doc_open`（标
+`DocOrigin::Agent`）；`probe_ready` 的探测靶子同样先打开。隔离靠来源标记：agent 打开的
+文档（用户没开过）产生的诊断不进编辑器 UI。**来源升级**是配套的必要条件——编辑器后来
+打开一个 agent 先递过的文件时，来源必须升级为 Editor，否则那个文件的诊断会被一路挡着
+（静默：用户开着文件却看不到报错）。
+
 ## 已排除的路径
 
 **CLI 没有「预启动语言服务器」的开关。** 在 `claude.exe`（2.1.252）二进制里搜过 `lspServers` / `lspStartup` / `eager` / `warmup` / `prestart`：唯一命中的 `options.execution: ["default","eager"]` 配的是 `options.mode: ["summary","detailed"]`，属监控/报告类功能，与 LSP 无关。懒启动是 CLI 的设计，配置层改不掉。

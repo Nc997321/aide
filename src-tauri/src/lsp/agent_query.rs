@@ -270,11 +270,16 @@ async fn run_jump(
     pos: &Position,
     workspace_root: &str,
 ) -> AgentQueryOutcome {
-    let Some(h) = server_for(state, workspace_root, &pos.file).await else {
+    let Some((lang_id, h)) = server_for(state, workspace_root, &pos.file).await else {
         // 语言认不出、或 server 没能 ensure 起来——都是「这条路径没有 server」，
         // 不是「还没好」（后者是 indexing）。两句话对用户的可操作性不同。
         return fail(AgentLspStatus::NoServer, "no language server for this file");
     };
+    // **先递文件再提问**。失败不判死：RA 这类不需要 didOpen 的 server 照常能答；
+    // 真答不了的会被空结果 + probe 定性成 indexing（宁可说「没答上来」，不说「没有」）。
+    if let Err(e) = ensure_doc_open(&h, workspace_root, &pos.file, lang_id).await {
+        tracing::debug!(file = %pos.file, error = %e, "agent lsp: didOpen 失败，继续查询");
+    }
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, &pos.file);
     let (method, params) = match tool {
         "references" => (
@@ -337,6 +342,11 @@ fn ok_with(
 /// 就绪判定：对一个**已知存在于磁盘的文件**做 `documentSymbol`。
 /// 返回 true = 语义层可用（空结果可信）；false = 还没好（空结果不可信）。
 async fn probe_ready(h: &Arc<ServerHandle>, file: &str, workspace_root: &str) -> bool {
+    // 探测靶子也要先打开：tsserver 对没打开的文档一律回空，那会把 probe 变成**恒失败**，
+    // 于是 references 的空被定性成 indexing——「面板说就绪、工具说在索引」那个坑的另一半。
+    if let Some(lang) = crate::lsp::lang_from_ext_of(file) {
+        let _ = ensure_doc_open(h, workspace_root, file, lang).await;
+    }
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file);
     let probe = || async {
         matches!(
@@ -365,10 +375,48 @@ async fn server_for(
     state: &LspState,
     workspace_root: &str,
     file_path: &str,
-) -> Option<Arc<ServerHandle>> {
+) -> Option<(crate::lsp::detector::LanguageId, Arc<ServerHandle>)> {
     let lang_id = crate::lsp::lang_from_ext_of(file_path)?;
     let mgr = state.0.lock().await;
-    mgr.get(workspace_root, lang_id).await
+    let h = mgr.get(workspace_root, lang_id).await?;
+    Some((lang_id, h))
+}
+
+/// 确保 agent 要查的文件已对 server 打开（`DocOrigin::Agent`）。
+///
+/// **为什么必需**：tsserver 只回答**它打开过的**文档。未 didOpen 时 `references` 与
+/// `documentSymbol` 都回空数组（2026-09-19 实测，见 spike README §5）——空结果让就绪
+/// 探测也跟着失败，于是整条查询路径恒报 `indexing`，而面板上那些 server 明明「就绪」。
+///
+/// rust-analyzer 不需要这一步（它的工程图来自 `cargo metadata`，未打开的文件照样答）。
+/// C1 当时**只测了 RA**，于是「按需 didOpen」被记为不实施，并写下触发条件：
+/// 「某个语言上观察到 references 恒为空且 probe 恒失败」——TS 正是那个反例，条件已到。
+///
+/// 标 `Agent` 是因为这些文档用户多半没打开过：它们的诊断由推送侧挡在 UI 之外
+/// （见 manager 的 `EmitDiagnostics` 分支）。
+async fn ensure_doc_open(
+    h: &Arc<ServerHandle>,
+    workspace_root: &str,
+    file_path: &str,
+    lang_id: crate::lsp::detector::LanguageId,
+) -> Result<(), String> {
+    if crate::lsp::manager::is_excluded(file_path, &h.exclude_globs) {
+        return Err("path is in the workspace exclude list".to_string());
+    }
+    // 读盘放 spawn_blocking：文件 IO 不占 tokio worker（与同步命令红线同一条纪律）。
+    let path = file_path.to_string();
+    let text = tokio::task::spawn_blocking(move || std::fs::read_to_string(path))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file_path);
+    h.open_doc(
+        &uri,
+        lang_id.id_str(),
+        text,
+        crate::lsp::docs::DocOrigin::Agent,
+    )
+    .await
 }
 
 #[cfg(test)]

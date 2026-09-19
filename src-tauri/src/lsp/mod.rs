@@ -217,26 +217,10 @@ pub async fn lsp_did_open(
         return Ok(());
     }
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-    // 去重：文档已在 jdtls 打开（导航回退时 cmLsp 不发 didClose，文档保持打开）→
-    // 跳过重发 didOpen，否则 jdtls 报 "document already open"，且省去重新解析导入绑定
-    // 的秒级延迟（回退后立刻跳转才拿得到定义）。
-    let already_open = {
-        let mut docs = h.docs.lock().await;
-        if docs.contains(&uri) {
-            true
-        } else {
-            docs.open(uri.clone(), text.clone());
-            false
-        }
-    };
-    if already_open {
-        return Ok(());
-    }
-    let notif = serde_json::json!({
-        "jsonrpc":"2.0","method":"textDocument/didOpen",
-        "params":{"textDocument":{"uri":uri,"languageId":lang,"version":1,"text":text}}
-    });
-    h.transport.send(&notif).await.map_err(|e| e.to_string())
+    // 去重与通知组装都在 `open_doc` 里——与 agent 查询路径**共用同一份**（唯一区别是
+    // 来源标记）。这里标 `Editor`：用户真开着这个文件，它的诊断/通知该进 UI。
+    h.open_doc(&uri, &lang, text, crate::lsp::docs::DocOrigin::Editor)
+        .await
 }
 
 #[tauri::command]
@@ -265,11 +249,8 @@ pub async fn lsp_did_change(
     }
     let v = h.docs.lock().await.change(&uri, text.clone());
     let _ = version; // Full 同步：用 docs 内部 version
-    let notif = serde_json::json!({
-        "jsonrpc":"2.0","method":"textDocument/didChange",
-        "params":{"textDocument":{"uri":uri,"version":v},
-                  "contentChanges":[{"text":text}]}
-    });
+    // 帧形状与 agent 路径共用（见 manager::did_change_notif）。
+    let notif = crate::lsp::manager::did_change_notif(&uri, v, &text);
     h.transport.send(&notif).await.map_err(|e| e.to_string())
 }
 
