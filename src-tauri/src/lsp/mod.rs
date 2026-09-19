@@ -2,9 +2,11 @@
 //! 子模块逐 task 填充。每个 task 创建对应子模块文件后，在此取消注释其 pub mod 行。
 
 pub mod agent_bridge;
+pub mod agent_query;
 pub mod agent_readiness;
 pub mod agent_status;
 pub mod detector;
+pub mod jump;
 pub mod docs;
 pub mod manager;
 pub mod profiles;
@@ -274,33 +276,17 @@ pub async fn lsp_definition(
         });
     };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-    let params = serde_json::json!({
-        "textDocument":{"uri":uri},
-        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-    });
-    let outcome = h
-        .request(
-            "textDocument/definition",
-            params,
-            crate::lsp::manager::DEFINITION_TIMEOUT,
-        )
-        .await?;
-    let (status, value) = match outcome {
-        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
-        crate::lsp::manager::RequestOutcome::Timeout => {
-            (JumpStatus::Timeout, serde_json::Value::Null)
-        }
-        crate::lsp::manager::RequestOutcome::NotReady => {
-            (JumpStatus::NotReady, serde_json::Value::Null)
-        }
-        crate::lsp::manager::RequestOutcome::ServerGone => {
-            (JumpStatus::Gone, serde_json::Value::Null)
-        }
-    };
+    let params = crate::lsp::jump::position_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/definition",
+        params,
+        crate::lsp::manager::DEFINITION_TIMEOUT,
+    )
+    .await?;
     // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
     // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
-    let locs = parse_locations(&value);
-    let results = crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root);
+    let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
     Ok(LspJumpResult { status, results })
 }
 
@@ -331,32 +317,15 @@ pub async fn lsp_references(
         });
     };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-    let params = serde_json::json!({
-        "textDocument":{"uri":uri},
-        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)},
-        "context":{"includeDeclaration":false}
-    });
-    let outcome = h
-        .request(
-            "textDocument/references",
-            params,
-            crate::lsp::manager::DEFINITION_TIMEOUT,
-        )
-        .await?;
-    let (status, value) = match outcome {
-        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
-        crate::lsp::manager::RequestOutcome::Timeout => {
-            (JumpStatus::Timeout, serde_json::Value::Null)
-        }
-        crate::lsp::manager::RequestOutcome::NotReady => {
-            (JumpStatus::NotReady, serde_json::Value::Null)
-        }
-        crate::lsp::manager::RequestOutcome::ServerGone => {
-            (JumpStatus::Gone, serde_json::Value::Null)
-        }
-    };
-    let locs = parse_locations(&value);
-    let results = crate::lsp::protocol::locations_to_query_results(&locs, &word, &workspace_root);
+    let params = crate::lsp::jump::references_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/references",
+        params,
+        crate::lsp::manager::DEFINITION_TIMEOUT,
+    )
+    .await?;
+    let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
     Ok(LspJumpResult { status, results })
 }
 
@@ -762,27 +731,18 @@ pub async fn lsp_implementation(
         return Ok(vec![]);
     };
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-    let params = serde_json::json!({
-        "textDocument":{"uri":uri},
-        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-    });
-    let outcome = h
-        .request(
-            "textDocument/implementation",
-            params,
-            crate::lsp::manager::REQUEST_TIMEOUT,
-        )
-        .await?;
-    let result = match outcome {
-        crate::lsp::manager::RequestOutcome::Ok(v) => v,
-        _ => serde_json::Value::Null,
-    };
-    let locs = parse_locations(&result);
-    Ok(crate::lsp::protocol::locations_to_query_results(
-        &locs,
-        &word,
-        &workspace_root,
-    ))
+    let params = crate::lsp::jump::position_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/implementation",
+        params,
+        crate::lsp::manager::REQUEST_TIMEOUT,
+    )
+    .await?;
+    // 历史行为：implementation **不透传 status**，非 Ok 一律当空结果（见 JumpStatus
+    // 注释「其余命令保持原空行为，向后兼容」）。故丢掉 status 只取 results——与重构前等价。
+    let (_, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
+    Ok(results)
 }
 
 #[tauri::command]
@@ -907,12 +867,12 @@ pub fn open_lsp_install_guide(app: tauri::AppHandle) -> Result<(), String> {
 
 // ── helpers ──
 
-fn lang_from_ext_of(file_path: &str) -> Option<crate::lsp::detector::LanguageId> {
+pub(crate) fn lang_from_ext_of(file_path: &str) -> Option<crate::lsp::detector::LanguageId> {
     let ext = file_path.rsplit('.').next().map(|e| e.to_lowercase())?;
     crate::lsp::detector::LanguageId::from_ext(&ext)
 }
 
-fn parse_locations(result: &serde_json::Value) -> Vec<lsp_types::Location> {
+pub(crate) fn parse_locations(result: &serde_json::Value) -> Vec<lsp_types::Location> {
     use lsp_types::Location;
     if result.is_null() {
         return vec![];
