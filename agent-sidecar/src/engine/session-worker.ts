@@ -47,7 +47,7 @@ import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
 import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
-import { cancelAllLspQueries } from "../extensions/lspClient.js";
+import { cancelAllLspQueries, queryLsp } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
@@ -157,6 +157,8 @@ export class SessionWorker {
   private shouldForkNextConnect = false;
   private turnActive = false;
   private stopped = false;
+  /** 本会话是否已触发过语言服务器预热（只触发一次，见 startLoop）。 */
+  private lspWarmed = false;
 
   // ---- 会话自动命名（截取首条用户消息内容作标题，见 titleGenerator.ts） ----
   /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
@@ -759,6 +761,15 @@ export class SessionWorker {
           // 已经落进共享队列了——上一轮若异常终止，它的孤儿迭代器此刻还挂在
           // resolveNext 上，会把那条消息 shift 走（详见 retireIterators 注释）。
           this.queue.retireIterators();
+          // 会话早期预热语言服务器（只做一次）：冷启动实测 46–73s，等到 agent 真要用
+          // LSP 时早已就绪——否则第一次真查询会撞上主进程 probe_ready 的 30s 预算而只能
+          // 拿到 indexing，整条链白建。fire-and-forget：预热失败不影响对话，后续查询
+          // 按实际状态返回 indexing / no_server。
+          // 排在 retireIterators 之后：它有「必须在任何 await 之前」的不变式。
+          if (!this.lspWarmed && lspLanguages.length > 0) {
+            this.lspWarmed = true;
+            void queryLsp("warm", {}, cwd ?? this.cwd ?? "", (e) => this.emit(e));
+          }
           // 本条 query 的思考值：**唯一推导点**（thinkingPolicy）。下面还有 await
           //（prepareQueryContext），而档位被每条 send 刷新——算一次落定，env 与 SDK
           // 选项消费同一个值，不让它们在装配窗口里劈叉。

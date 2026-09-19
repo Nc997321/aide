@@ -99,6 +99,12 @@ pub async fn run_agent_query(
     if !matches!(warmed, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
         return fail(warmed, "no usable language server for this workspace");
     }
+    // 预热：只确保 server 起来并等到就绪，**不执行查询**。sidecar 在会话早期
+    // fire-and-forget 调用它，把 46–73s 的冷启动挪出 agent 的关键路径——否则
+    // agent 第一次真查询会撞上 probe_ready 的 30s 预算而只能拿到 indexing。
+    if tool == "warm" {
+        return warm_only(state, workspace_root, &langs).await;
+    }
     // 2. 坐标
     let pos = match resolve_position(args) {
         Some(p) => p,
@@ -123,6 +129,30 @@ pub async fn run_agent_query(
         }
     };
     run_jump(state, tool, &pos, workspace_root).await
+}
+
+/// 预热：逐个语言探测就绪，**不做任何查询**。
+///
+/// 返回 `ready` 表示至少一种语言的语义层可用；`indexing` 表示进程在但还没好
+/// （调用方不关心——预热是 fire-and-forget，失败不影响对话）。
+async fn warm_only(
+    state: &LspState,
+    workspace_root: &str,
+    langs: &[crate::lsp::detector::LanguageId],
+) -> AgentQueryOutcome {
+    let mgr = state.0.lock().await;
+    for lang_id in langs {
+        let Some(h) = mgr.get(workspace_root, *lang_id).await else {
+            continue;
+        };
+        let Some(probe_file) = first_source_file(workspace_root, *lang_id).await else {
+            continue;
+        };
+        if probe_ready(&h, &probe_file, workspace_root).await {
+            return ok_with(AgentLspStatus::Ready, vec![]);
+        }
+    }
+    ok_with(AgentLspStatus::Indexing, vec![])
 }
 
 /// 按名字解析坐标。
