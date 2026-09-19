@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>输入框 @ 补全 · 交互与外观</title>
+<style>
+/* ── 主题 token（glass 默认主题实值，抄自 themes/glass） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-bg-raised: rgba(26,29,42,.96);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.28);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-accent-hover:#c3cfff;
+  --aide-accent-subtle: rgba(165,184,255,.14);
+  --aide-danger:#f2777a;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-radius-sm:5px;
+  --aide-radius-md:9px;
+  --aide-shadow-lg: 0 12px 32px rgba(0,0,0,.45);
+  --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.04);
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,'Microsoft YaHei',monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC','Microsoft YaHei',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--aide-font-ui);
+  color:var(--aide-text-primary);
+  background:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    #0a0b11;
+  min-height:100vh;
+  padding:24px 28px 64px;
+}
+.page-head h1{font-size:16px;font-weight:600}
+.page-head p{margin-top:7px;font-size:12px;color:var(--aide-text-muted);line-height:1.75;max-width:940px}
+.page-head code,.sec-head code{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-secondary);background:rgba(255,255,255,.06);padding:1px 5px;border-radius:4px}
+.page-head ul{margin:10px 0 0 2px;font-size:12px;color:var(--aide-text-secondary);line-height:1.9;list-style:none}
+.page-head li::before{content:"· ";color:var(--aide-accent)}
+.sec-head{margin:34px 0 12px;font-size:12.5px;font-weight:600;color:var(--aide-text-primary)}
+.sec-head small{margin-left:8px;font-weight:400;font-size:11px;color:var(--aide-text-muted)}
+kbd{
+  font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-text-secondary);
+  background:rgba(255,255,255,.07);border:1px solid var(--aide-border);
+  border-radius:3px;padding:0 4px;
+}
+.new{display:inline-block;margin-left:6px;font-size:10px;color:var(--aide-accent);background:var(--aide-accent-subtle);border-radius:3px;padding:0 5px;font-weight:400}
+
+/* ══ 以下为 ChatInputBox.vue 实值（.chat-input-area / .chat-input-box / .chat-input /
+      .mention-strip / .mention-chip / .skill-dropdown / .skill-item），做上下文用 ══ */
+.stage{position:relative;max-width:680px;padding:8px 0 0}
+.chat-input-box{
+  display:flex;flex-direction:column;
+  border-radius:var(--aide-radius-sm);
+  background:var(--aide-bg-deep);
+  border:1px solid var(--aide-border);
+  transition:border-color .15s ease;
+}
+.chat-input-box:focus-within{border-color:var(--aide-accent)}
+.mention-strip{display:flex;flex-wrap:wrap;gap:6px;padding:10px 12px 0}
+.mention-chip{
+  display:flex;align-items:center;gap:5px;max-width:220px;padding:3px 5px 3px 7px;
+  border-radius:var(--aide-radius-sm);border:1px solid var(--aide-border);
+  background:var(--aide-surface-default);font-size:11px;color:var(--aide-text-secondary);
+  user-select:none;
+}
+.mention-chip-icon{flex-shrink:0}
+.mention-chip-icon--folder{color:var(--aide-text-muted)}
+.mention-chip-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mention-chip-remove{
+  flex-shrink:0;width:14px;height:14px;border-radius:50%;border:none;background:transparent;
+  color:var(--aide-text-muted);cursor:pointer;font-size:11px;line-height:1;
+  display:flex;align-items:center;justify-content:center;padding:0;
+}
+.mention-chip-remove:hover{background:var(--aide-danger);color:var(--aide-text-primary)}
+.chat-input{
+  resize:none;border:none;background:transparent;padding:8px 12px;
+  font-size:13px;color:var(--aide-text-primary);outline:none;font-family:inherit;line-height:1.5;
+  min-height:62px;
+}
+.chat-input::placeholder{color:var(--aide-text-muted)}
+.composer-foot{
+  display:flex;align-items:center;gap:8px;padding:6px 12px 8px;
+  font-size:10.5px;color:var(--aide-text-muted);border-top:1px solid var(--aide-border-subtle);
+}
+.composer-foot b{color:var(--aide-text-secondary);font-weight:600}
+.hint-live{margin-left:auto}
+
+/* ── 弹层：定位与容器复用 .skill-dropdown 实值 ── */
+.skill-dropdown{
+  position:absolute;bottom:100%;left:12px;right:12px;
+  background:var(--aide-bg-raised);
+  border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-sm);
+  box-shadow:var(--aide-shadow-lg);
+  z-index:100;max-height:280px;overflow-y:auto;margin-bottom:4px;
+}
+/* ── 以下 .ms-* 是新增（@ 补全行），密度与 .skill-item 对齐 ── */
+.ms-item{
+  display:flex;align-items:center;gap:7px;padding:6px 10px;
+  cursor:pointer;font-size:12px;overflow:hidden;
+}
+.ms-item:hover,.ms-item--active{background:var(--aide-surface-hover)}
+.ms-icon{flex-shrink:0;color:var(--aide-text-muted)}
+.ms-name{
+  font-family:var(--aide-font-mono);font-size:12px;color:var(--aide-text-primary);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex-shrink:0;
+}
+/* 行尾区：所在目录（RTL 省略保尾部）+「进入」胶囊，两者可同时出现（项目行就是） */
+.ms-right{margin-left:auto;display:flex;align-items:center;gap:7px;min-width:0}
+.ms-rel{
+  flex-shrink:1;min-width:0;
+  font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;direction:rtl;text-align:left;
+}
+.ms-enter{
+  flex-shrink:0;font-size:10px;color:var(--aide-text-muted);
+  border:1px solid var(--aide-border);border-radius:999px;padding:0 6px;white-space:nowrap;
+}
+.ms-item--active .ms-enter{color:var(--aide-accent);border-color:color-mix(in srgb, var(--aide-accent) 40%, transparent)}
+.ms-tag{
+  flex-shrink:0;font-size:10px;color:var(--aide-text-muted);
+  background:var(--aide-bg-deep);padding:1px 4px;border-radius:3px;
+}
+/* 项目标签用 accent 弱色：它与「全仓」是两种来源，不能长一样 */
+.ms-tag--project{color:var(--aide-accent);background:var(--aide-accent-subtle)}
+/* 变体 A：分组标题行（把「同层命中」与「全仓兜底」切开） */
+.ms-sep{display:flex;align-items:center;gap:8px;padding:3px 10px 4px;font-size:10px;color:var(--aide-text-muted)}
+.ms-sep::before,.ms-sep::after{content:"";flex:1;height:1px;background:var(--aide-border-subtle)}
+/* 弹层底部操作提示 */
+.ms-foot{
+  position:sticky;bottom:0;display:flex;gap:12px;padding:4px 10px 5px;
+  background:var(--aide-bg-raised);border-top:1px solid var(--aide-border-subtle);
+  font-size:10px;color:var(--aide-text-muted);
+}
+.ms-foot span{display:inline-flex;align-items:center;gap:4px}
+
+/* ── 静态对照用的并排容器 ── */
+.gallery{display:flex;flex-wrap:wrap;gap:18px;align-items:flex-start}
+.gal{width:340px}
+.gal .cap{font-size:11px;color:var(--aide-text-muted);margin-bottom:6px;line-height:1.6}
+.gal .frame{
+  position:relative;height:340px;border-radius:var(--aide-radius-md);
+  border:1px dashed var(--aide-border);background:rgba(0,0,0,.18);overflow:hidden;
+}
+/* .anchor ＝「输入盒」，弹层贴着它的上沿（与 App 里 .skill-dropdown 的 bottom:100% 同构） */
+.gal .anchor{position:absolute;left:12px;right:12px;bottom:14px}
+.gal .fake-input{
+  border:1px solid var(--aide-border);border-radius:var(--aide-radius-sm);
+  background:var(--aide-bg-deep);padding:8px 12px;font-size:13px;color:var(--aide-text-secondary);
+  min-height:34px;
+}
+.gal .fake-input .tok{color:var(--aide-text-primary)}
+.gal .pop{position:absolute;left:0;right:0;bottom:100%;margin-bottom:4px}
+.gal .note{margin-top:7px;font-size:10.5px;color:var(--aide-text-muted);line-height:1.7}
+.pick{display:inline-block;margin-left:6px;font-size:10px;color:var(--aide-accent);background:var(--aide-accent-subtle);border-radius:3px;padding:0 5px}
+/* 被过滤项目的说明表 */
+.skip-table{width:100%;border-collapse:collapse;margin-top:8px;font-size:11px}
+.skip-table td{padding:3px 8px;border-top:1px solid var(--aide-border-subtle);color:var(--aide-text-secondary)}
+.skip-table td:first-child{font-family:var(--aide-font-mono);color:var(--aide-text-muted);white-space:nowrap}
+.skip-table td:last-child{color:var(--aide-text-muted);font-size:10.5px}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>输入框 @ 补全 · 交互与外观</h1>
+  <p>
+    确认对象：输入 <code>@</code> 弹出候选（像 <code>/</code> 菜单），路径每敲一个分隔符就换到该目录下——<code>@src/</code> → <code>@src/components/</code> 逐级跟随；
+    <strong>并能 @ 到其它项目</strong>（= 其它已注册工作区），选中即走既有的「@目录即授权」链。
+  </p>
+  <ul>
+    <li><b>→</b> 或行尾「进入」＝下钻一层（文本变 <code>@src/components/</code>，不带尾空格）；对<b>项目</b>行同样是「进这个项目」</li>
+    <li><b>回车 / Tab / 点行</b>＝引用该项：文件=芯片，文件夹/项目=芯片（发送时即 @目录 授权，Rust 侧判「已注册工作区」才过闸）</li>
+    <li><code>@foo</code> 先列本层前缀命中，再补全仓模糊命中（gitignore 感知，只回文件）；同层打字零 IPC</li>
+    <li>弹层沿用 <code>/</code> 菜单的位置（输入盒上方、贴左右边距），锚在输入盒而非光标</li>
+  </ul>
+  <p style="margin-top:12px;color:var(--aide-text-secondary)">
+    本轮新增：<b>「项目」这一层候选</b>（第 1 节可直接打 <code>@</code> 看；第 3 节看它怎么被过滤）。
+    仍然只有两件事要你点头：<b>项目行放最前、右侧显示父目录</b>，以及<b>模糊兜底行的区分方式</b>（已定变体 B，这里保留 A 版供对照）。
+  </p>
+</div>
+
+<!-- ══ 1. 可交互 ══ -->
+<div class="sec-head">1 · 可交互 <small>直接打 <code>@</code> 看项目 · <code>@back</code> 看项目匹配 · 按 <kbd>→</kbd> 进项目 · ↑↓ 选择 · 回车/Tab 引用 · Esc 关闭</small></div>
+<div class="stage" id="stage">
+  <!-- 弹层向上覆盖消息区；这页里被盖住的是说明文字，真实位置就是输入盒正上方 -->
+  <div class="chat-input-box" id="box">
+    <div class="mention-strip" id="chips" style="display:none"></div>
+    <textarea class="chat-input" id="ta" rows="2" placeholder="输入消息…（先打个 @ 试试）"></textarea>
+    <div class="composer-foot">
+      <b>@</b> 引用文件/目录/项目 · <b>/</b> 命令
+      <span class="hint-live" id="hintLive">菜单未开 · 回车＝发送</span>
+    </div>
+  </div>
+  <!-- 弹层挂在输入盒外，位置对齐 .skill-dropdown（bottom:100%） -->
+  <div class="skill-dropdown" id="pop" style="display:none"></div>
+</div>
+
+<!-- ══ 2. 形态对照 ══ -->
+<div class="sec-head">2 · 四种形态对照 <small>同上弹层，固定状态渲染，便于横向比较密度</small></div>
+<div class="gallery">
+
+  <div class="gal">
+    <div class="cap">① <b>裸 @</b>：项目在最前 <span class="new">本轮新增</span><br>项目 → 本层目录 → 本层文件</div>
+    <div class="frame">
+      <div class="anchor">
+        <div class="fake-input"><span class="tok">@</span></div>
+        <div class="pop" id="gal1"></div>
+      </div>
+    </div>
+    <div class="note">项目行：项目名 + 「项目」弱标签 + 右侧<b>父目录</b>（同名项目靠它区分，RTL 省略保尾部）+ 「→ 进入」。回车＝引用（授权）该项目，<kbd>→</kbd>＝进去逐级挑它的文件。</div>
+  </div>
+
+  <div class="gal">
+    <div class="cap">② <b>本层下钻</b>：<code>@src/</code> 已敲分隔符<br>列出该目录的子项</div>
+    <div class="frame">
+      <div class="anchor">
+        <div class="fake-input"><span class="tok">@src/</span></div>
+        <div class="pop" id="gal2"></div>
+      </div>
+    </div>
+    <div class="note">一旦敲了分隔符就不再列项目——你已经在某个目录里了。</div>
+  </div>
+
+  <div class="gal">
+    <div class="cap">③ <b>项目按名匹配</b>：<code>@back</code> <span class="new">本轮新增</span><br>有叶子时项目同样参与匹配</div>
+    <div class="frame">
+      <div class="anchor">
+        <div class="fake-input"><span class="tok">@back</span></div>
+        <div class="pop" id="gal3"></div>
+      </div>
+    </div>
+    <div class="note">本层没有「back」开头的条目，兜底模糊也回空 ⇒ 只剩项目这一行。项目名匹配用的是<b>包含</b>（不是前缀），<code>@api</code> 也能命中 <code>backend-api</code>。</div>
+  </div>
+
+  <div class="gal">
+    <div class="cap">④ <b>三类混排 · 变体 B</b><br><code>@s</code>：项目 + 本层目录 + 全仓兜底</div>
+    <div class="frame">
+      <div class="anchor">
+        <div class="fake-input"><span class="tok">@s</span></div>
+        <div class="pop" id="gal4"></div>
+      </div>
+    </div>
+    <div class="note">项目用 accent 色「项目」标签、兜底用灰「全仓」标签——两种来源不能长一样；本层命中行尾留空，一眼可辨。</div>
+  </div>
+
+</div>
+
+<div class="sec-head">3 · 进项目之后 <span class="new" style="margin-left:0">本轮新增</span> <small>项目行按 <kbd>→</kbd> 或点「进入」</small></div>
+<div class="gallery">
+  <div class="gal">
+    <div class="cap">⑤ <code>@C:\work\backend-api/</code><br>列的是<b>那个项目</b>的子项</div>
+    <div class="frame">
+      <div class="anchor">
+        <div class="fake-input"><span class="tok">@C:\work\backend-api/</span></div>
+        <div class="pop" id="gal5"></div>
+      </div>
+    </div>
+    <div class="note">于是「@ 到别的项目里的具体文件」就是顺路的：进项目 → 逐级 → 回车拿文件芯片。绝对路径 token 的列目录能力已有单测覆盖（工作区外照列）。</div>
+  </div>
+  <div class="gal" style="width:auto;max-width:520px">
+    <div class="cap">被挡掉的项目（不进候选）</div>
+    <table class="skip-table">
+      <tr><td>C:\work</td><td>当前会话工作区的<b>祖先</b>——「其它项目」是"不是我所在的地方"</td></tr>
+      <tr><td>C:\work\frontend</td><td><b>当前会话工作区自己</b>——引用自己的 cwd 没有意义（本层条目已在候选里）</td></tr>
+      <tr><td>C:\work\gateway</td><td><b>missing</b>：登记的路径已经不在了，列出来只会让人选了才发现</td></tr>
+    </table>
+    <div class="note">三条都是纯前端过滤（`useWorkspaces().workspaces` 里就带 `missing`；自身/祖先用 SDK 现成的 <code>isSameOrInside</code>——发送侧剔主根子树用的同一个判据）。</div>
+  </div>
+</div>
+
+<div class="sec-head">4 · 边界态 <small>两种"菜单不该出现"的情况</small></div>
+<div class="gallery">
+  <div class="gal">
+    <div class="cap">⑥ <b>空态</b>：<code>@zzz</code> 无任何命中</div>
+    <div class="frame" style="height:150px">
+      <div class="anchor"><div class="fake-input"><span class="tok">@zzz</span></div></div>
+    </div>
+    <div class="note">不弹空菜单（弹一个「无匹配」比不弹更吵），保留文本、照常输入。</div>
+  </div>
+  <div class="gal">
+    <div class="cap">⑦ <b>光标离开 token</b>：文本里的 <code>@src/</code> 仍在，但光标已跳到句尾</div>
+    <div class="frame" style="height:150px">
+      <div class="anchor"><div class="fake-input"><span class="tok">@src/</span> 看下这个目录里有什么▏</div></div>
+    </div>
+    <div class="note">判定是「光标锚定」的：光标不在 token 末端就关菜单（否则编辑器里改上文会莫名弹层）。</div>
+  </div>
+  <div class="gal">
+    <div class="cap">⑧ <b>项目很多</b>：8 行上限共用<br>项目挤掉本层条目</div>
+    <div class="frame" style="height:150px">
+      <div class="anchor"><div class="fake-input"><span class="tok">@</span></div></div>
+    </div>
+    <div class="note">已知取舍：项目超过 8 个时本层条目会看不见（往上一级/往下敲一个字母即缓解）。真成问题再改分组折叠。</div>
+  </div>
+</div>
+
+<script>
+// ════════════════════════════════════════════════════════════════════
+// 纯函数（将来落 src/composables/useMentionSuggest.ts，此处同名同形）
+// ════════════════════════════════════════════════════════════════════
+
+/**
+ * 光标锚定的 @token：从 caret 往前扫到空白得到片段，取片段里最后一个 @，
+ * 要求它前面是行首或空白（不误吞邮箱 a@b.com——那里最后一个 @ 前面是 a）。
+ */
+function mentionTokenAt(text, caret) {
+  let i = caret;
+  while (i > 0 && !/\s/.test(text[i - 1])) i--;
+  const seg = text.slice(i, caret);
+  const at = seg.lastIndexOf("@");
+  if (at < 0) return null;
+  const atIdx = i + at;
+  if (atIdx > 0 && !/\s/.test(text[atIdx - 1])) return null;
+  return { at: atIdx, query: seg.slice(at + 1) };
+}
+
+/** 查询串按最后一个分隔符切成「目录部分（含尾分隔符）」+「叶子」。/ 与 \ 同等对待。 */
+function splitQueryPath(q) {
+  const idx = Math.max(q.lastIndexOf("/"), q.lastIndexOf("\\"));
+  return idx < 0 ? { dir: "", leaf: q } : { dir: q.slice(0, idx + 1), leaf: q.slice(idx + 1) };
+}
+
+/** 路径归一键（比对与查表用）：分隔符折成 /、去首尾、大小写不敏感。 */
+function nkey(p) {
+  return p.replace(/[\\/]+/g, "/").replace(/^\/+|\/+$/g, "").toLowerCase();
+}
+
+/** child 是否就是 parent、或落在 parent 子树内（按组件比：C:\ab 不命中 C:\a）。
+ *  与 SDK fileMentions.ts 的 isSameOrInside 同形——发送侧剔主根子树用的就是它。 */
+function isSameOrInside(child, parent) {
+  const c = nkey(child), p = nkey(parent);
+  if (!p) return false;
+  return c === p || c.startsWith(p + "/");
+}
+
+/** 路径最后一段（项目行的显示名）。 */
+function baseName(p) {
+  const parts = nkey(p).split("/");
+  return parts[parts.length - 1] || p;
+}
+
+/** 项目的父目录（项目行右侧显示它——同名项目靠这里区分）。 */
+function parentOf(p) {
+  const norm = p.replace(/[\\/]+$/, "");
+  const cut = Math.max(norm.lastIndexOf("/"), norm.lastIndexOf("\\"));
+  return cut < 0 ? "" : norm.slice(0, cut);
+}
+
+// ════════════════════════════════════════════════════════════════════
+// mock 数据（本仓库子集 + 几个"其它项目"）
+// ════════════════════════════════════════════════════════════════════
+
+/** 当前会话的工作区（= 会话 cwd）：本层条目就是它的子项 */
+const SESSION_WS = "C:\\work\\frontend";
+
+/** 已注册工作区（含三种该被挡掉的情况，见第 3 节表格） */
+const PROJECTS = [
+  { path: "C:\\work",                 missing: false }, // 祖先 → 挡
+  { path: "C:\\work\\frontend",       missing: false }, // 自己 → 挡
+  { path: "C:\\work\\backend-api",    missing: false },
+  { path: "C:\\work\\gateway",        missing: true  }, // 路径不在了 → 挡
+  { path: "D:\\repo\\mobile-app",     missing: false },
+  { path: "D:\\repo\\design-tokens",  missing: false },
+];
+
+/** 目录树：键走 nkey，所以 "" / "src" / "c:/work/backend-api" 同一张表查 */
+const FS = {
+  "": [
+    { name: "src", dir: true }, { name: "docs", dir: true }, { name: "public", dir: true },
+    { name: "CLAUDE.md", dir: false }, { name: "package.json", dir: false },
+    { name: "vite.config.ts", dir: false },
+  ],
+  "src": [
+    { name: "components", dir: true }, { name: "composables", dir: true }, { name: "utils", dir: true },
+    { name: "App.vue", dir: false }, { name: "main.ts", dir: false },
+  ],
+  "src/components": [
+    { name: "ChatPanel", dir: true }, { name: "FileTree", dir: true }, { name: "TitleBar.vue", dir: false },
+  ],
+  "src/components/ChatPanel": [
+    { name: "ChatInputBox.vue", dir: false }, { name: "ChatPanel.vue", dir: false },
+    { name: "MessageList.vue", dir: false },
+  ],
+  "src/composables": [
+    { name: "useInlineMention.ts", dir: false }, { name: "useMentionSuggest.ts", dir: false },
+    { name: "useChatScroll.ts", dir: false },
+  ],
+  // ── 其它项目的根层（进项目后列的就是这些）──
+  "c:/work/backend-api": [
+    { name: "src", dir: true }, { name: "prisma", dir: true }, { name: "scripts", dir: true },
+    { name: "package.json", dir: false }, { name: "README.md", dir: false },
+  ],
+  "d:/repo/mobile-app": [
+    { name: "app", dir: true }, { name: "lib", dir: true },
+    { name: "pubspec.yaml", dir: false }, { name: "CHANGELOG.md", dir: false },
+  ],
+  "d:/repo/design-tokens": [
+    { name: "tokens", dir: true }, { name: "package.json", dir: false },
+  ],
+};
+
+/** 全仓模糊索引（模拟 find_files_by_name：只回文件、basename 命中、按命中强度排序） */
+const ALL_FILES = [
+  { name: "ChatInputBox.vue", rel: "src/components/ChatPanel" },
+  { name: "ChatPanel.vue", rel: "src/components/ChatPanel" },
+  { name: "useMentionSuggest.ts", rel: "src/composables" },
+  { name: "useSlashCommands.ts", rel: "src/composables" },
+  { name: "styles.css", rel: "src" },
+  { name: "sitemap.ts", rel: "scripts" },
+];
+
+const CAP = 8; // 8 行 ≈ 252px，正好不触发弹层 280px 的滚动
+
+/**
+ * 「其它项目」候选：已注册工作区里，剔除 missing、剔除当前会话工作区自己与它的祖先；
+ * 叶子为空 → 全列（这就是「看得见其它项目」的入口）；有叶子 → 按项目名**包含**匹配。
+ */
+function projectRows(leaf) {
+  const q = leaf.toLowerCase();
+  return PROJECTS
+    .filter((p) => !p.missing)
+    .filter((p) => !isSameOrInside(SESSION_WS, p.path))
+    .map((p) => ({
+      kind: "project",
+      name: baseName(p.path),
+      dir: true,
+      rel: p.path,          // 写回文本用：绝对路径（授权链就认这个）
+      at: parentOf(p.path), // 行尾显示：父目录
+    }))
+    .filter((r) => !q || r.name.toLowerCase().includes(q));
+}
+
+/** 当前查询 → 候选行。敲了分隔符就只列该目录（逐级钻取，不跑模糊、也不列项目）。 */
+function suggestRows(query) {
+  const { dir, leaf } = splitQueryPath(query);
+  const entries = dir === "" ? FS[""] : FS[nkey(dir)];
+  if (entries === undefined) return []; // 该目录不在 mock 数据里
+
+  const q = leaf.toLowerCase();
+  const local = entries
+    .filter((e) => e.name.toLowerCase().startsWith(q))
+    .map((e) => ({
+      kind: "local",
+      name: e.name,
+      dir: e.dir,
+      rel: (dir === "" ? "" : dir.replace(/[\\/]+$/, "")) + (dir === "" ? "" : "/") + e.name,
+      // 行尾提示：文件给所在目录；本层目录行不给（你在哪一层，输入框里明摆着）
+      at: e.dir || dir === "" ? "" : dir.replace(/[\\/]+$/, ""),
+    }));
+
+  const projects = dir === "" ? projectRows(leaf) : [];
+  const seen = new Set([...projects, ...local].map((r) => nkey(r.rel)));
+  // 模糊只在「没敲到分隔符」时跑（find_files_by_name 的等价物），只回文件
+  const fuzzy = !leaf || dir !== "" ? [] : ALL_FILES
+    .filter((f) => f.name.toLowerCase().includes(q))
+    .filter((f) => !seen.has(nkey(f.rel + "/" + f.name)))
+    .map((f) => ({ kind: "fuzzy", name: f.name, dir: false, rel: f.rel + "/" + f.name, at: f.rel }));
+
+  // 顺序：项目 → 本层目录 → 本层文件 → 全仓兜底；同组按名升序（对齐 Rust list_directory）
+  const rank = (r) => (r.kind === "project" ? 0 : r.dir ? 1 : r.kind === "local" ? 2 : 3);
+  const byName = (a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+  return [...projects, ...local, ...fuzzy]
+    .sort((a, b) => rank(a) - rank(b) || (rank(a) === 3 ? 0 : byName(a, b)))
+    .slice(0, CAP);
+}
+
+/** 提交/下钻的文本编辑：返回 { text, caret }（下钻不带尾空格，否则立刻被转成芯片）。 */
+function applyPick(text, tok, row, action) {
+  const inserted = "@" + row.rel + (action === "drill" ? "/" : " ");
+  const next = text.slice(0, tok.at) + inserted + text.slice(tok.at + 1 + tok.query.length);
+  return { text: next, caret: tok.at + inserted.length };
+}
+
+// ════════════════════════════════════════════════════════════════════
+// 渲染
+// ════════════════════════════════════════════════════════════════════
+const ICON_DIR = 'M3 6.2a1.6 1.6 0 011.6-1.6h3.1l1.7 1.9h7.4A1.6 1.6 0 0118.4 8v8.2a1.6 1.6 0 01-1.6 1.6H4.6A1.6 1.6 0 013 16.4z';
+const ICON_FILE = 'M7 2.6h6.2L18 7.4v13a1.6 1.6 0 01-1.6 1.6H7a1.6 1.6 0 01-1.6-1.6V4.2A1.6 1.6 0 017 2.6zm6 1.6v3.6h3.6';
+
+function iconSvg(isDir) {
+  return `<svg class="ms-icon" width="13" height="13" viewBox="0 0 24 24" fill="none">
+    <path d="${isDir ? ICON_DIR : ICON_FILE}" fill="currentColor" opacity=".85"/></svg>`;
+}
+
+/** 来源标签：项目（accent）/ 全仓兜底（灰）/ 本层（无标签）。变体 A 不用行内标签。 */
+function tagHtml(r, variant) {
+  if (variant === "A") return "";
+  if (r.kind === "project") return '<span class="ms-tag ms-tag--project">项目</span>';
+  if (r.kind === "fuzzy") return '<span class="ms-tag">全仓</span>';
+  return "";
+}
+
+/** 渲染候选行。variant: "A" 分组标题行 | "B" 行内弱标签（已定 B）。 */
+function rowsHtml(rows, active, variant) {
+  const parts = [];
+  rows.forEach((r, i) => {
+    // 变体 A：同层命中与全仓兜底之间插分组标题行（全仓打头时也插，否则无从分辨）
+    if (variant === "A" && r.kind === "fuzzy" && (i === 0 || rows[i - 1].kind !== "fuzzy")) {
+      parts.push('<div class="ms-sep">全仓匹配</div>');
+    }
+    parts.push(`<div class="ms-item${i === active ? " ms-item--active" : ""}" data-i="${i}">
+      ${iconSvg(r.dir)}
+      <span class="ms-name">${r.name}</span>
+      ${tagHtml(r, variant)}
+      <span class="ms-right">
+        ${r.at ? `<span class="ms-rel">${r.at}</span>` : ""}
+        ${r.dir ? '<span class="ms-enter">→ 进入</span>' : ""}
+      </span>
+    </div>`);
+  });
+  return parts.join("");
+}
+
+const FOOT = `<div class="ms-foot">
+  <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+  <span><kbd>→</kbd> 进入</span>
+  <span><kbd>回车</kbd> 引用</span>
+  <span><kbd>Esc</kbd> 关闭</span>
+</div>`;
+
+// 静态对照
+function paintGallery(id, rows, active, variant) {
+  document.getElementById(id).innerHTML = rowsHtml(rows, active, variant) + FOOT;
+}
+paintGallery("gal1", suggestRows(""), 2, "B");                        // ① 裸 @：项目在前后两条本层
+paintGallery("gal2", suggestRows("src/"), 0, "B");                    // ② 本层下钻
+paintGallery("gal3", suggestRows("back"), 0, "B");                    // ③ 项目按名匹配
+paintGallery("gal4", suggestRows("s"), 1, "B");                       // ④ 三类混排
+paintGallery("gal5", suggestRows("C:\\work\\backend-api/"), 0, "B");  // ⑤ 进项目之后
+
+// ════════════════════════════════════════════════════════════════════
+// 可交互 demo
+// ════════════════════════════════════════════════════════════════════
+const ta = document.getElementById("ta");
+const pop = document.getElementById("pop");
+const chips = document.getElementById("chips");
+const hintLive = document.getElementById("hintLive");
+
+let state = { visible: false, rows: [], active: 0, tok: null };
+const variant = "B";
+
+function refresh() {
+  const caret = ta.selectionStart ?? 0;
+  const tok = mentionTokenAt(ta.value, caret);
+  if (!tok) return close();
+  const rows = suggestRows(tok.query);
+  if (rows.length === 0) return close();
+  state = { visible: true, rows, active: 0, tok };
+  paint();
+}
+
+function paint() {
+  pop.innerHTML = rowsHtml(state.rows, state.active, variant) + FOOT;
+  pop.style.display = "block";
+  hintLive.textContent = "菜单开着 · 回车＝引用选中项（不发消息）";
+}
+
+function close() {
+  state.visible = false;
+  pop.style.display = "none";
+  pop.innerHTML = "";
+  hintLive.textContent = "菜单未开 · 回车＝发送";
+}
+
+function move(d) {
+  state.active = Math.max(0, Math.min(state.rows.length - 1, state.active + d));
+  paint();
+}
+
+function pick(action) {
+  const row = state.rows[state.active];
+  if (!row) return;
+  const { text, caret } = applyPick(ta.value, state.tok, row, action);
+  ta.value = text;
+  ta.setSelectionRange(caret, caret);
+  if (action === "drill") { refresh(); return; }
+  // 引用：文本里的 `@path ` 按 useInlineMention 规则立刻转成芯片（demo 直接落芯片）
+  ta.value = text.replace(/@[^\s@]+ $/, "").replace(/ +$/, "");
+  addChip(row);
+  close();
+}
+
+function addChip(row) {
+  chips.style.display = "flex";
+  const el = document.createElement("div");
+  el.className = "mention-chip";
+  el.innerHTML = `${iconSvg(row.dir)}<span class="mention-chip-name">${row.name}</span><button class="mention-chip-remove">×</button>`;
+  el.querySelector("button").onclick = () => {
+    el.remove();
+    if (!chips.children.length) chips.style.display = "none";
+  };
+  if (row.dir) el.querySelector(".ms-icon").classList.add("mention-chip-icon--folder");
+  chips.appendChild(el);
+}
+
+ta.addEventListener("input", refresh);
+ta.addEventListener("click", refresh);
+ta.addEventListener("keydown", (e) => {
+  if (!state.visible) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); move(1); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); move(-1); }
+  else if (e.key === "ArrowRight" && state.rows[state.active]?.dir) { e.preventDefault(); pick("drill"); }
+  else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pick("commit"); }
+  else if (e.key === "Escape") { e.preventDefault(); close(); }
+});
+// 便于分享/截图：用 #demo=@back 打开即预置一条查询并展开菜单
+const preset = new URLSearchParams(location.hash.slice(1)).get("demo");
+if (preset) {
+  ta.value = preset;
+  ta.setSelectionRange(preset.length, preset.length);
+  ta.focus();
+  refresh();
+}
+
+pop.addEventListener("mousedown", (e) => {
+  const rowEl = e.target.closest(".ms-item");
+  if (!rowEl) return;
+  e.preventDefault();
+  state.active = Number(rowEl.dataset.i);
+  const clickedEnter = !!e.target.closest(".ms-enter");
+  pick(clickedEnter ? "drill" : "commit");
+});
+</script>
+</body>
+</html>

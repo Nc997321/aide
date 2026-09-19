@@ -79,6 +79,24 @@ export function normalizeMentionPath(path: string): string {
   return stripped.length ? stripped : path;
 }
 
+/** 跨平台路径拼接：按 base 的分隔符拼，剥前/后导分隔符，rel 内部统一为 base 的分隔符
+ *  （Windows 全反斜杠，与文件树/后端返回的原生路径格式一致，open() 的已有窗口查找
+ *  才能命中）。无 base 时原样返回 rel。
+ *  与输入框的 `@path ` 解析、`@` 补全共用这一份——别再抄第二份。 */
+export function joinPath(base: string, rel: string): string {
+  if (!base) return rel;
+  const sep = base.includes("\\") ? "\\" : "/";
+  const b = base.replace(/[\\/]+$/, "");
+  const r = rel.replace(/^[\\/]+/, "").replace(/[\\/]/g, sep);
+  if (!r) return b;
+  return `${b}${sep}${r}`;
+}
+
+/** token 形似绝对路径（Windows 盘符 / Unix 根 / UNC 反斜杠开头）。 */
+export function isAbsoluteishPath(token: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(token) || /^[\\/]/.test(token);
+}
+
 /** 路径归一键：Windows 形态（盘符/UNC）不区分大小写，分隔符一律折成 `/`。
  *  只用于**比对**，原值另存（下发/显示不丢用户写法）。 */
 function mentionPathKey(path: string): string {
@@ -86,8 +104,10 @@ function mentionPathKey(path: string): string {
   return /^[a-zA-Z]:\//.test(p) || p.startsWith("//") ? p.toLowerCase() : p;
 }
 
-/** child 是否就是 parent、或落在 parent 子树内。按组件比——`C:\ab` 不命中 `C:\a`。 */
-function isSameOrInside(child: string, parent: string): boolean {
+/** child 是否就是 parent、或落在 parent 子树内。按组件比——`C:\ab` 不命中 `C:\a`。
+ *  两个消费者共用这一把尺子：发送侧剔「会话主根子树」（`attachedDirsFrom`）、
+ *  输入框 @ 补全剔「其它项目里的自己与祖先」。别在调用点手搓 strip_prefix。 */
+export function isSameOrInside(child: string, parent: string): boolean {
   const c = mentionPathKey(child);
   const p = mentionPathKey(parent);
   if (!p) return false;

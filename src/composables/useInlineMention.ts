@@ -1,6 +1,10 @@
 import { nextTick, type Ref } from "vue";
 import { api } from "../api";
-import { parseMentionPath, normalizeMentionPath } from "../utils/fileMentions";
+import { parseMentionPath, normalizeMentionPath, joinPath, isAbsoluteishPath } from "../utils/fileMentions";
+
+// 路径语法（拼接/绝对性判定）已迁到 SDK 的 fileMentions（mention 路径的唯一真相源）；
+// 这里 re-export 给既有调用点（SearchPanel、本模块单测），新代码请直接引包。
+export { joinPath, isAbsoluteishPath };
 
 /**
  * 输入框的 `@path `→mention 小卡片转换层（唯一的转换机制，与来源无关）。
@@ -20,8 +24,8 @@ import { parseMentionPath, normalizeMentionPath } from "../utils/fileMentions";
  * - 多 token 一次批量 `path_types`（一次 IPC 处理多文件粘贴/拖入）。
  * - 异步竞态：请求序号 + 转换前片段复核双保险。
  *
- * 纯函数（`findMentionTokens` / `resolveCandidates` / `joinPath` /
- * `isAbsoluteishPath`）导出供单测，不依赖 Vue 运行时。
+ * 纯函数（`findMentionTokens` / `resolveCandidates`）导出供单测，不依赖 Vue 运行时；
+ * 路径语法（`joinPath` / `isAbsoluteishPath`）见 SDK 的 fileMentions.ts。
  */
 
 export interface MentionTokenMatch {
@@ -31,23 +35,6 @@ export interface MentionTokenMatch {
   endPos: number;
   /** `@` 与尾随空格之间的 token 原文 */
   token: string;
-}
-
-/** 跨平台路径拼接：按 base 的分隔符拼，剥前/后导分隔符，rel 内部统一为 base 的分隔符
- *  （Windows 全反斜杠，与文件树/后端返回的原生路径格式一致，open() 的已有窗口查找才能命中）。
- *  无 base 时原样返回 rel。 */
-export function joinPath(base: string, rel: string): string {
-  if (!base) return rel;
-  const sep = base.includes("\\") ? "\\" : "/";
-  const b = base.replace(/[\\/]+$/, "");
-  const r = rel.replace(/^[\\/]+/, "").replace(/[\\/]/g, sep);
-  if (!r) return b;
-  return `${b}${sep}${r}`;
-}
-
-/** token 形似绝对路径（Windows 盘符 / Unix 根 / UNC 反斜杠开头）。 */
-export function isAbsoluteishPath(token: string): boolean {
-  return /^[A-Za-z]:[\\/]/.test(token) || /^[\\/]/.test(token);
 }
 
 /**

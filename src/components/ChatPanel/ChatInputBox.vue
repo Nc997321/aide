@@ -19,6 +19,8 @@ import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
+import { useMentionSuggest, applyPick, type MentionSuggestion } from "@/composables/useMentionSuggest";
+import { useWorkspaces } from "@/composables/useWorkspaces";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
@@ -590,6 +592,107 @@ const mentionName = pathBasename;
 const mentionIcon = getFileIcon;
 const folderIconPath = FOLDER_ICON_PATH;
 
+// ── `@` 补全下拉（与 `/` 菜单并列的第二套补全）──────────────────────────────
+// 取数/排序/缓存/竞态全在 useMentionSuggest 里；这里只管两件事：事件 → 刷新、
+// 选中 → 改写文本（引用交回 useInlineMention 转芯片，不新开第二条转芯片路径）。
+// 两套补全互斥：`/` 看整串文本（须以 / 开头且无空格），`@` 看光标锚定的 token。
+const {
+  token: suggestToken,
+  items: suggestItems,
+  active: suggestActive,
+  visible: suggestOpen,
+  refresh: refreshMentions,
+  hide: hideSuggest,
+  move: moveSuggest,
+  current: currentSuggest,
+} = useMentionSuggest({
+  workspacePath: () => props.workspacePath ?? "",
+  // 其它已注册工作区（跨项目开发的主力用法）：候选里排在前面，选中即 @目录 授权
+  projects: () => useWorkspaces().workspaces.value,
+});
+const suggestVisible = computed(() => suggestOpen.value && !slashDropdownVisible.value);
+
+/** 上一次已算过的「光标 + 文本」指纹：input/keyup/click 会为同一次编辑都到这儿，
+ *  去重后既省一次 IPC，也保证方向键选行（keyup 会跟一发）不会把高亮打回首行。 */
+let lastSuggestSig = "";
+
+/** 按当前文本 + 光标重算候选（@ 比 / 多一维：selectionStart）。 */
+function refreshSuggest() {
+  const ta = textareaEl.value;
+  if (!ta) return;
+  const caret = ta.selectionStart ?? ta.value.length;
+  const sig = `${caret}|${ta.value}`;
+  if (sig === lastSuggestSig) return;
+  lastSuggestSig = sig;
+  void refreshMentions(ta.value, caret);
+}
+
+/** textarea 的 input：先走既有的 `@path `→芯片转换层，再刷新补全菜单。
+ *  IME 组合期不弹菜单（与转换层同一判据，避免打断中文输入）。 */
+function handleInput(e: InputEvent) {
+  handleMentionInput(e);
+  if (e.isComposing) return;
+  refreshSuggest();
+}
+
+/** 光标动了就重算：@ 是光标锚定的，←/→/Home/End 都可能让菜单该关或该换层。 */
+function onSuggestCaretKey(e: KeyboardEvent) {
+  if (e.key.startsWith("Arrow") || e.key === "Home" || e.key === "End") refreshSuggest();
+}
+
+/** 选中一项：改写文本 → 下钻留在菜单里换层；引用则交回转换层转芯片。 */
+function pickSuggest(action: "commit" | "drill") {
+  const ta = textareaEl.value;
+  const item = currentSuggest();
+  const tok = suggestToken.value;
+  if (!ta || !item || !tok) return;
+  // 防御：token 必须还在原处（菜单开着时文本若已变，先重新同步再让用户选）
+  if (ta.value.slice(tok.at, tok.at + 1 + tok.query.length) !== `@${tok.query}`) return refreshSuggest();
+
+  const { text, caret } = applyPick(ta.value, tok, item, action);
+  inputText.value = text;
+  nextTick(() => {
+    ta.setSelectionRange(caret, caret);
+    if (action === "drill") return refreshSuggest();
+    hideSuggest();
+    void scanMentions(); // 唯一转芯片路径：写回 `@rel ` 后由它认领
+  });
+}
+
+/** 点某一行：先把它设为高亮，再按同一套动作走（点「进入」用 drill）。 */
+function pickSuggestAt(index: number, action: "commit" | "drill") {
+  suggestActive.value = index;
+  pickSuggest(action);
+}
+
+/** 行尾目录提示：项目行给**父目录**（同名项目靠它区分）、文件行给所在目录；
+ *  本层目录行不给——你在哪一层是输入框里明摆着的，重复显示只是噪音。 */
+function suggestDirHint(item: MentionSuggestion): string {
+  return item.origin === "project" || !item.isDir ? item.dir : "";
+}
+
+/** Enter：@ 菜单开着时选中、不发消息（与 / 菜单同款「先吃掉按键」语义）。 */
+function onEnterKey() {
+  if (suggestVisible.value) return pickSuggest("commit");
+  if (slashDropdownVisible.value && filteredSkills.value.length) {
+    return selectSkill(filteredSkills.value[slashSelectedIndex.value]);
+  }
+  return handleSend();
+}
+
+/** Esc：两套补全一起关（文本保留）。 */
+function onEscapeKey() {
+  hideSuggest();
+  slashDropdownVisible.value = false;
+}
+
+/** → 只在「@ 菜单开着且高亮的是目录」时接管：进该目录继续列子项。 */
+function onArrowRight(e: KeyboardEvent) {
+  if (!suggestVisible.value || !currentSuggest()?.isDir) return;
+  e.preventDefault();
+  pickSuggest("drill");
+}
+
 // ── 附加目录（@目录 授权）的粘性状态 ────────────────────────────────────────
 // 只读镜像：真相在 sidecar worker 的账本里，这里只认 `workspace_attached` 事件
 // （全量、幂等）。发送时把已知全量一起报上去（D9），重连自愈靠它。
@@ -605,6 +708,11 @@ function handleTabKey(e: KeyboardEvent) {
   // Shift+Tab = 循环权限模式（CLI 同款），与 slash 补全互斥
   if (e.shiftKey) {
     cyclePermissionMode(e);
+    return;
+  }
+  if (suggestVisible.value) {
+    e.preventDefault();
+    pickSuggest("commit");
     return;
   }
   if (slashDropdownVisible.value && filteredSkills.value.length) {
@@ -623,6 +731,11 @@ function cyclePermissionMode(e: KeyboardEvent) {
 }
 
 function handleArrowUp(e: KeyboardEvent) {
+  if (suggestVisible.value) {
+    e.preventDefault();
+    moveSuggest(-1);
+    return;
+  }
   if (slashDropdownVisible.value) {
     e.preventDefault();
     slashSelectedIndex.value = Math.max(0, slashSelectedIndex.value - 1);
@@ -630,6 +743,11 @@ function handleArrowUp(e: KeyboardEvent) {
 }
 
 function handleArrowDown(e: KeyboardEvent) {
+  if (suggestVisible.value) {
+    e.preventDefault();
+    moveSuggest(1);
+    return;
+  }
   if (slashDropdownVisible.value) {
     e.preventDefault();
     slashSelectedIndex.value = Math.min(filteredSkills.value.length - 1, slashSelectedIndex.value + 1);
@@ -969,6 +1087,54 @@ const { actions: quickActions } = useQuickActions();
         <span class="skill-item-desc">{{ skill.description }}</span>
       </div>
     </div>
+    <!-- @ 提及补全下拉：与 / 菜单同位置（输入盒上方、贴左右边距），锚在输入盒而非光标。
+         同层命中行尾留空、全仓兜底挂「全仓」弱标签并显示所在目录（两者一眼可分）。 -->
+    <div v-if="suggestVisible" class="skill-dropdown mention-dropdown">
+      <div
+        v-for="(item, i) in suggestItems"
+        :key="item.rel"
+        :class="['skill-item', 'mention-item', i === suggestActive ? 'skill-item--active' : '']"
+        @mousedown.prevent="pickSuggestAt(i, 'commit')"
+      >
+        <svg
+          v-if="item.isDir"
+          class="mention-item-icon"
+          width="13" height="13" viewBox="0 0 24 24" fill="none"
+        >
+          <path
+            d="M3 6.2a1.6 1.6 0 0 1 1.6-1.6h3.1l1.7 1.9h7.4A1.6 1.6 0 0 1 18.4 8v8.2a1.6 1.6 0 0 1-1.6 1.6H4.6A1.6 1.6 0 0 1 3 16.4z"
+            fill="currentColor" opacity="0.85"
+          />
+        </svg>
+        <svg v-else class="mention-item-icon" width="13" height="13" viewBox="0 0 24 24" fill="none">
+          <path
+            d="M7 2.6h6.2L18 7.4v13a1.6 1.6 0 0 1-1.6 1.6H7a1.6 1.6 0 0 1-1.6-1.6V4.2A1.6 1.6 0 0 1 7 2.6zm6 1.6v3.6h3.6"
+            fill="currentColor" opacity="0.85"
+          />
+        </svg>
+        <span class="mention-item-name">{{ item.name }}</span>
+        <span
+          v-if="item.origin !== 'local'"
+          :class="['mention-item-tag', item.origin === 'project' && 'mention-item-tag--project']"
+        >{{ item.origin === 'project' ? '项目' : '全仓' }}</span>
+        <span class="mention-item-right">
+          <!-- 行尾所在目录：不带尾斜杠——RTL 省略会把尾斜杠翻到左边显示成 "/src"，反而像绝对路径 -->
+          <span v-if="suggestDirHint(item)" class="mention-item-rel">{{ suggestDirHint(item) }}</span>
+          <button
+            v-if="item.isDir"
+            type="button"
+            class="mention-item-enter"
+            @mousedown.prevent.stop="pickSuggestAt(i, 'drill')"
+          >→ 进入</button>
+        </span>
+      </div>
+      <div class="mention-foot">
+        <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+        <span><kbd>→</kbd> 进入目录</span>
+        <span><kbd>回车</kbd> 引用</span>
+        <span><kbd>Esc</kbd> 关闭</span>
+      </div>
+    </div>
     <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
          不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
     <!-- 忙碌时排队、正在等安全边界（当前回合结束）的消息：sidecar 已登记，不可撤回 -->
@@ -1068,14 +1234,18 @@ const { actions: quickActions } = useQuickActions();
         class="chat-input"
         :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusy ? '生成中，发送的消息将排队…' : (isHero ? '你正在解决什么问题？' : '输入消息…'))"
         rows="3"
-        @keydown.enter.exact.prevent="(slashDropdownVisible && filteredSkills.length) ? selectSkill(filteredSkills[slashSelectedIndex]) : handleSend()"
+        @keydown.enter.exact.prevent="onEnterKey"
         @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
         @keydown.tab="handleTabKey"
-        @keydown.escape="slashDropdownVisible = false"
+        @keydown.escape="onEscapeKey"
+        @keydown.right="onArrowRight"
         @keydown.up="handleArrowUp"
         @keydown.down="handleArrowDown"
+        @keyup="onSuggestCaretKey"
+        @click="refreshSuggest"
+        @focus="refreshSuggest"
         @paste="handlePaste"
-        @input="handleMentionInput"
+        @input="handleInput"
       />
       <div class="chat-toolbar">
         <ThemedSelect
@@ -1437,6 +1607,114 @@ const { actions: quickActions } = useQuickActions();
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+}
+
+/* ── `@` 提及补全行（容器复用 .skill-dropdown，行密度与 .skill-item 对齐） ── */
+.mention-item {
+  align-items: center;
+  gap: 7px;
+}
+
+.mention-item-icon {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+
+.mention-item-name {
+  font-family: var(--aide-font-mono);
+  font-size: 12px;
+  color: var(--aide-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* 全仓兜底行的弱标签：同层命中行尾留空，靠它 + 行尾相对路径区分两种来源 */
+.mention-item-tag {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  background: var(--aide-bg-deep);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+/* 项目（其它已注册工作区）用 accent 弱标签：它与「全仓」是两种来源，不能长一样 */
+.mention-item-tag--project {
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+}
+
+/* 行尾区（目录提示 + 「进入」胶囊）：两者可同时出现——项目行就是两个都要 */
+.mention-item-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+/* 行尾相对路径：RTL 省略保尾部（长路径下最该看见的是它所在的深层目录） */
+.mention-item-rel {
+  min-width: 0;
+  font-family: var(--aide-font-mono);
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+
+/* 目录行的「进入」：目录默认动作是引用，这个非默认动作必须在行内可见 */
+.mention-item-enter {
+  flex-shrink: 0;
+  font-family: inherit;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  background: transparent;
+  border: 1px solid var(--aide-border);
+  border-radius: 999px;
+  padding: 0 6px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mention-item:hover .mention-item-enter,
+.skill-item--active .mention-item-enter {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
+}
+
+/* 操作提示钉在底部：滚动列表时也在（「→ 能进入」不是默认行为，得让人知道） */
+.mention-foot {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  gap: 12px;
+  padding: 4px 10px 5px;
+  background: var(--aide-bg-raised);
+  border-top: 1px solid var(--aide-border-subtle);
+  font-size: 10px;
+  color: var(--aide-text-muted);
+}
+
+.mention-foot span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mention-foot kbd {
+  font-family: var(--aide-font-mono);
+  font-size: 10px;
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: 3px;
+  padding: 0 4px;
 }
 
 .jump-strip {

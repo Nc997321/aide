@@ -3,11 +3,29 @@ import {
   attachedDirsFrom,
   extractFileMentions,
   formatMentionPath,
+  isSameOrInside,
   normalizeMentionPath,
   parseMentionPath,
   resolveFileMentions,
   splitMentionSections,
 } from "./fileMentions";
+
+// 发送侧（attachedDirsFrom 剔主根子树）与输入框 @ 补全（剔项目里的自己/祖先）共用这一把尺子
+describe("isSameOrInside", () => {
+  it("同一路径与子目录命中；同前缀不同组件不命中", () => {
+    expect(isSameOrInside("C:\\a", "C:\\a")).toBe(true);
+    expect(isSameOrInside("C:\\a\\b", "C:\\a")).toBe(true);
+    expect(isSameOrInside("C:\\ab", "C:\\a")).toBe(false);
+  });
+
+  it("大小写与分隔符形态不敏感（Windows 形态）", () => {
+    expect(isSameOrInside("c:/a/b", "C:\\A")).toBe(true);
+  });
+
+  it("父目录为空（无会话工作区）→ 恒 false", () => {
+    expect(isSameOrInside("C:\\a", "")).toBe(false);
+  });
+});
 
 describe("parseMentionPath", () => {
   it("parses a trailing line range", () => {
