@@ -1,0 +1,6 @@
+# A/B 原始转录（4 份共 1.6 MB JSONL）。结论的可审计证据，但体积与噪音都不适合进仓。
+# 需要复现时重跑 run-lsp-ab.sh 即可（代价：要再花模型 token）——脚本与判定逻辑在仓内。
+ab-*.jsonl
+
+# 探针依赖（50 MB）。版本锁定在 package.json / package-lock.json 里，够复现。
+node_modules/

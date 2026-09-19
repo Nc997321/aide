@@ -1,0 +1,14 @@
+## Code navigation: reach for the LSP tool on semantic questions
+
+"Who defines X", "who references X", "what implements X" are LSP questions, not Grep
+ones. The tool misleads silently, so mind these:
+
+- \`workspaceSymbol\` searches by NAME yet the tool still REQUIRES \`line\` and
+  \`character\`. Pass any position in the same file; without them the call is rejected.
+- The server starts lazily on your first LSP call and needs ~40-60s to index. Until then
+  \`findReferences\` and \`workspaceSymbol\` return EMPTY. Empty is not "no references" —
+  never conclude from it: retry later, or use Grep and say the result is unverified.
+- Expecting several rounds of exploration? Warm the server up front with one cheap
+  \`documentSymbol\` call on any file.
+- In a project containing \`.vue\`: TS reference queries cannot see usages inside \`.vue\`
+  files — cover those with Grep. Plain text, config and log lookups stay Grep's job.

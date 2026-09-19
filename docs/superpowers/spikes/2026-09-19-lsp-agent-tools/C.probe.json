@@ -1,0 +1,25 @@
+{
+  "ok": true,
+  "op": "references",
+  "file": "src-tauri/src/lsp/manager.rs",
+  "attempt": 5,
+  "elapsedMs": 42857,
+  "count": 3,
+  "items": [
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/manager.rs",
+      "line": 143,
+      "col": 22
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/manager.rs",
+      "line": 221,
+      "col": 27
+    },
+    {
+      "uri": "file:///c:/Users/<user>/IdeaProjects/aide/src-tauri/src/lsp/manager.rs",
+      "line": 80,
+      "col": 12
+    }
+  ]
+}
