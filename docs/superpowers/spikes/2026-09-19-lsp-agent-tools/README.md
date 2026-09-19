@@ -123,6 +123,39 @@ node probe.mjs --server node \
 
 `probe.mjs` 是最小 LSP 客户端（Content-Length 分帧、按 section 应答 `workspace/configuration`、轮询到非空为止）。位置参数是 **1-based**，发给 server 前转 0-based。
 
+## C1 落地后的验收状态（2026-09-19）
+
+### 已验证（机械可判）
+
+| 项 | 结果 |
+|---|---|
+| Rust 侧单测 | `cargo test --lib` **893 passed** |
+| sidecar 单测 | `vitest run` **1067 passed**（engine + extensions） |
+| sidecar typecheck | 干净 |
+| 构建新鲜度 | `dist/runtime.js` 含 `lsp_query` / `lsp_result` / `aide-lsp` / `lspLanguages` |
+
+### 未验证：端到端（需要在跑的 app 里做）
+
+**为什么验不了**：`lsp_query` 的往返需要三条链同时在场——sidecar 的 MCP server、
+`runtime/mod.rs` 的拦截器、主进程的 `LspManager`。前两条只在真实会话里跑；而
+仓库的 `MockLsp` 走**进程内 tokio duplex 管道**，不是可 spawn 的二进制，因此驱动不了
+`ensure_server`（它必须从路径起真实进程）。要在此做集成测试，得给 `LspManager`
+加一个仅供测试的句柄注入缝——**为测试去改生产代码的私有边界，不值得**。
+
+**验收步骤**（开一个会话，让它做一件名字有歧义的检索）：
+
+1. 工具是否挂载：会话里问「你现在有哪些 LSP 相关的工具」。期望看到
+   `mcp__aide-lsp__lsp_symbols` / `lsp_references` / `lsp_definition` /
+   `lsp_implementations` 四个。**看不到** = 四档闸门有一档没过，先查 `lsp_languages`
+   是否下发（该工作区要真的有配得上 LSP 的语言）。
+2. 语义查询是否可用：让它「找出 `LspManager::get` 的所有调用点」。期望一次
+   `lsp_references` 返回**15 个精确调用点**（基线：裸 grep `.get(` 有 547 处噪音）。
+3. 冷窗口的语义：**新开会话立刻**问同一句。期望**不是**「没有引用」，而是
+   `indexing` 状态 + 「空不代表没有，重试或退回 Grep」的文案。这一条是本设计的
+   全部意义所在——**若这里说出了「没有」，就是回归**。
+
+验收结果请补回本节。
+
 ## 已排除的路径
 
 **CLI 没有「预启动语言服务器」的开关。** 在 `claude.exe`（2.1.252）二进制里搜过 `lspServers` / `lspStartup` / `eager` / `warmup` / `prestart`：唯一命中的 `options.execution: ["default","eager"]` 配的是 `options.mode: ["summary","detailed"]`，属监控/报告类功能，与 LSP 无关。懒启动是 CLI 的设计，配置层改不掉。
