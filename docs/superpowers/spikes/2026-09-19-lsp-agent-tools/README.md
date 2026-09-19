@@ -48,11 +48,72 @@ rust-analyzer 由 CLI **懒启动**——第一次调用 LSP 工具时才拉起�
 
 本地装 `@vue/language-server@3.3.11 + typescript@5.7.3` 可消除该崩溃（无嵌套副本，解析到 5.7.3）。
 
-### 4. Volar 能否真正给出跨文件引用：**未决**
+### 4. Volar 能否真正给出跨文件引用：**已定案——不能，而且原因在架构层**
 
-修好版本组合后，Volar 在本仓库上对 `references` **4 次尝试、256 秒零响应**（超时，不是空结果）。
+（2026-09-19 后续实测补记，取代原先的「未决」。）
 
-**这不能判定为「Volar 不可用」**——装置本身可能是瓶颈（手搓客户端的 capabilities 是否满足 Volar 的要求未知，也没有为它下发任何配置）。要下结论需要换更可信的客户端。
+**`vue-language-server` 根本不是语言服务器，是 proxy。** 源码 `lib/server.js`：
+
+```js
+async function sendTsServerRequest(command, args) {
+  return await new Promise(resolve => {
+    tsserverRequestHandlers.set(requestId, resolve);
+    connection.sendNotification('tsserver/request', [requestId, command, args]); // 发给**客户端**
+  });
+}
+```
+
+它把请求发给客户端、等客户端回 `tsserver/response`。宿主不桥接 tsserver，这个 Promise **永不 resolve** → 一条请求都不答。实测吻合：
+
+| 测什么 | 结果 |
+|---|---|
+| 72KB `.vue`，`documentSymbol` | 零响应 125.9s |
+| **10 行**的最小 Vue 项目，`documentSymbol` | 零响应 60s（排除「仓库太大」） |
+| 崩的时候崩在哪 | `getLanguageService`（第一次功能请求），不是 `initialize` ← 正是要 tsserver 的那一刻 |
+
+本机那份还额外崩：`@vue/language-server@3.3.11` 的**嵌套** `typescript` 被 npm 用全局
+**7.0.2**（Go 原生重写版，`ts.server` 根本不存在）填了 peer → `ts.server.protocol` TypeError。
+`--tsdk=<有 tsserverlibrary.js 的目录>` 能绕过崩溃（**注意必须是 `--tsdk=<path>` 带等号**，
+源码里是 `arg.startsWith('--tsdk=')`；写成两个 token 会被静默忽略、退回嵌套那份再崩），
+但**绕不开 proxy 架构**。
+
+**结论：不要再往 `vue-language-server` 上使劲。**
+
+### 5. `.vue` 的根治：tsserver + Vue 插件（**已实测可用**）
+
+路线：`typescript-language-server` 载入 `@vue/typescript-plugin`（Volar 3 的现代做法，
+tsserver 插件形态），**不新增任何进程**。
+
+**关键开关：`tsserver.useSyntaxServer: "never"`。** 踩坑记录：TLS 默认会把请求分流给
+**syntax server**，而 **syntax server 不加载插件**——于是单文件功能与引用查询全被那个
+「没有 Vue 能力」的实例接走，表现为插件装了跟没装一样。这个坑很能骗人：日志里
+`Loading global plugin @vue/typescript-plugin` **是打出来的**（semantic 实例确实加载了），
+所以「插件加载失败」这个方向会把排查带偏。
+
+复跑（真仓库，`applyTheme` 在 `src/themes/apply.ts:8:17`）：
+
+```bash
+node probe.mjs --server node --args "<tls>/lib/cli.mjs,--stdio" \
+  --root <repo> --file src/themes/apply.ts --line 8 --col 17 --op references \
+  --init-options '{"tsserver":{"useSyntaxServer":"never"},"plugins":[{"name":"@vue/typescript-plugin","location":"<abs>"}]}'
+```
+
+| 配置 | `applyTheme` 的 references |
+|---|---|
+| 不装插件 | count=1（只有定义自己） |
+| 装插件、默认 useSyntaxServer | count=1 ← **看起来像插件没生效，其实是 syntax server 接走了** |
+| 装插件 + `useSyntaxServer:"never"` | **count=7：`themes/index.ts` + `App.vue`×3 + `SettingsPanel.vue`×2**，与 grep 真值逐条吻合 |
+
+**尚未解决的一条不对称**：`documentSymbol` 对 `.vue` **仍然不出结果**（30 次尝试 / 150s 零条）。
+这对 aide 有直接影响——`lsp_agent` 的就绪探测 `probe_ready` **用的就是 documentSymbol**。
+后果：`.vue` 目标上的**空结果**会被判成 `indexing` 而不是「已确认的没有」。方向是安全的
+（绝不假阴性，符合红线），但 `.vue` 永远拿不到「确认没有」。
+**候选修法**：`probe_ready` 改成探一个**同语言的普通源文件**（`lookup_symbol` 已经这么做），
+而不是探被查询文件本身。
+
+**依赖前提**：`@vue/typescript-plugin` 必须可达。本机它藏在
+`<npm 全局>/@vue/language-server/node_modules/@vue/typescript-plugin`——**不能假设用户都有**，
+所以产品化时要能探测到才启用、探不到就退回不用（别为了 Vue 把普通 TS 也搞坏）。
 
 ## 提示词 A/B：能不能靠注入系统提示解决？（**结论：不能，已量化**）
 
@@ -191,5 +252,6 @@ node probe.mjs --server node \
 
 1. `files.exclude` / `watcherExclude` 的默认值，以及 RA 在本仓库上 5 GB 的构成（crate 图？未排除的 `target` 193 MB `node_modules` / 106 GB `target`？）—— 需真实送达路径才能量。
 2. 日志中反复出现的 `WARN notify error: Input watch path is neither a file nor a directory.` 指向哪个路径？RA 的 watcher 在监看一个不存在的路径，可能是文件监听开销的来源。
-3. Volar 在本仓库上为何不响应（装置问题 vs 配置问题）。
+3. ~~Volar 在本仓库上为何不响应（装置问题 vs 配置问题）。~~ **已定案，见 §4/§5**：
+   不是装置问题，是 `vue-language-server` 的 proxy 架构 + TLS 的 syntax server 不加载插件。
 4. `LSP` 未列入 aide 的 `allowedTools`（`agent-sidecar/src/engine/session-worker/queryOptions.ts:76`）——但 `Grep`/`Read` 也不在，两者同属内置只读工具，**推测无实际影响，未验证**。

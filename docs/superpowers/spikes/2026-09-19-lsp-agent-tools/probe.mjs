@@ -12,7 +12,8 @@
  *   node probe.mjs --server <cmd> [--args a,b] --root <dir> \
  *                  --file <relpath> --line 80 --col 15 \
  *                  [--op references|documentSymbol] [--poll-ms 5000] [--poll-timeout 300000] \
- *                  [--init-options '<json>'] [--settings '<json>'] [--language <id>]
+ *                  [--init-options '<json>'] [--settings '<json>'] [--language <id>] \
+ *                  [--dump-notify] [--dump-response] [--no-did-open]
  *
  * Positions on the command line are 1-based (as editors show them); they are
  * converted to LSP's 0-based before being sent.
@@ -57,8 +58,11 @@ function parseArgs(argv) {
   return out;
 }
 
-/** JSON-RPC over stdio with LSP's Content-Length framing. */
-function makeTransport(child) {
+/** JSON-RPC over stdio with LSP's Content-Length framing.
+ *  `opts.dumpNotify` 打服务器→客户端的通知（`--dump-notify`）：TLS/Volar 的关键自述
+ *  ——选了哪份 TypeScript、插件加载成功没有——**只走 `window/logMessage`**，
+ *  不看它等于在黑盒里猜「为什么没答案」。 */
+function makeTransport(child, opts = {}) {
   let buf = Buffer.alloc(0);
   const pending = new Map();
   const onRequest = new Map();
@@ -101,7 +105,10 @@ function makeTransport(child) {
       pending.delete(msg.id);
       return;
     }
-    // Notifications ($/progress, window/logMessage, …) are ignored.
+    // Notifications ($/progress, window/logMessage, …) are ignored by default.
+    if (opts.dumpNotify && !String(msg.method ?? "").startsWith("$/")) {
+      process.stderr.write(`[notify] ${msg.method} ${JSON.stringify(msg.params)}\n`);
+    }
   }
 
   return {
@@ -153,7 +160,7 @@ async function main() {
   });
   child.stderr.on("data", (d) => process.stderr.write(`[server stderr] ${d}`));
 
-  const t = makeTransport(child);
+  const t = makeTransport(child, { dumpNotify: !!a["dump-notify"] });
   // A dead server must abort the poll loop immediately — retrying a process
   // that has already exited just burns the whole timeout.
   let died = null;
@@ -242,6 +249,16 @@ async function main() {
       }
       process.stderr.write(`attempt ${attempt}: ${err.message}\n`);
       result = [];
+    }
+    // `--dump-response`：**把「答了空」和「没答」分开**。轮询循环把两者都算成 0 条，
+    // 于是「服务器秒回 null」和「服务器根本不理」在输出里长得一模一样——而这两件事
+    // 的修法完全不同（前者是能力边界，后者是装置/协议问题）。这正是本项目那条
+    // 「空 ≠ 没有」红线在工具侧的翻版。
+    if (a["dump-response"]) {
+      const raw = JSON.stringify(result);
+      process.stderr.write(
+        `[resp] attempt ${attempt}: ${raw === undefined ? "(undefined)" : raw.slice(0, 300)}\n`
+      );
     }
     const items = Array.isArray(result) ? result : [];
     const elapsed = Date.now() - started;
