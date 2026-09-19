@@ -67,6 +67,15 @@ const badgeClass = computed(() => {
   }
 });
 
+/** C3 起 Aide 自带 LSP 通道（`aide-lsp` 工具），会在受信任工作区**退役**声明了语言
+ *  服务器的插件（运行时抑制，见 spec § C3）——而卡片仍显示「已启用」。不说明用户
+ *  无从理解「我开着它为什么没有」。措辞对「已装」「未装」两态都成立：未装时这句话
+ *  正好劝退一次无谓的安装。 */
+const LSP_TAKEOVER_NOTE = "语言服务器已由 Aide 接管，此插件不会生效";
+const LSP_TAKEOVER_TIP =
+  "Aide 的 LSP 工具（aide-lsp）已接管这些语言的语义查询。受信任的工作区不再加载此插件；" +
+  "未信任的工作区、或 Aide 没识别出该语言的工作区，它仍照常生效。";
+
 const caveatText = computed(() => {
   // 仅 UNSUPPORTED 组件（output_styles/themes/monitors）会出现于 entry.unsupported；
   // lsp_servers 与 mcp_servers 同属 SUPPORTED，永不出现于其中，故不列入此映射。
@@ -129,6 +138,7 @@ function openGit() {
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>
       </div>
       <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
+      <span v-if="entry.providesLsp" class="caveat" :title="LSP_TAKEOVER_TIP">{{ LSP_TAKEOVER_NOTE }}</span>
       <div class="f-foot">
         <span class="f-meta">{{ sourceLabel }}<span v-if="installed?.version || entry.version" class="f-ver"> · {{ installed?.version || entry.version }}</span></span>
         <div class="btns">
@@ -176,6 +186,7 @@ function openGit() {
           <div class="desc">{{ entry.description }}</div>
           <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
           <span v-else-if="entry.availability === 'unavailable'" class="caveat unavailable-caveat">在 Aide 中不可用</span>
+          <span v-if="entry.providesLsp" class="caveat" :title="LSP_TAKEOVER_TIP">{{ LSP_TAKEOVER_NOTE }}</span>
         </div>
       </div>
       <div class="actions">

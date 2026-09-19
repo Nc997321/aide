@@ -8,11 +8,21 @@ function tool(name: string, input: unknown, result?: string): ToolCallBlock {
 }
 
 function msg(role: "user" | "assistant", ...blocks: ContentBlock[]): ChatMessage {
-  return { id: `m-${Math.random()}`, role, blocks, timestamp: "" };
+  return { id: `m-${Math.random()}`, role, blocks, timestamp: 0 };
 }
 
 const HOVER_OK = "Hover info at 13:9:\n\n```rust\nlet count: u32\n```";
 const HOVER_FAIL = "No hover information available. This may occur if the cursor is not on a symbol.";
+
+// ── aide-lsp（C3 之后 agent 唯一走的通道）的结果文本 ──
+// 这三个常量照 agent-sidecar/src/extensions/lspStatusText.ts 的输出**抄**的，不是编的：
+// 格式漂移时这里会先红，比徽章在真机上莫名其妙消失好查。
+const AIDE_OK =
+  "15 references for `get`:\n  C:\\repo\\src-tauri\\src\\lsp\\manager.rs:80:12\n  C:\\repo\\src-tauri\\src\\lsp\\manager.rs:112:13";
+const AIDE_INDEXING =
+  "The language server is still building its index, so the references for `get` was not answered. An empty result now does NOT mean the reference does not exist — it means nobody looked yet. Retry in ~30s, or use Grep and say the result is unverified.";
+const AIDE_CONFIRMED_EMPTY =
+  "No references found for `get` — the language server's index is ready, so this is a confirmed negative (not a missing answer).";
 
 describe("judgeReadRelay", () => {
   const lsp = { filePath: "C:\\repo\\src-tauri\\src\\commands\\chat.rs", result: HOVER_OK };
@@ -152,6 +162,63 @@ describe("annotateReadRelay", () => {
     ];
     annotateReadRelay(messages);
     expect((messages[2]!.blocks[0] as ToolCallBlock).lspRelay).toBeUndefined();
+  });
+});
+
+describe("两代 LSP 通道（C3 退役内置后，agent 只走 aide-lsp）", () => {
+  const AIDE_TOOL = "mcp__aide-lsp__lsp_references";
+  const AIDE_INPUT = { name: "get", file: "C:\\repo\\src-tauri\\src\\lsp\\manager.rs" };
+
+  it("aide-lsp 的调用被认作 LSP 上下文（此前硬编码 === \"LSP\" 会整块漏掉）", () => {
+    const m = msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_OK));
+    expect(lastLspContextInMessages([m])).toEqual({ filePath: AIDE_INPUT.file, result: AIDE_OK });
+  });
+
+  it("目标文件从 `file` 取，不是内置那代的 `filePath`", () => {
+    const m = msg("assistant", tool(AIDE_TOOL, { name: "get", file: "C:\\repo\\a.rs" }, AIDE_OK));
+    expect(lastLspContextInMessages([m])?.filePath).toBe("C:\\repo\\a.rs");
+  });
+
+  /// 红线在徽章上的体现：索引没就绪的那次调用**什么都没答**，不能拿它当接力上下文。
+  /// 注意前缀判据在这一代是失效的（文案开头是 "The"），拦下它的是「结果里没有坐标」。
+  it("非 ready（indexing）不算上下文——否则会白送一枚「✓ LSP 接力」", () => {
+    const m = msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_INDEXING));
+    expect(lastLspContextInMessages([m])).toBeNull();
+  });
+
+  it("ready + 空（已确认的否定）也不算上下文——它没给出任何坐标可沿", () => {
+    const m = msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_CONFIRMED_EMPTY));
+    expect(lastLspContextInMessages([m])).toBeNull();
+  });
+
+  it("只带 name、没带 file 的调用不构成上下文（没有「那一个坐标」）", () => {
+    const m = msg("assistant", tool("mcp__aide-lsp__lsp_symbols", { name: "get" }, AIDE_OK));
+    expect(lastLspContextInMessages([m])).toBeNull();
+  });
+
+  /// 内置那代的行为**不得**被新判据波及：hover 结果是纯文档、没有路径坐标，
+  /// 给它也套上「必须有坐标」会把 hover 构成的上下文整片杀掉。
+  it("内置 hover 的成功结果仍算上下文（新判据只作用于 aide-lsp 那代）", () => {
+    const m = msg("assistant", tool("LSP", { operation: "hover", filePath: "a.rs" }, HOVER_OK));
+    expect(lastLspContextInMessages([m])?.filePath).toBe("a.rs");
+  });
+
+  it("两代混用时最近的那次说了算", () => {
+    const m = msg(
+      "assistant",
+      tool("LSP", { operation: "hover", filePath: "a.rs" }, HOVER_OK),
+      tool(AIDE_TOOL, { name: "get", file: "b.rs" }, AIDE_OK),
+    );
+    expect(lastLspContextInMessages([m])?.filePath).toBe("b.rs");
+  });
+
+  it("annotateReadRelay（历史回看路径）同样认 aide-lsp：Read 拿得到徽章", () => {
+    const messages = [
+      msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_OK)),
+      msg("assistant", tool("Read", { file_path: "manager.rs", offset: 80, limit: 5 })),
+    ];
+    annotateReadRelay(messages);
+    expect((messages[1]!.blocks[0] as ToolCallBlock).lspRelay).toBe("hit");
   });
 });
 

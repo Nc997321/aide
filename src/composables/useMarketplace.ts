@@ -48,6 +48,9 @@ const installedOnlyEntries = computed<PluginEntry[]>(() => {
       availability: "available",
       unsupported: [],
       isFeatured: false,
+      // 合成条目没有市场元数据，无从知道它声不声明语言服务器 → 按否处理。
+      // 方向是安全的：宁可不打那行「已由 Aide 接管」的说明，不做无据的断言。
+      providesLsp: false,
     });
   }
   return out;

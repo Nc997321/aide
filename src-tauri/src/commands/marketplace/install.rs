@@ -33,6 +33,7 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
             .into_iter()
             .map(|raw| {
                 let (avail, unsup) = manifest::classify_availability(&raw);
+                let provides_lsp = manifest::provides_lsp(&raw);
                 // version = 语义版本（marketplace.json 的 version 字段），仅显示用；sha-pinned 为空。
                 // version_id = 安装身份（version 或 short_sha(sha)），与 install_git 落盘的版本目录名
                 // 同源，供 hasUpdate 比对——sha 不暴露给用户。
@@ -54,6 +55,7 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
                     repository: raw.repository.clone().unwrap_or_default(),
                     availability: avail,
                     unsupported: unsup,
+                    provides_lsp,
                     // 内置清单元数据（图标/精选）由 merge_bundled_metadata 后处理填入
                     icon: None,
                     is_featured: false,

@@ -8,11 +8,16 @@ import type { ChatMessage, ContentBlock, LspRelayVerdict } from "../types/chat";
  * 坐标整文件读。这里的职责：给 assistant 的每次 Read 调用算出「接力了 / 没接力 /
  * 无从判定」三态，供工具卡头行渲染徽章。
  *
+ * **两代 LSP 通道都要认**（2026-09-19 C3 起）：内置 `LSP` 工具，与 aide-lsp 的四个
+ * `mcp__aide-lsp__*` 工具。C3 把内置通道退役掉了，此后 agent 只走后者——判定若还只认
+ * 前者，整块接力 UI 会**静默失效**（不是报错，是徽章再也不出现）。两代的入参字段名与
+ * 「结果算不算数」的判据都不同，分别在本文件下半部按代处理。
+ *
  * 判定依据刻意保持宽松——徽章是行为指示器不是契约证明：
  * 同一文件（basename 相等）+ LSP 结果非失败 + Read 带 offset ⇒ hit；
  * 同上但 Read 无 offset ⇒ miss（整文件读）。
  *
- * 已实测的 LSP 失败结果文本前缀（scripts/diag/lsp-probe-run{B,C,D2}.json）：
+ * 已实测的**内置** LSP 失败结果文本前缀（scripts/diag/lsp-probe-run{B,C,D2}.json）：
  * "No hover information available…" / "No symbols found…" / "No references
  * found…" / "No definition found…" / "Error performing hover…" / "Failed to
  * sync file open…" —— 统一按 no / error / failed 前缀识别。
@@ -20,7 +25,7 @@ import type { ChatMessage, ContentBlock, LspRelayVerdict } from "../types/chat";
 
 /** 一次已完成的 LSP 调用的判定上下文。 */
 export interface LspCallContext {
-  /** LSP 操作的目标文件（tool_use input.filePath） */
+  /** LSP 操作的目标文件（内置 `LSP` 的 input.filePath / aide-lsp 的 input.file） */
   filePath: string;
   /** 该调用的结果文本（tool_result；空/缺失视为未完成，不构成上下文） */
   result: string;
@@ -29,6 +34,36 @@ export interface LspCallContext {
 /** LSP 失败结果的统一前缀识别。误杀方向恒为中性（不打徽章）——禁止扩大前缀集：
  *  扩大只会把成功结果误判成失败，徽章永远往「缺」的方向偏，不往「错」偏。 */
 const LSP_FAILED = /^(no\b|error|failed)/i;
+
+/** 内置 LSP 工具名（C3 之前的唯一通道）。 */
+const BUILTIN_LSP_TOOL = "LSP";
+
+/** aide-lsp 的 MCP 工具名前缀：server 名 `aide-lsp`，SDK 展开成
+ *  `mcp__aide-lsp__lsp_symbols` 等（工具清单见 agent-sidecar/src/extensions/lspTools.ts）。 */
+const AIDE_LSP_TOOL_PREFIX = "mcp__aide-lsp__";
+
+/** 这次工具调用属于 LSP 家族吗。两代都认——漏认后者 = 整块接力 UI 静默失效。 */
+function isLspToolCall(name: string): boolean {
+  return name === BUILTIN_LSP_TOOL || name.startsWith(AIDE_LSP_TOOL_PREFIX);
+}
+
+/** 该调用的结果算不算「答了话」（够不够格当接力上下文）。
+ *
+ *  两代判据不同，各自照**实测 / 自控的文案**定，不是随手松紧之差：
+ *  - 内置 `LSP`：前缀识别。**不能**改成「有坐标才算」——内置的 hover 结果是纯文档
+ *    （`Hover info at 13:9:` 后接代码块），那样会把 hover 构成的上下文整片杀掉
+ *    （lspRelay.test.ts 的 HOVER_OK 就是这个形状）。
+ *  - aide-lsp：**必须有坐标**。它四个工具全是定位类（symbols / references /
+ *    definition / implementations，没有 hover），而**非 ready 时一律回散文**——
+ *    "The language server is still building its index…" 开头是 "The"，前缀判据那边
+ *    整片失效。用坐标在场判定同时办两件事：真答了话的才算上下文，**索引没就绪的空
+ *    结果绝不算「接力了」**（红线，也是这个徽章最容易骗人的地方）。 */
+function isUsableLspResult(toolName: string, result: string): boolean {
+  const text = result.trim();
+  if (LSP_FAILED.test(text)) return false;
+  if (toolName === BUILTIN_LSP_TOOL) return true;
+  return /:\d+:\d+/.test(text);
+}
 
 /** 实时路径的回看扫描上限（块数）：防超长会话 O(n)。 */
 const RECENT_BLOCK_CAP = 200;
@@ -40,11 +75,20 @@ function basenameOf(path: string): string {
   return parts[parts.length - 1] ?? "";
 }
 
-/** LSP 工具 input 里的目标文件（实测 harness 格式为 camelCase filePath）。 */
+/** LSP 工具 input 里的目标文件。**两代字段名不同**：内置 `LSP` 是 camelCase
+ *  `filePath`（实测 harness 格式），aide-lsp 的四个工具是 `file`（见其 zod shape）。
+ *
+ *  只有带 file 的调用才有目标文件可谈。aide-lsp 的 `{ name }` 单参形式（先按名找符号）
+ *  没有 file ⇒ 不构成上下文 ⇒ 那次 Read 落中性。**这是刻意的**：一次返回 N 个文件的
+ *  引用查询并没有「那一个坐标」，硬凑一个集合会把徽章变成噪声（模块头：误杀方向恒为
+ *  中性，宁可少打不可错打）。 */
 function lspInputFilePath(input: unknown): string | null {
   const record = input as Record<string, unknown> | null;
-  const filePath = record?.filePath;
-  return typeof filePath === "string" && filePath ? filePath : null;
+  for (const key of ["filePath", "file"] as const) {
+    const value = record?.[key];
+    if (typeof value === "string" && value) return value;
+  }
+  return null;
 }
 
 /**
@@ -79,8 +123,9 @@ export function lastLspContextInMessages(
       // !block 此臂实际不可达（合法索引下元素恒存在）；未开 noUncheckedIndexedAccess，属防御性收窄
       if (!block || block.type !== "tool_call") continue;
       scanned++;
-      if (block.name !== "LSP") continue;
+      if (!isLspToolCall(block.name)) continue;
       if (typeof block.result !== "string" || !block.result) continue;
+      if (!isUsableLspResult(block.name, block.result)) continue;
       const filePath = lspInputFilePath(block.input);
       if (filePath) return { filePath, result: block.result };
     }
@@ -101,10 +146,11 @@ export function annotateReadRelay(messages: readonly ChatMessage[]): void {
     if (msg.role !== "assistant") continue;
     for (const block of msg.blocks) {
       if (block.type !== "tool_call") continue;
-      if (block.name === "LSP") {
+      if (isLspToolCall(block.name)) {
+        const result = typeof block.result === "string" ? block.result : "";
         const filePath = lspInputFilePath(block.input);
-        if (typeof block.result === "string" && block.result && filePath) {
-          lsp = { filePath, result: block.result };
+        if (result && filePath && isUsableLspResult(block.name, result)) {
+          lsp = { filePath, result };
         }
         continue;
       }

@@ -17,6 +17,11 @@ export interface PluginEntry {
   icon?: string;
   /** Aide 精选推荐标记（内置清单驱动）。 */
   isFeatured: boolean;
+  /** 该插件声明了语言服务器（marketplace.json 的 `lspServers`）。
+   *  Aide 自带 LSP 通道（aide-lsp 工具），C3 起会在受信任工作区退役这类插件
+   *  （运行时抑制，见 spec § C3）——卡片据此加一行说明，否则用户看到「已启用」
+   *  却不知它为什么不生效。 */
+  providesLsp: boolean;
 }
 
 export interface InstalledPlugin {

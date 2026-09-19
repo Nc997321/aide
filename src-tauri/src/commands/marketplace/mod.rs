@@ -50,6 +50,11 @@ pub struct PluginEntry {
     /// Aide 精选推荐标记（内置清单驱动，前端「精选推荐」区块用）。
     #[serde(default)]
     pub is_featured: bool,
+    /// 这个插件声明了语言服务器（marketplace.json 的 `lspServers`，见 manifest::provides_lsp）。
+    /// 前端据它给卡片加一行「已由 Aide 接管」说明：C3 起 aide-lsp 会在受信任工作区退役
+    /// 这类插件（运行时抑制），卡片上却仍显示「已启用」——不说明用户无从理解。
+    #[serde(default)]
+    pub provides_lsp: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
