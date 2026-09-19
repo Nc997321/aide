@@ -9,8 +9,11 @@
 // so the query is never aborted, and a missing file is silently skipped.
 //
 // One block does not come from a file at all: Aide's own LSP navigation hint
-// (lspHint.ts), injected only when the user actually has a language server —
-// see that module for why. It goes first so Aide's layer reads above user rules.
+// (lspHint.ts), injected only when the built-in LSP channel is live — see that
+// module for why. The caller computes it and passes it in as `builtinHint`:
+// the decision needs the LSP gate (trusted / languages / env), which the caller
+// (queryContext) already holds, and this module stays a pure file assembler.
+// It goes first so Aide's layer reads above user rules.
 //
 // 生效窗口（方案 F6）：本函数只在 query spawn 时跑，而 query 全会话只 spawn 一次
 // ⇒ 附加根的指令只在「首条消息带目录 / 新会话 / query 重启」进 system prompt；
@@ -19,7 +22,6 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { memoryDirs } from "./memoryDirs.js";
-import { loadLspHint } from "./lspHint.js";
 
 const MAX_INSTRUCTION_FILE_BYTES = 256 * 1024;
 /** auto memory 索引（MEMORY.md）截断：前 200 行 / 25 KiB 先到先截——镜像 CLI 的加载
@@ -42,6 +44,10 @@ export interface InstructionSources {
   trusted: boolean;
   /** 本会话的 @目录账本（附加根）。 */
   attached?: string[];
+  /** Aide 自己撰写、不来自任何文件的指令块（当前只有内置 LSP 通道的导航提示，
+   *  见 lspHint.ts）。**由调用方算好**——判它要不要注入需要 LSP 总闸的三份输入，
+   *  那是调用方（queryContext）手里才有的东西；本模块只负责拼装。null = 没有这块。 */
+  builtinHint?: string | null;
 }
 
 /**
@@ -51,7 +57,7 @@ export interface InstructionSources {
  * `query()` is never blocked.
  */
 export async function loadAideInstructions(p: InstructionSources): Promise<string> {
-  const builtin = await loadLspHint(p.configDir);
+  const builtin = p.builtinHint ?? null;
   const base = await readBaseInstructions(p);
   const attached = await readAttachedInstructions(p.attached ?? [], p.configDir);
   return [...(builtin ? [builtin] : []), ...base, ...attached].join("\n\n");

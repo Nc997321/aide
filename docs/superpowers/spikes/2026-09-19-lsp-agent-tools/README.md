@@ -156,6 +156,28 @@ node probe.mjs --server node \
 
 验收结果请补回本节。
 
+## C3 落地后的验收状态（退役内置通道）
+
+设计见 spec § C3。机制：拼 `--plugin-dir` 时剔除声明 `.lsp.json` 的插件
+（`extensions/lspRetire.ts`）——CLI 拿不到插件就不再挂内置 LSP 工具，也就不会再懒启动
+第二个语言服务器。
+
+### 已静态核验
+
+| 项 | 结果 |
+|---|---|
+| CLI 有没有第二条插件发现路径 | **没有**。`~/.aide/claude/plugins/installed_plugins.json`（CLI 自己的注册表）只列 `superpowers` / `frontend-design`，**不含** `rust-analyzer-lsp` / `typescript-lsp` —— 那两个只存在于 aide 的 `enabled-plugins.json` |
+| 退掉 LSP 会不会连带丢别的能力 | **不会**。两个官方 LSP 插件目录是纯 LSP（`.claude-plugin/` + `.lsp.json` + LICENSE + README） |
+| 退役判据与挂载闸门会不会漂移 | 不会，同一个谓词 `lspToolsMounted`（`extensions/lspGate.ts`） |
+
+### 未验证（要在跑的 app 里做）
+
+1. **决定性判据**：任务管理器里同一仓库**只有一个** rust-analyzer（此前是两个）。
+2. 内置 `LSP` 工具**拿不到答案**（不再出现 "No references found"）。
+3. ⚠️ **别拿「内置 `LSP` 是否还出现在工具列表里」当判据**——「列在工具表」与「有 server
+   可服务」是 CLI 的两件事，未实测；依赖它会把「已生效」误判成「没生效」。
+4. 回归：某语言没配 LSP 的工作区里插件**不被剔除**。
+
 ## 已排除的路径
 
 **CLI 没有「预启动语言服务器」的开关。** 在 `claude.exe`（2.1.252）二进制里搜过 `lspServers` / `lspStartup` / `eager` / `warmup` / `prestart`：唯一命中的 `options.execution: ["default","eager"]` 配的是 `options.mode: ["summary","detailed"]`，属监控/报告类功能，与 LSP 无关。懒启动是 CLI 的设计，配置层改不掉。

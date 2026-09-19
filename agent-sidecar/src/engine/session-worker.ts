@@ -850,6 +850,9 @@ export class SessionWorker {
                 cwdWorker: this.cwd,
                 // 账本在 spawn 时落地（中途 @ 的走 applyFlagSettings，见 applyAttachedDirs）
                 additionalDirs: this.additionalDirs,
+                // 与上面 prepareQueryContext 收的是同一个值：LSP 总闸的两处消费者
+                // （aide-lsp 挂载 / 内置 LSP 插件退役）必须同源，见 lspGate.ts。
+                lspLanguages,
               },
               branch: {
                 automationConfig: this.automationConfig,

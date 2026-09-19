@@ -1,10 +1,16 @@
 // buildSpawnQueryOptions 直测：条件展开臂逐条钉住。dispatchPlugins/claudeExe 打桩
 //（真实现摸 ~/.aide/claude 与 exe 探测——测试不许有盘上副作用）。
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { PermissionMode } from "@anthropic-ai/claude-agent-sdk";
 
+/** 市场插件条目可变：C3 的退役用例要指向**真的**插件目录——夹具照假设写，
+/// 测试就只验证了假设（`undefined:undefined:1` 那次的教训）。 */
+const market = vi.hoisted(() => ({ dirs: [{ type: "local" as const, path: "/plugins/market" }] }));
 vi.mock("../../extensions/dispatchPlugins.js", () => ({
-  buildPluginsOption: () => [{ type: "local", path: "/plugins/market" }],
+  buildPluginsOption: () => market.dirs,
   buildDispatchPluginsOption: () => [{ type: "local", path: "/plugins/user", skipMcpDiscovery: true }],
 }));
 vi.mock("../claudeExe.js", () => ({ resolveClaudeExe: vi.fn(() => "") }));
@@ -27,7 +33,7 @@ function parts(over: {
       ctx: { instructions: "INST", hooks: { PreToolUse: [] }, hookManifest: [], mcpServers: { biz: { type: "http" } } },
       cliEnv: { PATH: "/bin" },
     },
-    workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, ...over.workspace },
+    workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, lspLanguages: [], ...over.workspace },
     branch: { automationConfig: undefined, ...over.branch },
     model: { sdkModel: "", effort: "", thinkingDisabled: false, ...over.model },
     fork: { resumeSource: "", shouldFork: false, ...over.fork },
@@ -83,6 +89,42 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.plugins).toHaveLength(2);
     expect(o.tools).toBeUndefined();
     expect(o.includePartialMessages).toBe(true);
+  });
+
+  /// C3 的端到端一段：退役闸门必须真的走到 `--plugin-dir` 那一层。
+  /// 闸门的两半边各测一次——「退了」和「该留的时候留着」缺一不可：
+  /// 只测退了，会漏掉能力缺口（替代品不在场却把内置工具拿掉）。
+  describe("C3：内置 LSP 通道退役", () => {
+    let lspDir: string;
+    afterEach(() => {
+      market.dirs = [{ type: "local", path: "/plugins/market" }];
+      if (lspDir) rmSync(lspDir, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    });
+
+    const paths = (o: Opts) => (o.plugins as Array<{ path: string }>).map((p) => p.path);
+
+    it("aide-lsp 接管 → 声明 LSP 的市场插件不进 --plugin-dir（并留一行日志）", () => {
+      lspDir = mkdtempSync(join(tmpdir(), "aide-qo-lsp-"));
+      writeFileSync(join(lspDir, ".lsp.json"), "{}");
+      market.dirs = [{ type: "local", path: lspDir }];
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const o = buildSpawnQueryOptions(parts({ workspace: { lspLanguages: ["rust"] } })) as Opts;
+
+      expect(paths(o)).not.toContain(lspDir);
+      expect(warn.mock.calls.flat().join(" ")).toContain("内置 LSP 通道已退役");
+    });
+
+    it("替代品不在场（该工作区没配得上 LSP 的语言）→ 内置插件原样保留", () => {
+      lspDir = mkdtempSync(join(tmpdir(), "aide-qo-lsp-"));
+      writeFileSync(join(lspDir, ".lsp.json"), "{}");
+      market.dirs = [{ type: "local", path: lspDir }];
+
+      const o = buildSpawnQueryOptions(parts({ workspace: { lspLanguages: [] } })) as Opts;
+
+      expect(paths(o)).toContain(lspDir);
+    });
   });
 
   it("model/effort 空串不带键；有值带上", () => {

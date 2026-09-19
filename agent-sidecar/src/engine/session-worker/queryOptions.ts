@@ -8,7 +8,8 @@ import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
-import { buildPluginsOption, buildDispatchPluginsOption } from "../../extensions/dispatchPlugins.js";
+import { buildPluginsOption, buildDispatchPluginsOption, type SdkPluginConfig } from "../../extensions/dispatchPlugins.js";
+import { retireBuiltinLspPlugins } from "../../extensions/lspRetire.js";
 import { forkResumeOptions } from "./forkResume.js";
 import { automationQueryOverrides, type AutomationConfig } from "../../desktop/automation.js";
 import { resolveClaudeExe } from "../claudeExe.js";
@@ -35,6 +36,9 @@ export interface QuerySpawnParts {
     cwdWorker: string | undefined;
     /** 本会话已授权的附加目录（@目录 账本，见 attachDirs.ts）。空/缺省 = 不落字段。 */
     additionalDirs?: string[];
+    /** 该工作区配得上 LSP 的语言（主进程算好下发）。与 trust 同为 LSP 总闸的输入，
+     *  C3 用它决定要不要退役内置 LSP 插件——见 pluginDirs。 */
+    lspLanguages: string[];
   };
   branch: {
     automationConfig: AutomationConfig | undefined;
@@ -52,6 +56,26 @@ export interface QuerySpawnParts {
     resumeSource: string;
     shouldFork: boolean;
   };
+}
+
+/** `--plugin-dir` 列表装配。automation 全关（前缀最小化）。
+ *
+ *  C3：aide-lsp 接管时剔掉声明 LSP 的市场插件——内置 LSP 通道退役，否则同一仓库会起
+ *  第二份语言服务器，且它在冷窗口那句平铺直叙的 "No references found" 会把 aide-lsp
+ *  的诚实状态信号抵消掉（见 lspRetire.ts）。
+ *
+ *  闸门读 `process.env`：与 `lspMcpRegistration` 收到的 processEnv 是同一份，
+ *  **不是** cliEnv（两者白名单不同，AIDE_LSP_TOOLS 只在进程环境里稳定可见）。 */
+function pluginDirs(p: QuerySpawnParts): SdkPluginConfig[] {
+  const all = [
+    ...buildPluginsOption(),
+    ...buildDispatchPluginsOption(p.workspace.cwd, p.workspace.trusted),
+  ];
+  return retireBuiltinLspPlugins(all, {
+    trusted: p.workspace.trusted,
+    lspLanguages: p.workspace.lspLanguages,
+    env: process.env,
+  });
 }
 
 export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
@@ -88,9 +112,7 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
     skills: p.branch.automationConfig ? [] : "all",
-    plugins: p.branch.automationConfig
-      ? []
-      : [...buildPluginsOption(), ...buildDispatchPluginsOption(p.workspace.cwd, p.workspace.trusted)],
+    plugins: p.branch.automationConfig ? [] : pluginDirs(p),
     hooks: p.runtime.ctx.hooks,
     // 终装链（内建+用户 → automation 白名单过滤 → 会话级头注入）见 queryContext.ts。
     mcpServers: p.runtime.ctx.mcpServers,

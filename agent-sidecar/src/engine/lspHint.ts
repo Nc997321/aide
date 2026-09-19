@@ -1,5 +1,10 @@
 // 内置 LSP 导航提示：唯一一处由 Aide 自己撰写、而非来自用户文件的指令块。
 //
+// **这段文本只讲 Claude Code 内置的 LSP 工具**（`workspaceSymbol` 要坐标、
+// `findReferences` 冷窗口返空、tsserver 看不见 .vue），所以它只在**那个工具真的在场**
+// 时才注入——见 loadLspHint 的两道闸。aide-lsp 接管后（C3 退役内置通道）这套语义由
+// extensions/lspTools.ts 的 server instructions 承担，这段文本整篇作废。
+//
 // 成因（2026-09-19 实测，基线见 docs/superpowers/spikes/2026-09-19-lsp-agent-tools/）：
 // agent 有内置 LSP 工具却退回 Grep，不是不知道工具存在（装插件 6 天用了 29 次），
 // 是四类缺陷让它「试过、失望、放弃」：
@@ -16,6 +21,7 @@
 
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { lspToolsMounted, type LspGate } from "../extensions/lspGate.js";
 
 const LSP_USAGE_HINT = `## Code navigation: reach for the LSP tool on semantic questions
 
@@ -33,11 +39,19 @@ ones. The tool misleads silently, so mind these:
   files — cover those with Grep. Plain text, config and log lookups stay Grep's job.`;
 
 /**
- * 本会话要不要注入 LSP 提示。返回 null = 不注入。
+ * 本会话要不要注入内置工具的 LSP 提示。返回 null = 不注入。
  *
- * 闸门是必要的：没有语言服务器可调时，这段文本既是噪音又是每轮的纯开销。
+ * 两道闸，都必要：
+ * 1. `lspToolsMounted(gate)` —— aide-lsp 接管时内置工具**已被退役**（lspRetire.ts），
+ *    对不存在的工具讲这些是纯噪音，且那套语义已由 aide-lsp 的 server instructions
+ *    承担。顺带把这段每轮重发的文本省掉。
+ * 2. 没有插件提供 `.lsp.json` —— 没有内置通道可讲，同样别讲。
+ *
+ * 两道都不满足时返回文本：**内置通道在场，且替代品不在**——正是这个提示被写出来的
+ * 那个世界（未信任工作区、detector 没认出的工作区）。
  */
-export async function loadLspHint(configDir: string): Promise<string | null> {
+export async function loadLspHint(configDir: string, gate: LspGate): Promise<string | null> {
+  if (lspToolsMounted(gate)) return null;
   if (!(await hasAgentLspPlugin(configDir))) return null;
   return LSP_USAGE_HINT;
 }

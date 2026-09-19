@@ -1,7 +1,7 @@
 # Agent LSP 工具设计
 
 日期：2026-09-19
-状态：设计待评审
+状态：C1 已落地（22 提交）、C3 已实施（待真机验收）
 基线证据：[docs/superpowers/spikes/2026-09-19-lsp-agent-tools/README.md](../spikes/2026-09-19-lsp-agent-tools/README.md)
 
 ## 背景
@@ -158,13 +158,17 @@ lsp_workspace_symbol(workspace_root, query, lang?) -> LspSymbolSearchResult { st
 
 ## 分期
 
-- **C1（先做）**：桥 + 就绪探测 + 预热 + `lsp_symbols` + `lsp_references`。以 spike 的歧义任务端到端验收。
-- **C2**：`lsp_definition` + `lsp_implementations`；`call_hierarchy` 视使用情况再定。
+- **C1（已落地）**：桥 + 就绪探测 + 预热 + 四个工具（`symbols`/`references`/`definition`/
+  `implementations`）。端到端验收未完成（见 spike README：工具挂载 ✓、冷窗口文案 ✓，
+  **热态返回真实引用那一步还没验过**）。
+- **C3（已实施）**：退役内置 LSP 通道——见下节。C1 的「不会再起第二个语言服务器」这句
+  承诺到 C3 才算兑现。
+- **C2（未做）**：`call_hierarchy` / `hover` 等视使用情况再定。
 
-## C3：退役内置 LSP 通道（选项 B，待实施）
+## C3：退役内置 LSP 通道（选项 B）——**已实施**
 
-**为什么必须做**：C1 建了新路，**从没把旧路退掉**——spec 架构节里写的「agent 不再走
-Claude Code 内置 LSP 工具，因此不会再起第二个语言服务器进程」至今是空头承诺。
+**为什么必须做**：C1 建了新路，**从没把旧路退掉**——架构节里写的「agent 不再走
+Claude Code 内置 LSP 工具，因此不会再起第二个语言服务器进程」在 C1 落地时仍是空头承诺。
 
 真机实测的后果（2026-09-19）：同一个问题，agent 会**并排调用** `mcp__aide-lsp__lsp_references`
 与内置 `LSP` 工具。两个危害：
@@ -175,37 +179,73 @@ Claude Code 内置 LSP 工具，因此不会再起第二个语言服务器进程
    平铺直叙回 **"No references found"**。模型拿到两个矛盾信号，很可能采信更简洁的那个
    ——**我们建的诚实性被并排的工具直接抵消**。
 
-### 方案
+### 方案（实施版）
 
-`--plugin-dir` 那份列表是 **aide 自己拼的**（已核对进程命令行），所以 aide 可以在拼列表时
-把提供 `.lsp.json` 的插件剔掉。判据与挂载闸门同一数据源：该工作区有配得上 LSP 的语言。
+`--plugin-dir` 那份列表是 **aide 自己拼的**（`buildPluginsOption()` 读 Rust 维护的
+`enabled-plugins.json`），所以在拼列表时把提供 `.lsp.json` 的插件剔掉即可。落点：
+`extensions/lspRetire.ts`，调用点 `queryOptions.ts` 的 `pluginDirs()`。
 
-### 已知的时序问题（实施前必须想清）
+**两道条件缺一不可**（比原方案 (b) 多一道，理由见下）：
 
-`--plugin-dir` 在 **CLI spawn** 时确定，而语言列表要到 **send** 时才由
-`lsp_languages_for_path(app, cwd)` 算出。两者不同时。
+1. **替代品在场** = `lspToolsMounted(gate)`——与 aide-lsp 的挂载闸门**同源**
+   （`extensions/lspGate.ts`，三个消费者共用同一个谓词）。
+2. **这个插件只提供 LSP**——剔 `--plugin-dir` 是**整目录**剔除，插件若还带 skills/agents，
+   退掉 LSP 的代价是连它们一起丢。
 
-候选解法：
-- **(a) 按工作区预判**：CLI spawn 时该会话的工作区已知，可直接跑一次
-  `detect_languages` ∩ `registry::resolve`，不必等 send。缺点是 CLI 可能跨工作区复用
-  （需确认：`--plugin-dir` 是 per-CLI-process 的，而 CLI 是 per-session 的，故大概率可行）。
-- **(b) 全局退役**：装了 aide-lsp 能力就一律剔掉 `*-lsp` 插件，不看工作区。简单，
-  但在没配 LSP 的工作区也剔——那些地方本来也不该有内置工具，所以**其实可接受**。
+只作用在**市场插件**条目上：散装注入的 `aide-user` / `aide-project` 根不碰——那是用户
+自己的 skills/agents 家，不能因为根目录躺着一个 `.lsp.json` 就把整包退掉。
 
-**倾向 (b)**：简单、无时序问题，且「同一个能力不该有两个入口」本来就是全局原则而非
-逐工作区的。若日后发现需要按工作区保留，再升级到 (a)。
+### 实施期对原方案的两处修正
+
+**修正一：时序问题不存在。** 原方案担心「`--plugin-dir` 在 CLI spawn 时定、语言列表在
+send 时才算」。实测代码：`lspLanguages` 是 `startLoop(cwd, trusted, codegraphEnabled,
+lspLanguages)` 的形参，而 `buildSpawnQueryOptions` 在**同一个函数体内**被调用——两者
+同一刻到手。故候选解法 (a) 并不比 (b) 复杂，原方案选 (b) 的头号理由（「简单、无时序
+问题」）不成立。
+
+**修正二：判据从「全局退役」升级为「替代品在场才退」。** 原方案 (b) 的代价被写成
+「在没配 LSP 的工作区也剔——那些地方本来也不该有内置工具，所以其实可接受」。**这个论证
+是错的**：`lsp_languages_for_path` = detector ∩ `registry::resolve`，两者都可能不认——
+detector 只看工作区**根**（Rust 在子目录的 monorepo 探不到），`registry::resolve` 也可能
+解析不出 server。这些工作区里 aide-lsp **不会挂载**，而内置工具**本来能用**，退掉是净
+损失。故判据改为「替代品在场」，并把谓词抽成 `lspToolsMounted` 与挂载闸门共用防漂移。
+
+### 连带改动：提示词随闸门分叉
+
+`engine/lspHint.ts` 那段系统提示**整篇在讲内置工具**（`workspaceSymbol` 要坐标、
+`findReferences` 冷窗口返空、tsserver 看不见 `.vue`）。内置通道退役后，它是在对一个不存在
+的工具讲话。改为按同一闸门分叉：
+
+- 闸门通过（aide-lsp 接管）→ **不注入**。那套语义由 aide-lsp 的 server instructions 承担，
+  顺带省掉这段每轮重发的文本。
+- 闸门不通过（内置通道留着）→ 照旧注入——正是这个提示被写出来的那个世界。
+
+`.vue` 失明那条警告搬进了 `LSP_INSTRUCTIONS`：它是 **TS server 的性质**，与走哪条通道无关。
+
+### 未定案项的定案
+
+**不连 `enabled-plugins.json` 一起改。** 两个理由：① 它是 `lspHint` 判「内置通道存不存在」
+的真值，改它等于把判据的输入删掉；② 那是用户的安装设置，而运行时抑制是 aide 的行为。
+代价是设置页里 `*-lsp` 仍显示「已启用」而实际不生效——退役时打一行日志兜底
+（`[lsp] 内置 LSP 通道已退役…`）。**UI 上的说明留作后续**（属前端工作，不在本批）。
 
 ### 验收
 
-- 新会话里问「你有哪些 LSP 工具」→ **只有 `mcp__aide-lsp__*` 四个**，没有内置 `LSP`。
-- 任务管理器里同一仓库**只有一个** rust-analyzer（不是两个）。
-- 回归：某个语言没配 LSP 时，`*-lsp` 插件被剔掉不会造成能力缺口（那种工作区本来也没有 LSP）。
+- **决定性判据**：任务管理器里同一仓库**只有一个** rust-analyzer；内置 `LSP` 工具**拿不到
+  答案**（不再有那句 "No references found"）。
+- 新会话里问「你有哪些 LSP 工具」→ 能看到 `mcp__aide-lsp__*` 四个。
+  ⚠️ **别拿「内置 `LSP` 是否还出现在工具列表里」当判据**——「工具列在模型工具表里」与
+  「有没有 server 可服务」是 CLI 的两件事，未实测；依赖它会把「已生效」误判成「没生效」。
+- 回归：某语言没配 LSP 的工作区里，`*-lsp` 插件**不被剔除**（退役闸门不通过）。
 
-=== 未定案 ===
+### 静态核验（本批已完成）
 
-**要不要连 `enabled-plugins.json` 一起改？** 剔 `--plugin-dir` 是运行时抑制，插件本身
-仍显示为「已启用」。用户会困惑「我开着它为什么没有」。可接受（抑制是 aide 的行为，
-插件是用户的安装），但要在 UI 上或文档里说清。
+- 两个 LSP 插件**只**经 aide 的 `enabled-plugins.json` → `--plugin-dir` 注入：CLI 自己的
+  `plugins/installed_plugins.json` 里**没有** `rust-analyzer-lsp` / `typescript-lsp`
+  （只有 superpowers / frontend-design）。**CLI 没有第二条发现路径** ⇒ 剔 `--plugin-dir`
+  就是真退役。
+- 官方那两个插件目录是**纯 LSP**（只有 `.claude-plugin/`、`.lsp.json`、LICENSE、README）
+  ⇒ 条件 ② 在现状下不会挡下任何插件。
 
 ## 未决问题
 
@@ -213,5 +253,10 @@ Claude Code 内置 LSP 工具，因此不会再起第二个语言服务器进程
 
 1. **远程客户端对未知事件类型的行为**（风险 3）——需查 PWA / ohos 的事件分发是否有「未知类型静默忽略」的兜底。有则无需改动；没有则要给两端加兜底，否则 `lsp_query` 帧会让它们报错。
 2. **`ready` 探测的预算与频率**：默认 90s 上界是拍的，实现时用真实仓库标定（本仓库 rust-analyzer 实测 46–73s，jdtls 更长）。
+3. **`.vue` 文件会不会被 `ready` + 空**（C3 暴露出来的既有洞）：TS server 不解析 `.vue`，
+   所以「谁引用了 X」的 `ready` + 空**对 `.vue` 调用点而言是假阴性**——而我们的红线上
+   写着「ready + 空 = 已确认的没有」。本批只把它写进 `LSP_INSTRUCTIONS` 让模型自己兜
+   （「`.vue` 用 Grep 覆盖」），**没有在通道层修**。真修有两条路：让 Vue 语言服务器
+   （Volar）在 `lspLanguages` 里到位，或对 `.vue` 的查询降级成非 ready 状态。两条都未验证。
 
 **已定案、不再作为开放项**：预热**不加显式开关**——按「该工作区已配置语言」自动判定（YAGNI）。用户要关掉时，既有的工作区 LSP 开关与信任门已经够用。

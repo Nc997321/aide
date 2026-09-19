@@ -3,6 +3,7 @@ import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../engine/types.js";
 import { queryLsp, type LspTool } from "./lspClient.js";
 import { formatLspResponse } from "./lspStatusText.js";
+import { lspToolsMounted, type LspGate } from "./lspGate.js";
 
 /**
  * allowedTools 前缀规则：匹配该 server 全部工具，canUseTool 直接跳过（只读工具不弹窗）。
@@ -28,15 +29,12 @@ export const LSP_TOOL_NAMES = [
 export const LSP_INSTRUCTIONS = `This environment has a LANGUAGE SERVER for the current workspace, exposed as the aide-lsp MCP tools. Read the returned status before trusting a result:
 1. Semantic questions — "who defines X", "who references X", "what implements X" — use these tools. They are compiler-precise: a match is a real reference, not a mention in a comment or a string. When a symbol name is common (get, run, handle) or several types define it, one call replaces a grep-then-read fan-out.
 2. Plain-text / config / log / string-literal lookups are still Grep's job. Do not use these tools to find text.
-3. The language server starts lazily and may still be indexing (rust-analyzer takes 40-70s on a large project). Every result carries a status: only status "ready" with zero results is a CONFIRMED negative. Any other status means the question was not answered — retry, or fall back to Grep and say the result is unverified. Never report "no references" from a non-ready status.`;
+3. The language server starts lazily and may still be indexing (rust-analyzer takes 40-70s on a large project). Every result carries a status: only status "ready" with zero results is a CONFIRMED negative. Any other status means the question was not answered — retry, or fall back to Grep and say the result is unverified. Never report "no references" from a non-ready status.
+4. The TypeScript server does not parse \`.vue\` files, so its reference results miss usages inside them — a "ready + empty" answer is confirmed only for \`.ts\`/\`.js\` callers. Cover \`.vue\` with Grep.`;
 
-export interface LspToolsDeps {
+export interface LspToolsDeps extends LspGate {
   cwd: string;
   emit: (e: ChatEvent) => void;
-  env: NodeJS.ProcessEnv;
-  trusted: boolean;
-  /** 该工作区配得上 LSP 的语言（主进程 `lsp_languages_for_path` 算好下发）。空 = 不挂载。 */
-  lspLanguages: string[];
 }
 
 /** 工具入参：给名字（服务层自己解析坐标），或直接给坐标。两者二选一。
@@ -55,19 +53,15 @@ const nameOrPosition = () => ({
 });
 
 /**
- * 挂载条件（并列，任一不满足即返回 null → server 不挂载 → 工具对模型不存在）：
- * - `trusted=false`：不信任的工作区不跑语言服务器（主进程侧同一道门）。
- * - `lspLanguages` 为空：该工作区没有配得上 LSP 的语言。挂载只会白付每轮重发的
- *   工具 schema，并诱导模型去调注定返回 no_server 的工具。
- * - `AIDE_LSP_TOOLS=off`：逃生舱（与 AIDE_CODEGRAPH_TOOLS / AIDE_DOCX_TOOLS 同款）。
- * - `emit` 缺失：headless 没有 Rust 宿主，事件发出去也没人回（调用方传 undefined 时拦截）。
+ * 挂载闸门三条见 `lspGate.ts`（**别在这里重写**——退役内置 LSP 通道的判据是同一份，
+ * 分叉会造出「两个都没有」或「两个都在」）。返回 null = server 不挂载 = 工具对模型不存在。
+ *
+ * headless 不在闸门里单独列一条：`lspLanguages` 由主进程下发，headless 不发 ⇒ 空 ⇒ 关。
  */
 export function lspMcpRegistration(
   deps: LspToolsDeps,
 ): Record<string, unknown> | null {
-  if (!deps.trusted) return null;
-  if (deps.lspLanguages.length === 0) return null;
-  if (deps.env.AIDE_LSP_TOOLS === "off") return null;
+  if (!lspToolsMounted(deps)) return null;
 
   const run = async (
     toolName: LspTool,

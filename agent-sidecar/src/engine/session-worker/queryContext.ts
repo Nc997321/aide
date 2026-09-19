@@ -8,11 +8,13 @@ import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
+import { type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
+import { loadLspHint } from "../lspHint.js";
 
 export interface QueryContextDeps {
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
@@ -68,25 +70,30 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // knowledge 直连 HTTP、docs 本地同步解析、codegraph 与本插件回主进程）。
   // headless 下**照挂**，由工具层发起前短路成引导文本（不在注册处摘除，理由见 browserMcp.ts）。
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
-  // agent LSP 工具：四档闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
+  // agent LSP 工具：闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
   // 闸门数据 lspLanguages 由主进程算好下发（同 codegraph_enabled 的政策值通道）。
-  const lspMcp = lspMcpRegistration({
-    cwd: deps.cwd,
-    emit: deps.emit,
-    env: deps.processEnv,
+  // **闸门算一次给三处用**（本文件的挂载、queryOptions 的内置插件退役、下面提示注入）：
+  // 各算各的会算出「两个都没有」或「两个都在」（见 lspGate.ts）。
+  const lspGate: LspGate = {
     trusted: deps.trusted,
     lspLanguages: deps.lspLanguages,
-  });
+    env: deps.processEnv,
+  };
+  const lspMcp = lspMcpRegistration({ cwd: deps.cwd, emit: deps.emit, ...lspGate });
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，追加到 preset system prompt。
   // settingSources 必须为空，否则 SDK 仍会去读 .claude/settings*.json，与 Aide
   // 独立设置体系冲突。
+  // LSP 提示由这里按闸门算好再交进去（见 lspHint.ts）：闸门通过 = 内置通道已退役，
+  // 那段讲内置工具的文本作废，改由 aide-lsp 的 server instructions 承担。
+  const configDir = deps.processEnv.CLAUDE_CONFIG_DIR ?? "";
   const instructions = await loadAideInstructions({
     cwd: deps.cwd,
-    configDir: deps.processEnv.CLAUDE_CONFIG_DIR ?? "",
+    configDir,
     trusted: deps.trusted,
     attached: deps.attachedDirs,
+    builtinHint: await loadLspHint(configDir, lspGate),
   });
   // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
   // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard
