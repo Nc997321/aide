@@ -125,8 +125,15 @@ pub async fn run_agent_query(
     run_jump(state, tool, &pos, workspace_root).await
 }
 
-/// 按名字解析坐标。`Err(Indexing)` 与非空的 `Ok(None)` 是**两件事**：
-/// 前者是「还没索引好，什么都没查成」，后者是「索引是好的，真没这个符号」。
+/// 按名字解析坐标。
+///
+/// `Err(Indexing)` 与 `Ok(None)` 是**两件不同的事**：前者是「没能证实到底有没有」，
+/// 后者是「探测过了，索引是好的，确实没这个符号」。
+///
+/// **空结果不能直接断言「没有」**：冷启动时未建好索引的 server 同样回 `Ok` + 空数组。
+/// 所以每个返回空的候选语言都要拿一个该语言的**真实文件**做 `documentSymbol` 探测——
+/// 探测通过才计一次 `confirmed_absent`。没有靶子文件时宁可不置（保守报 indexing），
+/// 也绝不误报「没这个符号」。
 async fn lookup_symbol(
     state: &LspState,
     name: &str,
@@ -137,38 +144,90 @@ async fn lookup_symbol(
         return Err(AgentLspStatus::NoServer);
     }
     let mgr = state.0.lock().await;
-    let mut answered = false;
+    let mut confirmed_absent = false;
     for lang_id in langs {
         let Some(h) = mgr.get(workspace_root, lang_id).await else {
             continue;
         };
         let params = json!({ "query": name });
-        let outcome = match jump::issue(
+        let Ok(RequestOutcome::Ok(v)) = jump::issue(
             &h,
             "workspace/symbol",
             params,
             crate::lsp::manager::DEFINITION_TIMEOUT,
         )
         .await
-        {
-            Ok(o) => o,
-            Err(_) => continue,
+        else {
+            continue;
         };
-        if let RequestOutcome::Ok(v) = outcome {
-            answered = true;
-            let hit = crate::lsp::workspace_symbol::parse_workspace_symbols(&v, lang_id.id_str())
+        if let Some(hit) =
+            crate::lsp::workspace_symbol::parse_workspace_symbols(&v, lang_id.id_str())
                 .into_iter()
-                .next();
-            if hit.is_some() {
-                return Ok(hit);
-            }
+                .next()
+        {
+            return Ok(Some(hit));
+        }
+        let Some(probe_file) = first_source_file(workspace_root, lang_id).await else {
+            continue; // 没靶子 → 无法证实
+        };
+        if probe_ready(&h, &probe_file, workspace_root).await {
+            confirmed_absent = true;
         }
     }
-    if answered {
+    if confirmed_absent {
         Ok(None)
     } else {
         Err(AgentLspStatus::Indexing)
     }
+}
+
+/// 找一个该语言的源文件，用作就绪探测的靶子（`probe_ready` 要一个磁盘上真实存在的文件）。
+///
+/// 深度受限、跳过重目录——只为探测，不需要找全。**放 spawn_blocking**：遍历文件系统
+/// 属重 IO，不许占 tokio worker（CLAUDE.md 的同步命令红线同理）。
+async fn first_source_file(
+    workspace_root: &str,
+    lang_id: crate::lsp::detector::LanguageId,
+) -> Option<String> {
+    let root = workspace_root.to_string();
+    tokio::task::spawn_blocking(move || walk_for_language(&root, lang_id))
+        .await
+        .ok()
+        .flatten()
+}
+
+fn walk_for_language(
+    workspace_root: &str,
+    lang_id: crate::lsp::detector::LanguageId,
+) -> Option<String> {
+    const SKIP: [&str; 7] = ["node_modules", "target", "dist", "build", ".venv", "vendor", "out"];
+    const MAX_DEPTH: usize = 4;
+    let mut stack = vec![(std::path::PathBuf::from(workspace_root), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                // 点目录（.git/.aide/…）与重目录一律不下钻。
+                if depth < MAX_DEPTH && !name.starts_with('.') && !SKIP.contains(&name.as_str()) {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            let matches = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(crate::lsp::detector::LanguageId::from_ext)
+                == Some(lang_id);
+            if matches {
+                return Some(path.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
+    None
 }
 
 /// 执行跳转类查询。先按当前状态直接发；**只有结果为空时才回头探测就绪**
@@ -309,6 +368,28 @@ mod tests {
         assert_eq!(symbol_query_name("LspManager::get"), "get");
         assert_eq!(symbol_query_name("is_excluded"), "is_excluded");
         assert_eq!(symbol_query_name("a::b::c"), "c");
+    }
+
+    #[test]
+    fn walk_for_language_skips_heavy_dirs_and_respects_depth() {
+        let tmp = std::env::temp_dir().join("aide-lsp-walk-test");
+        let _ = std::fs::remove_dir_all(&tmp);
+        let deep = tmp.join("node_modules").join("pkg");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::write(deep.join("hidden.rs"), "fn x() {}").unwrap();
+        // 重目录里的文件不该被找到
+        assert!(
+            walk_for_language(tmp.to_str().unwrap(), crate::lsp::detector::LanguageId::Rust).is_none(),
+            "node_modules 里的文件不该当探测靶子"
+        );
+        // 正常位置的文件要能找到
+        std::fs::write(tmp.join("real.rs"), "fn y() {}").unwrap();
+        let found = walk_for_language(tmp.to_str().unwrap(), crate::lsp::detector::LanguageId::Rust);
+        assert!(
+            found.as_deref().is_some_and(|f| f.ends_with("real.rs")),
+            "got {found:?}"
+        );
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     /// 空 results 时 `ok` 必须是 false——`ok:true` + 空会被读成「查到了，就是没有」。
