@@ -8,6 +8,7 @@
     "build": "node scripts/check-sync-io-commands.mjs && node scripts/check-overlay-layers.mjs && vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
+    "build:sidecar:dev": "npm --prefix agent-sidecar run build",
     "build:sidecar": "npm --prefix agent-sidecar run build && npm --prefix agent-sidecar run build:bin",
     "build:codegraph": "node scripts/build-codegraph.mjs",
     "build:codegraph:release": "node scripts/build-codegraph.mjs --release",

@@ -169,8 +169,17 @@ watch(
 // 会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel → "high"。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、
 // 实测不碰 prompt 缓存）；进程没起时选择随下一条消息的 initialEffort（env 通道）带上。
-// sidecar 坐实/回滚由 props.currentEffort 同步。快速(low) 时 worker 关思考模式
-// （thinkingForEffort），进阶/极致时开启——见 agent-sidecar/src/effortSwitch.ts。
+// sidecar 坐实/回滚由 props.currentEffort 同步。**快速(low) 另外会请求关掉思考**，
+// 但不是在这里生效的：Rust 侧按档位算出 thinking_enabled（chat.rs 的
+// thinking_enabled_for_effort），sidecar 发现该值与当前 query 的 spawn 值漂移时，
+// 在下一条 send 原地 resume 重启兑现（session-worker 的 restartQueryForThinking）
+// ——所以 effort 是热生效、思考要等下一轮。
+//
+// ⚠️ 「请求了关闭」≠「端点一定不推理」：CLI 按模型名查本地能力表，对不认识的模型名
+// （deepseek-* / 本地 ollama 模型等）**根本不发 thinking 参数**，兼容端点「无该字段
+// = 默认开推理」（2026-09-19 实测）。sidecar 已在 cliEnv 注入 CLAUDE_CODE_EXTRA_BODY
+// 绕过那份名单，实测有效：deepseek 与本地 ollama 的 /v1/messages 都认 disabled，也都
+// 不会因为多这个字段而 400。见 docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md。
 const selectedEffort = ref("high");
 
 /** ThemedSelect 的 options 收 mutable 数组；SDK 的 EFFORT_OPTIONS 是 as const
@@ -226,7 +235,14 @@ watch(() => props.currentEffort, (v) => {
   ) {
     lastEffortToastValue = nv;
     const label = EFFORT_OPTIONS.find((o) => o.value === nv)?.label ?? nv;
-    showToast(`effort 已切换为 ${label}`, "success");
+    showToast(
+      // 快速档多一句：effort 是热生效的，思考关不关要等下一轮重建 query（见文件头
+      // 注释）。**措辞只说"已请求"**——CLI 对不认识的模型名会丢掉 thinking 参数，
+      // 兼容端点于是默认开推理（2026-09-19 实测），那时只有显示被隐藏、token 照烧。
+      // 说成"已关闭"就是又一次「徽章说假话」。
+      nv === "low" ? `${label}已生效 · 已请求关闭思考（下一条消息起）` : `effort 已切换为 ${label}`,
+      "success",
+    );
   }
   if (nv !== selectedEffort.value) selectedEffort.value = nv;
 });

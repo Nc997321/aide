@@ -29,7 +29,7 @@ function parts(over: {
     },
     workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, ...over.workspace },
     branch: { automationConfig: undefined, ...over.branch },
-    model: { sdkModel: "", effort: "", thinkingEnabled: true, ...over.model },
+    model: { sdkModel: "", effort: "", thinkingDisabled: false, ...over.model },
     fork: { resumeSource: "", shouldFork: false, ...over.fork },
   };
 }
@@ -94,10 +94,8 @@ describe("buildSpawnQueryOptions", () => {
     expect(set.effort).toBe("high");
   });
 
-  it("thinking 三臂：automation 恒 disabled；开关关 disabled；开 adaptive+summarized", () => {
-    const cfg = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" };
-    expect((buildSpawnQueryOptions(parts({ branch: { automationConfig: cfg } })) as Opts).thinking).toEqual({ type: "disabled" });
-    expect((buildSpawnQueryOptions(parts({ model: { thinkingEnabled: false } })) as Opts).thinking).toEqual({ type: "disabled" });
+  it("thinking 两臂：关 disabled；开 adaptive+summarized（automation 恒关在 thinkingPolicy 推导）", () => {
+    expect((buildSpawnQueryOptions(parts({ model: { thinkingDisabled: true } })) as Opts).thinking).toEqual({ type: "disabled" });
     expect((buildSpawnQueryOptions(parts()) as Opts).thinking).toEqual({ type: "adaptive", display: "summarized" });
   });
 

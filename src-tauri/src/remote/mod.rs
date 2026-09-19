@@ -61,6 +61,23 @@ impl CodeAnnouncer {
     }
 }
 
+/// 本构建允不允许连中继。
+///
+/// **dev 默认不连**（2026-09-19）：dev 与安装版共用 identifier（com.aide.app）与同一
+/// settings.json（remote device_id 同源），双双注册会在 relay 路由表上互踢——
+/// 2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，手机每次桥接几毫秒内被顶断。
+/// 这与 `lib.rs` 里 single-instance 对 dev 的豁免是**一对**：豁免让两个实例能并存，
+/// 这条闸门保证并存时不会两个都去 relay 抢同一台设备身份。改一个必须改另一个。
+///
+/// dev 里确实要连真中继（调试远程链路）：先退出安装版，再用
+/// `AIDE_DEV_REMOTE=1 pnpm tauri dev` 启动——否则两边会抢设备身份。
+pub fn relay_allowed_in_this_build() -> bool {
+    if !cfg!(debug_assertions) {
+        return true;
+    }
+    std::env::var("AIDE_DEV_REMOTE").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 /// 远程控制网关：出站连中继，桥接手机消息到 sidecar 命令面。
 /// 组装层——只做生命周期 + 连接状态；认证逻辑在 auth::TokenStore，
 /// 消息映射在 rpc，传输在 relay_client。
@@ -98,7 +115,13 @@ impl RemoteGateway {
     /// 启动中继客户端任务（幂等：已在跑则不动）。
     /// 必须走 tauri 的全局 async runtime 而非 tokio::spawn——setup 钩子跑在主线程
     /// （Tokio runtime 之外），tokio::spawn 会 panic "no reactor running"。
+    ///
+    /// 单一咽喉：启动时的自动连接与设置面板的开关都走这里，所以 dev 的闸门放这一处
+    /// 就够（见 relay_allowed_in_this_build）。
     pub fn start(self: &Arc<Self>) {
+        if !relay_allowed_in_this_build() {
+            return;
+        }
         if lock_recover(&self.relay_task).is_some() {
             return;
         }

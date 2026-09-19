@@ -42,6 +42,7 @@ import { applyAttachExtension, decideAttach } from "./attachDirs.js";
 import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv } from "./cliEnv.js";
+import { thinkingDisabledFor } from "./thinkingPolicy.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
@@ -124,12 +125,13 @@ export class SessionWorker {
   private rollbackPending = false;
   /** 当前 query 的 abort 信号（每次 while 迭代新建；回滚时 abort 杀 CLI 停写入）。 */
   private abortController: AbortController | null = null;
-  /** 场景 B 注入消息（预置槽）：不 push 进共享 queue——MessageQueue 的 resolveNext
-   *  是单槽，abort 后旧迭代器还挂在 await 上，push 会被它 shift 走并卡死在 yield
-   *  （SDK 已 abort 不再 next()），下一轮新迭代器就永远拿不到（2026-08-21 实锤：
-   *  注入未达 CLI → resume 0 事件退出，会话无后续）。改由下一轮 query 的私有
-   *  迭代器首条 yield。 */
-  private rollbackInjection: SDKUserMessage | null = null;
+  /** 「下一轮 query 才该收到」的用户消息预置槽。**必须**用它，不能 queue.push：
+   *  MessageQueue 的 resolveNext 是单槽，abort 后旧迭代器还挂在 await 上，push 会被
+   *  它 shift 走并卡死在 yield 挂起点（SDK 已 abort 不再 next()），下一轮新迭代器就
+   *  永远拿不到（2026-08-21 实锤：注入未达 CLI → resume 0 事件退出，会话无后续）。
+   *  两个生产者：图片回滚（场景 B，模型得接着读文本）、思考值漂移的原地重启
+   *  （本条用户消息归重建后的 query）。 */
+  private nextQueryInjections: SDKUserMessage[] = [];
 
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
@@ -166,6 +168,14 @@ export class SessionWorker {
    *  thinking 字段=端点默认，模型总会出思考块，2026-08-21 mock 端点实锤），
    *  无法能力级禁用，仅靠 ② 隐藏显示。 */
   private thinkingEnabled = true;
+  /** 建**当前** query 时用的 thinking 值。值虽每条 send 都刷新，但只在建 query 时
+   *  落地——与本条 send 的值漂移就要原地重启（SDK 没有运行时 thinking setter，
+   *  applyFlagSettings 被 CLI 静默忽略）。与 currentEffort 同款分工，刻意不在
+   *  `!turnActive` 之外的地方提前记账：在飞的回合没能重启时，漂移得留在账上等下一轮。 */
+  private spawnedThinking = true;
+  /** 主动拆 query 的归因标志（与 rollbackPending 同款）：catch 里据此把 abort 认成
+   *  「思考值漂移重启」而不是会话级故障——否则会 emit error 帧并 break 掉循环。 */
+  private restartPending = false;
   /** 输出样式（send.output_style 下发，handleSend 归一后存这里）。null = 默认/未知，
    *  建 query 后不下发。与 thinkingEnabled 同款：值每条 send 都刷新，但只在**新建
    *  会话**（建 query）时落地——改动不影响已在跑的会话（见 session-worker/outputStyle.ts）。 */
@@ -376,16 +386,36 @@ export class SessionWorker {
     prompt: string,
     images: ImageAttachment[] | undefined,
     display: UserMessageBlock[] | undefined,
+    /** liveQuery（默认）= 喂给当前活着的 query；nextQuery = 当前 query 正要被拆掉
+     *  （思考值漂移重启），预置给重建后的那一轮——走共享队列会被孤儿迭代器吞。 */
+    target: "liveQuery" | "nextQuery" = "liveQuery",
   ): void {
     const text =
       display?.find((b): b is Extract<UserMessageBlock, { type: "text" }> => b.type === "text")
         ?.text ?? prompt;
-    this.queue.push({
+    const msg: SDKUserMessage = {
       type: "user",
       message: buildUserMessage(prompt, images ?? []),
       parent_tool_use_id: null,
-    });
+    };
+    if (target === "nextQuery") this.nextQueryInjections.push(msg);
+    else this.queue.push(msg);
     this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
+  }
+
+  /** 思考值在会话中变了（快速 ⇒ 关思考）：拆掉当前 query，让本条消息由**重建后的**
+   *  query 承接。
+   *
+   *  链路：abort → for await 抛 AbortError → catch 的 AbortError 分支（retireIterators
+   *  作废旧迭代器 → while 再迭代一轮）→ 用新 thinking 值重建。重建是**原地 resume**：
+   *  resumeSource 已由 session_init 过户成真实会话 id，且不设 shouldForkNextConnect，
+   *  故 forkSession 不生效、会话 id 不变（三端不 re-key）。
+   *
+   *  **不发任何回合终态事件**：query 是被我们主动拆的，不是回合结束。谎报
+   *  message_stop/interrupted 会翻 isBusy，还会给上一条消息盖一个假档位徽章。 */
+  private restartQueryForThinking(): void {
+    this.restartPending = true;
+    this.abortController?.abort();
   }
 
   /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
@@ -686,6 +716,15 @@ export class SessionWorker {
       return;
     }
 
+    // 思考值漂移（用户拍板：快速 ⇒ 关思考，下一轮生效）：本条消息归重建后的 query。
+    // 只在回合空闲时拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在账上，
+    // 下一个空闲的 send 再兑现。
+    if (this.currentQuery && !this.turnActive && this.thinkingEnabled !== this.spawnedThinking) {
+      this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery");
+      this.restartQueryForThinking();
+      return;
+    }
+
     // 普通续发。注意不回放 cmd.permission_mode：query 存活期间权限模式由
     // set_permission_mode 实时通道独占（前端下拉切换必发），消息里带的只是
     // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
@@ -708,12 +747,20 @@ export class SessionWorker {
           // 已经落进共享队列了——上一轮若异常终止，它的孤儿迭代器此刻还挂在
           // resolveNext 上，会把那条消息 shift 走（详见 retireIterators 注释）。
           this.queue.retireIterators();
-          // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：白名单
-          // 透传 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 固定注入）
+          // 本条 query 的思考值：**唯一推导点**（thinkingPolicy）。下面还有 await
+          //（prepareQueryContext），而档位被每条 send 刷新——算一次落定，env 与 SDK
+          // 选项消费同一个值，不让它们在装配窗口里劈叉。
+          const thinkingDisabled = thinkingDisabledFor({
+            automation: !!this.automationConfig,
+            thinkingEnabled: this.thinkingEnabled,
+          });
+          // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：白名单透传
+          // → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入）
           const cliEnv = buildCliEnv({
             processEnv: process.env,
             envOverrides: this.envOverrides,
             automationSessionDir: this.automationConfig?.sessionDir,
+            thinkingDisabled,
           });
 
           // pendingFork 只服务「供应商切换」通知——自动化蒸馏轮也 fork（隔离
@@ -749,13 +796,13 @@ export class SessionWorker {
           // 每次迭代新建 abort 信号：abort 过的 controller 不能复用（回滚后
           // 下一轮 query 需要全新的）。回滚时 abort 杀 CLI 进程、停一切写入。
           this.abortController = new AbortController();
-          // 场景 B 注入走预置槽：先 yield 注入（私有迭代器，无共享 queue 竞态），
-          // 再 yield* 共享 queue（后续用户消息走 MessageQueue 正常通道）。
-          const rollbackInjection = this.rollbackInjection;
-          this.rollbackInjection = null;
+          // 预置注入（图片回滚 / 思考值漂移重启）先 yield——私有迭代器，无共享
+          // queue 竞态；再 yield* 共享 queue（后续用户消息走 MessageQueue 正常通道）。
+          const injections = this.nextQueryInjections;
+          this.nextQueryInjections = [];
           const queueIter = this.queue[Symbol.asyncIterator]();
           const promptIter = (async function* () {
-            if (rollbackInjection) yield rollbackInjection;
+            yield* injections;
             yield* queueIter;
           })();
           const q = this.queryFn({
@@ -786,13 +833,15 @@ export class SessionWorker {
               model: {
                 sdkModel: this.currentModel ? this.modelRoster.toSdkModel(this.currentModel) : "",
                 effort: this.currentEffort,
-                thinkingEnabled: this.thinkingEnabled,
+                thinkingDisabled,
               },
               fork: { resumeSource: this.resumeSource ?? "", shouldFork: this.shouldForkNextConnect },
             }),
           });
           this.currentQuery = q;
           loopQuery = q;
+          // 记账：本条 query 落地的 thinking 值——下一条 send 据此判漂移（见字段注释）。
+          this.spawnedThinking = this.thinkingEnabled;
           this.shouldForkNextConnect = false;
           // 输出样式：必须在首轮 prompt 被 CLI 取走之前落地（晚一步 = 第一条消息
           // 不变样，故不能挪到 session_init 之后）。只在建 query 时应用这一次——
@@ -856,6 +905,15 @@ export class SessionWorker {
             // 回滚本身失败时静默（会话保持现状），不把 AbortError 当错误上报。
             this.rollbackPending = false;
             this.performImageRollback();
+          } else if (this.restartPending) {
+            // 思考值漂移的主动拆：不是错误、更不是回合结束——清账后继续 while，
+            // 下一轮用新 thinking 值重建（原地 resume）。
+            //
+            // 判据必须是**标志位**，不能靠 e.name === "AbortError"：实测真 SDK 的
+            // abort 抛出来的 message 是 "Operation aborted"，名字不是 AbortError
+            // （2026-09-19 smoke 实锤）——按名字判会掉进下面的错误分支，emit 一条
+            // error 帧并 break 掉整个循环，重启就变成「会话死了」。
+            this.restartPending = false;
           } else if ((e as Error)?.name !== "AbortError") {
             this.emit({ type: "error", message: String((e as Error)?.message ?? e), fatal: false });
             // 自动化一次性会话：query 循环抛错（SDK 初始化失败等）即终态，
@@ -970,14 +1028,14 @@ export class SessionWorker {
 
   /** 薄接线：回滚执行体已迁 imageRollback.ts 的 rollbackImageHistory（纯移动，
    *  失败静默语义在内）。返回的场景 B 注入消息预置到下一轮私有迭代器——不能
-   *  queue.push（旧迭代器挂起的 resolveNext 会吞消息，见 rollbackInjection 字段注释）。 */
+   *  queue.push（旧迭代器挂起的 resolveNext 会吞消息，见 nextQueryInjections 注释）。 */
   private performImageRollback(): void {
     const injection = rollbackImageHistory({
       configDir: this.subprocessConfigDir(),
       sessionId: this.resumeSource,
       emit: (e) => this.emit(e),
     });
-    if (injection) this.rollbackInjection = injection;
+    if (injection) this.nextQueryInjections.push(injection);
   }
 
   // ---- 会话自动命名 ----

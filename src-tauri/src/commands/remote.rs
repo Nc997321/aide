@@ -14,6 +14,9 @@ pub struct RemoteStatus {
     pub device_id: String,
     pub pairing_code: Option<String>,
     pub connected: bool,
+    /// true = 本构建不连中继（dev 且未设 AIDE_DEV_REMOTE）。**必须回给 UI**：
+    /// 否则面板显示「已开启」而实际没连，就是静默失效（见 remote/mod.rs 的闸门）。
+    pub relay_suppressed: bool,
     pub token_configured: bool,
     /// token 签发时刻（Unix 毫秒）。旧版签发的 token 无此记录 → None。
     pub token_issued_at: Option<i64>,
@@ -51,6 +54,7 @@ pub async fn remote_get_status(app: AppHandle) -> Result<RemoteStatus, String> {
         device_id: settings.remote.device_id,
         pairing_code,
         connected: gateway.is_connected(),
+        relay_suppressed: !crate::remote::relay_allowed_in_this_build(),
         token_configured,
         token_issued_at,
     })

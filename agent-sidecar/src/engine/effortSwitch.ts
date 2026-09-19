@@ -37,11 +37,24 @@ export interface EffortSwitchParams {
  * Settings.effortLevel 的 TS 类型只列到 xhigh，max 是类型外但运行时可用的值
  * （smoke-effort.ts 验证），故接口上 effortLevel 声明为 string。
  *
- * 思考开关与 effort 解耦（2026-08-21 决策）：effort 切换不再联动 thinking——
- * applyFlagSettings 只改 effort。思考由「设置→通用」的独立开关控制，只在
- * spawn（建 query）时经 thinking 参数生效（见 session-worker 的 thinking 构造）。
- * 会话内 thinking 一旦关闭会被 CLI 锁死无法恢复（2.1.228+ollama 冒烟实测），
- * 解耦后无此问题——开关只在新建会话生效。
+ * effort 与 thinking 的关系（2026-09-19 修订）：**本模块只改 effort，绝不碰
+ * thinking**——SDK 根本没有运行时的 thinking setter，`applyFlagSettings({alwaysThinkingEnabled})`
+ * 会被 CLI 静默接受但请求体一字不变（2026-09-19 实测：resolve 成功、零效果，
+ * 且是单向锁死，关了再开也回不来）。
+ *
+ * 「快速 ⇒ 关思考」因此在**上层**实现，不在本模块：
+ *   Rust send 路径算 thinking_enabled = 设置开关 && 档位非快速
+ *   （commands/chat.rs 的 effective_thinking_enabled）
+ *   → sidecar 发现该值与当前 query 的 spawn 值漂移时，在下一条 send **原地 resume
+ *     重启**兑现（session-worker 的 restartQueryForThinking）。
+ * 也就是说：effort 走热通道即时生效，思考只能等下一轮重建 query——两者生效时机
+ * 不同，是刻意保留的差异（UI 文案据此区分，别合并成一句）。
+ *
+ * ⚠️ 另一层前提：即使重建了 query、spawn 参数写了 disabled，CLI 也可能**不发**这个
+ * 参数——它按模型名查本地能力表，对不认识的模型名（deepseek-* / 本地 ollama 模型等）
+ * 整个 `thinking` 字段都不发，兼容端点于是默认开推理（2026-09-19 实测）。真正的兜底
+ * 是 cliEnv 注入的 CLAUDE_CODE_EXTRA_BODY：它绕过那份名单直接写请求体，既不依赖模型名、
+ * 也不依赖端点认 Claude 名（见 docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md）。
  */
 export function applyEffortSwitch(p: EffortSwitchParams): void {
   const next = normalizeEffort(p.effort);

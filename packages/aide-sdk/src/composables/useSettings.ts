@@ -24,7 +24,6 @@ const defaults: AppSettings = {
   editorFontFamily: MONO_FONT_STACK,
   terminalFontFamily: MONO_FONT_STACK,
   notificationsEnabled: true,
-  thinkingEnabled: true,
   outputStyle: "default",
   proxy: "",
   shellPath: "",
@@ -99,7 +98,6 @@ export function useSettings() {
       settings.editorFontFamily = resolveScopedFontFamily(s.editorFontFamily, settings.fontFamily);
       settings.terminalFontFamily = resolveScopedFontFamily(s.terminalFontFamily, settings.fontFamily);
       settings.notificationsEnabled = s.notificationsEnabled ?? defaults.notificationsEnabled;
-      settings.thinkingEnabled = s.thinkingEnabled ?? defaults.thinkingEnabled;
       // 过值域校验再收下：手改配置文件 / 旧版写入的未知样式回落默认，别让下拉空白。
       settings.outputStyle = isOutputStyle(s.outputStyle) ? s.outputStyle : defaults.outputStyle;
       settings.proxy = s.proxy ?? defaults.proxy;
@@ -148,7 +146,6 @@ export function useSettings() {
     if (partial.editorFontFamily !== undefined) settings.editorFontFamily = partial.editorFontFamily;
     if (partial.terminalFontFamily !== undefined) settings.terminalFontFamily = partial.terminalFontFamily;
     if (partial.notificationsEnabled !== undefined) settings.notificationsEnabled = partial.notificationsEnabled;
-    if (partial.thinkingEnabled !== undefined) settings.thinkingEnabled = partial.thinkingEnabled;
     if (partial.outputStyle !== undefined) settings.outputStyle = partial.outputStyle;
     if (partial.proxy !== undefined) settings.proxy = partial.proxy;
     if (partial.shellPath !== undefined) settings.shellPath = partial.shellPath;

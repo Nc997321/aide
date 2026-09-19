@@ -221,6 +221,18 @@ fn attach_flag(cmd: &mut serde_json::Value, key: &str, on: bool) {
     }
 }
 
+/// 本会话该不该思考：**档位是唯一事实源**（2026-09-19 决策——快速 ⇒ 关思考）。
+///
+/// 原先还有一个「设置→通用 → 启用思考」的独立开关，已删除：两个事实源必然打架
+/// （切了快速却又开着思考），而档位本身就表达了这个意图。
+///
+/// `effort` 缺席（旧端/鸿蒙不带该字段）→ 思考保持开启（与历史默认一致），
+/// 不拿默认值当快速。大小写不敏感：provider 配置里的默认档位是大写（如 `LOW`，
+/// 见 attach_env_override 注）。历史档位 medium/xhigh 归一后是进阶/极致，不会误判。
+fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
+    !effort.is_some_and(|e| e.eq_ignore_ascii_case("low"))
+}
+
 #[tauri::command]
 pub async fn send_message(
     session_id: String,
@@ -279,12 +291,12 @@ pub async fn send_message(
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
-    // 思考开关下发 sidecar（设置读取失败时默认开启）：只在 spawn（建 query）时
-    // 生效——会话内 CLI 锁死无法恢复，故仅影响之后新建的会话/btw 支线。
-    let thinking_enabled = settings
-        .as_ref()
-        .map(|s| s.thinking_enabled)
-        .unwrap_or(true);
+    // 思考开关下发 sidecar：**档位是唯一事实源**（快速关、其余开，见
+    // thinking_enabled_for_effort）。**只在 spawn（建 query）时生效**——SDK 没有
+    // 运行时的 thinking setter，`applyFlagSettings({alwaysThinkingEnabled})` 被 CLI
+    // 静默忽略（2026-09-19 实测，见 agent-sidecar 注释），所以档位漂移由 sidecar 在
+    // 下一条 send 时**原地 resume 重启**兑现，本条字段就是那次重建的依据。
+    let thinking_enabled = thinking_enabled_for_effort(initial_effort.as_deref());
     // 输出样式下发 sidecar（设置读取失败时按默认）：生效时机与 thinking 同款——
     // sidecar 只在新建会话（建 query）时落地，改动不影响已在跑的会话。
     let output_style = settings
@@ -1001,6 +1013,23 @@ mod tests {
         // 缺省：provider env 原值保留（sidecar 读作 provider 默认档位）
         let cmd2 = build_send_command("s", "hi", "/tmp", &env, base_opts());
         assert_eq!(cmd2["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "LOW");
+    }
+
+    /// 快速 ⇒ 关思考（2026-09-19 决策）。**档位是唯一事实源**——那个独立的
+    /// 「启用思考」设置已删除，所以这里不再有"设置关掉"这条臂。
+    /// 大小写不敏感是硬要求：provider 配置里的默认档位是大写 `LOW`。
+    #[test]
+    fn fast_effort_disables_thinking() {
+        assert!(!thinking_enabled_for_effort(Some("low")));
+        assert!(!thinking_enabled_for_effort(Some("LOW")));
+        // 其余档位恒开
+        assert!(thinking_enabled_for_effort(Some("high")));
+        assert!(thinking_enabled_for_effort(Some("max")));
+        // 历史档位归一后不是快速，不能误判
+        assert!(thinking_enabled_for_effort(Some("medium")));
+        assert!(thinking_enabled_for_effort(Some("xhigh")));
+        // 档位缺席（旧端/鸿蒙不带该字段）→ 保持开，不拿默认值当快速
+        assert!(thinking_enabled_for_effort(None));
     }
 
     /// permission_mode 非空才落字段；空串不落。

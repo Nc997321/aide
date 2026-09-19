@@ -81,7 +81,6 @@ const fontFamilyLocal = ref(settings.fontFamily);
 const editorFontFamilyLocal = ref(settings.editorFontFamily);
 const terminalFontFamilyLocal = ref(settings.terminalFontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
-const thinkingEnabledLocal = ref(settings.thinkingEnabled);
 const proxyLocal = ref(settings.proxy);
 /** 本机自动检测到的活代理（设置在空时提示一键填入）；null = 未检测到。 */
 const proxyHint = ref<string | null>(null);
@@ -100,7 +99,6 @@ watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v 
 watch(editorFontFamilyLocal, (v) => { settings.editorFontFamily = v; update({ editorFontFamily: v }); });
 watch(terminalFontFamilyLocal, (v) => { settings.terminalFontFamily = v; update({ terminalFontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
-watch(thinkingEnabledLocal, (v) => { settings.thinkingEnabled = v; update({ thinkingEnabled: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
 watch(recentLimitLocal, (v) => {
@@ -577,17 +575,6 @@ function onOverlayClick(e: MouseEvent) {
               </div>
 
               <div class="settings-field">
-                <label class="field-label">启用思考</label>
-                <div class="toggle-row">
-                  <span class="field-hint">对话中展示模型的思考过程。关闭后从能力上禁用思考（新会话起生效）</span>
-                  <label class="toggle">
-                    <input v-model="thinkingEnabledLocal" type="checkbox" />
-                    <span class="toggle-track"></span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="settings-field">
                 <label class="field-label">输出样式</label>
                 <ThemedSelect
                   :model-value="settings.outputStyle"
@@ -909,6 +896,12 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">连接状态</label>
                 <span class="field-hint">{{ remoteStatus?.connected ? "已连接" : "未连接" }}</span>
+                <!-- dev 构建默认不连中继（避免与安装版抢同一台设备身份互踢）：
+                     不点破的话，这里会一直显示「未连接」，看起来像网络故障。 -->
+                <span v-if="remoteStatus?.relaySuppressed" class="field-hint">
+                  dev 构建不连中继——它与安装版共用同一台设备身份，同时注册会在中继上互踢。
+                  要调试远程链路：先从托盘退出安装版，再用 AIDE_DEV_REMOTE=1 启动 dev。
+                </span>
               </div>
 
               <div class="settings-field">

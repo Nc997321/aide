@@ -129,11 +129,9 @@ export interface AppSettings {
   notificationsEnabled: boolean;
   /** 首次安装引导是否已完成。首次启动若为 false 则弹全屏向导；完成或"跳过引导"后置 true，不再二次弹。 */
   onboarded: boolean;
-  /** 启用思考（默认开）：关闭 = 从能力上禁用思考——请求层（thinking 参数）在
-   *  新建会话（spawn）时生效，官方 API 真正不思考、省 token；展示层剥除立即生效
-   *  （sidecar 剥掉 thinking 块）。例外：本地 ollama 模型不认 thinking 参数、无法
-   *  能力级禁用，仅隐藏显示。与 effort 解耦。 */
-  thinkingEnabled: boolean;
+  /** （原「启用思考」开关已删除，2026-09-19：思考由**档位**唯一决定——快速档关、
+   *  进阶/极致开。两个事实源会打架：切了快速却又开着思考。旧配置里残留的
+   *  `thinkingEnabled` 键会被后端忽略，下次写盘自然消失。） */
   /** 输出样式（内置四款 + "default"）。生效时机与 thinking 同款：值随每条 send
    *  下发，但 sidecar 只在新建会话（建 query）时落地——改动对已在跑的会话无效。 */
   outputStyle: OutputStyle;
@@ -185,6 +183,9 @@ export interface RemoteStatus {
   deviceId: string;
   pairingCode: string | null;
   connected: boolean;
+  /** true = 本构建被刻意挡住不连中继（dev 且未设 AIDE_DEV_REMOTE）。
+   *  面板必须据此说明，否则「已开启」与「没连上」会同时出现在界面上。 */
+  relaySuppressed: boolean;
   tokenConfigured: boolean;
   /** token 签发时刻（Unix 毫秒）。旧版签发的 token 无记录 → null。 */
   tokenIssuedAt: number | null;

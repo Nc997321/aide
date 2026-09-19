@@ -1,6 +1,13 @@
 // CLI 子进程 env 组装（session-worker.ts 拆分批 3 迁出，纯移动）：
-// 白名单透传 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 固定注入。
+// 白名单透传 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入。
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
+
+/** 关思考的请求体补丁：CLI 只对**它自己名单里**的模型名才发 thinking 参数，名单外整个字段
+ *  丢掉，而兼容端点「没有该字段 = 默认开推理」——于是只剩展示层隐藏、token 照烧。
+ *  这个 env 绕过名单直接写请求体，且**不依赖供应商认 Claude 名**（模型名保持精确真名）。
+ *  实测见 agent-sidecar/probe-extra-body.ts（5 臂）与
+ *  docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md。 */
+const THINKING_DISABLED_BODY = '{"thinking":{"type":"disabled"}}';
 
 export interface CliEnvParams {
   processEnv: NodeJS.ProcessEnv;
@@ -8,6 +15,9 @@ export interface CliEnvParams {
   envOverrides: Record<string, string>;
   /** automation.session_dir（协议一等字段）：非空时 CLAUDE_CONFIG_DIR 指向隔离配置根。 */
   automationSessionDir?: string | undefined;
+  /** 本条 query 是否关思考。**唯一推导点**是 thinkingPolicy.thinkingDisabledFor，
+   *  同一值也喂给 queryOptions 的 thinking 选项——两处各推一遍会劈叉。 */
+  thinkingDisabled: boolean;
 }
 
 /** 构造传给 claude CLI 子进程的显式 env。 */
@@ -40,6 +50,12 @@ export function buildCliEnv(p: CliEnvParams): Record<string, string | undefined>
   // {...process.env} 的扩散和 envOverrides 都可能带进 CLAUDE_CODE_EFFORT_LEVEL
   // （用户全局 env / Rust provider 注入），必须在最后显式删除。
   delete cliEnv.CLAUDE_CODE_EFFORT_LEVEL;
+  // 关思考：EXTRA_BODY 是**硬覆盖**（SDK 要 adaptive 也照样被改写成 disabled，探针 E 臂），
+  // 而上面 {...process.env} 与 envOverrides 都可能把这个键带进来——用户全局 env、Rust
+  // provider 注入、或别处忘了清。残留一次就静默吃掉**每个**会话的思考，所以先删再按需设，
+  // 且值只认我们这份常量（不被残留值改写）。与 CLAUDE_CODE_EFFORT_LEVEL 同一个坑。
+  delete cliEnv.CLAUDE_CODE_EXTRA_BODY;
+  if (p.thinkingDisabled) cliEnv.CLAUDE_CODE_EXTRA_BODY = THINKING_DISABLED_BODY;
   cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(p.processEnv);
   // SDK 0.3.233 起 Todo/task 工具(TaskCreate/TaskGet/TaskUpdate/TaskList/
   // TodoWrite)在新模型(Opus 4.8/Sonnet 5/Fable 5)上不再默认进工具面——Aide

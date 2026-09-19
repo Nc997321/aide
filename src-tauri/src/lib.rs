@@ -91,13 +91,15 @@ pub fn run() {
     }
 
     let builder = tauri::Builder::default();
-    // 单实例（release 与 dev 一视同仁）：二次启动唤出首实例窗口、转发 argv 后
-    // 立即退出。
+    // 单实例（**仅 release**）：二次启动唤出首实例窗口、转发 argv 后立即退出。
     //
-    // 为什么 dev 不再豁免（推翻 2026-09 前的决策）：dev 与安装版共用同一
-    // identifier（com.aide.app）与同一 settings.json（remote device_id 同源），
-    // 双实例会在 relay 上互踢——2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，
-    // 手机每次桥接几毫秒内被顶断。要跑 `pnpm tauri dev`，先从托盘退出安装版。
+    // dev 豁免（`#[cfg(not(debug_assertions))]`）是刻意保留的——开发期要与安装版
+    // 并存。但它**与「dev 不连中继」是一对**：两个实例共用 identifier（com.aide.app）
+    // 与同一 settings.json（remote device_id 同源），双双注册会在 relay 上互踢——
+    // 2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，手机每次桥接几毫秒内被顶断。
+    // 所以豁免的另一半挡在 `remote/mod.rs` 的 relay_allowed_in_this_build()：
+    // **改这里必须同时看那里**，只改一边就会把互踢放回来。
+    #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
         // 唤出主窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
         // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——set_focus

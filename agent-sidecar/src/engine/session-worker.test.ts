@@ -1107,19 +1107,155 @@ describe("SessionWorker — 思考开关（send.thinking_enabled → spawn think
     return captured;
   }
 
-  it("缺省（未下发）→ adaptive + summarized（默认开）", async () => {
+  it("缺省（未下发）→ adaptive + summarized（默认开），env 不带 EXTRA_BODY", async () => {
     const captured = await captureSend({});
     expect(captured.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(captured.env.CLAUDE_CODE_EXTRA_BODY).toBeUndefined();
   });
 
-  it("thinking_enabled:false → thinking: disabled", async () => {
+  it("thinking_enabled:false → thinking: disabled，且 env 注入 EXTRA_BODY", async () => {
+    // 这一半是「快速 ⇒ 关思考」在第三方端点上**真正生效**的条件：CLI 对名单外的模型名
+    // 会把 thinking 字段整个丢掉，只有这个 env 能把它写进请求体（见 engine/cliEnv.ts）。
+    // 断言的是**协议字段 → 推导 → spawn env** 的完整接线，不是单函数行为。
     const captured = await captureSend({ thinking_enabled: false });
     expect(captured.thinking).toEqual({ type: "disabled" });
+    expect(captured.env.CLAUDE_CODE_EXTRA_BODY).toBe('{"thinking":{"type":"disabled"}}');
   });
 
-  it("thinking_enabled:true → adaptive + summarized", async () => {
+  it("thinking_enabled:true → adaptive + summarized，env 不带 EXTRA_BODY", async () => {
     const captured = await captureSend({ thinking_enabled: true });
     expect(captured.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(captured.env.CLAUDE_CODE_EXTRA_BODY).toBeUndefined();
+  });
+
+  it("automation 会话恒关思考：thinking_enabled 缺席也注入 EXTRA_BODY", async () => {
+    // automation 分支的推导从 queryOptions 搬到了 thinkingPolicy，这条钉住它没搬丢。
+    const captured = await captureSend({ automation: { task_id: "t", run_id: "r", preset: "auto" } });
+    expect(captured.thinking).toEqual({ type: "disabled" });
+    expect(captured.env.CLAUDE_CODE_EXTRA_BODY).toBe('{"thinking":{"type":"disabled"}}');
+  });
+});
+
+/**
+ * 思考值漂移 → 原地重启（2026-09-19，快速 ⇒ 关思考的下半段）。
+ *
+ * 背景：SDK 没有运行时 thinking setter，`applyFlagSettings({alwaysThinkingEnabled})`
+ * 被 CLI 静默忽略（实测）。所以「切快速 = 真的不思考」只能靠**下一条 send 时重建
+ * query**——用 spawn 期的 thinking 参数兑现。
+ *
+ * 关键不变量（每条都有测试钉住）：
+ * - 重启走**原地 resume**（resume 同一会话 id、**不 fork**）——fork 换 id 会让三端 re-key
+ * - 重启**不发**任何回合终态/错误帧（query 是我们主动拆的，不是回合结束）
+ * - 本条用户消息要落进**新** query 的输入流（不能进共享队列——孤儿迭代器会吞，见 retireIterators）
+ * - 回合进行中不拆（不能为了切档做掉在飞的回合）；同值不拆
+ */
+describe("SessionWorker — 思考值漂移 → 原地重启", () => {
+  /** 伪 query：记下入参；发 session_init 确立真实会话 id，再发一条 result 收掉首轮
+   *  （turnActive 归 false——真实的"空闲且 query 活着"状态），随后挂起等 abort。
+   *  真 SDK 被 abort 时会让 for await 抛 AbortError，这里复刻同一形状。 */
+  function makeHarness() {
+    const calls: any[] = [];
+    const queryFn = ((args: any) => {
+      calls.push(args);
+      const opts = args?.options ?? args;
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "real-sid" } as any;
+        // 只有第一代 query 自动收一轮（模拟「上一轮已结束、query 空闲存活」）；
+        // 重建后的 query 停在新回合进行中——这样「重启期间不得再出现终态」才可断言。
+        if (calls.length === 1) {
+          yield { type: "result", subtype: "success", is_error: false, total_cost_usd: 0 } as any;
+        }
+        await new Promise((_, reject) => {
+          opts.abortController.signal.addEventListener("abort", () => {
+            const e = new Error("aborted by worker");
+            e.name = "AbortError";
+            reject(e);
+          });
+        });
+      })();
+    }) as any;
+    const events: any[] = [];
+    const worker = new SessionWorker("real-sid", (e) => events.push(e), { queryFn, cwd: "/proj" });
+    return { worker, events, calls };
+  }
+
+  const send = (worker: SessionWorker, prompt: string, thinking: boolean) =>
+    worker.handleCommand({
+      cmd: "send", session_id: "real-sid", prompt, cwd: "/proj", env: {},
+      thinking_enabled: thinking,
+    } as any);
+
+  it("漂移：拆 query 原地重启——新 query 带新值、resume 同一会话、不 fork", async () => {
+    const { worker, events, calls } = makeHarness();
+    send(worker, "甲", true);
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await flushPromises();
+    // resumeSource 由 session_init 过户而来——这是「原地」的前提，先钉住
+    expect((worker as any).resumeSource).toBe("real-sid");
+    expect((worker as any).turnActive).toBe(false); // 首轮已收，query 空闲存活
+
+    // 空闲时切到快速 → 下一条 send 带 thinking_enabled:false。
+    // 基线要等首轮的 message_stop 落定再取——finishTurn 的 message_stop 是
+    // setImmediate 延迟发的，早取会把「上一轮正常收尾」误判成重启伪造的终态。
+    await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+    const mark = events.length;
+    send(worker, "乙", false);
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+
+    const second = calls[1].options;
+    expect(second.thinking).toEqual({ type: "disabled" });
+    expect(second.resume).toBe("real-sid"); // 原地：resume 同一 id
+    expect(second.forkSession).toBeFalsy(); // 不 fork：id 不变，三端不 re-key
+
+    // 主动拆 query 不是回合结束：不许伪造终态/错误
+    expect(events.slice(mark).filter((e) => e.type === "message_stop" || e.type === "error")).toEqual([]);
+
+    // 本条消息必须由新 query 的私有迭代器首条拿到（进共享队列会被孤儿迭代器吞）
+    const iter = (calls[1].prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    const first = await iter.next();
+    expect(JSON.stringify(first.value)).toContain("乙");
+
+    worker.stop();
+  });
+
+  it("同值：不重启，照常走原 query", async () => {
+    const { worker, events, calls } = makeHarness();
+    send(worker, "甲", true);
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await flushPromises();
+
+    send(worker, "乙", true); // 值没变
+    await flushPromises();
+    await flushPromises();
+
+    expect(calls.length).toBe(1); // 没拆
+    // 两条消息照常走**原** query 的输入流（共享队列），不是预置槽
+    const iter = (calls[0].prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    expect(JSON.stringify((await iter.next()).value)).toContain("甲");
+    expect(JSON.stringify((await iter.next()).value)).toContain("乙");
+    expect(events.filter((e) => e.type === "user_message").map((e) => e.text)).toEqual(["甲", "乙"]);
+
+    worker.stop();
+  });
+
+  it("回合进行中漂移：不拆 query（不打断在飞的回合），留到下一轮", async () => {
+    const { worker, events, calls } = makeHarness();
+    send(worker, "甲", true);
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await flushPromises();
+
+    await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+    const mark = events.length; // 首轮收尾已落定，之后不许再有终态
+    (worker as any).turnActive = true; // 回合还在跑
+    send(worker, "乙", false);
+    await flushPromises();
+    await flushPromises();
+
+    expect(calls.length).toBe(1); // 没拆：在飞的回合不能被牺牲
+    expect((worker as any).spawnedThinking).toBe(true); // 漂移仍在账上，下一轮还认得出
+    expect(events.slice(mark).some((e) => e.type === "message_stop")).toBe(false);
+
+    worker.stop();
   });
 });
 

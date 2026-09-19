@@ -198,13 +198,10 @@ pub struct AppSettings {
     pub terminal_font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
-    /// 启用思考：默认开。关闭 = 从能力上禁用思考——请求层（thinking 参数）在
-    /// 新建会话 spawn 时生效（官方 API 真正不思考、省 token）；展示层剥除立即
-    /// 生效（sidecar 剥掉 thinking 块）。例外：ollama 兼容端点不认 thinking 参数
-    /// （2026-08-21 mock 端点实锤），模型无法能力级禁用，仅隐藏显示。
-    /// 与 effort 解耦（2026-08-21 决策）：effort 切换不再联动 thinking。
-    #[serde(default = "default_thinking_enabled")]
-    pub thinking_enabled: bool,
+    /// （原「启用思考」设置项已删除，2026-09-19：思考由**档位**唯一决定——
+    /// 快速档关、进阶/极致开，见 commands/chat.rs 的 thinking_enabled_for_effort。
+    /// 两个事实源会打架：切了快速却又开着思考。旧配置里残留的 `thinkingEnabled`
+    /// 键会被 serde 忽略，下次写盘自然消失。）
     /// 输出样式（Claude Code 内置样式名，见 DEFAULT_OUTPUT_STYLE 说明）。空串 =
     /// 未设置，按默认处理。与 thinking 同款的生效时机：值随每条 send 下发，但
     /// sidecar 只在**新建会话**（建 query）时落地——改动对已在跑的会话无效。
@@ -316,9 +313,6 @@ fn default_font_family() -> String {
 fn default_notifications_enabled() -> bool {
     true
 }
-fn default_thinking_enabled() -> bool {
-    true
-}
 /// 输出样式的唯一真相源：serde 默认值与 chat.rs 读设置失败时的兜底共用同一常量。
 /// 取值是 Claude Code 内置样式名——"default"（不改变默认行为）/ "Proactive" /
 /// "Concise" / "Explanatory" / "Learning"。自定义样式走插件通道（plugin 的
@@ -346,7 +340,6 @@ impl Default for AppSettings {
             editor_font_family: String::new(),
             terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
-            thinking_enabled: default_thinking_enabled(),
             output_style: default_output_style(),
             proxy: String::new(),
             shell_path: String::new(),
