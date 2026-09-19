@@ -34,11 +34,14 @@ enum SymbolLookup {
     Absent,
 }
 
-pub struct AgentQueryOutcome {
-    pub ok: bool,
-    pub status: AgentLspStatus,
-    pub payload: Value,
-}
+/// 查询结果的返回形状 = **上线的那份 JSON**：`{ok, status, error?, count?, results?, ...}`。
+/// 与 codegraph 的 `agent_query -> Value` 同形。
+///
+/// 曾经外面还包着一个 `AgentQueryOutcome { ok, status, payload }`，但那两个字段在 payload
+/// 里各有一份副本，**而真正上线的是 payload**（`build_result_command` 只是往它上面盖
+/// `cmd`/`request_id`，sidecar 也照 payload 读）——同一份值摆两处，只会漂移，且那两个
+/// 字段从没被读过。现在只有一份：payload。
+pub type AgentQueryOutcome = Value;
 
 /// 显式坐标（三个字段齐全）才算数；只给名字不算。
 pub fn resolve_position(args: &Value) -> Option<Position> {
@@ -59,11 +62,7 @@ pub fn symbol_query_name(name: &str) -> &str {
 }
 
 fn fail(status: AgentLspStatus, msg: &str) -> AgentQueryOutcome {
-    AgentQueryOutcome {
-        ok: false,
-        status,
-        payload: json!({ "ok": false, "status": status.as_str(), "error": msg }),
-    }
+    json!({ "ok": false, "status": status.as_str(), "error": msg })
 }
 
 /// 本次查询该为哪些语言准备 server：显式坐标 → 该文件的扩展名；只给名字 →
@@ -232,20 +231,16 @@ async fn lookup_symbol(
 /// 而那必须由模型读代码决定（spec 的原话：不假装唯一）。
 fn ambiguous_outcome(name: &str, cands: Vec<SymbolCandidate>) -> AgentQueryOutcome {
     let n = cands.len();
-    AgentQueryOutcome {
-        ok: true,
-        status: AgentLspStatus::Ready,
-        payload: json!({
-            "ok": true,
-            "status": "ready",
-            "ambiguous": true,
-            "count": n,
-            "candidates": cands,
-            "error": format!(
-                "{n} symbols named `{name}` — read them and re-query with an explicit                  {{file, line, character}} for the one you want"
-            ),
-        }),
-    }
+    json!({
+        "ok": true,
+        "status": AgentLspStatus::Ready.as_str(),
+        "ambiguous": true,
+        "count": n,
+        "candidates": cands,
+        "error": format!(
+            "{n} symbols named `{name}` — read them and re-query with an explicit                  {{file, line, character}} for the one you want"
+        ),
+    })
 }
 
 /// 找一个该语言的源文件，用作就绪探测的靶子（`probe_ready` 要一个磁盘上真实存在的文件）。
@@ -354,18 +349,19 @@ async fn run_jump(
     )
 }
 
-fn ok_with(status: AgentLspStatus, results: Vec<crate::codegraph::types::QueryResult>) -> AgentQueryOutcome {
-    let ready = status == AgentLspStatus::Ready;
-    AgentQueryOutcome {
-        ok: ready || !results.is_empty(),
-        status,
-        payload: json!({
-            "ok": ready || !results.is_empty(),
-            "status": status.as_str(),
-            "count": results.len(),
-            "results": results,
-        }),
-    }
+fn ok_with(
+    status: AgentLspStatus,
+    results: Vec<crate::codegraph::types::QueryResult>,
+) -> AgentQueryOutcome {
+    // `ok` 的判据只算一次：ready（可信的否定）或结果非空（铁证）——两者都不是就是
+    // 「没能回答」，`ok:false` 让 sidecar 走非 ready 的文案分支。
+    let ok = status == AgentLspStatus::Ready || !results.is_empty();
+    json!({
+        "ok": ok,
+        "status": status.as_str(),
+        "count": results.len(),
+        "results": results,
+    })
 }
 
 /// 就绪判定：对一个**已知存在于磁盘的文件**做 `documentSymbol`。
@@ -463,10 +459,33 @@ mod tests {
     #[test]
     fn empty_results_never_claim_ok_unless_ready() {
         let indexing = ok_with(AgentLspStatus::Indexing, vec![]);
-        assert!(!indexing.ok);
-        assert_eq!(indexing.payload["status"], "indexing");
+        assert_eq!(indexing["ok"], false);
+        assert_eq!(indexing["status"], "indexing");
 
         let ready = ok_with(AgentLspStatus::Ready, vec![]);
-        assert!(ready.ok, "ready + 空 = 可信的「没有」");
+        assert_eq!(ready["ok"], true, "ready + 空 = 可信的「没有」");
+    }
+
+    /// 回包就是**上线的那份 JSON**——`lsp_agent` 只往它上面盖 `cmd`/`request_id`，
+    /// sidecar 按名读这些键。少了任何一个都是**静默**降级（状态或结果变 undefined，
+    /// 文案走兜底分支、不报错），所以键集在这里钉住。
+    #[test]
+    fn wire_shape_keeps_the_keys_the_sidecar_reads() {
+        let ok = ok_with(AgentLspStatus::Ready, vec![]);
+        assert_eq!(ok["count"], 0);
+        for key in ["ok", "status", "count", "results"] {
+            assert!(ok.get(key).is_some(), "成功回包缺 key `{key}`：{ok}");
+        }
+
+        let f = fail(AgentLspStatus::Timeout, "boom");
+        for key in ["ok", "status", "error"] {
+            assert!(f.get(key).is_some(), "失败回包缺 key `{key}`：{f}");
+        }
+
+        let amb = ambiguous_outcome("get", vec![]);
+        for key in ["ok", "status", "ambiguous", "count", "candidates"] {
+            assert!(amb.get(key).is_some(), "歧义回包缺 key `{key}`：{amb}");
+        }
+        assert_eq!(amb["status"], "ready", "候选清单本身是可信答案");
     }
 }

@@ -46,7 +46,5 @@ pub async fn handle(app: AppHandle, stdin: Arc<TokioMutex<ChildStdin>>, req: Lsp
 /// 取 state → 执行。state 缺失（不该发生：lib.rs 无条件 manage）也要回一个
 /// 可读的 no_server，而不是让 sidecar 干等超时。
 async fn run(app: &AppHandle, req: &LspQueryRequest) -> Value {
-    crate::lsp::agent_query::run_agent_query(app, &req.tool, &req.args, &req.workspace_root)
-        .await
-        .payload
+    crate::lsp::agent_query::run_agent_query(app, &req.tool, &req.args, &req.workspace_root).await
 }
