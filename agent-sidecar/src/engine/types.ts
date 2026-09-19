@@ -312,6 +312,16 @@ export type ChatEvent =
       args: Record<string, unknown>;
       project_root: string;
     }
+  // Rust reader 拦截的 agent LSP 查询（不转发 Vue；响应走 lsp_result 命令）。
+  // 与 codegraph 的区别：查询本体不跳 runner——LspManager 就在主进程就地执行
+  // （见 src-tauri/src/runtime/lsp_agent.rs）。
+  | {
+      type: "lsp_query";
+      request_id: string;
+      tool: string;
+      args: Record<string, unknown>;
+      workspace_root: string;
+    }
   // Rust reader 拦截的内嵌浏览器查询（不转发 Vue；响应走 browser_result 命令）。
   // op 面**刻意收窄**为三个机制词汇——页面语义（正文/表格/表单）全在 sidecar 的投影脚本里，
   // 不进协议（见 src-tauri/src/browser/agent_bridge.rs 头注释：换站点时 Rust 一行不动）。
