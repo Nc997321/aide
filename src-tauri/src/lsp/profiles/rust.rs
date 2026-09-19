@@ -7,7 +7,7 @@
 //! supplement_explicit 不补 --stdio，否则 PATH 发现（which 找到 proxy）与用户填 proxy 路径
 //! 都会启动失败。
 
-use crate::lsp::registry::ServerProfile;
+use crate::lsp::registry::{InitOptionsCtx, ServerProfile};
 use serde_json::Value;
 use std::path::Path;
 
@@ -27,7 +27,7 @@ impl ServerProfile for RustProfile {
     /// （兼容旧版 rust-analyzer 或用户确实需要时）。
     fn supplement_explicit(&self, _args: &mut Vec<String>, _data_dir: Option<&Path>) {}
 
-    fn init_options(&self, exclude_globs: &[String]) -> Value {
-        serde_json::json!({ "excludeGlobs": exclude_globs })
+    fn init_options(&self, ctx: &InitOptionsCtx) -> Value {
+        serde_json::json!({ "excludeGlobs": ctx.exclude_globs })
     }
 }

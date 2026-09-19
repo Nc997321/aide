@@ -6,7 +6,7 @@
 //!   重定向到 -data 的 metadata 区域（项目根零污染）——经 `--jvm-arg` 注入，实测验证
 //! - 握手 30s：jdtls 首次启动（OSGi 框架 + 索引）10-30s 常见，5s 必挂
 
-use crate::lsp::registry::{LaunchCtx, ServerProfile, ServerSource};
+use crate::lsp::registry::{InitOptionsCtx, LaunchCtx, ServerProfile, ServerSource};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -115,7 +115,7 @@ impl ServerProfile for JavaProfile {
         build_lombok_args(resolve_lombok_jar(ctx).as_deref())
     }
 
-    fn init_options(&self, _exclude_globs: &[String]) -> Value {
+    fn init_options(&self, _ctx: &InitOptionsCtx) -> Value {
         serde_json::json!({
             // jdtls 扩展握手（vscode-java 同款）：classFileContentsSupport 允许
             // 打开 class 文件内容（跳进无源码的库时给反编译文本而非报错）。
@@ -272,7 +272,7 @@ mod tests {
 
     #[test]
     fn init_options_feeds_settings_and_extended_capabilities() {
-        let opts = JavaProfile.init_options(&[]);
+        let opts = JavaProfile.init_options(&InitOptionsCtx { workspace: "", exclude_globs: &[] });
         // 扩展握手：classFileContentsSupport 允许跳进无源码库时给 class 内容
         assert_eq!(
             opts["extendedClientCapabilities"]["classFileContentsSupport"],
@@ -300,7 +300,7 @@ mod tests {
         // 避免两处漂移（jdtls 运行期以 configuration 应答为准）。
         assert_eq!(
             JavaProfile.settings(),
-            JavaProfile.init_options(&[])["settings"]
+            JavaProfile.init_options(&InitOptionsCtx { workspace: "", exclude_globs: &[] })["settings"]
         );
     }
 

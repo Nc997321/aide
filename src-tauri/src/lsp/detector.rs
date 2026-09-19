@@ -132,6 +132,42 @@ pub fn lang_from_id_str(s: &str) -> Option<LanguageId> {
     }
 }
 
+/// 在工作区里找一个**该语言**的源文件。**有界**：深度 ≤4、跳过重目录、点目录不下钻
+/// ——它服务的场景是「要一个磁盘上真实存在的靶子文件」（就绪探测、判「这工作区有没有
+/// Vue」），不是「找全」。
+///
+/// 同步（`fs::read_dir` 循环）：重场景的调用方（`agent_query::first_source_file`）自己
+/// 放进 `spawn_blocking`；只做一次 `is_some()` 判定的调用方（TS profile）直接同步调。
+pub fn find_source_file(root: &Path, lang: LanguageId) -> Option<std::path::PathBuf> {
+    const SKIP: [&str; 7] = ["node_modules", "target", "dist", "build", ".venv", "vendor", "out"];
+    const MAX_DEPTH: usize = 4;
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir() {
+                if depth < MAX_DEPTH && !name.starts_with('.') && !SKIP.contains(&name.as_str()) {
+                    stack.push((path, depth + 1));
+                }
+                continue;
+            }
+            let matches = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .and_then(LanguageId::from_ext)
+                == Some(lang);
+            if matches {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,6 +265,28 @@ mod tests {
         assert!(langs.contains(&LanguageId::Rust), "{:?}", langs);
         assert!(langs.contains(&LanguageId::Go), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
+    }
+
+    /// 有界遍历的边界纪律：重目录不下钻（node_modules 里的同语言文件不该被当靶子），
+    /// 正常位置的要找得到。**本用例原在 agent_query.rs，随遍历本体一并迁来**——
+    /// 边界只留一份实现，测试也跟着走。
+    #[test]
+    fn find_source_file_skips_heavy_dirs() {
+        let d = tmp_dir("findfile");
+        let deep = d.join("node_modules").join("pkg");
+        fs::create_dir_all(&deep).unwrap();
+        fs::write(deep.join("hidden.rs"), "fn x() {}").unwrap();
+        assert!(
+            find_source_file(&d, LanguageId::Rust).is_none(),
+            "node_modules 里的文件不该当探测靶子"
+        );
+
+        fs::write(d.join("real.rs"), "fn y() {}").unwrap();
+        let found = find_source_file(&d, LanguageId::Rust);
+        assert!(
+            found.as_deref().is_some_and(|f| f.ends_with("real.rs")),
+            "got {found:?}"
+        );
     }
 
     #[test]

@@ -7,6 +7,15 @@ use std::time::Duration;
 //
 // 每个语言一个 profile（见 profiles/），收敛该语言的全部特判：捆绑、启动参数、
 // Explicit 补充、初始化选项、握手超时、是否需要 data_dir。registry 只保留通用骨架。
+/// `init_options` 的输入面。对象化而非再加一个位置参数：两个字段不同型但调用点相邻，
+/// 且以后大概率还要加（app 等）——位置参数会变成一串谁也记不住顺序的尾巴。
+pub struct InitOptionsCtx<'a> {
+    /// 该 server 所属的工作区根（绝对路径）。
+    pub workspace: &'a str,
+    /// 该工作区的排除目录集（用户配置，进各语言的排除参数）。
+    pub exclude_globs: &'a [String],
+}
+
 pub trait ServerProfile {
     /// 捆绑资源子目录 + 二进制名（None = 该语言不捆绑，靠 which / 用户覆盖）。
     fn bundled(&self) -> Option<(&'static str, &'static str)> {
@@ -49,7 +58,10 @@ pub trait ServerProfile {
     }
 
     /// initialize 的 initializationOptions（按语言注入排除集等）。
-    fn init_options(&self, _exclude_globs: &[String]) -> serde_json::Value {
+    ///
+    /// 收 `ctx` 而非裸 `exclude_globs`：TS profile 要按**工作区**决定要不要挂 Vue 插件
+    /// （见 `vue_plugin`），而工作区是它拿不到就只能靠猜的东西。
+    fn init_options(&self, _ctx: &InitOptionsCtx) -> serde_json::Value {
         serde_json::json!({})
     }
 

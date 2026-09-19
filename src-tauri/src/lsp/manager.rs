@@ -672,8 +672,11 @@ async fn init_handshake(
     exclude_globs: &[String],
 ) -> Result<(), EnsureError> {
     let root_uri = crate::lsp::protocol::path_to_uri(workspace);
-    // 初始化选项按语言档案注入（Rust excludeGlobs / Go directoryFilters / 其余默认）
-    let init_options = crate::lsp::profiles::profile(lang).init_options(&exclude_globs);
+    // 初始化选项按语言档案注入（Rust excludeGlobs / Go directoryFilters /
+    // TS 按工作区挂 Vue 插件 / 其余默认）。
+    let init_options = crate::lsp::profiles::profile(lang).init_options(
+        &crate::lsp::registry::InitOptionsCtx { workspace, exclude_globs },
+    );
     // 注意：capabilities 只声明规范允许的字段——`workspace.workspaceEdit` 的类型是
     // 对象（WorkspaceEditClientCapabilities），传布尔会炸 jdtls 的 Gson 严格解析
     // （实测 error -32700 → ClientPreferences 永不设置 → 后续诊断/补全全 NPE）。

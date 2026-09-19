@@ -14,6 +14,7 @@ pub mod protocol;
 pub mod registry;
 pub mod rpc;
 pub mod transport;
+pub mod vue_plugin;
 pub mod workspace_symbol;
 
 #[cfg(test)]

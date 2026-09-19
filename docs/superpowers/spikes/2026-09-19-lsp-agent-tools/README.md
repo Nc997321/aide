@@ -115,6 +115,26 @@ node probe.mjs --server node --args "<tls>/lib/cli.mjs,--stdio" \
 `<npm 全局>/@vue/language-server/node_modules/@vue/typescript-plugin`——**不能假设用户都有**，
 所以产品化时要能探测到才启用、探不到就退回不用（别为了 Vue 把普通 TS 也搞坏）。
 
+### 已落地（aide 侧）
+
+- `src-tauri/src/lsp/vue_plugin.rs`（新）：按真实布局探测插件目录（项目本地 → 项目内嵌套
+  → pnpm 内容寻址 → node 同级全局 → Windows npm 全局；判据是 `package.json` 在，不是目录在）
+  + `has_vue_files()`（复用 `detector::find_source_file` 的有界遍历）。
+- `src-tauri/src/lsp/profiles/ts.rs`：两个条件都成立才注入
+  `plugins` + `tsserver.useSyntaxServer:"never"`；否则返回空对象，**行为与从前逐字相同**。
+- `init_options` 的签名加了 `InitOptionsCtx { workspace, exclude_globs }`——原先只收
+  `exclude_globs`，profile 根本拿不到工作区，按工作区做决策就无从谈起。
+- `detector::find_source_file`（新）：有界遍历从 `agent_query::walk_for_language` 挪来，
+  **边界纪律只留一份**（原来它是私有的，第二处用途出现时才发现该挪）。
+
+**本机实况**：`which node` → WinGet 的 node → 命中全局嵌套候选；工作区 140 个 `.vue`
+（第一个在深度 2）⇒ 两个条件都成立，注入生效。
+
+**已知边界**：`.vue` 探测是有界遍历（深度 ≤4、跳 `node_modules`）。`.vue` 全在 4 层以下的
+项目探不到 → 不启用（退回现状，不是错误）。`.vue` 作为**查询目标**（`{file: "X.vue"}`）
+仍走 `LanguageId::Vue` → 那个坏掉的 `vue-language-server`，本批**没修**：本次的收益在
+**TS 侧**（`.ts` 的引用查询看得见 `.vue` 用法），那正是 token 痛的来源。
+
 ## 提示词 A/B：能不能靠注入系统提示解决？（**结论：不能，已量化**）
 
 问的判据是机器可判的：同一任务、同一模型、同一插件，唯一变量是 `--append-system-prompt-file`（内容 = `lspHint.ts` 真正注入的那 930 字符，由脚本从源码抽取，不会漂移）。
