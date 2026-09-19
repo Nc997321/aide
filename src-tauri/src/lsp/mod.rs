@@ -12,6 +12,7 @@ pub mod protocol;
 pub mod registry;
 pub mod rpc;
 pub mod transport;
+pub mod workspace_symbol;
 
 #[cfg(test)]
 mod mock_server;
