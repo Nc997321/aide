@@ -1,4 +1,5 @@
 import { ref } from "vue";
+import { visibleWorkspaces } from "@aide/sdk/utils/dailyWorkspace";
 import { api } from "../api";
 import type { WorkspaceInfo } from "../types";
 
@@ -12,7 +13,9 @@ export function useWorkspaces() {
    *  空态；重新触发拉取即重试。WorkspacePicker 收口后也经此刷新。 */
   async function refresh() {
     try {
-      workspaces.value = await api.listWorkspaces();
+      // 日常目录对 UI 隐身：**唯一过滤点**在这里（SDK 的 visibleWorkspaces）。
+      // 侧栏分区与 WorkspacePicker 都经这份列表，渲染期不要再滤一次。
+      workspaces.value = visibleWorkspaces(await api.listWorkspaces());
     } catch (_e) {
       workspaces.value = [];
     }

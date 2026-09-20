@@ -744,6 +744,11 @@ export const api = {
   getActiveWorkspace(): Promise<{ key: string; path: string } | null> {
     return getTransport().invoke("get_active_workspace");
   },
+  /** 「日常」模式的归属（key + path）。**桌面独有**：远程 RPC 白名单不含此命令，
+   *  调用方（@aide/sdk/utils/dailyWorkspace）对失败降级为「没有日常概念」。 */
+  dailyWorkspace(): Promise<{ key: string; path: string }> {
+    return getTransport().invoke("daily_workspace");
+  },
   setWorkspace(key: string, path: string): Promise<void> {
     return getTransport().invoke("set_workspace", { key, path });
   },
