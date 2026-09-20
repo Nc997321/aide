@@ -71,7 +71,8 @@ const emit = defineEmits<{
   /** 发送请求（不清输入）：effectiveProvider/effectiveModel 并入 opts（ChatPanel
    *  的发送前确认门控据此判定是否弹确认形态），相邻 string 不再位置错位 */
   "send-request": [prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }];
-  "send-btw": [prompt: string, opts: { model?: string; effort?: string }];
+  /** btw 只带问题正文：支线的模型/档位一律继承主会话（见 toggleBtw 处说明） */
+  "send-btw": [prompt: string];
   "set-model": [model: string];
   "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
@@ -129,12 +130,6 @@ watch(
 // 模型下拉的 provider 切换重置已归 L2（identity 内部按 provider 归属重算 displayModels/effectiveModel）。
 
 function handleModelChange(value: string) {
-  // btw 模式下模型选择器只决定这条支线用什么模型,不回写主会话(主会话模型不变,
-  // 发送后 btwMode 关闭,选择器自动回到主会话模型)。
-  if (btwMode.value) {
-    btwModel.value = value;
-    return;
-  }
   // 用户手选 → L2 草稿（不落盘；落盘由 model_committed/models_available 的进程坐实事件驱动，见 2026-09-01 设计稿）。
   identity.setUserChoice(value);
   emit("set-model", value);
@@ -202,11 +197,6 @@ function providerDefaultEffort(): string {
 }
 
 function handleEffortChange(value: string) {
-  // btw 模式下 effort 选择器只决定这条支线的档位，不回写主会话（同模型选择器语义）。
-  if (btwMode.value) {
-    btwEffort.value = value;
-    return;
-  }
   effortTouchedByUser = true;
   lastEffortUserActionAt = Date.now();
   selectedEffort.value = value;
@@ -401,28 +391,16 @@ function formatResetTime(resetsAt: number | null): string | null {
 
 // ── btw 输入模式 ──
 const btwMode = ref(false);
-// btw 默认继承主会话当前模型（2026-08-02 改：原默认最便宜的 haiku 系/defaultHaikuModel
-// 映射，用户反馈支线回答质量跟不上主会话，索性同源）。btw 期间模型选择器显示它，
-// 用户可临时改这条支线的模型（不回写主会话）；发送后 btwMode 关闭，选择器自动回到
-// 主会话模型。
-const btwModel = ref("");
-const btwDefaultModel = computed(() =>
-  selectedModel.value || modelSelectOptions.value[0]?.value || "",
-);
-// btw 期间 effort 选择器落到最低档 low（一次性支线省 token，且 low = 关思考模式，
-// 支线不产生思考块）——与模型选择器同形：用户可临时改（只影响这条支线，不回写
-// 主会话），发送后 btwMode 关闭，选择器自动回到主会话之前的档位。
-const btwEffort = ref("low");
-const displayedEffort = computed(() => (btwMode.value ? btwEffort.value : selectedEffort.value));
+// 支线**没有自己的模型/档位**：btw 走官方 side_question，进程内跑在存活主 query 的
+// cache-safe fork 上，通道只收 question/history（SDK 的 askSideQuestion 无 model/effort
+// 参数，BtwAskParams 也只有 sessionId/question/history）——支线一律继承主会话当时的模型
+// 与档位，且只有同模型同档位才吃得到那份缓存。所以 btw 期间两个选择器一律禁用（只读显示
+// 主会话的值），曾经的"支线自己一套"（btwModel/btwEffort/displayedModel）是假控件——
+// 显示的是一个对支线毫无作用的值，2026-09-20 删除。
+const BTW_SELECTOR_HINT = "支线跟随主会话，不可单独设置";
 function toggleBtw() {
   btwMode.value = !btwMode.value;
-  if (btwMode.value) {
-    btwModel.value = btwDefaultModel.value;
-    btwEffort.value = "low";
-  }
 }
-// 输入框模型选择器显示值:btw 期间显示支线模型,否则显示主会话模型
-const displayedModel = computed(() => (btwMode.value ? btwModel.value : selectedModel.value));
 const btwRevertToast = ref(false);
 let btwToastTimer: number | undefined;
 function showBtwRevertToast() {
@@ -927,10 +905,7 @@ async function performSend() {
           toggleBtw(); // 只切输入模式，等问题
           return;
         }
-        emit("send-btw", mentionPrefix + args, {
-          model: btwModel.value || btwDefaultModel.value,
-          effort: btwEffort.value,
-        });
+        emit("send-btw", mentionPrefix + args);
         awaitingBtwLaunch.value = true;
         return;
       }
@@ -946,7 +921,7 @@ async function performSend() {
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-    emit("send-btw", mentionPrefix + text, { model: btwModel.value, effort: btwEffort.value });
+    emit("send-btw", mentionPrefix + text);
     inputText.value = "";
     pendingImages.value = [];
     pendingMentions.value = [];
@@ -1250,18 +1225,20 @@ const { actions: quickActions } = useQuickActions();
       <div class="chat-toolbar">
         <ThemedSelect
           v-if="displayModels.length"
-          :model-value="displayedModel"
+          :model-value="selectedModel"
           :options="modelSelectOptions"
-          title="模型"
+          :disabled="btwMode"
+          :title="btwMode ? BTW_SELECTOR_HINT : '模型'"
           @update:model-value="handleModelChange"
         />
         <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
              不重启进程、不碰 prompt 缓存）；三档制：快速=关闭思考模式、进阶/极致=
              开启思考（worker 侧 thinkingForEffort 联动）；默认 思考(high) -->
         <ThemedSelect
-          :model-value="displayedEffort"
+          :model-value="selectedEffort"
           :options="effortSelectOptions"
-          title="effort（思考深度）：快速=关闭思考模式、进阶/极致=开启思考；切换从下一轮起生效，不影响缓存"
+          :disabled="btwMode"
+          :title="btwMode ? BTW_SELECTOR_HINT : 'effort（思考深度）：快速=关闭思考模式、进阶/极致=开启思考；切换从下一轮起生效，不影响缓存'"
           @update:model-value="handleEffortChange"
         />
         <div

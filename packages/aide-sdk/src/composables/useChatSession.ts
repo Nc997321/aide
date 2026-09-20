@@ -510,8 +510,11 @@ export function useChatSession(sessionId: Ref<string | null>) {
   /** 顺便问一下:对当前存活主会话做一次侧问（官方 side_question 通道，进程内完成）。
    *  一次性——发送后由 ChatPanel 负责复位 btw 模式视觉。结论以
    *  ActionBlock(actionId:'btw')回插本会话 store 末尾(前端可见、不进 SDK resume
-   *  上下文,见 ChatMessage 渲染)。 */
-  async function sendBtw(prompt: string, opts: { model?: string; effort?: string } = {}) {
+   *  上下文,见 ChatMessage 渲染)。
+   *
+   *  不接模型/档位参数：官方通道只收 question/history，跑的是主会话同一 query 的
+   *  cache-safe fork（同模型同档位才吃得到缓存），支线一律继承主会话。 */
+  async function sendBtw(prompt: string) {
     const sid = sessionId.value;
     if (!sid) {
       // 无主会话可问:ChatPanel 已在 !sessionId 时禁用 btw 切换项,正常走不到这里。
@@ -535,7 +538,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     });
     // startBtw 内部把命令失败(Runtime 不可用)转成 store.status="error",由抽屉展示
     // 原因;答案与错误都走 btw_answer 事件——不抛、不静默。
-    await btw.startBtw({ ownerSid: sid, question: prompt, model: opts.model, effort: opts.effort });
+    await btw.startBtw({ ownerSid: sid, question: prompt });
   }
 
   return {

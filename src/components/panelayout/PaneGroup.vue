@@ -119,8 +119,8 @@ function onRespondPermission(
   });
 }
 
-function onSendBtw(prompt: string, opts: { model?: string; effort?: string }) {
-  sendBtw(prompt, opts);
+function onSendBtw(prompt: string) {
+  sendBtw(prompt);
 }
 
 function onTabContext(tabId: string, x: number, y: number) {

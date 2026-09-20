@@ -29,8 +29,6 @@ interface BtwState {
   question: string;
   status: BtwStatus;
   ownerSessionId: string | null; // 主会话 sid;null=idle
-  model: string; // 这条支线实际跑的模型别名(抽屉展示用);空串=idle
-  effort: string; // 这条支线实际跑的 effort 档位;空串=idle
   minimized: boolean; // 用户点了「关闭」=最小化:抽屉收起,答案到达后照样插批注。
 }
 
@@ -42,8 +40,6 @@ const IDLE: BtwState = {
   question: "",
   status: "idle",
   ownerSessionId: null,
-  model: "",
-  effort: "",
   minimized: false,
 };
 const state = ref<BtwState>({ ...IDLE });
@@ -116,12 +112,13 @@ function handleBtwAnswer(e: Record<string, unknown>) {
   });
 }
 
+/** btw **没有自己的一套模型/档位**：官方 side_question 通道只收 question/history，支线一律
+ *  继承主会话的模型与档位（cache-safe fork 必须与父会话同前缀才吃得到缓存）。曾有的
+ *  model/effort 两个可选字段既不下发、也不是"支线实际跑的"值，2026-09-20 删除。 */
 interface StartBtwOpts {
   /** 主会话 sid：既作命令的路由键，也作抽屉绑定与记忆 key。 */
   ownerSid: string;
   question: string;
-  model?: string;
-  effort?: string;
 }
 
 async function startBtw(opts: StartBtwOpts) {
@@ -132,8 +129,6 @@ async function startBtw(opts: StartBtwOpts) {
     question: opts.question,
     status: "starting",
     ownerSessionId: opts.ownerSid,
-    model: opts.model ?? "",
-    effort: opts.effort ?? "",
   };
   try {
     await api.btwAsk({

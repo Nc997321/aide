@@ -3,7 +3,9 @@ import { computed } from "vue";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { renderMarkdown } from "@/utils/markdown";
 
-const props = defineProps<{ visible: boolean; modelLabel: string }>();
+/** 没有 modelLabel 之类的"支线配置"展示：支线跑在主会话的模型/档位上（官方 side_question
+ *  只收 question/history），标题里再写一个模型名只会误导——要看模型看主会话工具栏。 */
+const props = defineProps<{ visible: boolean }>();
 const emit = defineEmits<{
   (e: "close"): void;
 }>();
@@ -22,7 +24,7 @@ const html = computed(() => renderMarkdown(text.value));
       <div class="btw-drawer-stripe"></div>
       <div class="btw-head">
         <div class="btw-title-row">
-          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下 <span class="btw-pill">· {{ props.modelLabel }}</span></div>
+          <div class="btw-title"><span class="btw-fork">↳</span> 顺便问一下</div>
           <button class="btw-btn" @click="emit('close')">关闭</button>
         </div>
       </div>
@@ -89,12 +91,6 @@ const html = computed(() => renderMarkdown(text.value));
 .btw-fork {
   font-size: 14px;
   line-height: 1;
-}
-
-.btw-pill {
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  font-weight: 400;
 }
 
 .btw-btn {

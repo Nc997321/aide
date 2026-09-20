@@ -37,7 +37,6 @@ import {
   messagesOf,
 } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
-import { effortLabel } from "@aide/sdk/utils/effort";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -81,7 +80,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
-  "send-btw": [prompt: string, opts: { model?: string; effort?: string }];
+  "send-btw": [prompt: string];
   interrupt: [];
   "set-model": [model: string];
   "set-effort": [effort: string];
@@ -483,18 +482,6 @@ const btwDrawerVisible = computed(
     && btw.store.value.ownerSessionId !== null
     && btw.store.value.ownerSessionId === props.sessionId,
 );
-// 抽屉标题里"· btw"那块小字换成这条支线实际用的模型名(查下拉 displayName,查不到回落原值)
-// + 实际 effort 档位——"/btw 问题"直发不进输入模式,选择器显示的仍是主会话档位,
-// 支线真实跑什么只能看这里(2026-08-02 用户实锤分不清 HIGH 是显示还是实际)。
-// 档位显示走 effortLabel（三档中文，medium/xhigh 历史值映射相邻档位）。
-const btwModelLabel = computed(() => {
-  const v = btw.store.value.model;
-  const base = v
-    ? (displayModels.value.find((m) => m.value === v)?.displayName ?? v)
-    : "btw";
-  const eff = btw.store.value.effort;
-  return eff ? `${base} · ${effortLabel(eff)}` : base;
-});
 // 「关闭」按状态分两种语义:
 //  - 还在跑(starting/running):最小化——抽屉收起,侧问在服务端继续跑,答案到达后
 //    照样作为批注插进主对话(用户要的就是这个)。
@@ -644,7 +631,7 @@ function onOpenBgDock(taskId: string) {
       :session-provider="sessionProvider"
       :send-confirmed-nonce="sendConfirmedNonce"
       @send-request="onSendRequest"
-      @send-btw="(prompt, opts) => emit('send-btw', prompt, opts)"
+      @send-btw="(prompt) => emit('send-btw', prompt)"
       @set-model="(m) => emit('set-model', m)"
       @set-effort="(e) => emit('set-effort', e)"
       @set-permission-mode="(m) => emit('set-permission-mode', m)"
@@ -654,7 +641,6 @@ function onOpenBgDock(taskId: string) {
     />
     <BtwDrawer
       :visible="btwDrawerVisible"
-      :model-label="btwModelLabel"
       @close="closeBtw"
     />
   </div>

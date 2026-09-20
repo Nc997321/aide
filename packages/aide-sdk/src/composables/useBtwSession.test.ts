@@ -18,9 +18,9 @@ beforeEach(() => {
 });
 
 /** 起一条 btw 并让它处于「等事件」态。 */
-async function startBtwForTest(ownerSid: string, question: string, model?: string) {
+async function startBtwForTest(ownerSid: string, question: string) {
   const btw = useBtwSession();
-  await btw.startBtw({ ownerSid, question, model });
+  await btw.startBtw({ ownerSid, question });
   return btw;
 }
 
