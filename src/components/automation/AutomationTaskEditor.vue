@@ -10,6 +10,7 @@ import { mcpServerApi } from "../../api/customization";
 import ThemedSelect from "../ThemedSelect.vue";
 import DirTreePicker from "../DirTreePicker.vue";
 import Icon from "../Icon.vue";
+import { automationModelOptions } from "./modelOptions";
 import type { AutomationTaskInput, Schedule } from "../../api/automation";
 
 const auto = useAutomation();
@@ -127,20 +128,8 @@ function onCustomDirPick(p: string | string[]) {
   if (typeof p === "string" && p) form.workspacePath = p;
 }
 
-const STATIC_MODELS = [
-  { value: "", label: "跟随提供商默认" },
-  { value: "claude-sonnet-5", label: "Sonnet 5（推荐：自动化够用且便宜）" },
-  { value: "claude-opus-5", label: "Opus 5（重推理任务）" },
-  { value: "claude-fable-5", label: "Fable 5（成本 ×3.3，慎用）" },
-];
-const modelOptions = computed(() => {
-  // 编辑时遇到列表外的自定义模型（第三方 provider），原样保留为一个选项
-  const cur = form.model;
-  if (cur && !STATIC_MODELS.some((m) => m.value === cur)) {
-    return [...STATIC_MODELS, { value: cur, label: cur }];
-  }
-  return STATIC_MODELS;
-});
+// 模型选项跟随当前供应商（与聊天面板同源），见 ./modelOptions.ts
+const modelOptions = computed(() => automationModelOptions(form.model));
 
 const effortOptions = EFFORT_OPTIONS.map((o) =>
   o.value === "high" ? { ...o, label: `${o.label}（默认）` } : o,
