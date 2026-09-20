@@ -1,0 +1,373 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>日常模式原型 · aide</title>
+<style>
+/* ── 主题 token：手抄自 src/themes/glass.ts（变量名与 src/styles/global.css 一致）──
+   原型只用 var(--aide-*)，方便和真机对照；改主题时这里跟着变色。 */
+:root {
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-bg-raised: rgba(24,26,38,.48);
+
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.14);
+
+  --aide-text-primary: #eef0f8;
+  --aide-text-secondary: #b9bdd0;
+  --aide-text-muted: #7c8296;
+  --aide-text-on-accent: #eef0ff;
+
+  --aide-accent: #a5b8ff;
+  --aide-accent-hover: #bcc9ff;
+  --aide-accent-subtle: rgba(150,170,255,.16);
+  --aide-accent-gradient: linear-gradient(180deg, rgba(160,180,255,.42), rgba(130,150,255,.3));
+  --aide-accent-glow: 0 4px 18px rgba(140,160,255,.38);
+  --aide-accent-ring: 0 0 0 2.5px rgba(150,170,255,.42);
+
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-border-strong: rgba(255,255,255,.17);
+
+  --aide-radius-sm: 8px;
+  --aide-radius-md: 10px;
+  --aide-radius-lg: 14px;
+  --aide-shadow-md: 0 8px 24px rgba(0,0,0,.38);
+  --aide-shadow-lg: 0 20px 60px rgba(0,0,0,.55);
+
+  --aide-success: #6ee7a8;
+  --aide-ease-t: .16s cubic-bezier(.2,.8,.2,1);
+
+  --ui: system-ui, "Segoe UI", "Microsoft YaHei", sans-serif;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--ui);
+  color: var(--aide-text-primary);
+  background: #0a0c12;
+  background-image: radial-gradient(700px 240px at 50% -60px, rgba(150,170,255,.12), transparent 70%);
+  overflow: hidden;
+}
+.app { display: flex; height: 100%; }
+
+/* ─────────────────────────── 左：侧栏 ─────────────────────────── */
+.sidebar {
+  width: 260px; flex: none; height: 100%;
+  background: var(--aide-bg-base);
+  border-right: 1px solid var(--aide-border-subtle);
+  padding: 10px 8px; overflow-y: auto;
+}
+.sec-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px; font-size: 12.5px; letter-spacing: .04em;
+  color: var(--aide-text-muted);
+}
+.sec-head .chev { transition: transform var(--aide-ease-t); }
+.sec-head .count { margin-left: auto; font-family: var(--mono); font-size: 11px; }
+.subtree { margin-left: 10px; border-left: 1px solid var(--aide-border-subtle); padding-left: 1px; }
+
+.row {
+  position: relative; display: flex; align-items: center; gap: 8px;
+  margin: 2px 0 2px 18px; padding: 7px 8px;
+  border-radius: var(--aide-radius-sm); font-size: 13px;
+  color: var(--aide-text-secondary); cursor: pointer;
+  transition: background var(--aide-ease-t);
+}
+/* 日常分区的会话是根分区的直接子级（同自动化任务节点），不再多缩一层 */
+.subtree > .row { margin-left: 0; }
+.row:hover { background: var(--aide-surface-hover); }
+.row.on { background: var(--aide-surface-active); color: var(--aide-text-primary); }
+.row.on::before {
+  content: ""; position: absolute; left: -2px; top: 7px; bottom: 7px;
+  width: 2px; border-radius: 2px; background: var(--aide-accent);
+}
+.row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .time { margin-left: auto; flex: none; font-size: 11px; color: var(--aide-text-muted); }
+
+.ws-head {
+  display: flex; align-items: center; gap: 8px;
+  margin: 6px 0 2px; padding: 7px 8px; border-radius: var(--aide-radius-sm);
+  font-size: 13px; color: var(--aide-text-secondary);
+}
+.ws-head:hover { background: var(--aide-surface-hover); }
+.ws-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; direction: rtl; text-align: left;  /* 长路径保留尾部 */
+}
+.ws-head .w-count { flex: none; font-family: var(--mono); font-size: 11px; color: var(--aide-text-muted); }
+
+/* ─────────────────────────── 右：新建对话页 ─────────────────────────── */
+.main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat {
+  flex: 1; display: flex; flex-direction: column; justify-content: center;
+  align-items: center; padding: 0 32px 40px; gap: 0;
+}
+
+/* 分段控件：日常 / 工程 */
+.modes {
+  display: inline-flex; gap: 2px; padding: 3px; margin-bottom: 34px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: 999px;
+}
+.mode-btn {
+  appearance: none; border: 0; cursor: pointer;
+  padding: 7px 22px; border-radius: 999px;
+  font-family: inherit; font-size: 13.5px;
+  color: var(--aide-text-secondary); background: transparent;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.mode-btn:hover { color: var(--aide-text-primary); }
+.mode-btn.is-active {
+  color: var(--aide-text-on-accent);
+  background: var(--aide-accent-gradient);
+  box-shadow: var(--aide-accent-glow);
+}
+
+.greeting {
+  display: inline-flex; align-items: baseline; gap: 14px; margin: 0 0 10px;
+  font-size: clamp(19px, 2.4vw, 25px); font-weight: 500; color: var(--aide-text-secondary);
+}
+.eyebrow {
+  display: inline-flex; align-items: center; gap: 9px;
+  font-family: var(--mono); font-size: 12.5px; letter-spacing: .08em; color: var(--aide-text-muted);
+}
+.eyebrow .clock { color: var(--aide-text-secondary); }
+
+.headline {
+  margin: 0; font-size: clamp(28px, 4.6vw, 44px); font-weight: 650;
+  letter-spacing: -.01em; line-height: 1.22; text-align: center;
+}
+.body {
+  margin: 14px 0 0; max-width: 540px; font-size: 15px; line-height: 1.7;
+  text-align: center; color: var(--aide-text-secondary);
+}
+.rule { width: min(320px, 62%); height: 1px; margin: 28px 0 14px; background: var(--aide-border-subtle); }
+.meta {
+  display: flex; align-items: center; gap: 8px; font-size: 13.5px;
+  color: var(--aide-text-secondary); min-height: 22px;
+}
+.meta .label { color: var(--aide-text-muted); }
+.meta .sep { color: var(--aide-text-muted); }
+.meta .model { color: var(--aide-accent); }
+.picker {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px; border-radius: var(--aide-radius-sm);
+  background: var(--aide-surface-default); border: 1px solid var(--aide-border-subtle);
+  font-size: 13px; color: var(--aide-text-primary);
+}
+
+/* 输入盒 */
+.composer {
+  width: min(760px, 100%); margin-top: 22px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-lg);
+  box-shadow: var(--aide-shadow-md);
+  padding: 14px 16px 10px;
+}
+.composer textarea {
+  width: 100%; min-height: 62px; resize: none; border: 0; outline: none;
+  background: transparent; color: var(--aide-text-primary);
+  font-family: inherit; font-size: 15px; line-height: 1.6;
+}
+.composer textarea::placeholder { color: var(--aide-text-muted); }
+.bar { display: flex; align-items: center; gap: 10px; margin-top: 6px; }
+.pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 999px;
+  background: var(--aide-surface-default); border: 1px solid var(--aide-border-subtle);
+  font-size: 12.5px; color: var(--aide-text-secondary); cursor: pointer;
+}
+.pill:hover { background: var(--aide-surface-hover); }
+.pill .bolt { color: var(--aide-accent); }
+.bar .spacer { flex: 1; }
+.send {
+  width: 32px; height: 32px; flex: none; border: 0; border-radius: 999px; cursor: pointer;
+  background: var(--aide-accent-gradient); box-shadow: var(--aide-accent-glow);
+  color: var(--aide-text-on-accent); font-size: 15px; line-height: 1;
+}
+.plus {
+  width: 28px; height: 28px; border: 0; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--aide-text-muted); font-size: 19px; line-height: 1;
+}
+.plus:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+
+/* ── 标注开关：给"新增了什么"画虚线框（评审用，不是产品 UI）── */
+.tt { position: fixed; right: 16px; top: 16px; z-index: 9; display: flex; gap: 8px; }
+.tt button {
+  font-family: inherit; font-size: 12.5px; cursor: pointer;
+  padding: 6px 12px; border-radius: 999px;
+  color: var(--aide-text-secondary); background: var(--aide-bg-deep);
+  border: 1px solid var(--aide-border);
+}
+.tt button:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+body.annotate .is-new { outline: 1.5px dashed var(--aide-accent); outline-offset: 6px; border-radius: var(--aide-radius-sm); }
+body.annotate .is-new::after {
+  content: attr(data-note); position: absolute; left: 0; top: -20px;
+  font-size: 11px; letter-spacing: .04em; color: var(--aide-accent); white-space: nowrap;
+}
+body.annotate .is-new { position: relative; }
+</style>
+</head>
+<body>
+
+<div class="tt">
+  <button id="btn-annotate">标注新增</button>
+  <button id="btn-reroll">换一条文案</button>
+</div>
+
+<div class="app">
+  <!-- ── 侧栏 ── -->
+  <aside class="sidebar">
+    <!-- 新增：日常分区（与「会话」平级的根分区，会话直接挂在它下面） -->
+    <div class="sec-head is-new" data-note="新增：日常分区（与「会话」并级）">
+      <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>日常</span><span class="count">3</span>
+    </div>
+    <div class="subtree">
+      <div class="row"><span class="name">今天想聊点什么…</span><span class="time">2 小时前</span></div>
+      <div class="row"><span class="name">帮我看看这段话</span><span class="time">昨天</span></div>
+      <div class="row"><span class="name">什么是向量数据库</span><span class="time">3 天前</span></div>
+    </div>
+
+    <!-- 现状：工作区树分区（一字未改，计数不再含日常会话） -->
+    <div class="sec-head" style="margin-top:8px">
+      <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>项目</span><span class="count">1</span>
+    </div>
+    <div class="subtree">
+      <div class="ws-head">
+        <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3L21.5 7.8L12 12.6L2.5 7.8L12 3Z"/><path d="M2.5 12.3L12 17.1L21.5 12.3"/><path d="M2.5 16.8L12 21.6L21.5 16.8"/></svg>
+        <span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span>
+        <span class="w-count">1</span>
+      </div>
+      <div class="row on"><span class="name">确认 AIDE 桌面端与鸿蒙…</span><span class="time">10 天前</span></div>
+    </div>
+
+    <div class="sec-head" style="margin-top:8px">
+      <svg class="chev" width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2.5 4.5L6 8L9.5 4.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      <span>自动化</span>
+    </div>
+  </aside>
+
+  <!-- ── 新建对话页 ── -->
+  <main class="main">
+    <div class="chat">
+      <div class="modes is-new" data-note="新增：日常 / 工程（默认日常）">
+        <button class="mode-btn is-active" data-mode="daily">日常</button>
+        <button class="mode-btn" data-mode="project">工程</button>
+      </div>
+
+      <div class="greeting">
+        <span class="eyebrow"><span id="date">9月21日 · 星期日</span><span>·</span><span class="clock" id="clock">14:32</span></span>
+        <span id="greet">下午好。</span>
+      </div>
+
+      <h1 class="headline" id="headline">今天想聊点什么？</h1>
+      <p class="body" id="body">随便问，不用先想清楚要干什么。</p>
+
+      <div class="rule"></div>
+
+      <div class="meta" id="meta">
+        <span class="model">默认模型</span>
+      </div>
+
+      <div class="composer">
+        <textarea id="ta" rows="3"></textarea>
+        <div class="bar">
+          <button class="plus" title="添加">+</button>
+          <span class="spacer"></span>
+          <span class="pill" id="effort"><span class="bolt">⚡</span><span id="effort-label">快速</span>⌄</span>
+          <span class="pill">自动模式 ⌄</span>
+          <button class="send" title="发送">➤</button>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+// ── 文案池：日常（新）与工程（现状，一字未改）────────────────────────────
+const POOLS = {
+  daily: [
+    { headline: "今天想聊点什么？", body: "随便问，不用先想清楚要干什么。" },
+    { headline: "有什么想弄明白的？", body: "概念、原理、一段看不懂的文字，贴过来就行。" },
+    { headline: "要写点什么吗？", body: "措辞、总结、翻译、换个口气 —— 说个大概，我来起草。" },
+    { headline: "在琢磨什么事？", body: "先把想法倒出来，我帮你理一理。" },
+    { headline: "有什么要查的？", body: "问一句就行，我整理好再给你。" },
+  ],
+  project: [
+    { headline: "今天想从哪块代码开始？", body: "发个目标、贴段报错，或直接指个文件——我先读代码再动手。" },
+    { headline: "哪个 bug 在等你？", body: "把现象或报错贴过来，我定位根因，再给出修复方案。" },
+    { headline: "有什么想法值得做成代码？", body: "说个大概就行，我把它拆成一步步可落地的计划。" },
+    { headline: "想推进哪一块？", body: "新功能、重构，或把某个角落弄干净——都行。" },
+    { headline: "接下来做什么？", body: "一个目标、一段上下文，或一条命令——从这里开始。" },
+  ],
+};
+
+const PLACEHOLDER = { daily: "今天想聊点什么？", project: "你正在解决什么问题？" };
+const EFFORT = { daily: "快速", project: "进阶" };
+
+let mode = "daily";     // 默认日常
+let seed = 0;
+
+const $ = (id) => document.getElementById(id);
+
+/** 按模式渲染四处差异：文案 / 环境脚注 / placeholder / 档位药丸。 */
+function render() {
+  const copy = POOLS[mode][seed % POOLS[mode].length];
+  $("headline").textContent = copy.headline;
+  $("body").textContent = copy.body;
+  $("ta").placeholder = PLACEHOLDER[mode];
+  $("effort-label").textContent = EFFORT[mode];
+
+  // 日常没有工作区这个概念：脚注只剩模型名（档位在输入盒右下角那颗药丸上）
+  $("meta").innerHTML =
+    mode === "daily"
+      ? '<span class="model">默认模型</span>'
+      : '<span class="label">新会话位于</span>' +
+        '<span class="picker">📁 <span class="ws-path">aide</span> ▾</span>' +
+        '<span class="sep">·</span><span class="model">默认模型</span>';
+
+  document.querySelectorAll(".mode-btn").forEach((b) => {
+    b.classList.toggle("is-active", b.dataset.mode === mode);
+  });
+}
+
+document.querySelectorAll(".mode-btn").forEach((b) => {
+  b.addEventListener("click", () => { mode = b.dataset.mode; seed = 0; render(); });
+});
+
+$("btn-reroll").addEventListener("click", () => { seed += 1; render(); });
+
+$("btn-annotate").addEventListener("click", (e) => {
+  document.body.classList.toggle("annotate");
+  e.target.textContent = document.body.classList.contains("annotate") ? "隐藏标注" : "标注新增";
+});
+
+// 问候行：与真机同规则（时段问候 + 中文日期 + 时钟，每 60s 刷新）
+const WEEK = ["星期日","星期一","星期二","星期三","星期四","星期五","星期六"];
+function tick() {
+  const d = new Date();
+  const h = d.getHours();
+  const greet =
+    h >= 5 && h < 11 ? "早上好" : h >= 11 && h < 13 ? "中午好" :
+    h >= 13 && h < 18 ? "下午好" : h >= 18 && h < 23 ? "晚上好" : "夜深了";
+  $("greet").textContent = greet + "。";
+  $("date").textContent = `${d.getMonth() + 1}月${d.getDate()}日 · ${WEEK[d.getDay()]}`;
+  $("clock").textContent = `${String(d.getHours()).padStart(2,"0")}:${String(d.getMinutes()).padStart(2,"0")}`;
+}
+tick();
+setInterval(tick, 60_000);
+render();
+</script>
+</body>
+</html>
