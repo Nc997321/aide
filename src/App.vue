@@ -20,7 +20,7 @@ import { useAutomation } from "./composables/useAutomation";
 import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
-import { useBrowserPanel } from "./composables/useBrowserPanel";
+import { useRightPanel, type RightTabId } from "./composables/useRightPanel";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -70,10 +70,12 @@ import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
 
 const leftCollapsed = ref(false);
-// 右侧栏默认收起：只留竖直 toolbar（IDEA 式），按需点 rail 图标或 Ctrl+3~7 展开。
+// 右侧栏状态的主人是 useRightPanel（模块单例）：折叠态、当前 tab、最大化、两档宽度都在那里，
+// 三态裁决也搬到了它的 `select`。这两个别名只为少改模板与既有函数——它们就是 store 里的 ref 本身。
 // 注意调用层级面板在 rootQuery 变化时会强制展开（见下方 watch）。
-const rightCollapsed = ref(true);
-const rightTab = ref<"files" | "changes" | "git" | "search" | "codegraph" | "callhierarchy" | "permissions">("files");
+const rightPanel = useRightPanel();
+const rightCollapsed = rightPanel.collapsed;
+const rightTab = rightPanel.tab;
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
 // 调用层级面板状态（模块单例；gutter ⇄ 触发点在编辑器深处）。根变化 = 换根查询 →
@@ -110,12 +112,17 @@ const rightResize = useResizable({
  *  FileViewer.vue 顶部注释）——轨道不真的变，那层就量不到变化。
  *  左侧栏未固定（QQ 式自动隐藏）时轨道归 0：侧栏脱离 grid 改走 overlay
  *  绝对定位（见 .panel-left.overlay），不占布局、覆盖内容。 */
+/** 最大化 = 右栏吃满主区：中心轨道归 0、右栏拿 1fr。聊天区已被 v-show 换下（保活不卸载），
+ *  所以这里不动任何 DOM 结构——原生视图的「洞」只是换了个更大的 rect。 */
+const browserMaximized = rightPanel.maximized;
+
 const gridTemplateColumns = computed(() => {
   const left = !leftPinned.value
     ? "0px"
     : leftCollapsed.value
       ? "10px"
       : "var(--aide-left-w, 280px)";
+  if (browserMaximized.value) return `${left} 1px 0px 1px 1fr`;
   const right = rightCollapsed.value ? "var(--aide-rail-w, 40px)" : "var(--aide-right-w, 300px)";
   return `${left} 1px minmax(400px, 1fr) 1px ${right}`;
 });
@@ -172,8 +179,8 @@ const gitPanelRef = ref<InstanceType<typeof GitPanel> | null>(null);
 const titleBarRef = ref<InstanceType<typeof TitleBar> | null>(null);
 const paletteOpen = ref(false);
 const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
-// 内嵌浏览器面板（Ctrl+Shift+B 切换；侧栏入口同一开关）。桌面壳专属，原生子 webview 浮在主区之上。
-const browserPanel = useBrowserPanel();
+// 内嵌浏览器：主区已不认它——它是右栏的一个 tab（rail 图标 / Ctrl+8 / Ctrl+Shift+B），
+// 开合状态同住在 useRightPanel（`browserEverActive` 管懒挂载）。桌面壳专属，原生子 webview。
 // 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
@@ -311,6 +318,8 @@ const tabIconSearch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor
 const tabIconCodegraph = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M10.8 7.2 6.2 16.8"/><path d="M13.2 7.2 17.8 16.8"/></svg>';
 const tabIconCallhierarchy = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2v6h-6"/><path d="M7 22v-6h6"/><path d="M17 8c0 5-3 8-10 8"/><path d="M7 16c0-5 3-8 10-8"/></svg>';
 const tabIconPermissions = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>';
+// 地球（圆 + 赤道 + 两弧）：与侧栏那几个入口同一字形语言。
+const tabIconBrowser = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a9 9 0 0 1 0 18"/><path d="M12 3a9 9 0 0 0 0 18"/></svg>';
 
 const rightTabs = computed<Tab[]>(() => [
   { id: "files", icon: tabIconFiles, label: "文件 (Ctrl+1)" },
@@ -319,27 +328,20 @@ const rightTabs = computed<Tab[]>(() => [
   { id: "search", icon: tabIconSearch, label: "搜索 (Ctrl+4)" },
   { id: "codegraph", icon: tabIconCodegraph, label: "代码索引 (Ctrl+6)" },
   { id: "callhierarchy", icon: tabIconCallhierarchy, label: "调用层级 (Ctrl+7)" },
+  { id: "browser", icon: tabIconBrowser, label: "浏览器 (Ctrl+8)" },
   { id: "permissions", icon: tabIconPermissions, label: "权限 (Ctrl+5)", bottom: true },
 ]);
 
-/** 右侧竖直工具栏选择（IDEA 式）：点未激活项切换并展开、点已激活项折叠、
- *  折叠态点任意项展开并激活。标题栏 toggle-right 走 rightCollapsed 直翻。 */
+/** 右侧竖直工具栏选择（IDEA 式）：展开 / 折叠 / 切换的三态裁决住在 `useRightPanel.select`。
+ *  标题栏 toggle-right 走 rightCollapsed 直翻。 */
 function onRailSelect(id: string) {
-  const tab = id as typeof rightTab.value;
-  if (rightCollapsed.value) {
-    rightTab.value = tab;
-    rightCollapsed.value = false;
-  } else if (tab === rightTab.value) {
-    rightCollapsed.value = true;
-  } else {
-    rightTab.value = tab;
-  }
+  rightPanel.select(id as RightTabId);
 }
 
-/** Ctrl+1~5 → 右侧栏 tab（IDEA Alt+数字语义，走 onRailSelect 的现成裁决：按当前
+/** Ctrl+1~8 → 右侧栏 tab（IDEA Alt+数字语义，走 onRailSelect 的现成裁决：按当前
  *  激活项 = 折叠右栏）。key 用 e.code 物理键位而非 e.key：AZERTY 等布局数字在
  *  Shift 层，e.key 产出的是 "&" 不是 "1"。 */
-const RAIL_DIGIT_TABS: Record<string, typeof rightTab.value> = {
+const RAIL_DIGIT_TABS: Record<string, RightTabId> = {
   Digit1: "files",
   Digit2: "changes",
   Digit3: "git",
@@ -347,6 +349,7 @@ const RAIL_DIGIT_TABS: Record<string, typeof rightTab.value> = {
   Digit5: "permissions",
   Digit6: "codegraph",
   Digit7: "callhierarchy",
+  Digit8: "browser",
 };
 
 /** 快捷键打开搜索面板：展开右侧 + 切到 search tab + 预选模式并聚焦输入框。
@@ -368,35 +371,46 @@ function onSearchFilesChanged() {
   fileTreeRef.value?.loadRoot();
 }
 
-// 自动化 ⇄ 插件市场 ⇄ 记忆观测台 ⇄ 知识库 ⇄ 内嵌浏览器五者互斥：主区 v-if 链有优先级
+// 自动化 ⇄ 插件市场 ⇄ 记忆观测台 ⇄ 知识库四者互斥：主区 v-if 链有优先级
 // （自动化 > 市场 > 观测台 > 知识库），不互斥的话先开的那个会一直挡住后开的，点侧栏入口
 // 毫无反应（自动化漏了互斥就是这个症状）。放在 App 层做，覆盖全部入口（侧栏任务节点、
-// 底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel、Ctrl+Shift+B）。
+// 底部入口行、市场的 ⋯ 菜单「打开市场」、标题栏/通知的 openPanel）。
 //
-// 五个面板两两互斥，写成"打开谁就关掉其余四个"比写一个 N×N 的表好维护。
-// 浏览器面板走 v-show（不卸载，保活原生视图），所以它的互斥**只靠这条 + PaneLayout 的
-// v-show 条件**——不靠 v-if 链的分支顺序。
+// 内嵌浏览器**不在这条链上**：它是右栏 tab，不占主区（2026-09-20 前它与聊天互斥，
+// 导致"看着聊天时视图必然隐藏 → agent 截图永远等不到帧"）。唯一还互斥的是**最大化**
+// ——右栏吃满主区，等同占用了主区，见下方两条 watch。
 function closeOtherPanels(except: string) {
   if (except !== "marketplace") marketplace.closePanel();
   if (except !== "observatory") observatory.closePanel();
   if (except !== "automation") automation.closePanel();
   if (except !== "kb") knowledgeBase.closePanel();
-  if (except !== "browser") browserPanel.closePanel();
 }
 watch(marketplace.panelOpen, (open) => { if (open) closeOtherPanels("marketplace"); });
 watch(observatory.panelOpen, (open) => { if (open) closeOtherPanels("observatory"); });
 watch(knowledgeBase.panelOpen, (open) => { if (open) closeOtherPanels("kb"); });
-watch(browserPanel.panelOpen, (open) => { if (open) closeOtherPanels("browser"); });
 watch(() => automation.state.view, (v) => { if (v !== null) closeOtherPanels("automation"); });
 
+// 最大化 = 右栏吃满主区，与其它主区面板互斥：开最大化先关掉它们；它们被打开则退最大化。
+// **只在有面板真的开着时才退**——否则 closeOtherPanels 关掉它们的瞬间会反过来把刚开的
+// 最大化取消掉（顺序：设 true → 关它们 → 它们的 watch 触发 → 无条件 setMaximized(false) → 白开）。
+watch(browserMaximized, (on) => {
+  if (on) closeOtherPanels("browser");
+});
+watch(
+  [marketplace.panelOpen, observatory.panelOpen, knowledgeBase.panelOpen, () => automation.state.view],
+  ([mk, ob, kb, auto]) => {
+    if (mk || ob || kb || auto !== null) rightPanel.setMaximized(false);
+  },
+);
+
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化/插件市场/记忆观测台/浏览器面板，主区切回聊天
+  // 选中会话时关掉自动化/插件市场/记忆观测台，主区切回聊天
   // （知识库不关：它跟会话/工作区/配对都无关，见主区挂载处的注释）。
-  // 浏览器是保活语义——关面板只是 setVisible(false)，网页与前进后退历史都留着，切回来还在。
+  // 浏览器也不关：它是右栏 tab——2026-09-20 前这里会 closePanel()，正是"切会话就把浏览器
+  // 踢掉、视图随之隐藏、agent 截图永远等不到帧"那条死路的入口。
   automation.closePanel();
   marketplace.closePanel();
   observatory.closePanel();
-  browserPanel.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -667,11 +681,11 @@ function handleKeydown(e: KeyboardEvent) {
     sidebarRef.value?.newSession();
   }
 
-  // Ctrl+Shift+B：切换内嵌浏览器面板（桌面壳专属，原生子 webview）
+  // Ctrl+Shift+B：内嵌浏览器（右栏 tab；已激活则折叠，与 rail 点击同语义）
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyB" || e.key === "B")) {
     e.preventDefault();
     e.stopPropagation();
-    browserPanel.togglePanel();
+    rightPanel.select("browser");
     return;
   }
 
@@ -1022,17 +1036,10 @@ onUnmounted(() => {
         <!-- 知识库不接 workspaceKey：它连的是独立进程 knowledge-server，
              与当前打开的工作区、会话、配对状态都无关——没配对也能用。 -->
         <KnowledgeBase v-else-if="knowledgeBase.panelOpen.value" class="h-full" @close="knowledgeBase.closePanel()" />
-        <!-- 内嵌浏览器：**v-if + v-show 而非 v-else-if 链**——首次打开才挂载（异步 chunk 不在
-             启动时拉），挂上后常驻、关面板只 v-show 隐藏（保活原生视图：切回来同一页面、同一
-             滚动位置、前进后退历史都在）。因此它的互斥靠 closeOtherPanels + PaneLayout 的
-             v-show 条件，而不是 v-if 链的分支顺序。 -->
-        <BrowserPanel
-          v-if="browserPanel.everOpened.value"
-          v-show="browserPanel.panelOpen.value"
-          class="h-full"
-        />
+        <!-- 内嵌浏览器已不在主区：它是右栏的一个 tab（见 .panel-right-inner）。
+             这里只剩"最大化 = 右栏吃满主区"时把聊天换下。 -->
         <PaneLayout
-          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value && !browserPanel.panelOpen.value"
+          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value && !browserMaximized"
           :workspace-path="workspacePath"
           class="h-full"
         />
@@ -1079,6 +1086,12 @@ onUnmounted(() => {
             <PermissionsPanel
               v-show="rightTab === 'permissions'"
               :workspace-path="workspacePath"
+            />
+            <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位。首次激活才挂（异步 chunk 不在启动时拉），
+                 挂上后常驻——关面板/切 tab 只 setVisible(false)，页面、滚动位置与前进后退历史都留着。 -->
+            <BrowserPanel
+              v-if="rightPanel.browserEverActive.value"
+              v-show="rightTab === 'browser'"
             />
           </div>
         </div>

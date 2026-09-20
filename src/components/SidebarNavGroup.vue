@@ -12,7 +12,6 @@ import { computed } from "vue";
 import { useMarketplace } from "../composables/useMarketplace";
 import { useMemoryObservatory } from "../composables/useMemoryObservatory";
 import { useKnowledgeBase } from "../composables/useKnowledgeBase";
-import { useBrowserPanel } from "../composables/useBrowserPanel";
 import { useContextMenu } from "../composables/useContextMenu";
 import { marketplaceSectionMenuItems } from "../menus/contextMenus";
 
@@ -28,8 +27,6 @@ const { panelOpen: observatoryOpen, togglePanel: toggleObservatory } = useMemory
 // 知识库：与上面两个同范式（模块级面板开关），但**不依赖 aide 的会话状态**——
 // 它连的是独立进程 knowledge-server，没配对也能用（只要那个服务活着）。
 const { panelOpen: kbOpen, togglePanel: toggleKb } = useKnowledgeBase();
-// 内嵌浏览器：同范式（模块级面板开关）。面板自带标签条，跟「插件/知识库」一样是主区一级视图。
-const { panelOpen: browserOpen, togglePanel: toggleBrowser } = useBrowserPanel();
 const { show } = useContextMenu();
 
 /** 已安装插件数（0 时不占位，与旧侧栏入口同规则） */
@@ -117,22 +114,6 @@ function onDockMenu(e: MouseEvent) {
         <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
       </svg>
       <span class="nav-label">知识库</span>
-    </div>
-
-    <div
-      class="nav-row"
-      :class="{ on: browserOpen }"
-      v-tooltip="'内嵌浏览器（Ctrl+Shift+B）'"
-      @click="toggleBrowser"
-    >
-      <!-- 地球（圆 + 赤道 + 经线两弧）：与上面三行同一字形语言 -->
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M3 12h18" />
-        <path d="M12 3a9 9 0 0 1 0 18" />
-        <path d="M12 3a9 9 0 0 0 0 18" />
-      </svg>
-      <span class="nav-label">浏览器</span>
     </div>
   </div>
 </template>

@@ -16,7 +16,7 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 
 import BrowserPanel from "./BrowserPanel.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
-import { useBrowserPanel } from "../../composables/useBrowserPanel";
+import { useRightPanel, __resetRightPanelForTest } from "../../composables/useRightPanel";
 
 const VIEW_ID = "view-1";
 
@@ -109,7 +109,9 @@ beforeEach(() => {
     if (cmd === "browser_favicons") return {};
     return undefined;
   });
-  useBrowserPanel().openPanel();
+  // 面板开合现在归 useRightPanel：select('browser') = 展开右栏并激活浏览器 tab。
+  __resetRightPanelForTest();
+  useRightPanel().select("browser");
 });
 
 afterEach(() => {
@@ -117,7 +119,7 @@ afterEach(() => {
   mounted = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
-  useBrowserPanel().closePanel();
+  __resetRightPanelForTest();
 });
 
 describe("BrowserPanel 浮层与原生视图的让位", () => {
@@ -156,9 +158,9 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
 
     await w.find(".bp-bm-import").trigger("click");
     await flushPromises();
-    useBrowserPanel().closePanel(); // 浮层还开着
+    useRightPanel().select("browser"); // 再点已激活的 tab = 折叠（浮层还开着）
     await flushPromises();
-    useBrowserPanel().openPanel();
+    useRightPanel().select("browser"); // 再展开
     await flushPromises();
 
     expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);

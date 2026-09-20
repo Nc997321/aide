@@ -19,12 +19,11 @@ import SidebarNavGroup from "./SidebarNavGroup.vue";
 import { useMarketplace } from "../composables/useMarketplace";
 import { useMemoryObservatory } from "../composables/useMemoryObservatory";
 import { useKnowledgeBase } from "../composables/useKnowledgeBase";
-import { useBrowserPanel } from "../composables/useBrowserPanel";
 import { useContextMenu } from "../composables/useContextMenu";
 import type { SourceInfo } from "../api/marketplace";
 
-/** 行序（与模板同序）：0 新增会话 / 1 插件 / 2 记忆观测台 / 3 知识库 / 4 浏览器 */
-const ROW = { NEW_SESSION: 0, PLUGIN: 1, OBSERVATORY: 2, KNOWLEDGE_BASE: 3, BROWSER: 4 } as const;
+/** 行序（与模板同序）：0 新增会话 / 1 插件 / 2 记忆观测台 / 3 知识库 */
+const ROW = { NEW_SESSION: 0, PLUGIN: 1, OBSERVATORY: 2, KNOWLEDGE_BASE: 3 } as const;
 
 function mountNavGroup() {
   return mount(SidebarNavGroup, {
@@ -37,17 +36,19 @@ beforeEach(() => {
 });
 
 describe("SidebarNavGroup 侧栏顶部导航组", () => {
-  it("渲染「新增会话」「插件」「记忆观测台」「知识库」「浏览器」五行；点击插件行切换主区面板开关", async () => {
+  it("渲染「新增会话」「插件」「记忆观测台」「知识库」四行；点击插件行切换主区面板开关", async () => {
     const m = useMarketplace();
     m.closePanel();
     const w = mountNavGroup();
     const rows = w.findAll(".nav-row");
-    expect(rows.length).toBe(5);
+    expect(rows.length).toBe(4);
     expect(w.text()).toContain("新增会话");
     expect(w.text()).toContain("插件");
     expect(w.text()).toContain("记忆观测台");
     expect(w.text()).toContain("知识库");
-    expect(w.text()).toContain("浏览器");
+    // 浏览器入口 2026-09-20 搬去右栏 rail（它是右栏 tab，不再是主区一级视图）——
+    // 挡在这里，免得有人顺手往侧栏加回去。
+    expect(w.text()).not.toContain("浏览器");
     // 面板关闭 → 无选中态
     expect(rows[ROW.PLUGIN].classes()).not.toContain("on");
 
@@ -83,25 +84,6 @@ describe("SidebarNavGroup 侧栏顶部导航组", () => {
 
     await w.findAll(".nav-row")[ROW.KNOWLEDGE_BASE].trigger("click");
     expect(kb.panelOpen.value).toBe(false);
-  });
-
-  it("浏览器行切换浏览器面板（与 Ctrl+Shift+B 同一开关）；不连带打开其它面板", async () => {
-    const bp = useBrowserPanel();
-    const kb = useKnowledgeBase();
-    bp.closePanel();
-    kb.closePanel();
-    const w = mountNavGroup();
-    const rows = w.findAll(".nav-row");
-
-    await rows[ROW.BROWSER].trigger("click");
-    expect(bp.panelOpen.value).toBe(true);
-    // 互斥由 App.vue 的 watch 负责，组件层只管自己那一份状态。
-    expect(kb.panelOpen.value).toBe(false);
-    await w.vm.$nextTick();
-    expect(w.findAll(".nav-row")[ROW.BROWSER].classes()).toContain("on");
-
-    await w.findAll(".nav-row")[ROW.BROWSER].trigger("click");
-    expect(bp.panelOpen.value).toBe(false);
   });
 
   it("插件行右键出市场菜单；「刷新全部市场源」只刷 enabled 的源", async () => {

@@ -24,7 +24,7 @@ import {
   type BoundsDto,
   type NavStateDto,
 } from "../../composables/useEmbeddedBrowser";
-import { useBrowserPanel } from "../../composables/useBrowserPanel";
+import { useRightPanel } from "../../composables/useRightPanel";
 import { useBrowserBookmarks } from "../../composables/useBrowserBookmarks";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
@@ -41,7 +41,7 @@ import {
   type BookmarkFolder,
 } from "../../utils/browser";
 
-const { panelOpen, closePanel } = useBrowserPanel();
+const { browserActive, select } = useRightPanel();
 const browser = useEmbeddedBrowser();
 
 /** 一个浏览器标签页。`viewId=null` = 还没开原生视图的空标签（首次导航才 create）。 */
@@ -153,7 +153,7 @@ function hideTab(t: Tab | undefined) {
  *  让位，否则浮层只在「洞」以上那一条可见、取消/确认按钮全被网页吃掉。
  *  **浮层清单不在这里维护**：谁有遮罩谁在根元素挂 `v-overlay-layer` 自己登记
  *  （见 `directives/overlayLayer.ts`），这里只读结论——所以新增浮层不必回来改这个文件。 */
-const viewAllowed = computed(() => panelOpen.value && !overlayLayerOpen.value);
+const viewAllowed = computed(() => browserActive.value && !overlayLayerOpen.value);
 
 /** 地址栏回显：用户正在输入时不抢（否则事件一到就把输入冲掉）。 */
 function syncAddressFromTab() {
@@ -386,7 +386,7 @@ onMounted(() => {
   if (surfaceEl.value) ro.observe(surfaceEl.value);
   window.addEventListener("resize", scheduleSync);
 
-  // 首次挂载时面板可能已经是开的（`everOpened` 与 `panelOpen` 同一次点击里置位，
+  // 首次挂载时面板可能已经是开的（`browserEverActive` 与 `browserActive` 同一次点击里置位，
   // 组件的 watch 捕不到那次变化）——补一次显示，别让首个视图隐着。
   if (viewAllowed.value) void showActive();
 
@@ -430,7 +430,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-show="panelOpen" class="browser-panel">
+  <div v-show="browserActive" class="browser-panel">
     <!-- 顶行：标签条（可横向滚动）+ 关面板 ✕ 钉在右上角（与「知识库/插件」头部同规格同语义：
          面板关掉回聊天，网页保活） -->
     <div class="bp-top">
@@ -451,8 +451,8 @@ onBeforeUnmount(() => {
       </div>
       <button
         class="bp-iconbtn"
-        v-tooltip="'关闭面板（网页保活：Ctrl+Shift+B 或侧栏「浏览器」可再开）'"
-        @click="closePanel"
+        v-tooltip="'关闭面板（网页保活：Ctrl+8 / Ctrl+Shift+B 或右栏 rail 图标可再开）'"
+        @click="select('browser')"
       >
         ✕
       </button>
