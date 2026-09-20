@@ -16,8 +16,10 @@ import { api, openExternal } from "../api";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
+import SidebarDailySection from "./SidebarDailySection.vue";
 import SidebarNavGroup from "./SidebarNavGroup.vue";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
+import { dailyWorkspaceBind, ensureDailyWorkspace } from "@aide/sdk/utils/dailyWorkspace";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
 import { vOverlayLayer } from "../directives/overlayLayer";
@@ -57,8 +59,12 @@ const appVersion = ref("");
  *  注意与下方 sessionsCollapsed(wsKey)（「另外 N 个」分页折叠）是两回事。 */
 const sessionsSectionCollapsed = ref(false);
 /** 全工作区会话总数（会话分区头的计数徽标）。 */
+// 「项目」分区的计数：日常会话也住 sessionsByWorkspace（见 loadDailySessions 说明），
+// 但它们不属于这个分区，别数进来。
 const totalSessionCount = computed(() =>
-  Object.values(sessionsByWorkspace.value).reduce((n, list) => n + list.length, 0),
+  Object.entries(sessionsByWorkspace.value)
+    .filter(([key]) => key !== dailyKey.value)
+    .reduce((n, [, list]) => n + list.length, 0),
 );
 
 // ── 工作区信任提示（Variant A 居中模态）── trustPrompt 非 null 时显示。
@@ -205,6 +211,35 @@ async function loadWsSessions(wsKey: string) {
     registerSessionWs(loaded, wsKey);
   } catch (_e) {
     sessionsByWorkspace.value[wsKey] = [];
+  }
+}
+
+// ── 日常分区（与「项目」「自动化」平级的第三个根分区）──────────────────────────
+/** 日常归属 key；装载前为空串（分区显示空态）。它不在 workspaces 列表里（SDK 已过滤），
+ *  所以这里单独持有 —— 但会话**仍住同一个 sessionsByWorkspace**：这样 addSession /
+ *  重命名 / 删除 / 乐观移除全都自动生效，不用维护第二套列表。 */
+const dailyKey = ref("");
+const dailyCollapsed = ref(false);
+
+const dailySessions = computed(() =>
+  dailyKey.value ? (sessionsByWorkspace.value[dailyKey.value] ?? []) : [],
+);
+
+/** 拉日常会话：先确保归属可用（懒加载一次），再按 key 拉。失败只降级为空列表 + warn
+ *  （远程端没有这条命令、或 state 异常），不阻塞侧栏其余部分渲染。 */
+async function loadDailySessions() {
+  if (!(await ensureDailyWorkspace())) return;
+  const bind = dailyWorkspaceBind();
+  if (!bind) return;
+  dailyKey.value = bind.wsKey;
+  try {
+    const loaded = await api.listSessionsForWorkspace(bind.wsKey);
+    sessionsByWorkspace.value[bind.wsKey] = loaded;
+    sessionNames.setFromSessions(loaded);
+    registerSessionWs(loaded, bind.wsKey);
+  } catch (e) {
+    console.warn("[sidebar] 日常会话列表拉取失败，日常分区暂显示为空", e);
+    sessionsByWorkspace.value[bind.wsKey] = [];
   }
 }
 
@@ -385,9 +420,15 @@ function onSessionContextMenu(e: MouseEvent, wsKey: string, id: string) {
   );
 }
 
-/** 「会话」导航行 ⋯：新建入口（v3 右槽位交互，与右键体系同一个 useContextMenu）。 */
+/** 分区导航行 ⋯：新建入口（v3 右槽位交互，与右键体系同一个 useContextMenu）。
+ *  「项目」「日常」两个分区共用 —— 两处的 ⋯ 都是"新建对话"。 */
 function onSessionSectionMenu(e: MouseEvent) {
   show(e.clientX, e.clientY, sessionSectionMenuItems(newSession));
+}
+
+/** 日常会话行右键：与工作区里的会话行同一份菜单，归属 key 换成日常的。 */
+function onDailySessionContextMenu(payload: { event: MouseEvent; sid: string }) {
+  onSessionContextMenu(payload.event, dailyKey.value, payload.sid);
 }
 
 function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
@@ -431,6 +472,7 @@ onMounted(async () => {
     }
     if (activeWs) void maybePromptTrust(activeWs);
   } catch (_) { /* ignore */ }
+  await loadDailySessions();
   await loadSessions();
   void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
 
@@ -482,11 +524,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     <!-- 导航区 ↔ 分区树 的分界（见 .nav-sep 注释） -->
     <div class="nav-sep" aria-hidden="true" />
 
-    <!-- Workspace + Session list（「会话」降级为分区树的根分区之一，与自动化平级；
-         session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换）） -->
+    <!-- 分区树：日常（第一个根分区，见下方 SidebarDailySection）+ 工作区树「项目」
+         + 自动化。三个根分区同区滚动。
+         session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换） -->
     <div class="session-list" :class="`session-style-${settings.sessionListStyle ?? 'card'}`">
       <SidebarSectionHead
-        label="会话"
+        label="项目"
         :count="totalSessionCount || undefined"
         :expanded="!sessionsSectionCollapsed"
         @toggle="sessionsSectionCollapsed = !sessionsSectionCollapsed"
@@ -602,7 +645,19 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       </div>
       </template>
 
-      <!-- 自动化分区：分区树的第二个根分区（会话工作区树之下，同区滚动），
+      <!-- 日常分区：分区树的**第一个**根分区（用户 2026-09-21 定：与「项目」平级，
+           主栏在最上）。会话直接挂它下面，没有工作区那一层。 -->
+      <SidebarDailySection
+        :sessions="dailySessions"
+        :active-session-id="props.activeSessionId"
+        :collapsed="dailyCollapsed"
+        @toggle="dailyCollapsed = !dailyCollapsed"
+        @menu="onSessionSectionMenu"
+        @select="(sid: string) => emit('session-changed', sid)"
+        @contextmenu="onDailySessionContextMenu"
+      />
+
+      <!-- 自动化分区：分区树的第三个根分区（日常、工作区树之下，同区滚动），
            选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
       <AutomationSidebarSection />
 
