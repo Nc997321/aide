@@ -53,14 +53,14 @@ interface LayoutState {
    * 还没选工作区」与「日常」都表现为「没有归属」，光看 defaultWs 分不开。
    * 与 defaultWs 同生命周期（不落盘、reset 清）。
    */
-  heroMode: ChatMode;
+  chatMode: ChatMode;
 }
 
 /** 初始/兜底状态：空根组（零会话欢迎态——无 tab 栏，居中 hero 输入区）。 */
 function emptyState(): LayoutState {
   const root = createEmptyRoot();
   // 新建对话页默认「日常」（spec 2026-09-20）。这是全新安装的第一屏。
-  return { root, focusedGroupId: root.id, heroMode: DEFAULT_CHAT_MODE };
+  return { root, focusedGroupId: root.id, chatMode: DEFAULT_CHAT_MODE };
 }
 
 const layout = reactive<LayoutState>(emptyState());
@@ -191,7 +191,7 @@ export function usePaneLayout() {
 
   /** hero（零 tab）模式意图：只在没有 tab 时有效（有 tab 时模式由 pendingWs 派生）。 */
   function setChatMode(mode: ChatMode) {
-    layout.heroMode = mode;
+    layout.chatMode = mode;
   }
 
   /** 侧栏右键「在新标签页打开」：显式动作，无论启动与否都开固定 tab。 */
@@ -487,7 +487,7 @@ export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
   layout.defaultWs = null;
-  layout.heroMode = DEFAULT_CHAT_MODE;
+  layout.chatMode = DEFAULT_CHAT_MODE;
   isStarted = startedProbe ?? defaultIsStarted;
   mru.length = 0;
   mruFrozen = false;

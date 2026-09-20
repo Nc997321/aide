@@ -140,9 +140,9 @@ async function onNewTab() {
   // 新建对话的默认落点听**模式意图**：日常 → 日常工作区（先确保归属已装载）；
   // 工程 → hero 上选定的归属（defaultWs），没选就快照当前活动工作区——布局全局
   // 一份、切工作区不动 tab，不快照的话首条消息会落到「当前」工作区而不是创建时的那个。
-  if (pl.layout.heroMode === "daily") await ensureDailyWorkspace();
+  if (pl.layout.chatMode === "daily") await ensureDailyWorkspace();
   const ws =
-    pl.layout.heroMode === "daily"
+    pl.layout.chatMode === "daily"
       ? (dailyWorkspaceBind() ?? undefined)
       : (pl.layout.defaultWs ?? wsSnapshot());
   if (pl.layout.defaultWs) pl.setDefaultWs(null);
@@ -178,7 +178,7 @@ const tabWsKey = computed<string>(() => {
  *  其余（含未绑）算工程：未绑时首条消息会落到活动工作区（后端 cwd 链第三级），
  *  与「工程」的语义一致。 */
 const currentMode = computed<ChatMode>(() =>
-  tabWsKey.value ? (isDailyKey(tabWsKey.value) ? "daily" : "project") : pl.layout.heroMode,
+  tabWsKey.value ? (isDailyKey(tabWsKey.value) ? "daily" : "project") : pl.layout.chatMode,
 );
 
 /**
@@ -241,7 +241,7 @@ async function onPickMode(mode: ChatMode) {
       :permission-queue-count="pendingPermissionCount"
       :rollback-text="rollbackText"
       class="pane-group__chat"
-      :hero-mode="currentMode"
+      :mode="currentMode"
       @send="onSend"
       @send-btw="onSendBtw"
       @select-workspace="onPickWorkspace"

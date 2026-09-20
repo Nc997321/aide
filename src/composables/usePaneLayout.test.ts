@@ -499,25 +499,25 @@ describe("关闭即停止：stop 命令的送达契约（2026-09-17 孤儿进程
 
 // hero（零 tab 欢迎态）的模式意图：新建对话页默认「日常」（spec 2026-09-20）。
 // 有 tab 之后模式由那个 tab 的 pendingWs 派生，这个字段就不再是判据了。
-describe("usePaneLayout heroMode", () => {
+describe("usePaneLayout chatMode", () => {
   it("默认是日常（全新安装的第一屏）", () => {
-    expect(usePaneLayout().layout.heroMode).toBe("daily");
+    expect(usePaneLayout().layout.chatMode).toBe("daily");
   });
 
   it("setChatMode 改写意图；reset 后回到日常", () => {
     const pl = usePaneLayout();
     pl.setChatMode("project");
-    expect(pl.layout.heroMode).toBe("project");
+    expect(pl.layout.chatMode).toBe("project");
 
     __resetPaneLayoutForTest((sid) => started.has(sid));
-    expect(pl.layout.heroMode).toBe("daily");
+    expect(pl.layout.chatMode).toBe("daily");
   });
 
-  it("heroMode 与 defaultWs 各自独立：工程 + 未选工作区 = 有意图、无归属", () => {
+  it("chatMode 与 defaultWs 各自独立：工程 + 未选工作区 = 有意图、无归属", () => {
     const pl = usePaneLayout();
     pl.setChatMode("project");
     pl.setDefaultWs(null);
-    expect(pl.layout.heroMode).toBe("project");
+    expect(pl.layout.chatMode).toBe("project");
     expect(pl.layout.defaultWs).toBeNull();
   });
 });

@@ -30,6 +30,8 @@ import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionI
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
+import { inputPlaceholder } from "./inputPlaceholder";
+import type { ChatMode } from "./modes";
 import { memoryObservatoryApi } from "@aide/sdk/api";
 
 const props = defineProps<{
@@ -37,6 +39,8 @@ const props = defineProps<{
   workspacePath?: string;
   isBusy: boolean;
   isHero: boolean;
+  /** 日常 / 工程：档位默认值与 hero placeholder 按它分叉（见 modes.ts） */
+  mode?: ChatMode;
   /** 模型下拉选项（ChatPanel 算好的 displayModels：第三方 provider 真实列表 / 系统默认 SDK 列表） */
   models: ModelOption[];
   currentModel?: string;
@@ -391,6 +395,16 @@ function formatResetTime(resetsAt: number | null): string | null {
 
 // ── btw 输入模式 ──
 const btwMode = ref(false);
+
+/** placeholder 按优先级线性化（原为三层嵌套三元；加模式分叉会变四层）。 */
+const placeholder = computed(() =>
+  inputPlaceholder({
+    btw: btwMode.value,
+    busy: props.isBusy,
+    hero: props.isHero,
+    daily: props.mode === "daily",
+  }),
+);
 // 支线**没有自己的模型/档位**：btw 走官方 side_question，进程内跑在存活主 query 的
 // cache-safe fork 上，通道只收 question/history（SDK 的 askSideQuestion 无 model/effort
 // 参数，BtwAskParams 也只有 sessionId/question/history）——支线一律继承主会话当时的模型
@@ -1207,7 +1221,7 @@ const { actions: quickActions } = useQuickActions();
         ref="textareaEl"
         v-model="inputText"
         class="chat-input"
-        :placeholder="btwMode ? '顺便问一下,不进入主对话…' : (isBusy ? '生成中，发送的消息将排队…' : (isHero ? '你正在解决什么问题？' : '输入消息…'))"
+        :placeholder="placeholder"
         rows="3"
         @keydown.enter.exact.prevent="onEnterKey"
         @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"

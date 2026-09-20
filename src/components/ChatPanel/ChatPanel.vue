@@ -41,8 +41,9 @@ import { useToast } from "@/composables/useToast";
 const props = defineProps<{
   sessionId: string | null;
   workspacePath?: string;
-  /** hero 模式（日常 / 工程）：归属与文案都由它分叉，见 PaneGroup 的 currentMode */
-  heroMode?: ChatMode;
+  /** 这个 tab 的模式（日常 / 工程）：归属行、文案、档位默认、右栏都由它分叉。
+   *  由 PaneGroup 的 currentMode 给出（活着的会话问注册表，空白 tab 看 pendingWs）。 */
+  mode?: ChatMode;
   /** 父层经模板自动解包后传入的纯值（PaneGroup 传 useChatSession computed，模板解包成数组） */
   messages: ChatMessageType[];
   isBusy: boolean;
@@ -597,7 +598,7 @@ function onOpenBgDock(taskId: string) {
     <Transition name="hero-fade">
       <HeroWelcome
         v-if="isHero"
-        :mode="props.heroMode ?? DEFAULT_CHAT_MODE"
+        :mode="props.mode ?? DEFAULT_CHAT_MODE"
         :workspace-path="props.workspacePath ?? ''"
         :model-name="heroModelName"
         @select-workspace="(ws) => emit('select-workspace', ws)"
@@ -614,6 +615,7 @@ function onOpenBgDock(taskId: string) {
       :workspace-path="props.workspacePath"
       :is-busy="props.isBusy"
       :is-hero="isHero"
+      :mode="props.mode"
       :models="displayModels"
       :current-model="props.currentModel"
       :model-switch-result="props.modelSwitchResult"
