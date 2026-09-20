@@ -1,7 +1,7 @@
 # 日常模式：新建页两段切换 + 侧栏「日常」栏 + 档位默认快速
 
 日期：2026-09-20
-状态：**设计定稿，待实现**（实现计划见 `docs/superpowers/plans/`，由 writing-plans 产出）
+状态：**已实现（2026-09-21）；端到端冒烟未做**（逐条见文末「实现状态」）
 基线证据：2026-09-20 代码走查（逐条给 `文件:行号`，标注「代码事实」与「推断」）
 修订：2026-09-21 —— 原「已知代价」第 1 条（记忆空间）框架错误：把"记忆按工作空间分"这条统一规则写成了日常模式的特例，已改写为「边界」节并注明修订理由。
 
@@ -217,6 +217,37 @@ live 当前值 → api.sessionEffort(sid)（用户显式改过的） → 【日�
 |---|---|
 | 「日常」放哪 | **与「会话」并级的根分区**（不是塞在「会话」分区内部）—— 并级反而更简单：不碰工作区循环，零回归面 |
 | 「会话」分区名 | **改「项目」**（装的是工作区树，旧名失准） |
+| 零 tab 欢迎态的模式 | 需要**布局层意图字段** `layout.chatMode`（原计划以为可从归属完全派生，见「新建对话页」节的修正段） |
+
+## 实现状态（2026-09-21）
+
+八个提交（`3f577ebb` → `6be6fbf0`），逐条对齐「目标」：
+
+| 目标 | 落点 | 提交 |
+|---|---|---|
+| 日常目录引导 + 隐身注册 | `commands/workspace/daily.rs`、`list_workspaces` 过滤、`daily_workspace` 命令 | `3f577ebb` |
+| 归属单一判定 + 列表唯一过滤点 | `packages/aide-sdk/src/utils/dailyWorkspace.ts` | `99ce9913` |
+| 新建对话页两段切换（默认日常） | `hero/modes.ts`、`heroCopy.ts` 双池、`VariantMorning`、`PaneGroup.currentMode` | `ebe95b43`、`646489be` |
+| placeholder 按模式 | `inputPlaceholder.ts` | `3b1bb196` |
+| 档位默认快速 | `effortDefault.ts` + `ChatInputBox` 三处落点 | `fd748699` |
+| 侧栏「日常」根分区 + 「项目」改名 | `SidebarDailySection.vue`、`SidebarLeft` | `4f14e1d4` |
+| 切进日常收起右栏 | `useRightPanel.collapse()`、`activeTabWsKey` | `6be6fbf0` |
+
+**非目标逐条确认未越界**：活动工作区仍未跟随焦点（右栏收起是布局动作）；未做虚拟工作区类型；
+28 个隐式取根的 git 命令与 cwd 解析链一字未动；未做远程端「日常」标记（PWA/鸿蒙调
+`daily_workspace` 会走 `ensureDailyWorkspace` 的降级分支，warn 一次后当普通工作区）；
+未做会话改归属（模式仅新建前可选）；未做技能 chips 行；引导向导未动（日常目录不激活，
+故 `getProjectInfo().root` 对新装仍为空，向导照常出现）。
+
+**验证到什么程度**：
+- 单测/组件测试：TS 259 files / 3229 tests 全绿；Rust 913 passed。
+- 构建守卫：`pnpm build` 通过（`check:sync-io` / `check:overlay-layers` / `vue-tsc` / vite）。
+- 后端引导做过一次性集成自检（`cargo test --lib -- --ignored smoke`）：目录被建、条目已注册、
+  **活动工作区一字未动**、二次调用幂等；并做了独立的外部读盘核对（注册 key 与
+  `path_to_key(daily_path_in(..))` 一致、路径串完全相等）。
+- **未做**：真机端到端冒烟（新建日常对话 → 出现在「日常」分区 → 重启后仍在；档位默认快速；
+  切进日常右栏收起）。这同时是本文件「待验证」那条（`list_sessions_for_workspace(日常key)`
+  能否列出会话）的实测装置。
 
 ## 参考图哪里收、哪里不收（2026-09-20）
 
