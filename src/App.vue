@@ -59,7 +59,6 @@ import { useWorkspaceJdk } from "./composables/useWorkspaceJdk";
 import { matchShortcut } from "./utils/shortcut";
 import { applyTheme, themes } from "./themes";
 import { listen } from "./api";
-import { snapshotScrollTrail, probeRebuildChatScrollers } from "./utils/diagnostics/scrollTrail";
 import { useFileViewer } from "./composables/useFileViewer";
 import { useRecent } from "./composables/useRecent";
 import { useWorkspaces } from "./composables/useWorkspaces";
@@ -670,15 +669,6 @@ function handleKeydown(e: KeyboardEvent) {
     sidebarRef.value?.newSession();
   }
 
-  // Ctrl+Shift+D：滚动诊断环落盘——间歇性「滚轮定格」的活体取证（见
-  // utils/diagnostics/scrollTrail.ts）。定格时按下，wheel 目标 / scrollTop
-  // 写入者时间线写入 diagnostics/scroll-trail-<ts>.json，路径走通知中心反馈。
-  if (e.ctrlKey && e.shiftKey && (e.code === "KeyD" || e.key === "D")) {
-    e.preventDefault();
-    e.stopPropagation();
-    void dumpScrollTrail();
-  }
-
   // Ctrl+Shift+B：切换内嵌浏览器面板（桌面壳专属，原生子 webview）
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyB" || e.key === "B")) {
     e.preventDefault();
@@ -701,24 +691,6 @@ function handleKeydown(e: KeyboardEvent) {
     return;
   }
 
-  // Ctrl+Shift+Alt+R：滚动修复探针——定格现场重建滚动节点，复活即坐实滚轮路径
-  // 缓存病（见 scrollTrail.ts 注释）；探针副作用是回到顶部。原 Ctrl+Shift+R
-  // 让位给全局搜索+替换（Ruling R9）。
-  if (e.ctrlKey && e.shiftKey && e.altKey && (e.code === "KeyR" || e.key === "R")) {
-    e.preventDefault();
-    e.stopPropagation();
-    const n = probeRebuildChatScrollers();
-    pushNotification({
-      severity: "info",
-      source: "diagnostics",
-      title: "滚动探针已执行",
-      body: `重建了 ${n} 个对话滚动容器（回到顶部）。现在试试滚轮，然后 Ctrl+Shift+D 落盘`,
-      timestamp: Date.now(),
-      dedupKey: "scroll-probe",
-    });
-    return;
-  }
-
   // Ctrl+Alt+I：打开 WebView2 devtools。仅 dev build / 诊断包（--features devtools）可用；
   // 正常 release 的 open_devtools command 不注册，调用静默 reject。避开 F12/Ctrl+Shift+I
   // 这类可能被浏览器加速器键拦截的组合
@@ -726,30 +698,6 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     void api.openDevtools().catch(() => {});
-  }
-}
-
-/** 滚动诊断环快照 → Rust 落盘；诊断永不影响业务，失败仅通知。 */
-async function dumpScrollTrail() {
-  try {
-    const path = await api.diagScrollTrail(JSON.stringify(snapshotScrollTrail()));
-    pushNotification({
-      severity: "info",
-      source: "diagnostics",
-      title: "滚动诊断已落盘",
-      body: path,
-      timestamp: Date.now(),
-      dedupKey: "scroll-trail-dump",
-    });
-  } catch (err) {
-    pushNotification({
-      severity: "warning",
-      source: "diagnostics",
-      title: "滚动诊断落盘失败",
-      body: String(err),
-      timestamp: Date.now(),
-      dedupKey: "scroll-trail-dump",
-    });
   }
 }
 

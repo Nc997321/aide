@@ -1,6 +1,5 @@
 import { computed, getCurrentInstance, getCurrentScope, nextTick, onMounted, onScopeDispose, onUnmounted, reactive, ref, watch } from "vue";
 import type { ComputedRef } from "vue";
-import { trail } from "../utils/diagnostics/scrollTrail";
 import {
   clearGaugeProvider,
   countDomNodes,
@@ -242,10 +241,10 @@ export function useChatScroll(
   /** 切入落位（一次性挂载后唯一的写入通道）：双帧校准——第一帧落一次（DOM 刚
    *  patch），第二帧复量复落（图片/字体/高亮会在下一帧再把行高推一次，原
    *  finishRamp 的双帧语义原样保留）；落点近底才恢复跟随，防残留 scroll 回波把
-   *  跟随误刷新后又被 toBottom 拉走（2026-08-26 trail 实锤的时序）。
+   *  跟随误刷新后又被 toBottom 拉走（2026-08-26 实测的时序）。
    *  第一帧必须排进 rAF 而不是同步写：本函数在 watch(sessionId) 的 pre-flush 里
    *  被调用，那一刻 DOM 还是**上一个会话**的——在旧 DOM 上读 scrollHeight 会把
-   *  落点与判定基线一起锚错（2026-09-01 trail 实锤：首帧写 0 → patch 后 scrollTop
+   *  落点与判定基线一起锚错（2026-09-01 实测：首帧写 0 → patch 后 scrollTop
    *  被置到新 DOM 的 max → 位置钉死在误判点）。 */
   function landScrollAfterMount(pin: Extract<LandPin, { kind: "anchor" }>): void {
     landCancel();
@@ -266,7 +265,6 @@ export function useChatScroll(
           return;
         }
         el2.scrollTop = landAnchored(el2, pin);
-        trail("write", `land anchor ${Math.round(el2.scrollTop)}`);
         if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
         landing.value = false;
         landRaf = null;
@@ -408,7 +406,6 @@ export function useChatScroll(
           : hiddenCount * ESTIMATE_MESSAGE_HEIGHT_PX;
     }
     liveWindows.set(sid, { hiddenCount, hiddenPx: Math.max(1, hiddenPx) });
-    trail("recycle", `liveCollapse ${sid.slice(0, 8)} hidden=${hiddenCount} hiddenPx=${hiddenPx}`);
   }
 
   /** 切入会话时的窗口保障：live 段超窗而未收拢（重开/后台增长）→ 滑到尾窗，
@@ -431,10 +428,6 @@ export function useChatScroll(
     if (existing.hiddenCount >= liveSeg) {
       // 过藏（dispose 后同 sid 重开，内容已换，旧窗口大于现存 live 段）：
       // 按 px/条比例折算重建到尾窗，防 stale 大窗口把 live 段整段吞掉
-      trail(
-        "recycle",
-        `liveOverHidden ${sid.slice(0, 8)} ${existing.hiddenCount}→${targetHidden} px${Math.round(existing.hiddenPx)}`,
-      );
       liveWindows.set(sid, {
         hiddenCount: targetHidden,
         hiddenPx: Math.max(1, Math.round((existing.hiddenPx * targetHidden) / existing.hiddenCount)),
@@ -484,7 +477,6 @@ export function useChatScroll(
       }
       if (el.scrollTop !== prevTop) return; // 校正期间用户滚动：放弃补偿
       el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-      trail("expand", `live ${Math.round(prevTop)}→${Math.round(el.scrollTop)} hidden=${newHidden}`);
       scheduleSettle(); // 展开后复查：另一侧的骨架/窗口可能进入预取带
     } finally {
       expandingLive.value = false;
@@ -553,7 +545,6 @@ export function useChatScroll(
         return row ? heights.get(row.id) : undefined;
       },
     );
-    if (released > 0) trail("recycle", `switchAway ${oldId.slice(0, 8)} released=${released} hot=${pageIdx}`);
   }
 
   /** 取回骨架页 + 视口补偿：骨架/真实内容的高度差按「页顶相对视口位置不变」
@@ -576,7 +567,6 @@ export function useChatScroll(
       await nextTick();
       const cumAfter = buildCumulative(rows.value, measureRowHeights());
       el.scrollTop = computeRestoreScrollTop(cumBefore, cumAfter, rowIndex, prevTop);
-      trail("restore", `p=${pageIndex} ${Math.round(prevTop)}→${Math.round(el.scrollTop)}`);
     } finally {
       restoring.value = false;
       scheduleSettle(); // 取回后复查：滚过的另一侧可能已可释放
@@ -600,7 +590,6 @@ export function useChatScroll(
         await nextTick();
         // 视口补偿：新页插在顶部，scrollTop 同步下移 = 看到的旧内容位置不变
         el.scrollTop = prevTop + (el.scrollHeight - prevHeight);
-        trail("expand", `${Math.round(prevTop)}→${Math.round(el.scrollTop)} n=${rows.value.length}`);
       }
     } finally {
       loadingOlder.value = false;
@@ -616,7 +605,7 @@ export function useChatScroll(
   }
 
   // ── 滚轮接管 ──────────────────────────────────────────────────────────────
-  // 根因（见 [[nested-scroller-wheel-trap]]，两份 scroll-trail 现场 + 探针复活定案）：
+  // 根因（见 [[nested-scroller-wheel-trap]]；采集现场的那套 scrollTrail 已随案子结案退役）：
   // 合成器滚轮路径把 maxScrollOffset 焊死在内容首次溢出视口那一刻的值，之后内容
   // 增长不刷新；JS 的 scrollTop 赋值走主线程布局读实时 scrollHeight，畅通。所以把
   // 滚轮也赶到 JS 赋值路径：光标下最近可滚祖先就是本容器时（该滚对话区、无嵌套块
@@ -638,14 +627,12 @@ export function useChatScroll(
       e.preventDefault();
       userTookScroll();
       el.scrollTop += e.deltaY;
-      trail("wheelTakeover", `dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
       return;
     }
     if (nearest && atScrollEdge(nearest, e.deltaY)) {
       e.preventDefault();
       userTookScroll();
       el.scrollTop += e.deltaY;
-      trail("wheelTakeover", `chained dy=${Math.round(e.deltaY)}→top=${Math.round(el.scrollTop)}`);
     }
   }
 
@@ -663,10 +650,6 @@ export function useChatScroll(
     const dist = el.scrollHeight - el.scrollTop - el.clientHeight;
     const prev = prevScrollTop;
     prevScrollTop = el.scrollTop;
-    trail(
-      "scroll",
-      `top=${Math.round(el.scrollTop)} sh=${el.scrollHeight} ch=${el.clientHeight} auto=${autoScroll.value ? 1 : 0}`,
-    );
     // 切入落位期间跳过两个自动分支：落点写入会让 scrollTop 回落（钳底 → 锚点落位）
     // ——按「用户上滚」处理会立刻把刚落好的视口判成用户接管；钳底那一帧的 dist<48
     // 也会把 autoScroll 误刷成 true，让 RO 置底与落点互相打架。用户接管另有两条独立
@@ -687,19 +670,19 @@ export function useChatScroll(
     if (autoScroll.value) newWhileAway.value = false;
     // 上滚到触发带 = 想看更早的内容：取回一页（带视口补偿）。落位期间不触发。
     const canFetch = !landing.value && !restoring.value && (pagination?.hasMore() ?? false);
-    if (el.scrollTop < expandThreshold(el) && canFetch) {
-      trail("tryExpand", `hit top=${Math.round(el.scrollTop)} hm=${pagination?.hasMore() ?? false} land=${landing.value ? 1 : 0}`);
+    const atExpandBand = el.scrollTop < expandThreshold(el);
+    if (atExpandBand && canFetch) {
       if (loadingOlder.value) {
         // 加载在途：用户已在顶部滚过——记 pending，完成后自动续取（连翻）
         topPending = true;
       } else {
         void expandOlderAnchored();
       }
-    } else if (el.scrollTop < expandThreshold(el) && !canFetch) {
-      trail("tryExpand", `blocked top=${Math.round(el.scrollTop)} hm=${pagination?.hasMore() ?? false} land=${landing.value ? 1 : 0}`);
-    } else {
+    } else if (!atExpandBand) {
       topPending = false; // 离开顶部触发带：取消待续
     }
+    // atExpandBand && !canFetch（到顶但取不了：落位中/取回中/没有更早的了）：
+    // topPending 保持不动——加载在途时用户已滚到顶的那次登记要留到能取时兑现。
     scheduleSettle(); // 滚动停驻后结算回收/取回
   }
 
@@ -720,7 +703,6 @@ export function useChatScroll(
       if (gen !== toBottomGeneration) return;
       const el = scrollEl.value;
       if (el) {
-        trail("write", `toBottom ${Math.round(el.scrollTop)}→${el.scrollHeight}`);
         el.scrollTop = el.scrollHeight;
       }
     });
@@ -775,7 +757,6 @@ export function useChatScroll(
     const el = scrollEl.value;
     if (!el) return;
     landCancel();
-    trail("write", `jump smooth from=${Math.round(el.scrollTop)}`);
     newWhileAway.value = false;
     farFromBottom.value = false;
     autoScroll.value = true;
@@ -831,7 +812,6 @@ export function useChatScroll(
       scrollEl.value?.addEventListener("wheel", onWheel, { passive: false });
       if (typeof ResizeObserver === "undefined") return;
       contentObserver = new ResizeObserver(() => {
-        trail("ro", `auto=${autoScroll.value ? 1 : 0}`);
         scrollToBottom();
       });
       if (contentEl.value) contentObserver.observe(contentEl.value);
@@ -851,7 +831,6 @@ export function useChatScroll(
   watch(
     sessionId,
     (newId, oldId) => {
-      trail("session", newId ?? "null"); // 切会话标记：定格「自愈」的分界线
       syncGaugeProvider(); // 现场读数跟着换会话（未挂载时是 no-op）
       // 离开的会话：记录位置 + 离底距离（watch 在渲染前执行，scrollEl 还是旧 DOM，
       // 读数准确）+ 内容锚点（视口顶所在行，见 ScrollMemory.anchor——后台 evict 收缩
@@ -894,7 +873,6 @@ export function useChatScroll(
         budget: RECYCLE_BYTES_BUDGET,
         anchorRowId: saved?.anchor?.rowId,
       });
-      if (released > 0) trail("recycle", `switchIn ${newId.slice(0, 8)} released=${released}`);
       if (messages().length === 0) {
         // 还没 hydrate：挂起，等 messages 0→N 那一下再落位
         landPending = true;

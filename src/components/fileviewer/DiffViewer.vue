@@ -12,6 +12,7 @@ import {
 import type { Extension } from "@codemirror/state";
 import type { DiffPair } from "../../types";
 import { loadLanguageExtension } from "../../utils/cmLanguage";
+import { diffNotice } from "../../utils/diffNotice";
 import { createHighlightStyle } from "../../utils/cmHighlight";
 import { useSettings } from "../../composables/useSettings";
 import { themes } from "../../themes";
@@ -46,23 +47,10 @@ let mergeView: MergeView | null = null;
 let unifiedView: EditorView | null = null;
 let createId = 0;
 
-/** 对齐 useFileViewer 的 MAX_EDITABLE_SIZE：防 diff 计算卡窗 */
-const MAX_DIFF_SIZE = 1_000_000;
-
-const tooBig = computed(
-  () =>
-    props.pair.tooBig ||
-    props.pair.oldText.length > MAX_DIFF_SIZE ||
-    props.pair.newText.length > MAX_DIFF_SIZE,
-);
-const showNotice = computed(
-  () => props.pair.eolOnly || props.pair.isBinary || tooBig.value,
-);
-const noticeText = computed(() => {
-  if (props.pair.eolOnly) return `内容与 ${props.pair.oldLabel} 无差异（仅行尾不同）`;
-  if (props.pair.isBinary) return "二进制文件无法对比";
-  return "文件过大（超过 1MB），无法渲染对比视图";
-});
+/** 不渲染内容的情形（太大 / 二进制 / 仅行尾不同）——与静态变更卡同一判定，
+ *  同一份 pair 在两处必须给同一个结论（见 utils/diffNotice.ts）。 */
+const noticeText = computed(() => diffNotice(props.pair));
+const showNotice = computed(() => noticeText.value !== null);
 
 const STATUS_LABELS: Record<string, string> = {
   added: "新增",
@@ -209,10 +197,31 @@ watch(
   () => applyFontSettings(),
 );
 
+/** 内容是否一字未变。**pair 是父层每次重算都新造的对象**（changeCard.buildChangeInfo
+ *  在 computed 里现造），按身份判断会让「父层重渲染、内容没动」也整块重建视图——
+ *  重建一次 = 一次 `await loadLanguageExtension` + 一次 MergeView 构造（真机 ~250ms，
+ *  冻结报告里那串 `import.then` 长任务就是它）。所以比内容，不比身份；代价是
+ *  每次 props 变化比一遍字符串，对片段级 diff 可以忽略。 */
+function samePairContent(a: DiffPair, b: DiffPair): boolean {
+  return (
+    a.oldText === b.oldText &&
+    a.newText === b.newText &&
+    a.oldLabel === b.oldLabel &&
+    a.newLabel === b.newLabel &&
+    a.status === b.status &&
+    a.isBinary === b.isBinary &&
+    a.eolOnly === b.eolOnly &&
+    a.tooBig === b.tooBig
+  );
+}
+
 // 同路径重开 → pair 被就地替换 → 重建视图（flush: post 确保 mountEl 已随 v-if 切换）
 watch(
   () => props.pair,
-  () => void createView(),
+  (next, prev) => {
+    if (prev && samePairContent(prev, next)) return;
+    void createView();
+  },
   { flush: "post" },
 );
 

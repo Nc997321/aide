@@ -16,7 +16,6 @@ import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, Co
 import type { WorkspaceInfo } from "@/types";
 import { api } from "@/api";
 import { deriveSessionFileRules } from "@/utils/permissionRuleDerivation";
-import { trail } from "../../utils/diagnostics/scrollTrail";
 import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import {
   usePermissionRememberContext,
@@ -250,14 +249,6 @@ function toastRememberResult(result: RememberPersistResult): void {
       showToast(`记住规则失败：${result.error}（本次仍已放行）`, "danger");
   }
 }
-
-// 滚动诊断环：弹窗显隐标记。滚轮定格的嫌疑方向之一是弹窗挤压/死区——留下
-// show/hide 时间戳，定格时与 wheel/scroll 记录互证（弹窗出现前后滚轮是否还
-// 落在对话区）。
-watch(
-  () => props.permission?.id ?? null,
-  (id) => trail("perm", id ? `show:${props.permission?.name}` : "hide"),
-);
 
 /** PermissionDialog 的 respond 统一入口：处理「记住」持久化 + 会话规则推导 +
  *  权限模式同步 + 放行。发送前确认（变体 C，name="__sendConfirm__"）在此本地

@@ -16,7 +16,7 @@
 //!   `docs/superpowers/specs/2026-07-08-freeze-diagnostics-design.md`）。
 
 #[cfg(any(debug_assertions, feature = "devtools"))]
-pub mod experiment;
+pub mod selfcheck;
 mod report;
 mod ring;
 mod stackwalk;
@@ -278,23 +278,6 @@ pub async fn diag_freeze_supplement(
 #[tauri::command]
 pub fn open_devtools(window: tauri::WebviewWindow) {
     window.open_devtools();
-}
-
-/// 滚动诊断环落盘：前端热键（Ctrl+Shift+D）触发，把滚轮目标 / scrollTop 写入者
-/// 时间线写到 diagnostics/scroll-trail-<epoch_ms>.json，返回落盘路径。针对间歇性
-/// 滚轮定格（『回到底部』可用、切会话自愈）的活体取证—— watchdog 管的是主线程
-/// 冻结，这类「不冻结但滚轮失效」的状态病靠用户按键手动抓。payload 可达数百 KB，
-/// 写盘走 spawn_blocking。
-#[tauri::command]
-pub async fn diag_scroll_trail(payload: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let dir = crate::commands::our_config_dir().join("diagnostics");
-        report::write_scroll_trail(&dir, &payload)
-    })
-    .await
-    .map_err(|e| e.to_string())?
-    .map(|p| p.to_string_lossy().into_owned())
-    .map_err(|e| e.to_string())
 }
 
 #[cfg(test)]

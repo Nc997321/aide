@@ -225,14 +225,10 @@ pub fn run() {
             // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
             diagnostics::start(app.handle());
 
-            // emit 归因实验无人值守入口（仅 dev/诊断包；未设环境变量时是空操作）
-            #[cfg(any(debug_assertions, feature = "devtools"))]
-            diagnostics::experiment::autorun_on_startup(app.handle());
-
             // 冻结报告现场完整性自检（仅 dev/诊断包；AIDE_FREEZE_SELFCHECK=<ms>）
-            // ——注入真冻结后审报告，退出码即 verdict。见 experiment.rs 注释。
+            // ——注入真冻结后审报告，退出码即 verdict。见 selfcheck.rs 注释。
             #[cfg(any(debug_assertions, feature = "devtools"))]
-            diagnostics::experiment::selfcheck_on_startup(app.handle());
+            diagnostics::selfcheck::selfcheck_on_startup(app.handle());
 
             // 注入 release 资源目录给 provider catalog 加载器（dev 走 CARGO_MANIFEST_DIR）
             #[cfg(not(debug_assertions))]
@@ -588,11 +584,8 @@ pub fn run() {
             diagnostics::log_frontend_error,
             diagnostics::diag_heartbeat,
             diagnostics::diag_freeze_supplement,
-            diagnostics::diag_scroll_trail,
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::open_devtools,
-            #[cfg(any(debug_assertions, feature = "devtools"))]
-            diagnostics::experiment::diag_emit_experiment,
             // 通知中心持久化
             commands::notifications::load_notifications,
             commands::notifications::save_notifications,

@@ -37,7 +37,6 @@ import {
 } from "../utils/diagnostics/longFrames";
 import { readGauges } from "../utils/diagnostics/frontendState";
 import { drainPending, snapshotAll, startBreadcrumbs } from "../utils/diagnostics/breadcrumbs";
-import { startScrollTrail } from "../utils/diagnostics/scrollTrail";
 
 /** 心跳周期。Rust watchdog 的判定阈值（2s）以此为基准，改动需两侧同步。 */
 const HEARTBEAT_MS = 500;
@@ -158,7 +157,6 @@ export function startDiagnostics(): void {
   startLongTasks();
   startLongFrames(); // 长帧归因：拆「脚本 / 样式布局 / 其余」+ 点名到函数（见 longFrames.ts）
   startBreadcrumbs();
-  startScrollTrail(); // 滚动诊断环：间歇性滚轮定格的活体采集（见 scrollTrail.ts）
 
   lastBeatAt = performance.now();
 

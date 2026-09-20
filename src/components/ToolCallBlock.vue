@@ -2,7 +2,7 @@
 import { ref, computed, watch } from "vue";
 import type { ToolCallBlock, BgTask } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
-import DiffViewer from "./fileviewer/DiffViewer.vue";
+import StaticDiff from "./fileviewer/StaticDiff.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { estimateDiffHeight } from "@/utils/diffHeight";
@@ -73,7 +73,7 @@ const changeInfo = computed<ChangeInfo | null>(() => {
   return buildChangeInfo(props.block.name, props.block.input);
 });
 
-/** DiffViewer 需要定高容器（内部 100% 布局）：按片段行数估算，超高封顶内滚。
+/** 变更卡 diff 需要定高容器（内部 100% 布局）：按片段行数估算，超高封顶内滚。
  *  估算与文件窗的 diff 面板共用（utils/diffHeight），同一段 diff 两处显高一致。 */
 const changeHeight = computed(() => {
   const info = changeInfo.value;
@@ -93,7 +93,7 @@ async function openChangeFile(e: MouseEvent) {
 }
 
 /**
- * 变更卡 diff 行号偏移：展开时异步算片段在当前文件中的真实起始行，传给 DiffViewer
+ * 变更卡 diff 行号偏移：展开时异步算片段在当前文件中的真实起始行，传给 StaticDiff
  * 使行号显示真实行而非片段相对行。算不出（Write 新文件 / 文件已改覆盖 / 读失败）→
  * undefined → 行号从 1。firstLine 的 null = 「未算」，与「算出 undefined」区分，
  * 避免每次展开都重读文件。
@@ -200,7 +200,7 @@ const readRange = computed(() =>
         class="ti-change"
         :style="{ height: `${changeHeight}px` }"
       >
-        <DiffViewer :pair="changeInfo.pair" :file-path="changeInfo.filePath" :first-line-number="firstLine ?? undefined" initial-mode="unified" :show-badge="false" />
+        <StaticDiff :pair="changeInfo.pair" :file-path="changeInfo.filePath" :first-line-number="firstLine ?? undefined" />
       </div>
       <div v-else-if="block.truncated" class="ti-truncated">{{ truncatedLabel(block.truncated.originalBytes) }}</div>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
@@ -425,7 +425,7 @@ const readRange = computed(() =>
   background: var(--aide-bg-deep);
 }
 
-/* 变更卡的 DiffViewer 容器：定高（script 按行数估算），内部自滚 */
+/* 变更卡的 diff 容器：定高（script 按行数估算），内部自滚 */
 .ti-change {
   overflow: hidden;
 }

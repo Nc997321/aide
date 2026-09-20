@@ -420,21 +420,6 @@ fn prune_prefixed(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> 
     Ok(())
 }
 
-/// 滚动诊断环落盘：`scroll-trail-<epoch>.json`——间歇性滚轮定格的活体现场
-/// （wheel 目标 / scrollTop 写入者时间线，见前端 scrollTrail.ts）。与 freeze
-/// 报告同款「临时文件 + rename」原子写与保留策略。payload 是前端已序列化好的
-/// JSON 字符串，原样写盘不再加工。
-pub fn write_scroll_trail(dir: &Path, payload: &str) -> std::io::Result<PathBuf> {
-    fs::create_dir_all(dir)?;
-    let epoch = epoch_ms();
-    let path = dir.join(format!("scroll-trail-{epoch}.json"));
-    let tmp = dir.join(format!(".scroll-trail-{epoch}.json.tmp"));
-    fs::write(&tmp, payload)?;
-    fs::rename(&tmp, &path)?;
-    prune_prefixed(dir, "scroll-trail-", KEEP_REPORTS)?;
-    Ok(path)
-}
-
 // ── 现场完整性审计（自检装置用）───────────────────────────────────────
 
 /// 一项判定：`id` 是机器可读的检查名，`detail` 是给人看的原因/实测值。
@@ -1251,50 +1236,24 @@ mod tests {
     }
 
     #[test]
-    fn write_scroll_trail_atomic_and_prune_prefix_isolated() {
-        let dir = temp_dir("scroll-trail");
-        // 同目录放一份 freeze 报告：两套保留策略按前缀隔离，scroll-trail 清理不波及
+    fn prune_prefixed_按前缀隔离() {
+        let dir = temp_dir("prune-prefix");
+        // 同目录放一份 freeze 报告：两套保留策略按前缀隔离，清 selfcheck 不波及 freeze
         write_report(&dir, &sample_report(7, 12)).unwrap();
-        let path =
-            write_scroll_trail(&dir, r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#).unwrap();
-        let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        assert!(name.starts_with("scroll-trail-") && name.ends_with(".json"));
-        // 内容原样、无临时文件残留
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            r#"[{"t":1,"kind":"wheel","detail":"dy=120"}]"#
-        );
-        let leftovers: Vec<String> = fs::read_dir(&dir)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|n| n.starts_with(".scroll-trail-"))
-            .collect();
-        assert!(leftovers.is_empty());
-        // prune 前缀隔离：清掉真文件（真实 epoch 远大于下面的伪造值，会占保留名额），
-        // 手排 5 份 scroll-trail（伪造递增 epoch，避免同毫秒文件名碰撞——生产路径是
-        // 人按热键，不会同毫秒），清到 2 份，freeze 报告不动
-        fs::remove_file(&path).unwrap();
         for i in 0..5u64 {
-            fs::write(
-                dir.join(format!("scroll-trail-{}.json", 100_000 + i * 10)),
-                "[]",
-            )
-            .unwrap();
+            fs::write(dir.join(format!("selfcheck-{}.json", 100_000 + i * 10)), "[]").unwrap();
         }
-        prune_prefixed(&dir, "scroll-trail-", 2).unwrap();
+        prune_prefixed(&dir, "selfcheck-", 2).unwrap();
         let mut names: Vec<String> = fs::read_dir(&dir)
             .unwrap()
             .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
             .filter(|n| n.ends_with(".json"))
             .collect();
         names.sort();
-        assert!(names.contains(&"scroll-trail-100030.json".to_string()));
-        assert!(names.contains(&"scroll-trail-100040.json".to_string()));
+        assert!(names.contains(&"selfcheck-100030.json".to_string()));
+        assert!(names.contains(&"selfcheck-100040.json".to_string()));
         assert_eq!(
-            names
-                .iter()
-                .filter(|n| n.starts_with("scroll-trail-"))
-                .count(),
+            names.iter().filter(|n| n.starts_with("selfcheck-")).count(),
             2
         );
         assert!(names.contains(&"freeze-7.json".to_string()));

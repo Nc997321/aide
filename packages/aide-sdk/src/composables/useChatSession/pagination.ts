@@ -1,5 +1,4 @@
 import { api } from "../../api";
-import { trail } from "../../utils/diagnostics/scrollTrail";
 import type { LoadMessagesResult } from "../../types";
 import type { ChatMessage } from "../../types/chat";
 import { computeMessagesBytes } from "../../utils/messageBytes";
@@ -64,16 +63,10 @@ export async function hydrate(sid: string): Promise<void> {
         const result = await api.loadMessages(sid, null, 1); // 最小页：只探游标（最新 1 条保底），消息丢弃不 unshift
         if (result && Array.isArray(result.messages)) {
           sessionPagination.set(sid, { tailOffset: result.nextOffsetBytes });
-          trail("pager", `probe ${sid.slice(0, 8)} tail=${result.nextOffsetBytes}`);
-        } else {
-          trail("pager", `probe ${sid.slice(0, 8)} EMPTY-RESULT`);
         }
       } catch (e) {
         console.warn("Failed to probe pagination cursor:", e);
-        trail("pager", `probe ${sid.slice(0, 8)} FAILED ${String(e).slice(0, 80)}`);
       }
-    } else {
-      trail("pager", `skip ${sid.slice(0, 8)} n=${store.messages.length} pag=${sessionPagination.has(sid)}`);
     }
     return;
   }
@@ -81,7 +74,6 @@ export async function hydrate(sid: string): Promise<void> {
   try {
     const result = await api.loadMessages(sid, null, HYDRATE_PAGE_BYTES);
     if (!result || !Array.isArray(result.messages)) {
-      trail("pager", `hydrate ${sid.slice(0, 8)} EMPTY-RESULT`);
       // 响应形状异常（版本错配/网关裁剪）不是「真空会话」：回滚 hydrated 让
       // 重开重试，否则一次坏响应把会话永久钉死在空态（真空走下方正常路径，
       // msgs 为空数组时保持 hydrated 不重试）。
@@ -98,7 +90,6 @@ export async function hydrate(sid: string): Promise<void> {
       const ledger = getOrCreateLedger(sid);
       ledger.push(pageEntryFrom(result, msgs));
     }
-    trail("pager", `hydrate ${sid.slice(0, 8)} n=${result.messages.length} tail=${result.nextOffsetBytes}`);
     maybeEvict(sid, store);
   } catch (e) {
     console.warn("Failed to load messages:", e);
@@ -106,7 +97,6 @@ export async function hydrate(sid: string): Promise<void> {
     // SPA 的模块级 store 里一次失败把会话永久钉死在「此会话暂无消息」
     // （hydrated=true 使 hydrate 的 skip 分支拦截一切后续加载）。
     store.hydrated = false;
-    trail("pager", `hydrate ${sid.slice(0, 8)} FAILED ${String(e).slice(0, 80)}`);
   }
 }
 
@@ -119,7 +109,6 @@ export async function loadOlderPage(sid: string, limit: number): Promise<number>
   try {
     const result = await api.loadMessages(sid, page.tailOffset, limit);
     if (!result || !Array.isArray(result.messages)) {
-      trail("pager", `load ${sid.slice(0, 8)} EMPTY-RESULT`);
       return 0;
     }
     const msgs = itemsToChatMessages(result.messages);

@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>冻结复现 · 变更卡 × DiffViewer 实测量</title>
+</head>
+<body>
+  <div id="app"></div>
+  <pre id="out" style="font:12px/1.5 monospace;white-space:pre-wrap;padding:12px"></pre>
+  <script>
+    // 夹具专用的错误兜底：报错要能被读出来（不然页面只是一片空白）
+    window.__err = [];
+    window.addEventListener("error", (e) => {
+      window.__err.push("error: " + (e.message || e.error) + " @ " + (e.filename || "") + ":" + e.lineno);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      window.__err.push("rejection: " + (e.reason && (e.reason.stack || e.reason.message)) || String(e.reason));
+    });
+  </script>
+  <script type="module" src="./freeze-repro-live.ts"></script>
+</body>
+</html>

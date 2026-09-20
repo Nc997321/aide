@@ -40,7 +40,6 @@ vi.mock("@/api/permissions", () => ({
       permCreateManyMock(scope, rules, project),
   },
 }));
-vi.mock("../../utils/diagnostics/scrollTrail", () => ({ trail: vi.fn(), snapshotScrollTrail: vi.fn() }));
 
 // ── 其余 composable stub（ChatPanel onMounted/watch 依赖）──
 // 形状必须与 useChatScroll 的返回值一致（行模型：rows/landing——ramp 时代是

@@ -11,7 +11,7 @@
 
 **第 2 节「卡死根因定位到 emit 投递路径」是推断，从未被栈帧证实**（native 栈捕获 stackwalk 是这份结论之后才加的），且被后续证据全面推翻。
 
-**证伪实验**（代码 `src-tauri/src/diagnostics/experiment.rs`；复跑 `AIDE_EMIT_EXPERIMENT=6000 pnpm tauri dev` → `~/.aide/diagnostics/emit-experiment-*.json`）：以 ~600 事件/秒（真实流式的 ~50 倍）从后台线程 `app.emit("chat-event")`，同时每 100ms 测一次主线程 no-op 探针延迟——
+**证伪实验**（装置已随诊断瘦身删除，2026-09-20：原 `src-tauri/src/diagnostics/experiment.rs` + `AIDE_EMIT_EXPERIMENT=6000 pnpm tauri dev` → `~/.aide/diagnostics/emit-experiment-*.json`）：以 ~600 事件/秒（真实流式的 ~50 倍）从后台线程 `app.emit("chat-event")`，同时每 100ms 测一次主线程 no-op 探针延迟——
 
 | 场景 | 投递次数 | 探针 p50 | max | 投出未兑现 | Windows 判未响应 |
 |---|---|---|---|---|---|

@@ -16,7 +16,9 @@
 import { describe, it, expect, vi } from "vitest";
 
 // xterm 的实际构造在 jsdom 下会炸；本测量只关心节点数，用非变更类工具
-// （Bash/Read/Grep）保证 DiffViewer 不进渲染路径，同时 mock 掉 xterm。
+// （Bash/Read/Grep）保证变更卡的 diff 视图不进渲染路径，同时 mock 掉 xterm。
+// 变更卡自己那一路（静态 diff：无 CodeMirror、节点数量级）由
+// fileviewer/StaticDiff.test.ts 守。
 const t = vi.hoisted(() => {
   class Terminal {
     write = () => {};

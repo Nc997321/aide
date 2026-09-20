@@ -1,5 +1,4 @@
 import { api } from "../../api";
-import { trail } from "../../utils/diagnostics/scrollTrail";
 import type { ChatMessage } from "../../types/chat";
 import { itemsToChatMessages } from "./transcriptMapping";
 import { pageLedgers, stores, type PageEntry } from "./state";
@@ -127,7 +126,6 @@ export function releasePage(sid: string, pageIndex: number, heightPx?: number): 
   page.heightPx = heightPx && heightPx > 0 ? heightPx : estimatePageHeight(ledger, page);
   store.messages.splice(idx, page.count);
   page.loaded = false;
-  trail("recycle", `release ${sid.slice(0, 8)} p=${pageIndex} n=${page.count} h=${Math.round(page.heightPx)}`);
   return page.count;
 }
 
@@ -144,7 +142,6 @@ export async function restorePage(sid: string, pageIndex: number): Promise<numbe
     const result = await api.loadMessages(sid, page.endOffset, Math.max(1, page.bytes));
     if (!result || !Array.isArray(result.messages) || result.messages.length === 0) {
       ledger.splice(pageIndex, 1);
-      trail("recycle", `restore ${sid.slice(0, 8)} p=${pageIndex} EMPTY → drop skeleton`);
       return 0;
     }
     const msgs = itemsToChatMessages(result.messages);
@@ -152,11 +149,9 @@ export async function restorePage(sid: string, pageIndex: number): Promise<numbe
     store.messages.splice(insertionIndex(ledger, pageIndex), 0, ...msgs);
     page.count = msgs.length; // 预算边界允许条数漂移，以实际为准
     page.loaded = true;
-    trail("recycle", `restore ${sid.slice(0, 8)} p=${pageIndex} n=${msgs.length}`);
     return msgs.length;
   } catch (e) {
     console.warn("Failed to restore page:", e);
-    trail("recycle", `restore ${sid.slice(0, 8)} p=${pageIndex} FAILED ${String(e).slice(0, 80)}`);
     return 0;
   } finally {
     mutating.delete(sid);

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>变更卡 · 静态 diff 方案原型</title>
+<style>
+/* ── 主题 token（glass 默认主题实值，抄自 themes/glass） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-success:#6ee7a8;
+  --aide-danger:#ff8f9c;
+  --aide-info:#7fd7f0;
+  --aide-warning:#f0c987;
+  --aide-syntax-keyword:#c3a6ff;
+  --aide-syntax-number:#ffb98a;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-radius-md:9px;
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC',sans-serif;
+  /* diff 三层结构（抄自 fileviewer/diffThemes.ts 的 color-mix 配方） */
+  --diff-add-line: color-mix(in srgb, color-mix(in oklch, var(--aide-success) 68%, var(--aide-text-muted)) 12%, transparent);
+  --diff-del-line: color-mix(in srgb, color-mix(in oklch, var(--aide-danger) 68%, var(--aide-text-muted)) 13%, transparent);
+  --diff-add-text: color-mix(in srgb, color-mix(in oklch, var(--aide-success) 68%, var(--aide-text-muted)) 34%, transparent);
+  --diff-del-text: color-mix(in srgb, color-mix(in oklch, var(--aide-danger) 68%, var(--aide-text-muted)) 34%, transparent);
+  --diff-add-gutter: color-mix(in srgb, color-mix(in oklch, var(--aide-success) 68%, var(--aide-text-muted)) 55%, transparent);
+  --diff-del-gutter: color-mix(in srgb, color-mix(in oklch, var(--aide-danger) 68%, var(--aide-text-muted)) 55%, transparent);
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--aide-font-ui); color:var(--aide-text-primary);
+  background:radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+             radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%), #0a0b11;
+  min-height:100vh; padding:22px 26px 70px; font-size:13px;
+}
+h1{font-size:16px;font-weight:600}
+.page-head p{margin-top:7px;font-size:12px;color:var(--aide-text-muted);line-height:1.8;max-width:1000px}
+.page-head code{font-family:var(--aide-font-mono);color:var(--aide-text-secondary)}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;margin-top:20px}
+@media (max-width:1100px){.grid{grid-template-columns:1fr}}
+.col > h2{font-size:12px;font-weight:600;color:var(--aide-text-secondary);margin-bottom:4px}
+.col > h2 .tag{font-weight:400;color:var(--aide-text-muted);margin-left:6px}
+.col > .note{font-size:11px;color:var(--aide-text-muted);line-height:1.7;margin-bottom:10px;min-height:32px}
+
+/* ── 变更卡外框（抄 ToolCallBlock 的 ti-card / ti-head） ── */
+.card{border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);overflow:hidden;background:var(--aide-bg-base)}
+.head{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;
+      background:var(--aide-surface-default);border-bottom:1px solid var(--aide-border-subtle)}
+.head .name{color:var(--aide-text-primary);font-weight:600}
+.head .path{color:var(--aide-text-muted);font-family:var(--aide-font-mono);font-size:11px;
+            overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.head .stat-add{color:var(--aide-success);font-family:var(--aide-font-mono);font-size:11px}
+.head .stat-del{color:var(--aide-danger);font-family:var(--aide-font-mono);font-size:11px}
+.head .open{color:var(--aide-accent);font-size:11px}
+.head .chev{color:var(--aide-text-muted);font-size:11px}
+/* DiffViewer 工具栏（静态版去掉它——跳转按钮依赖编辑器 API） */
+.dv-toolbar{display:flex;align-items:center;gap:8px;padding:4px 10px;font-size:11px;
+            color:var(--aide-text-muted);border-bottom:1px solid var(--aide-border-subtle);background:var(--aide-bg-deep)}
+.dv-btn{background:none;border:1px solid var(--aide-border);color:var(--aide-text-secondary);
+        border-radius:4px;font-size:10px;padding:1px 6px;font-family:var(--aide-font-ui)}
+
+/* ── diff 主体：定高内滚（两栏一致） ── */
+.diff{max-height:320px;overflow:auto;background:var(--aide-bg-deep);
+      font-family:var(--aide-font-mono);font-size:11.5px;line-height:1.75}
+/* 现状：旧/新两列行号（gutter 色条落在各自列上） */
+.diff.cm .row{display:grid;grid-template-columns:44px 44px 14px 1fr;white-space:pre}
+/* 静态版：单列行号 + 增删记号列 */
+.diff.static .row{display:grid;grid-template-columns:52px 14px 1fr;white-space:pre}
+.diff.static .gut-a,.diff.static .gut-b{border-right:none}
+.diff.static .gut-b{border-right:1px solid var(--aide-border-subtle)}
+.diff.static .row.add .gut-b,.diff.static .row.del .gut-a{background:none;color:var(--aide-text-secondary)}
+.row.ctx{color:var(--aide-text-secondary)}
+.row.add{background:var(--diff-add-line)}
+.row.del{background:var(--diff-del-line)}
+.row.add .gut-a,.row.del .gut-a{color:var(--aide-text-muted)}
+.row .gut-a,.row .gut-b{text-align:right;padding-right:8px;color:var(--aide-text-muted);user-select:none;
+                        border-right:1px solid var(--aide-border-subtle)}
+.row .mark{text-align:center;color:var(--aide-text-muted)}
+.row.add .mark{color:var(--aide-success)}
+.row.del .mark{color:var(--aide-danger)}
+.row.add .gut-b{background:var(--diff-add-gutter);color:var(--aide-text-primary)}
+.row.del .gut-a{background:var(--diff-del-gutter);color:var(--aide-text-primary)}
+.row .code{padding-left:10px;overflow-x:auto}
+/* 行内变更段（静态版逐段标；原型里手标几个示例） */
+.seg-add{background:var(--diff-add-text);border-radius:2px}
+.seg-del{background:var(--diff-del-text);border-radius:2px}
+/* 折叠未变段落：CodeMirror 是可点按钮；静态版若保留就是一行纯文本 */
+.collapse{padding:2px 10px;color:var(--aide-text-muted);font-size:11px;background:var(--aide-bg-base)}
+
+/* 语法高亮（色值抄 utils/cmHighlight.ts 的 token 映射） */
+.k{color:var(--aide-syntax-keyword)} .s{color:var(--aide-success)} .n{color:var(--aide-syntax-number)}
+.c{color:var(--aide-text-muted);font-style:italic} .f{color:var(--aide-accent)}
+.p{color:var(--aide-info)} .t{color:var(--aide-warning)} .b{color:var(--aide-text-secondary)}
+
+/* ── 对照表 ── */
+table{margin-top:26px;border-collapse:collapse;font-size:12px;width:100%;max-width:1000px}
+th,td{border:1px solid var(--aide-border);padding:7px 10px;text-align:left;vertical-align:top}
+th{background:var(--aide-surface-default);font-weight:600;color:var(--aide-text-secondary)}
+td:first-child{color:var(--aide-text-secondary);white-space:nowrap}
+td code{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-secondary)}
+.ok{color:var(--aide-success)} .no{color:var(--aide-danger)}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>变更卡 · 静态 diff 原型（对着真 chrome 比）</h1>
+  <p>
+    左＝现状（<code>DiffViewer</code>，CodeMirror unified merge）；右＝候选（静态 diff）。
+    <b>两栏的行底色/色条/语法配色完全相同</b>——静态版照样上色，<b>高亮不会丢</b>：实现走已打包的
+    <code>highlight.js</code>（markdown 代码块同一条管道），再逐行套 add/del 底色与行内变更段。
+    本页代码块的 token 颜色是照 <code>utils/cmHighlight.ts</code> 的映射手抄的，真实现由 hljs 产出同样颜色的 span。
+  </p>
+</div>
+
+<div class="grid">
+  <!-- ───────── 现状 ───────── -->
+  <div class="col">
+    <h2>现状 · CodeMirror<span class="tag">每卡一个编辑器 · ~270 节点 · 构建 ~250ms（真机）</span></h2>
+    <div class="note">行号、语法高亮、行内变更段、gutter 色条、折叠条、上一处/下一处跳转、并排切换。</div>
+    <div class="card">
+      <div class="head">
+        <span class="name">Edit</span>
+        <span class="path">…\equipment\service\impl\EquipmentServiceImpl.java</span>
+        <span class="stat-add">+3</span><span class="stat-del">-2</span>
+        <span class="open">打开 ↗</span><span class="chev">▾</span>
+      </div>
+      <div class="dv-toolbar">
+        <button class="dv-btn">⌃</button><button class="dv-btn">⌄</button><button class="dv-btn">单栏</button>
+        <span style="flex:1"></span><span>旧片段 → 新片段</span>
+      </div>
+      <div class="diff cm" id="cm-diff"></div>
+    </div>
+  </div>
+
+  <!-- ───────── 静态版 ───────── -->
+  <div class="col">
+    <h2>候选 · 静态 diff<span class="tag">零编辑器 · ~40 节点 · 构建 ~1ms</span></h2>
+    <div class="note">保留：行号、语法高亮、add/del 行底色、行内变更段、定高内滚。失去：gutter 色条（并入行号列）、折叠条可点、「上一处/下一处」「并排/单栏」两个按钮（要看完整编辑器点「打开 ↗」）。</div>
+    <div class="card">
+      <div class="head">
+        <span class="name">Edit</span>
+        <span class="path">…\equipment\service\impl\EquipmentServiceImpl.java</span>
+        <span class="stat-add">+3</span><span class="stat-del">-2</span>
+        <span class="open">打开 ↗</span><span class="chev">▾</span>
+      </div>
+      <div class="diff static" id="static-diff"></div>
+    </div>
+  </div>
+</div>
+
+<table>
+  <tr><th style="width:130px">维度</th><th>现状（CodeMirror）</th><th>静态 diff</th></tr>
+  <tr><td>语法高亮</td><td class="ok">有（CodeMirror 语言包，按扩展名动态 import）</td><td class="ok">有（highlight.js，已打包 15 种语言）</td></tr>
+  <tr><td>行号 / 行底色 / 行内变更段</td><td class="ok">有</td><td class="ok">有（同一套 color-mix 配方）</td></tr>
+  <tr><td>「上一处/下一处」跳转、并排↔单栏</td><td class="ok">有（<code>goToNextChunk</code> / MergeView）</td><td class="no">无（点「打开 ↗」进文件查看器有全套）</td></tr>
+  <tr><td>「⋯N 行未变⋯」折叠条</td><td class="ok">可点展开</td><td class="no">默认展开显示（卡本来就是定高内滚，折叠价值低）</td></tr>
+  <tr><td>文本可选 / 搜索（Ctrl+F 浏览器级）</td><td class="ok">有</td><td class="ok">有（普通 DOM，反而更好选）</td></tr>
+  <tr><td>每卡 DOM 节点</td><td class="no">~270</td><td class="ok">~40</td></tr>
+  <tr><td>每卡构建耗时（真机）</td><td class="no">~180~250ms（含 60~180ms 强制同步布局）</td><td class="ok">~1~3ms（hljs 上色 + 拼字符串）</td></tr>
+  <tr><td>60 张卡同时在场</td><td class="no">16k 节点 / 十几~二十几秒主线程饱和 ← 实测冻结</td><td class="ok">~2.4k 节点 / ~200ms</td></tr>
+</table>
+</body>
+
+<script>
+/* 片段数据：一段真实量级的 Java Edit（old → new）。 */
+const ctx1 = [
+  [['    ','b'],['@','b'],['Override','p']],
+  [['    ','b'],['public','k'],[' PageResult','t'],['<','b'],['EquipmentVO','t'],['>','b'],[' page','f'],['(','b'],['Query','t'],[' query','n'],[') {','b']],
+];
+const oldMid = [
+  [['        wrapper','n'],['.','b'],['eq','f'],['(','b'],['StringUtils','t'],['.','b'],['hasText','f'],['(','b'],['query','n'],['.','b'],['getDeviceName','f'],['()), ','b'],['Equipment','t'],['::','b'],['getDeviceName','f'],[');','b']],
+  [['        wrapper','n'],['.','b'],['ge','f'],['(','b'],['query','n'],['.','b'],['getDeptId','f'],['() != ','b'],['null','k'],[', ','b'],['Equipment','t'],['::','b'],['getDeptId','f'],[');','b']],
+];
+const newMid = [
+  [['        wrapper','n'],['.','b'],['like','f'],['(','b'],['StringUtils','t'],['.','b'],['hasText','f'],['(','b'],['query','n'],['.','b'],['getDeviceName','f'],['()), ','b'],['Equipment','t'],['::','b'],['getDeviceName','f'],[');','b']],
+  [['        wrapper','n'],['.','b'],['eq','f'],['(','b'],['query','n'],['.','b'],['getDeptId','f'],['() != ','b'],['null','k'],[', ','b'],['Equipment','t'],['::','b'],['getDeptId','f'],[');','b']],
+  [['        wrapper','n'],['.','b'],['orderByDesc','f'],['(','b'],['Equipment','t'],['::','b'],['getCreateTime','f'],[');','b']],
+];
+const ctx2 = [
+  [['        Page','t'],['<','b'],['Equipment','t'],['>','b'],[' page = ','n'],['equipmentMapper','n'],['.','b'],['selectPage','f'],['(','b'],['new','k'],[' Page','t'],['<>(','b'],['query','n'],['.','b'],['getPageNo','f'],['(), ','b'],['query','n'],['.','b'],['getPageSize','f'],['()), ','b'],['wrapper','n'],[');','b']],
+];
+
+/** 片段 → 行模型：{kind:'ctx'|'add'|'del', oldNo, newNo, spans} */
+function buildLines(){
+  const rows = [];
+  let o = 141, n = 141;
+  ctx1.forEach(sp => rows.push({ kind:'ctx', o:o++, n:n++, spans:sp }));
+  oldMid.forEach(sp => rows.push({ kind:'del', o:o++, n:null, spans:sp }));
+  newMid.forEach(sp => rows.push({ kind:'add', o:null, n:n++, spans:sp }));
+  ctx2.forEach(sp => rows.push({ kind:'ctx', o:o++, n:n++, spans:sp }));
+  return rows;
+}
+
+const esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const html = spans => spans.map(([txt, cls]) => `<span class="${cls}">${esc(txt)}</span>`).join('');
+
+/** 行内变更段示意（真实现版由 old/new 片段逐段比对得出，不是这里的手标） */
+function inlineSpans(r){
+  let s = html(r.spans);
+  if (r.kind === 'del') s = s.replace('<span class="f">eq</span>', '<span class="seg-del"><span class="f">eq</span></span>');
+  if (r.kind === 'add') s = s.replace('<span class="f">like</span>', '<span class="seg-add"><span class="f">like</span></span>');
+  return s;
+}
+
+/** 现状：双行号列 + 记号列（CodeMirror unified 的形状） */
+function cmRow(r){
+  return `<div class="row ${r.kind}">`
+    + `<span class="gut-a">${r.o ?? ''}</span>`
+    + `<span class="gut-b">${r.n ?? ''}</span>`
+    + `<span class="mark">${r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ''}</span>`
+    + `<span class="code">${inlineSpans(r)}</span></div>`;
+}
+
+/** 候选：单行号列 + 记号列（色条并入行号列 → 少一列、少一层涂色） */
+function staticRow(r){
+  const no = r.kind === 'del' ? r.o : (r.n ?? r.o);
+  return `<div class="row ${r.kind}">`
+    + `<span class="gut-a">${no ?? ''}</span>`
+    + `<span class="mark">${r.kind === 'add' ? '+' : r.kind === 'del' ? '-' : ''}</span>`
+    + `<span class="code">${inlineSpans(r)}</span></div>`;
+}
+
+const rows = buildLines();
+document.getElementById('cm-diff').innerHTML = rows.map(cmRow).join('');
+document.getElementById('static-diff').innerHTML = rows.map(staticRow).join('');
+</script>
+</body>
+</html>

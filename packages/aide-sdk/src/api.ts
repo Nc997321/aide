@@ -563,9 +563,6 @@ export const api = {
     return getTransport().invoke("diag_freeze_supplement", { payload });
   },
   /** 滚动诊断环快照落盘；返回报告文件路径。 */
-  diagScrollTrail(payload: string): Promise<string> {
-    return getTransport().invoke("diag_scroll_trail", { payload });
-  },
   /** 前端错误上报（main.ts 全局兜底也用；走 Rust 日志落盘）。 */
   logFrontendError(message: string): Promise<void> {
     return getTransport().invoke("log_frontend_error", { message });
