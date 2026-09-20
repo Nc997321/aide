@@ -40,6 +40,7 @@ import { useResizable, staticWidthSource } from "./composables/useResizable";
 import { useConversationChanges } from "./composables/useConversationChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
+import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
@@ -399,6 +400,15 @@ watch(marketplace.panelOpen, (open) => { if (open) closeOtherPanels("marketplace
 watch(observatory.panelOpen, (open) => { if (open) closeOtherPanels("observatory"); });
 watch(knowledgeBase.panelOpen, (open) => { if (open) closeOtherPanels("kb"); });
 watch(() => automation.state.view, (v) => { if (v !== null) closeOtherPanels("automation"); });
+
+// 切进日常对话就收起右栏（用户 2026-09-20 定：日常 = 面板收起来）。
+// **只在归属 key 真的换到日常时才收**：不在两个日常会话之间反复收（那会和用户手动
+// 打开右栏打架），也不在切回工程时自动展开（避免开合抖动）。
+// 这是布局动作，不是归属变更 —— 活动工作区一动不动（「不跟随焦点」的既定决策）。
+watch(
+  () => paneLayout.activeTabWsKey.value,
+  (wsKey) => { if (isDailyKey(wsKey)) rightPanel.collapse(); },
+);
 
 // 最大化 = 右栏吃满主区，与其它主区面板互斥：开最大化先关掉它们；它们被打开则退最大化。
 // **只在有面板真的开着时才退**——否则 closeOtherPanels 关掉它们的瞬间会反过来把刚开的

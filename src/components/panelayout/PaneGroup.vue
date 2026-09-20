@@ -2,7 +2,7 @@
 import { computed, inject, ref, type Ref } from "vue";
 import ChatPanel from "../ChatPanel/ChatPanel.vue";
 import PaneTabBar from "./PaneTabBar.vue";
-import { usePaneLayout } from "../../composables/usePaneLayout";
+import { tabWsKeyOf, usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import type { PermissionRuleDraft } from "../../types/permissions";
 import { useContextMenu } from "../../composables/useContextMenu";
@@ -163,14 +163,9 @@ function onPickWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-/** 当前 tab 的归属 key —— 与 effectiveWorkspacePath（:79-86）**同源**：
- *  活着的会话问注册表，空白 tab 看创建时绑的 pendingWs。别在这里另造第三个来源。 */
-const tabWsKey = computed<string>(() => {
-  const tab = activeTab.value;
-  if (!tab) return "";
-  if (tab.sessionId) return workspaceOf(tab.sessionId)?.wsKey ?? "";
-  return tab.pendingWs?.wsKey ?? "";
-});
+/** 当前 tab 的归属 key —— 取 key 的唯一实现在 usePaneLayout 的 tabWsKeyOf（活着的会话
+ *  问注册表，空白 tab 看 pendingWs），这里只是把它接到本组的激活 tab 上。 */
+const tabWsKey = computed<string>(() => tabWsKeyOf(activeTab.value));
 
 /** 当前在用什么模式：有 tab 就看那个 tab 的归属，没有 tab 看布局上的意图。
  *  ⚠️ 活着的会话必须走注册表 —— 发送后 tab 的 pendingWs 会被删（usePaneLayout

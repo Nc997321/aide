@@ -135,3 +135,38 @@ describe("rightPanelWidthSource", () => {
     expect(p.widths.value.browser).toBe(700);
   });
 });
+
+// 「切进日常就收起右栏」用的裁决（spec 2026-09-20）。幂等、不动"上次看的是哪一栏"。
+describe("collapse", () => {
+  it("从展开态收起", () => {
+    const p = useRightPanel();
+    p.select("git");
+    expect(p.collapsed.value).toBe(false);
+
+    p.collapse();
+    expect(p.collapsed.value).toBe(true);
+  });
+
+  it("幂等：已经收起再调不报错", () => {
+    const p = useRightPanel();
+    p.collapse();
+    p.collapse();
+    expect(p.collapsed.value).toBe(true);
+  });
+
+  it("不切走 tab —— 收起只关面板，\"上次看的是哪一栏\"留着", () => {
+    const p = useRightPanel();
+    p.select("git");
+    p.collapse();
+    expect(p.tab.value).toBe("git");
+  });
+
+  it("收起的浏览器 tab 不再算 active（视图可见性总闸跟着关）", () => {
+    const p = useRightPanel();
+    p.select("browser");
+    expect(p.browserActive.value).toBe(true);
+
+    p.collapse();
+    expect(p.browserActive.value).toBe(false);
+  });
+});

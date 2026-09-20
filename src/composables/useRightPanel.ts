@@ -41,8 +41,7 @@ const browserActive = computed(() => tab.value === "browser" && !collapsed.value
 const maximized = computed(() => wantMaximized.value && browserActive.value);
 
 /** rail / 快捷键的统一裁决（逐字沿用 App.vue 旧 onRailSelect 的三态语义）。 */
-function select(id: RightTabId) {
-  // 懒挂载：第一次点就挂，之后常驻（关面板只 setVisible(false)，页面与历史都留着）。
+function select(id: RightTabId) {  // 懒挂载：第一次点就挂，之后常驻（关面板只 setVisible(false)，页面与历史都留着）。
   if (id === "browser") browserEverActive.value = true;
   if (collapsed.value) {
     tab.value = id;
@@ -52,6 +51,15 @@ function select(id: RightTabId) {
   } else {
     tab.value = id;
   }
+}
+
+/**
+ * 收起右栏（只留竖直 rail）。幂等；**不动 tab** —— "上次看的是哪一栏"是记着的，
+ * 下次展开还在那一栏。用于「切进日常对话就收起面板」（spec 2026-09-20）：那是布局
+ * 动作，不是归属变更，活动工作区一动不动。
+ */
+function collapse() {
+  collapsed.value = true;
 }
 
 function setMaximized(on: boolean) {
@@ -108,6 +116,7 @@ export function useRightPanel() {
     browserActive,
     browserEverActive,
     select,
+    collapse,
     setMaximized,
     widths,
     widthProfile,

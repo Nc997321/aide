@@ -521,3 +521,27 @@ describe("usePaneLayout chatMode", () => {
     expect(pl.layout.defaultWs).toBeNull();
   });
 });
+
+// 聚焦 tab 的归属 key：右栏「切进日常就收起」的策略判据（spec 2026-09-20）。
+// 有会话那一路要靠 useSessionWorkspaces 的注册表夹具，由手动冒烟兜住 —— 这里覆盖
+// 欢迎态与空白 tab 两条（正是 hero 判定用的那两条）。
+describe("usePaneLayout activeTabWsKey", () => {
+  it("无 tab（欢迎态）为空串 —— 与 activeSessionId 同源", () => {
+    const pl = usePaneLayout();
+    expect(pl.activeTabWsKey.value).toBe("");
+    expect(pl.activeSessionId.value).toBe("");
+  });
+
+  it("空白 tab 取创建时绑的 pendingWs", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话", { wsKey: "C--cfg-workspace", wsPath: "C:/cfg/workspace" });
+    expect(pl.activeTabWsKey.value).toBe("C--cfg-workspace");
+    expect(pl.activeSessionId.value).toBe(""); // 空白 tab 无会话
+  });
+
+  it("空白 tab 未绑归属时为空串（工程 + 还没选工作区）", () => {
+    const pl = usePaneLayout();
+    pl.openBlankTab("新会话", undefined);
+    expect(pl.activeTabWsKey.value).toBe("");
+  });
+});

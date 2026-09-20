@@ -86,6 +86,23 @@ function focusedGroup(): GroupNode {
   return first;
 }
 
+/** 聚焦组的激活 tab（无 tab 时 null）。 */
+function focusedTab(): TabItem | null {
+  const g = focusedGroup();
+  return g.tabs.find((t) => t.id === g.activeTabId) ?? null;
+}
+
+/**
+ * 任意 tab 的归属 key（"" = 无归属）。**唯一实现**：活着的会话问会话工作区注册表
+ * （发送后 tab 的 pendingWs 会被 promote 路径删掉，只看它会把日常会话误判成工程），
+ * 空白 tab 才看创建时绑的 pendingWs。PaneGroup 的 currentMode 也走这里，别各写一份。
+ */
+export function tabWsKeyOf(tab: TabItem | null): string {
+  if (!tab) return "";
+  if (tab.sessionId) return useSessionWorkspaces().workspaceOf(tab.sessionId)?.wsKey ?? "";
+  return tab.pendingWs?.wsKey ?? "";
+}
+
 /** 树被换根/规范化后的统一收尾：空树兜底空根组（欢迎态）+ 修正聚焦引用。 */
 function commitRoot(newRoot: PaneNode | null) {
   layout.root = newRoot ?? createEmptyRoot();
@@ -450,6 +467,9 @@ export function usePaneLayout() {
       const tab = g.tabs.find((t) => t.id === g.activeTabId);
       return tab?.sessionId ?? "";
     }),
+    /** 聚焦组激活 tab 的工作区归属 key（"" = 无归属 / 欢迎态）。右栏模式策略等下游用，
+     *  与 activeSessionId 同一处取值，走同一个 tabWsKeyOf —— 别在别处重算。 */
+    activeTabWsKey: computed(() => tabWsKeyOf(focusedTab())),
     /** 是否一个 tab 都没有（零会话欢迎态）——此时欢迎页本身就是新建会话页，
      *  「新建会话」动作（Ctrl+N / 侧栏 +）应 no-op，不再开冗余空白 tab */
     hasAnyTab: computed(() => listGroups(layout.root).some((g) => g.tabs.length > 0)),
