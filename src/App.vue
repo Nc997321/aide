@@ -20,7 +20,7 @@ import { useAutomation } from "./composables/useAutomation";
 import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
-import { useRightPanel, type RightTabId } from "./composables/useRightPanel";
+import { useRightPanel, rightPanelWidthSource, type RightTabId } from "./composables/useRightPanel";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -97,12 +97,22 @@ const leftResize = useResizable({
   source: staticWidthSource({ initial: 280, min: 220, max: 450 }),
 });
 
-// 右栏宽度真相住在 useRightPanel（两档：工具窄档 / 浏览器宽档），这里先挂单档源；
-// 双档在 Task 4 接上（`rightPanelWidthSource(measureLayout)`）。
+/** 右栏宽档的边界要看窗口：量 .app-layout 与**非 overlay 态**的左侧栏真实宽度
+ *  （overlay 态侧栏脱离 grid 不吃轨道，不能算进去）。 */
+function measureLayout() {
+  const layout = document.querySelector<HTMLElement>(".app-layout");
+  const left = document.querySelector<HTMLElement>(".panel-left:not(.overlay)");
+  return {
+    appW: layout?.getBoundingClientRect().width ?? 0,
+    leftW: left?.getBoundingClientRect().width ?? 0,
+  };
+}
+
+// 宽度真相住在 useRightPanel（两档：工具窄档 / 浏览器宽档），这里只把它绑到 CSS 变量。
 const rightResize = useResizable({
   cssVar: "--aide-right-w",
   direction: "right",
-  source: staticWidthSource({ initial: 340, min: 300, max: 540 }),
+  source: rightPanelWidthSource(measureLayout),
 });
 
 /** grid 轨道宽度的单一数据源：折叠态直接决定轨道本身，而不是只改子元素

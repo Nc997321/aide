@@ -7,6 +7,8 @@
 // 本模块只认状态与裁决，不认 DOM（宽度绑定见 useResizable + rightPanelWidthSource）。
 import { computed, ref } from "vue";
 
+import type { WidthSource } from "./useResizable";
+
 /** 右栏 tab id。加一个 tab = 这里加一个字面量 + App.vue 的 rightTabs / RAIL_DIGIT_TABS 各加一行。 */
 export type RightTabId =
   | "files"
@@ -56,6 +58,47 @@ function setMaximized(on: boolean) {
   wantMaximized.value = on;
 }
 
+// ── 宽度：两档（窄工具 tab / 浏览器宽档），值只存内存（跨重启按窗口重算，用户 2026-09-20 定）──
+
+/** 中心轨道 minmax(400px,1fr) 的保底：**聊天底线优先于"五五开"**。 */
+const MIN_CHAT_PX = 400;
+/** 两块面板之间的两条 1px 分隔线轨道。 */
+const GUTTER_PX = 2;
+
+const widths = ref<{ narrow: number; browser: number }>({ narrow: 0, browser: 0 });
+
+/** 拖动把手此刻用哪一档：浏览器停靠态用宽档，其余（含最大化——此时宽度不参与布局）用窄档。 */
+const widthProfile = computed<"narrow" | "browser">(() =>
+  browserActive.value && !maximized.value ? "browser" : "narrow",
+);
+
+/** 布局量测：App 注入（只有它知道 DOM）。量不到给 0 → 一律按 min 收，宁可容错不猜。 */
+export type LayoutMeasure = () => { appW: number; leftW: number };
+
+/** 右栏宽度源：档位选择与边界都在这里，`useResizable` 只拿它去绑 DOM。 */
+export function rightPanelWidthSource(measure: LayoutMeasure): WidthSource {
+  return {
+    active: () => widthProfile.value,
+    limits: (name) =>
+      name === "browser"
+        ? {
+            initial: () => Math.round(measure().appW * 0.5),
+            min: 420,
+            max: () => measure().appW - measure().leftW - MIN_CHAT_PX - GUTTER_PX,
+          }
+        : { initial: 340, min: 300, max: 540 },
+    get: (name) => (name === "browser" ? widths.value.browser : widths.value.narrow),
+    set: (name, px) => {
+      if (name === "browser") widths.value.browser = px;
+      else widths.value.narrow = px;
+    },
+  };
+}
+
+function setWidth(name: "narrow" | "browser", px: number) {
+  widths.value[name] = px;
+}
+
 export function useRightPanel() {
   return {
     collapsed,
@@ -66,6 +109,9 @@ export function useRightPanel() {
     browserEverActive,
     select,
     setMaximized,
+    widths,
+    widthProfile,
+    setWidth,
   };
 }
 
@@ -75,4 +121,5 @@ export function __resetRightPanelForTest() {
   tab.value = "files";
   wantMaximized.value = false;
   browserEverActive.value = false;
+  widths.value = { narrow: 0, browser: 0 };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { useRightPanel, __resetRightPanelForTest } from "./useRightPanel";
+import { useRightPanel, rightPanelWidthSource, __resetRightPanelForTest } from "./useRightPanel";
 
 // 模块级单例（与 usePaneLayout 同范式）：用例间共享状态，故每个用例前复位。
 beforeEach(() => __resetRightPanelForTest());
@@ -74,5 +74,64 @@ describe("懒挂载", () => {
     expect(p.browserEverActive.value).toBe(true);
     p.select("browser"); // 折叠
     expect(p.browserEverActive.value).toBe(true);
+  });
+});
+
+describe("宽度档位", () => {
+  it("浏览器停靠态用宽档；最大化 / 其它 tab 用窄档", () => {
+    const p = useRightPanel();
+    expect(p.widthProfile.value).toBe("narrow");
+    p.select("browser");
+    expect(p.widthProfile.value).toBe("browser");
+    p.setMaximized(true);
+    expect(p.widthProfile.value).toBe("narrow"); // 最大化吃满，宽度不再参与布局
+  });
+
+  it("值存在 store 里（切档往返不丢）", () => {
+    const p = useRightPanel();
+    p.setWidth("browser", 720);
+    expect(p.widths.value.browser).toBe(720);
+  });
+});
+
+describe("rightPanelWidthSource", () => {
+  const measure = () => ({ appW: 1600, leftW: 280 });
+
+  it("active 跟随 store 的档位", () => {
+    const p = useRightPanel();
+    const src = rightPanelWidthSource(measure);
+    expect(src.active()).toBe("narrow");
+    p.select("browser");
+    expect(src.active()).toBe("browser");
+  });
+
+  it("宽档：初值 = 窗口一半，上限给聊天留 400px", () => {
+    const src = rightPanelWidthSource(measure);
+    const limits = src.limits("browser");
+    expect((limits.initial as () => number)()).toBe(800);
+    expect(limits.min).toBe(420);
+    expect((limits.max as () => number)()).toBe(1600 - 280 - 400 - 2); // 918
+  });
+
+  it("窄档与旧行为一致（340 / 300..540）", () => {
+    const src = rightPanelWidthSource(measure);
+    const limits = src.limits("narrow");
+    expect(limits.initial).toBe(340);
+    expect(limits.min).toBe(300);
+    expect(limits.max).toBe(540);
+  });
+
+  it("窗口过窄 → max < min（由 useResizable 按 min 收）", () => {
+    const src = rightPanelWidthSource(() => ({ appW: 900, leftW: 280 }));
+    const limits = src.limits("browser");
+    expect((limits.max as () => number)()).toBeLessThan(limits.min);
+  });
+
+  it("读到的已记宽度能写回（store 是唯一主人）", () => {
+    const p = useRightPanel();
+    const src = rightPanelWidthSource(measure);
+    src.set("browser", 700);
+    expect(src.get("browser")).toBe(700);
+    expect(p.widths.value.browser).toBe(700);
   });
 });
