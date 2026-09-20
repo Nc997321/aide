@@ -36,7 +36,7 @@ import TitleBar from "./components/titlebar/TitleBar.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
 import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
-import { useResizable } from "./composables/useResizable";
+import { useResizable, staticWidthSource } from "./composables/useResizable";
 import { useConversationChanges } from "./composables/useConversationChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
@@ -91,18 +91,16 @@ watch(
 
 const leftResize = useResizable({
   cssVar: "--aide-left-w",
-  initial: 280,
-  min: 220,
-  max: 450,
   direction: "left",
+  source: staticWidthSource({ initial: 280, min: 220, max: 450 }),
 });
 
+// 右栏宽度真相住在 useRightPanel（两档：工具窄档 / 浏览器宽档），这里先挂单档源；
+// 双档在 Task 4 接上（`rightPanelWidthSource(measureLayout)`）。
 const rightResize = useResizable({
   cssVar: "--aide-right-w",
-  initial: 340,
-  min: 300,
-  max: 540,
   direction: "right",
+  source: staticWidthSource({ initial: 340, min: 300, max: 540 }),
 });
 
 /** grid 轨道宽度的单一数据源：折叠态直接决定轨道本身，而不是只改子元素
