@@ -43,13 +43,11 @@ const DISTILL_MAX_TURNS: u32 = 15;
 /// 50 轮对正常任务很宽裕，跑飞了也烧不穿配额。
 const RUN_MAX_TURNS: u32 = 50;
 
-/// 进行中的运行（active_runs 的值）；by_session 反向索引供事件挂钩查。
-/// trigger/mode 持久化在 RunRecord 里，这里只留路由需要的 run_id。
-/// sdk_session_id：session_init 坐实的 SDK 真实会话 id（转录文件名、resume
-/// 目标都是它；我们的 run_id 只是路由键）。
+/// 进行中的运行（active_runs 的值）：键存在 = 该任务忙（并发守卫 / 侧栏呼吸点）。
+/// 值只留 session_init 坐实的 SDK 真实会话 id（转录文件名、resume 目标都是它）；
+/// run_id 不在这儿——那是路由键，归下方 `SessionRoute` 持有。
 #[derive(Clone, Debug)]
 struct ActiveRun {
-    run_id: String,
     sdk_session_id: Option<String>,
 }
 
@@ -554,7 +552,6 @@ impl AutomationService {
             .insert(
                 task.id.clone(),
                 ActiveRun {
-                    run_id: run_id.clone(),
                     sdk_session_id: None,
                 },
             );
@@ -1562,7 +1559,6 @@ mod tests {
         svc.active_runs.lock().unwrap().insert(
             "aut_1".to_string(),
             ActiveRun {
-                run_id: "run_1".into(),
                 sdk_session_id: None,
             },
         );
@@ -1587,7 +1583,6 @@ mod tests {
         svc.active_runs.lock().unwrap().insert(
             "aut_1".to_string(),
             ActiveRun {
-                run_id: "run_1".into(),
                 sdk_session_id: None,
             },
         );

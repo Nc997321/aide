@@ -16,6 +16,10 @@ pub enum AgentLspStatus {
     /// **目前没有产出点**：按名查询已不再给「确认没有」（证明不了符号索引覆盖整个工作区，
     /// 见 `agent_query::SymbolLookup::Unverified`）。词表是两侧冻结的契约，别删——
     /// 等哪天找到「工程已加载」的正向信号，这个状态词要原样接回来。
+    ///
+    /// 变体上的 `#[allow(dead_code)]` 就是为这条契约挂的：告警说的是「没人构造它」，
+    /// 不是「没人用它」（`as_str` 与用例都在用）——不是漏删的尸体。
+    #[allow(dead_code)]
     NoSymbol,
     /// 该语言未配置/未安装 server。
     NoServer,

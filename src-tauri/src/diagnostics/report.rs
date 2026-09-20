@@ -421,8 +421,13 @@ fn prune_prefixed(dir: &Path, prefix: &str, keep: usize) -> std::io::Result<()> 
 }
 
 // ── 现场完整性审计（自检装置用）───────────────────────────────────────
+//
+// 这一整段的唯一调用方是自检装置 `selfcheck.rs`，而它自己只在 dev / 诊断包编译
+// （`diagnostics.rs` 的模块门）——本段跟着同一个开关：release 默认包里留着就是
+// 死代码。`test` 也在开关里，`cargo test --release` 下这些用例仍要编得到。
 
 /// 一项判定：`id` 是机器可读的检查名，`detail` 是给人看的原因/实测值。
+#[cfg(any(test, debug_assertions, feature = "devtools"))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditCheck {
@@ -432,6 +437,7 @@ pub struct AuditCheck {
 }
 
 /// 审计结论：`ok` = 全部检查通过（这份报告足以定案）。
+#[cfg(any(test, debug_assertions, feature = "devtools"))]
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuditVerdict {
@@ -449,6 +455,7 @@ pub struct AuditVerdict {
 ///
 /// `block_ms` = 自检注入的渲染阻塞时长（用来判断「抓到的帧确实是那一下肇事帧，
 /// 而不是旁边的杂鱼」）。
+#[cfg(any(test, debug_assertions, feature = "devtools"))]
 pub fn audit(path: &Path, block_ms: u64) -> AuditVerdict {
     let mut checks = Vec::new();
     let raw = match fs::read_to_string(path) {
@@ -696,6 +703,7 @@ pub fn audit(path: &Path, block_ms: u64) -> AuditVerdict {
 
 /// 自检结论落盘：`selfcheck-<epoch>.json`——与冻结报告同目录、同款「临时文件 +
 /// rename」原子写与保留策略（自检文件独立前缀，不会被 freeze- 的保留策略挤掉）。
+#[cfg(any(test, debug_assertions, feature = "devtools"))]
 pub fn write_selfcheck(dir: &Path, verdict: &AuditVerdict) -> std::io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let epoch = epoch_ms();
