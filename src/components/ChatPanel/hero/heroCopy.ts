@@ -2,7 +2,7 @@
  * hero 欢迎页的文案核心：时间问候 + 轮换文案，纯函数、无 IO/时钟/随机，
  * 同输入必同输出。UI 组件负责喂时间与 seed，这里只回答「现在该说什么」。
  */
-import type { HeroMode } from "./modes";
+import type { ChatMode } from "../modes";
 
 /** 一天问候时段。跨时段页面开着不动时，由组件层定时重算（见 HeroWelcome）。 */
 export type Period = "morning" | "noon" | "afternoon" | "evening" | "late";
@@ -117,7 +117,7 @@ const DAILY_COPY_POOL: readonly HeroCopy[] = [
 ];
 
 /** 模式 → 文案池。新增模式时必须在这里给它一个池子（类型系统会强制）。 */
-export function heroCopyPool(mode: HeroMode): readonly HeroCopy[] {
+export function heroCopyPool(mode: ChatMode): readonly HeroCopy[] {
   return mode === "daily" ? DAILY_COPY_POOL : PROJECT_COPY_POOL;
 }
 
@@ -125,7 +125,7 @@ export function heroCopyPool(mode: HeroMode): readonly HeroCopy[] {
  * seed 取模轮换：负数与越界 seed 都落到合法槽（数学模），同 seed 同模式必同文案。
  * idx 经数学模恒 ∈ [0, n)，池为 readonly 非空数组——索引必命中，无兜底臂。
  */
-export function pickHeroCopy(mode: HeroMode, seed: number): HeroCopy {
+export function pickHeroCopy(mode: ChatMode, seed: number): HeroCopy {
   const pool = heroCopyPool(mode);
   const n = pool.length;
   return pool[((seed % n) + n) % n];

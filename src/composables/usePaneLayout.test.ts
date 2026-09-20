@@ -504,9 +504,9 @@ describe("usePaneLayout heroMode", () => {
     expect(usePaneLayout().layout.heroMode).toBe("daily");
   });
 
-  it("setHeroMode 改写意图；reset 后回到日常", () => {
+  it("setChatMode 改写意图；reset 后回到日常", () => {
     const pl = usePaneLayout();
-    pl.setHeroMode("project");
+    pl.setChatMode("project");
     expect(pl.layout.heroMode).toBe("project");
 
     __resetPaneLayoutForTest((sid) => started.has(sid));
@@ -515,7 +515,7 @@ describe("usePaneLayout heroMode", () => {
 
   it("heroMode 与 defaultWs 各自独立：工程 + 未选工作区 = 有意图、无归属", () => {
     const pl = usePaneLayout();
-    pl.setHeroMode("project");
+    pl.setChatMode("project");
     pl.setDefaultWs(null);
     expect(pl.layout.heroMode).toBe("project");
     expect(pl.layout.defaultWs).toBeNull();

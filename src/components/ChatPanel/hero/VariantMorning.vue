@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import type { WorkspaceInfo } from "@/types";
 import WorkspacePicker from "../../../ui/WorkspacePicker.vue";
-import { HERO_MODES, type HeroMode } from "./modes";
+import { CHAT_MODES, type ChatMode } from "../modes";
 import type { HeroViewProps } from "./types";
 
 defineProps<HeroViewProps>();
 
 const emit = defineEmits<{
   "select-workspace": [ws: WorkspaceInfo];
-  "select-mode": [mode: HeroMode];
+  "select-mode": [mode: ChatMode];
 }>();
 </script>
 
@@ -17,7 +17,7 @@ const emit = defineEmits<{
     <!-- 模式切换：日常 / 工程（默认日常）。选中的判定来自归属，不由本组件持有 -->
     <div class="va-modes" role="tablist" aria-label="新建对话模式">
       <button
-        v-for="m in HERO_MODES"
+        v-for="m in CHAT_MODES"
         :key="m.id"
         class="va-mode-btn"
         :class="{ 'is-active': m.id === mode }"

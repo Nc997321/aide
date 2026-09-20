@@ -19,9 +19,9 @@ import {
   type TabItem,
 } from "./paneLayout/tree";
 import { useSessionState } from "./useSessionState";
-// 模式表是全项目唯一一份定义（hero/modes.ts，零依赖的叶子模块）：这里只借它的
+// 模式表是全项目唯一一份定义（ChatPanel/modes.ts，零依赖的叶子模块）：这里只借它的
 // 字面量联合与默认值，不反向耦合——布局层与 hero 组件都用同一份，别各写一个。
-import { DEFAULT_HERO_MODE, type HeroMode } from "@/components/ChatPanel/hero/modes";
+import { DEFAULT_CHAT_MODE, type ChatMode } from "@/components/ChatPanel/modes";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { disposeSession, getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
@@ -53,14 +53,14 @@ interface LayoutState {
    * 还没选工作区」与「日常」都表现为「没有归属」，光看 defaultWs 分不开。
    * 与 defaultWs 同生命周期（不落盘、reset 清）。
    */
-  heroMode: HeroMode;
+  heroMode: ChatMode;
 }
 
 /** 初始/兜底状态：空根组（零会话欢迎态——无 tab 栏，居中 hero 输入区）。 */
 function emptyState(): LayoutState {
   const root = createEmptyRoot();
   // 新建对话页默认「日常」（spec 2026-09-20）。这是全新安装的第一屏。
-  return { root, focusedGroupId: root.id, heroMode: DEFAULT_HERO_MODE };
+  return { root, focusedGroupId: root.id, heroMode: DEFAULT_CHAT_MODE };
 }
 
 const layout = reactive<LayoutState>(emptyState());
@@ -190,7 +190,7 @@ export function usePaneLayout() {
   }
 
   /** hero（零 tab）模式意图：只在没有 tab 时有效（有 tab 时模式由 pendingWs 派生）。 */
-  function setHeroMode(mode: HeroMode) {
+  function setChatMode(mode: ChatMode) {
     layout.heroMode = mode;
   }
 
@@ -457,7 +457,7 @@ export function usePaneLayout() {
     openBlankTab,
     setTabPendingWs,
     setDefaultWs,
-    setHeroMode,
+    setChatMode,
     openSessionInNewTab,
     openSessionInSplit,
     splitFocusedGroup,
@@ -487,7 +487,7 @@ export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
   layout.defaultWs = null;
-  layout.heroMode = DEFAULT_HERO_MODE;
+  layout.heroMode = DEFAULT_CHAT_MODE;
   isStarted = startedProbe ?? defaultIsStarted;
   mru.length = 0;
   mruFrozen = false;

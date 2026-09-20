@@ -1,20 +1,20 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from "vue";
 import { chimeForDate, pickHeroCopy } from "./heroCopy";
-import type { HeroMode } from "./modes";
+import type { ChatMode } from "../modes";
 import type { WorkspaceInfo } from "@/types";
 import VariantMorning from "./VariantMorning.vue";
 import type { HeroViewProps } from "./types";
 
 const props = defineProps<{
-  mode: HeroMode;
+  mode: ChatMode;
   workspacePath: string;
   modelName: string;
 }>();
 
 const emit = defineEmits<{
   "select-workspace": [ws: WorkspaceInfo];
-  "select-mode": [mode: HeroMode];
+  "select-mode": [mode: ChatMode];
 }>();
 
 const viewProps = computed<HeroViewProps>(() => ({
@@ -51,6 +51,6 @@ watch(
   <VariantMorning
     v-bind="viewProps"
     @select-workspace="(ws: WorkspaceInfo) => emit('select-workspace', ws)"
-    @select-mode="(m: HeroMode) => emit('select-mode', m)"
+    @select-mode="(m: ChatMode) => emit('select-mode', m)"
   />
 </template>

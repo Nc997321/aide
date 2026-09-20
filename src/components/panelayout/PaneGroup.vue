@@ -13,7 +13,7 @@ import {
   ensureDailyWorkspace,
   isDailyKey,
 } from "@aide/sdk/utils/dailyWorkspace";
-import type { HeroMode } from "../ChatPanel/hero/modes";
+import type { ChatMode } from "../ChatPanel/modes";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
@@ -163,14 +163,23 @@ function onPickWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-/** 当前在用什么模式：有 tab 就看那个 tab 的归属，没有 tab 看布局上的意图。
- *  空白 tab 绑了日常就是日常；其余（含未绑）算工程 —— 未绑时首条消息会落到活动
- *  工作区（后端 cwd 链第三级），与「工程」的语义一致。 */
-const currentMode = computed<HeroMode>(() => {
+/** 当前 tab 的归属 key —— 与 effectiveWorkspacePath（:79-86）**同源**：
+ *  活着的会话问注册表，空白 tab 看创建时绑的 pendingWs。别在这里另造第三个来源。 */
+const tabWsKey = computed<string>(() => {
   const tab = activeTab.value;
-  if (!tab) return pl.layout.heroMode;
-  return isDailyKey(tab.pendingWs?.wsKey) ? "daily" : "project";
+  if (!tab) return "";
+  if (tab.sessionId) return workspaceOf(tab.sessionId)?.wsKey ?? "";
+  return tab.pendingWs?.wsKey ?? "";
 });
+
+/** 当前在用什么模式：有 tab 就看那个 tab 的归属，没有 tab 看布局上的意图。
+ *  ⚠️ 活着的会话必须走注册表 —— 发送后 tab 的 pendingWs 会被删（usePaneLayout
+ *  的 promote 路径），只看 pendingWs 会把日常会话误判成工程。
+ *  其余（含未绑）算工程：未绑时首条消息会落到活动工作区（后端 cwd 链第三级），
+ *  与「工程」的语义一致。 */
+const currentMode = computed<ChatMode>(() =>
+  tabWsKey.value ? (isDailyKey(tabWsKey.value) ? "daily" : "project") : pl.layout.heroMode,
+);
 
 /**
  * 模式切换：写模式意图 + 归属，**不切活动工作区**（同 onPickWorkspace 的范式）。
@@ -178,8 +187,8 @@ const currentMode = computed<HeroMode>(() => {
  * 快照为空就绑「无」——「工程 + 还没选工作区」是能表达的真实状态，hero 上就地
  * 用 WorkspacePicker 选。
  */
-async function onPickMode(mode: HeroMode) {
-  pl.setHeroMode(mode);
+async function onPickMode(mode: ChatMode) {
+  pl.setChatMode(mode);
   if (mode === "daily") await ensureDailyWorkspace();
   const bind = mode === "daily" ? dailyWorkspaceBind() : wsSnapshot();
   const tab = activeTab.value;

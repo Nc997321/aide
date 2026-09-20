@@ -1,15 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_HERO_MODE, HERO_MODES } from "./modes";
-import { heroCopyPool, pickHeroCopy } from "./heroCopy";
+import { DEFAULT_CHAT_MODE, CHAT_MODES } from "./modes";
+import { heroCopyPool, pickHeroCopy } from "./hero/heroCopy";
 
 describe("hero 模式表", () => {
   it("默认是日常", () => {
-    expect(DEFAULT_HERO_MODE).toBe("daily");
+    expect(DEFAULT_CHAT_MODE).toBe("daily");
   });
 
   it("两个模式各有名字，顺序是 日常 → 工程", () => {
-    expect(HERO_MODES.map((m) => m.id)).toEqual(["daily", "project"]);
-    expect(HERO_MODES.map((m) => m.label)).toEqual(["日常", "工程"]);
+    expect(CHAT_MODES.map((m) => m.id)).toEqual(["daily", "project"]);
+    expect(CHAT_MODES.map((m) => m.label)).toEqual(["日常", "工程"]);
   });
 });
 

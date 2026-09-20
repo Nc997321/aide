@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { chimeForDate, pickHeroCopy, type HeroCopy, type Period } from "./heroCopy";
-import type { HeroMode } from "./modes";
+import type { ChatMode } from "../modes";
 
 /** 构造本地时区指定时刻（月份 0 起，与 Date 构造器一致）。 */
 function at(h: number, m: number, day = 1, month = 8, year = 2026): Date {
@@ -58,8 +58,8 @@ describe("chimeForDate 时钟标签", () => {
 });
 
 describe("pickHeroCopy seed 轮换（两个池子同一套取模规则）", () => {
-  const MODES: HeroMode[] = ["daily", "project"];
-  const poolOf = (mode: HeroMode): readonly HeroCopy[] =>
+  const MODES: ChatMode[] = ["daily", "project"];
+  const poolOf = (mode: ChatMode): readonly HeroCopy[] =>
     [0, 1, 2, 3, 4].map((seed) => pickHeroCopy(mode, seed));
 
   it.each(MODES)("%s：0..4 池内 5 条互相不同（真实轮换），且 headline/body 都非空", (mode) => {
