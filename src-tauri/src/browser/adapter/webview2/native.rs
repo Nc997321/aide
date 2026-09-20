@@ -72,8 +72,12 @@ where
         Ok(Ok(json)) => serde_json::from_str(&json)
             .map_err(|e| fail(format!("native call returned non-JSON ({e}): {json}"))),
         Ok(Err(detail)) => Err(fail(detail)),
+        // 超时原因不止一种：视图可能在取出句柄与闭包执行之间被 close（completed handler 永不来），
+        // 也可能是**依赖合成帧的调用**（如 Page.captureScreenshot）落在了隐藏视图上——隐藏视图
+        // 一帧都不合成，回包永远不来。下钻层是通用骨架，**只枚举可能，不指名单一原因**。
         Err(_) => Err(fail(format!(
-            "native call got no reply within {NATIVE_TIMEOUT:?} (view closed mid-flight?)"
+            "native call got no reply within {NATIVE_TIMEOUT:?} (the view may be closed, or a \
+             compositor-dependent call was made on a hidden view)"
         ))),
     }
 }
