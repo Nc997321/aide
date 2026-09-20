@@ -76,6 +76,12 @@ pub fn run() {
     if let Err(e) = commands::workspace::ensure_registry_migrated() {
         eprintln!("[aide] workspace registry migration failed: {e}");
     }
+    // 日常目录引导：建目录 + 幂等注册。**刻意不激活**——活动工作区仍由下面的恢复链
+    // 与用户操作决定（「日常」是内部实现细节，不该顶掉用户的当前项目，也不该影响
+    // 引导向导的跳过判据）。失败不阻断启动（与上面同策略）。
+    if let Err(e) = commands::workspace::daily::ensure_daily_workspace() {
+        eprintln!("[aide] daily workspace bootstrap failed: {e}");
+    }
     let saved_key = commands::load_workspace_state();
     let workspace_state = WorkspaceState::new();
     if let Some(key) = saved_key {
@@ -412,6 +418,7 @@ pub fn run() {
             commands::session::session_truncate_jsonl,
             commands::session::find_sessions_since,
             commands::workspace::list_workspaces,
+            commands::workspace::daily_workspace,
             commands::workspace::set_workspace,
             commands::workspace::create_workspace,
             commands::workspace::remove_workspace,

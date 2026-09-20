@@ -29,6 +29,11 @@ pub use registry::{
 // 落位与判据见 docs/superpowers/plans/2026-09-17-cross-directory-session.md
 pub mod attach;
 
+// daily：「日常」模式的底层工作区（内部目录，对 UI 隐身）。纯路径逻辑与 IO 外壳
+// 分开，理由见子模块头。设计取舍见
+// docs/superpowers/specs/2026-09-20-daily-mode-design.md
+pub mod daily;
+
 /// 路径 → 编码 key：把 : \ / 替换为 -，与 Claude CLI
 /// `~/.aide/claude/projects/` 目录命名一致。
 pub fn path_to_key(path: &str) -> String {
@@ -391,12 +396,34 @@ pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Resu
 pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     tokio::task::spawn_blocking(|| {
         let config = super::settings::load_state();
-        Ok(infos_from_registry(&config, |p| {
-            std::path::Path::new(p).exists()
-        }))
+        let daily = daily::daily_path_in(&super::our_config_dir());
+        let mut infos = infos_from_registry(&config, |p| std::path::Path::new(p).exists());
+        // 日常目录存在且已注册（它是 cwd / 信任 / 记忆目录的锚），但它不是用户要管理
+        // 的项目：从所有工作区列表（侧栏分区、WorkspacePicker）里剔除。唯一过滤点，
+        // 渲染期不要再滤一次。设计见 docs/superpowers/specs/2026-09-20-daily-mode-design.md
+        infos.retain(|w| !daily::is_daily_path(&daily, &w.name));
+        Ok(infos)
     })
     .await
     .map_err(|e| format!("list_workspaces panicked: {}", e))?
+}
+
+/// 日常模式的归属（key + path）。给前端做「这个会话是不是日常」的判定与落点绑定用。
+///
+/// 纯计算无 IO：路径由配置目录推出，key 与注册时走同一条链（normalize → path_to_key），
+/// 故无需读 state、也无需 spawn_blocking（同步命令不碰 IO，不触发 check:sync-io 守卫）。
+#[tauri::command]
+pub fn daily_workspace() -> DailyWorkspace {
+    let dir = daily::daily_path_in(&super::our_config_dir());
+    let path = normalize_registration_path(&dir.to_string_lossy());
+    let key = path_to_key(&path);
+    DailyWorkspace { key, path }
+}
+
+#[derive(serde::Serialize)]
+pub struct DailyWorkspace {
+    pub key: String,
+    pub path: String,
 }
 
 #[tauri::command]
