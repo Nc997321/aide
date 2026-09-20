@@ -1,4 +1,6 @@
 import type { FrameEvalOutcome, FrameRead } from "./frames.js";
+import type { EvalProbe } from "./runEval.js";
+import { hiddenNote, readVisibility } from "./visibility.js";
 
 /**
  * 浏览器工具的结果 → 模型可读文本。
@@ -51,6 +53,52 @@ function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * 一次成功求值的**结果视图**——`runEval` 的成功返回去掉通道细节。
+ *
+ * 做成对象而不是三个位置参数：`viewId` 与 `probe` 都是可缺省的旁注，摊平了容易传错位。
+ */
+export interface EvalView {
+  value: unknown;
+  /** Rust 解析出的视图 id（调用方省略 `view_id` 时才有价值）。 */
+  viewId?: string;
+  probe: EvalProbe;
+}
+
+/**
+ * 隐藏视图对**读取类**结果意味着什么。
+ *
+ * 与动作类不同：读到的内容**多半是真的**（DOM 在，`textContent` 在），但依赖渲染的东西会缺
+ * ——懒加载没触发、过渡没跑完、`innerText` 类取值可能为空。所以措辞落在"结果是可信的这一句
+ * 不成立"，而不是"结果不可信"。
+ */
+const HIDDEN_CONSEQUENCE =
+  "The DOM is still readable, but anything that depends on rendering (lazy-loaded content, " +
+  "transitions, layout that only settles once visible) may not have happened — treat a thin or " +
+  'empty result as "not rendered", not as "not there".';
+
+/** 异步没等到（只可能出现在 CDP 不可用的降级路径上）。 */
+const PENDING_NOTE =
+  "NOTE: your script returned a Promise and this runtime's fallback channel cannot await it — what you " +
+  "got back is the unresolved Promise, not its value. This happens when the CDP path is unavailable on " +
+  "this machine. Restructure the script to return a plain value, or have it park the result on `window` " +
+  "and read it in a second call.";
+
+/**
+ * 求值结果的两条旁注：视图隐藏 / 异步没等到（都只在**真的发生时**出现）。
+ *
+ * 入参刻意是 `unknown`：本模块的铁律是"data 是 unknown，畸形形状下解引用就会炸成 isError"，
+ * 所以这里自己收窄，不假设调用方给对了形状。
+ */
+function evalNotes(raw: unknown): string[] {
+  const probe = asRecord(raw);
+  const out: string[] = [];
+  const hidden = hiddenNote(readVisibility(probe?.["visibility"]), HIDDEN_CONSEQUENCE);
+  if (hidden) out.push(hidden);
+  if (probe?.["pending"] === true) out.push(PENDING_NOTE);
+  return out;
+}
+
 /** CDP 帧级读取的结果（跨域 iframe）。见 `frames.ts`。 */
 export interface FrameReadOutcome {
   frames: FrameRead[];
@@ -58,11 +106,16 @@ export interface FrameReadOutcome {
   error?: string;
 }
 
-/** `null` / 非对象 —— 大概率是页面脚本抛异常（`ExecuteScript` 那时回 null）。 */
+/**
+ * 投影脚本回了个非对象。
+ *
+ * 注意：**抛异常不再走这里**——`runEval` 拿 CDP 的 `exceptionDetails` 把"抛了"与"返回了 null"
+ * 分开了，异常有它自己的文案。所以这里只剩一种解释：脚本自己返回了个非对象（`null`/字符串…）。
+ */
 function malformedValueNote(raw: unknown): string {
   return (
-    "The page script returned no usable value (`null` or a non-object), which is how " +
-    `ExecuteScript reports a thrown exception. Raw result: ${JSON.stringify(raw)?.slice(0, 200) ?? "null"}`
+    "The page script returned no usable value (`null` or a non-object). " +
+    `Raw result: ${JSON.stringify(raw)?.slice(0, 200) ?? "null"}`
   );
 }
 
@@ -239,12 +292,13 @@ function renderFrames(raw: unknown, frameOutcome?: FrameReadOutcome): string[] {
   return out;
 }
 
-export function formatRead(data: unknown, frameOutcome?: FrameReadOutcome): string {
-  const envelope = asRecord(data);
-  const viewId = str(envelope?.["view_id"]);
-  const value = asRecord(envelope?.["value"]);
+export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): string {
+  // 签名是 `EvalView`，但这里**不假设**它真是（`formatRead(bad)` 有专门的守卫测试）。
+  const v = asRecord(view) ?? {};
+  const viewId = str(v["viewId"]) || "?";
+  const value = asRecord(v["value"]);
 
-  if (!value) return malformedValueNote(envelope?.["value"]);
+  if (!value) return malformedValueNote(v["value"]);
   if (value["ok"] === false) {
     return `Page projection failed: ${str(value["error"]) || "unknown error"}`;
   }
@@ -305,6 +359,10 @@ export function formatRead(data: unknown, frameOutcome?: FrameReadOutcome): stri
   const text = str(value["text"]);
   if (text) out.push("", "## Raw text", text);
 
+  // 旁注放最后：它是**关于上面这一整份结果**的免责说明，不是页面内容的一部分。
+  const notes = evalNotes(v["probe"]);
+  if (notes.length) out.push("", ...notes);
+
   return out.join("\n");
 }
 
@@ -324,21 +382,24 @@ export function formatFrameEval(outcome: FrameEvalOutcome): string {
     return lines.join("\n");
   }
   const rendered = JSON.stringify(outcome.value, null, 2);
-  return [
+  const lines = [
     `frame ${outcome.url} — script result:`,
     rendered === undefined ? "undefined" : rendered.slice(0, 20000),
-  ].join("\n");
+  ];
+  if (outcome.probe) lines.push("", ...evalNotes(outcome.probe));
+  return lines.join("\n");
 }
 
 // ---- browser_eval ----
 
-export function formatEval(data: unknown): string {
-  const envelope = asRecord(data);
-  const viewId = str(envelope?.["view_id"]);
-  const value = envelope?.["value"];
-  const rendered = JSON.stringify(value, null, 2);
-  return [
-    `view ${viewId} — script result:`,
+export function formatEval(view: EvalView): string {
+  const v = asRecord(view) ?? {};
+  const rendered = JSON.stringify(v["value"], null, 2);
+  const lines = [
+    `view ${str(v["viewId"]) || "?"} — script result:`,
     rendered === undefined ? "undefined" : rendered.slice(0, 20000),
-  ].join("\n");
+  ];
+  const notes = evalNotes(v["probe"]);
+  if (notes.length) lines.push("", ...notes);
+  return lines.join("\n");
 }

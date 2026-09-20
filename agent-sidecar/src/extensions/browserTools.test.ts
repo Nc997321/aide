@@ -40,12 +40,13 @@ describe("headless 短路（结构性没有内嵌浏览器）", () => {
     expect(r.content[0].text).toBe(NO_BROWSER_HOST_TEXT);
   });
 
-  it("五个工具都短路（漏一个就会有一个挂 15s）", async () => {
+  it("六个工具都短路（漏一个就会有一个挂 15s）", async () => {
     const env = { AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv;
     for (const name of [
       "browser_tabs",
       "browser_read",
       "browser_act",
+      "browser_wait",
       "browser_eval",
       "browser_screenshot",
     ]) {
@@ -86,11 +87,11 @@ describe("browser_read", () => {
     );
 
     const q = events[0] as any;
-    expect(q.op).toBe("eval");
+    expectEvalRequest(q, PAGE_PROJECTION_SCRIPT);
     expect(q.view_id).toBe("browser-2");
-    expect(q.script).toBe(PAGE_PROJECTION_SCRIPT);
 
-    resolveBrowserResult({ request_id: q.request_id, ok: true, data: { view_id: "browser-2", value: { ok: true, title: "T" } } });
+    reply(q, evalOk({ ok: true, title: "T" }));
+    await probeOk(events, 1);
     expect((await p).content[0].text).toContain("title: T");
   });
 
@@ -106,10 +107,11 @@ describe("browser_read", () => {
     );
 
     const q = events[0] as any;
-    expect(q.script).toBe(PAGE_PROJECTION_SCRIPT);
-    expect(q.script).not.toContain("/api/delete");
+    expect(q.params.expression).toContain(PAGE_PROJECTION_SCRIPT);
+    expect(q.params.expression).not.toContain("/api/delete");
 
-    resolveBrowserResult({ request_id: q.request_id, ok: true, data: { value: { ok: true } } });
+    reply(q, evalOk({ ok: true }));
+    await probeOk(events, 1);
     await p;
   });
 
@@ -121,19 +123,17 @@ describe("browser_read", () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
 
-    reply(await waitForQuery(events, 0), {
-      ok: true,
-      data: {
-        view_id: "browser-1",
-        value: {
-          ok: true,
-          url: "https://host/shell",
-          frames: [{ src: "https://other/proto", sameOrigin: false, content: null }],
-        },
-      },
-    });
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: true,
+        url: "https://host/shell",
+        frames: [{ src: "https://other/proto", sameOrigin: false, content: null }],
+      }),
+    );
+    await probeOk(events, 1);
 
-    const tree = await waitForQuery(events, 1);
+    const tree = await waitForQuery(events, 2);
     expect(tree.op).toBe("call_cdp");
     expect(tree.method).toBe("Page.getFrameTree");
     reply(tree, {
@@ -148,11 +148,9 @@ describe("browser_read", () => {
       },
     });
 
-    reply(await waitForQuery(events, 2), { ok: true, data: { value: { executionContextId: 5 } } });
-    reply(await waitForQuery(events, 3), {
-      ok: true,
-      data: { value: { result: { type: "object", value: { ok: true, title: "设备台账管理" } } } },
-    });
+    reply(await waitForQuery(events, 3), { ok: true, data: { value: { executionContextId: 5 } } });
+    reply(await waitForQuery(events, 4), evalOk({ ok: true, title: "设备台账管理" }));
+    await probeOk(events, 5);
 
     const text = (await p).content[0].text;
     expect(text).toContain("## Frame content 1 — https://other/proto");
@@ -162,12 +160,10 @@ describe("browser_read", () => {
   it("骨架里没有跨域帧 → 不追加多余的 CDP 往返", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
-    reply(await waitForQuery(events, 0), {
-      ok: true,
-      data: { view_id: "browser-1", value: { ok: true, title: "T", frames: [] } },
-    });
+    reply(await waitForQuery(events, 0), evalOk({ ok: true, title: "T", frames: [] }));
+    await probeOk(events, 1);
     await p;
-    expect(events).toHaveLength(1);
+    expect(events).toHaveLength(2);
   });
 
   it("桥失败 → Rust 的错误文本原样回到模型", async () => {
@@ -191,10 +187,10 @@ describe("browser_eval", () => {
       {},
     );
     const q = events[0] as any;
-    expect(q.op).toBe("eval");
-    expect(q.script).toBe("document.title");
+    expectEvalRequest(q, "document.title");
 
-    resolveBrowserResult({ request_id: q.request_id, ok: true, data: { view_id: "browser-1", value: "设备台账" } });
+    reply(q, evalOk("设备台账", "string"));
+    await probeOk(events, 1);
     expect((await p).content[0].text).toContain("设备台账");
   });
 });
@@ -213,11 +209,34 @@ function reply(q: any, body: { ok: boolean; data?: unknown; error?: string }): v
   resolveBrowserResult({ request_id: q.request_id, ...body });
 }
 
+/**
+ * 求值走的是 `runEval` → CDP `Runtime.evaluate`，成功回包要带上**包装器**那一层
+ * （`{value, visibility, readyState}`）。参数是脚本的返回值，这层由 helper 替它补。
+ */
+function evalOk(value: unknown, type = "object"): { ok: boolean; data: unknown } {
+  return { ok: true, data: { view_id: "browser-1", value: { result: { type, value } } } };
+}
+
+/**
+ * `runEval` 成功后会**再取一次可见性**（`probeVisibility`）——所以每个成功的求值都是两发。
+ * 答掉第二发，省得每条用例自己数下标。
+ */
+async function probeOk(events: ChatEvent[], i: number): Promise<void> {
+  const q = await waitForQuery(events, i);
+  expect((q.params as any).expression).toBe("document.visibilityState");
+  reply(q, evalOk("visible", "string"));
+}
+
+/** 求值请求的断言门面：`op` 与包装形态变了，用例关心的是"跑的是不是那段脚本"。 */
+function expectEvalRequest(q: any, scriptFragment: string): void {
+  expect(q.op).toBe("call_cdp");
+  expect(q.method).toBe("Runtime.evaluate");
+  expect(q.params.expression).toContain(scriptFragment);
+}
+
 describe("browser_act — 点击的两条路", () => {
-  const RESOLVED = {
-    ok: true,
-    data: { view_id: "browser-1", value: { ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 } },
-  };
+  /** 目标解析成功：`{ok:true, hit, x, y}` 是 `buildResolveScript` 的返回值。 */
+  const RESOLVED = evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 });
 
   it("CDP 可用时走真实输入：mousePressed + mouseReleased 都要发", async () => {
     const { events, emit } = emitCollector();
@@ -227,23 +246,24 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     const q0 = await waitForQuery(events, 0);
-    expect(q0.op).toBe("eval");
+    expectEvalRequest(q0, "TARGET");
     reply(q0, RESOLVED);
-
-    const q1 = await waitForQuery(events, 1);
-    expect(q1.op).toBe("call_cdp");
-    expect(q1.method).toBe("Input.dispatchMouseEvent");
-    expect(q1.params).toMatchObject({ type: "mousePressed", x: 10, y: 20, button: "left" });
-    reply(q1, { ok: true, data: { value: {} } });
+    await probeOk(events, 1);
 
     const q2 = await waitForQuery(events, 2);
-    expect(q2.params).toMatchObject({ type: "mouseReleased", x: 10, y: 20 });
+    expect(q2.op).toBe("call_cdp");
+    expect(q2.method).toBe("Input.dispatchMouseEvent");
+    expect(q2.params).toMatchObject({ type: "mousePressed", x: 10, y: 20, button: "left" });
     reply(q2, { ok: true, data: { value: {} } });
+
+    const q3 = await waitForQuery(events, 3);
+    expect(q3.params).toMatchObject({ type: "mouseReleased", x: 10, y: 20 });
+    reply(q3, { ok: true, data: { value: {} } });
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
     expect(text).toContain("刷新");
-    expect(events).toHaveLength(3);
+    expect(events).toHaveLength(4);
   });
 
   /**
@@ -258,11 +278,15 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     reply(await waitForQuery(events, 0), RESOLVED);
-    reply(await waitForQuery(events, 1), { ok: false, error: "Input domain not supported" });
+    await probeOk(events, 1);
+    reply(await waitForQuery(events, 2), { ok: false, error: "Input domain not supported" });
 
-    const q2 = await waitForQuery(events, 2);
-    expect(q2.op).toBe("eval"); // 兜底也是 eval，不是再次 CDP
-    reply(q2, { ok: true, data: { value: { ok: true, hit: { tag: "button", text: "刷新" } } } });
+    const q3 = await waitForQuery(events, 3);
+    // 兜底走 sidecar 里的合成事件脚本——**不是**再次 CDP
+    expect(q3.op).toBe("call_cdp");
+    expect((q3.params as any).expression).toContain("pointerdown");
+    reply(q3, evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
+    await probeOk(events, 4);
 
     const text = (await p).content[0].text;
     expect(text).toContain("SYNTHETIC");
@@ -278,12 +302,85 @@ describe("browser_act — 点击的两条路", () => {
       {},
     );
     reply(await waitForQuery(events, 0), RESOLVED);
-    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
-    reply(await waitForQuery(events, 2), { ok: false, error: "boom" });
-    reply(await waitForQuery(events, 3), { ok: false, error: "fallback also failed" });
+    await probeOk(events, 1);
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 3), { ok: false, error: "boom" });
+    reply(await waitForQuery(events, 4), { ok: false, error: "fallback also failed" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("pressed state");
+  });
+
+  /**
+   * **假成功回归**（2026-09-20 走查发现）。
+   *
+   * CDP 的**方法级拒绝**是一个合法 JSON 响应体（`{error:{code,message}}`），`drill` 只做 JSON
+   * 解析，于是它带着 `ok:true` 回到 sidecar。修复前这里会回 "Clicked … via CDP"——**而它根本
+   * 没点**。它比"降级了不说"更坏：不是漏报，是报假。
+   */
+  it("CDP 方法级拒绝（回 ok:true + {error}）→ 绝不报「用真实输入点过了」", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "click", text: "刷新" },
+      {},
+    );
+
+    reply(await waitForQuery(events, 0), RESOLVED);
+    await probeOk(events, 1);
+    reply(await waitForQuery(events, 2), {
+      ok: true, // ← 桥层成功
+      data: { value: { error: { code: -32601, message: "'Input.dispatchMouseEvent' wasn't found" } } },
+    });
+    reply(await waitForQuery(events, 3), evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
+    await probeOk(events, 4);
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("SYNTHETIC"); // 走了兜底，而不是报成功
+    expect(text).toContain("wasn't found"); // 运行时拒绝的原文要带出来
+    expect(text).not.toContain("via CDP at"); // ← 核心：不许出现假的成功句
+  });
+
+  it("hover 同样不许把方法级拒绝当成功", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "hover", text: "刷新" },
+      {},
+    );
+
+    reply(await waitForQuery(events, 0), RESOLVED);
+    await probeOk(events, 1);
+    reply(await waitForQuery(events, 2), {
+      ok: true,
+      data: { value: { error: { code: -32601, message: "mouseMoved rejected" } } },
+    });
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Hover failed");
+    expect(text).toContain("mouseMoved rejected");
+    expect(text).not.toContain("Hovered");
+  });
+
+  /**
+   * 隐藏视图：点击可能落下，但点击后的过渡不会推进——不说这句，模型会把"点完没反应"
+   * 判断成"控件坏了"或"没点到"。
+   */
+  it("视图隐藏时，结果里明说过渡不会推进", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "click", text: "刷新" },
+      {},
+    );
+
+    reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 }));
+    // 可见性来自随后那次独立探测
+    reply(await waitForQuery(events, 1), evalOk("hidden", "string"));
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 3), { ok: true, data: { value: {} } });
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("via CDP");
+    expect(text).toContain("hidden from the engine");
+    expect(text).toContain("will not progress");
   });
 
   it("目标解析失败 → 带候选清单，且**不发** CDP", async () => {
@@ -292,21 +389,20 @@ describe("browser_act — 点击的两条路", () => {
       { action: "click", text: "不存在的按钮" },
       {},
     );
-    reply(await waitForQuery(events, 0), {
-      ok: true,
-      data: {
-        value: {
-          ok: false,
-          error: "no visible element with text \"不存在的按钮\"",
-          candidates: [{ tag: "button", text: "刷新" }],
-        },
-      },
-    });
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: false,
+        error: 'no visible element with text "不存在的按钮"',
+        candidates: [{ tag: "button", text: "刷新" }],
+      }),
+    );
+    await probeOk(events, 1);
 
     const text = (await p).content[0].text;
     expect(text).toContain("Could not find the target");
     expect(text).toContain("刷新"); // 候选清单给模型改口径用
-    expect(events).toHaveLength(1); // 没瞎点
+    expect(events).toHaveLength(2); // 解析 + 可见性，没瞎点
   });
 });
 
@@ -344,6 +440,8 @@ describe("browser_screenshot — 视觉兜底", () => {
     // 默认也不带 captureBeyondViewport——整页会把屏幕外的噪音也带进来。
     expect(q.params).toEqual({ format: "jpeg", quality: 80 });
     reply(q, { ok: true, data: { value: { data: "BASE64JPG" } } });
+    // 截图之后还要问一次可见性（隐藏视图给的可能是旧帧）
+    reply(await waitForQuery(events, 1), evalOk("visible"));
 
     const r = await p;
     expect(r.content).toHaveLength(2);
@@ -364,6 +462,7 @@ describe("browser_screenshot — 视觉兜底", () => {
     const q = await waitForQuery(events, 0);
     expect(q.params).toEqual({ format: "jpeg", quality: 80, captureBeyondViewport: true });
     reply(q, { ok: true, data: { value: { data: "X" } } });
+    reply(await waitForQuery(events, 1), evalOk("visible"));
     expect((await p).content[0].text).toContain("full");
   });
 
@@ -377,6 +476,7 @@ describe("browser_screenshot — 视觉兜底", () => {
     expect(q.params).toEqual({ format: "png" });
     expect(q.params.quality).toBeUndefined();
     reply(q, { ok: true, data: { value: { data: "BASE64PNG" } } });
+    reply(await waitForQuery(events, 1), evalOk("visible"));
 
     const r = await p;
     expect(r.content[0].text).toContain("PNG");
@@ -422,6 +522,7 @@ describe("工具面里不许出现站点名词（换站点 MCP server 一行不�
       "browser_tabs",
       "browser_read",
       "browser_act",
+      "browser_wait",
       "browser_eval",
       "browser_screenshot",
     ]);

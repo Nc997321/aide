@@ -56,13 +56,15 @@ The \`aide-browser\` MCP tools drive the embedded browser pane in Aide. The page
 1. **Find the view.** Call \`browser_tabs\`. It lists the open views with ids, urls and titles. A view survives the panel being closed or the tab switched away, so the page may already be open. If a view is not open, ask the user to open one (browser panel, Ctrl+Shift+B) rather than guessing a URL.
 2. **Read the skeleton first.** Call \`browser_read\` before anything else. It returns outline, tables, form fields (with labels and options), clickable elements, frames and raw text for the top document plus same-origin frames. One call replaces a long series of script probes.
 3. **Only then reach for scripts.** If the skeleton does not carry what you need, use \`browser_eval\` to extract exactly that shape. See \`references/page-extraction.md\` for how to write an extraction that stays cheap.
-4. **To reach other pages**, use \`browser_act\` (click / fill / hover) — target an element by its visible \`text\`. Clicking through a prototype's own navigation is usually the only way to reach pages that no URL exposes. \`browser_act\` results say whether the click went through real CDP input or a synthetic fallback; re-read the page afterwards to confirm it actually changed.
-5. **When the question is visual, look at it.** \`browser_screenshot\` answers "which panel is the user actually looking at" — and "did this render at all" — far faster than reasoning about coordinates. It is the fallback, not the default: an image costs far more context than text and gives you pixels rather than structure. Reach for it when the structured read genuinely cannot answer, not before.
-6. **Deliver a specification, not a transcript.** The user wants a structured result — page inventory, tables with their columns, form fields with their labels, actions available, and how pages link. Do not paste raw page dumps into the answer.
+4. **To reach other pages**, use \`browser_act\` (click / fill / hover) — target an element by its visible \`text\`. Clicking through a prototype's own navigation is usually the only way to reach pages that no URL exposes. \`browser_act\` results say whether the click went through real CDP input or a synthetic fallback.
+5. **After an action, wait with \`browser_wait\` — never hand-roll a polling loop.** \`until:"condition"\` polls a synchronous expression you supply; \`until:"load"\` waits for a navigation to finish, which no in-page expression can do. A timeout is reported, not raised: it tells you how many times it polled, what it last saw, and whether the view was hidden. Read that before concluding the page is broken.
+6. **When the question is visual, look at it.** \`browser_screenshot\` answers "which panel is the user actually looking at" — and "did this render at all" — far faster than reasoning about coordinates. It is the fallback, not the default: an image costs far more context than text and gives you pixels rather than structure. Reach for it when the structured read genuinely cannot answer, not before.
+7. **Deliver a specification, not a transcript.** The user wants a structured result — page inventory, tables with their columns, form fields with their labels, actions available, and how pages link. Do not paste raw page dumps into the answer.
 
-## Two things that will bite you
+## Three things that will bite you
 
 - **Cross-origin frames need a different door — not a different page.** The parent document's own scripts cannot touch them, but \`browser_read\` reaches in anyway through CDP frame-level evaluation, and \`browser_eval\` with \`frame\` runs *your* script inside them. Do not navigate away, and do not fetch the frame's URL yourself — the interesting content is usually inside a frame, and both detours lose the page you were reading. If a read does report one as unreadable, that means the runtime refused; opening the frame's URL is then the fallback.
+- **A hidden view does not render, and the tools say so.** When the browser panel is closed, another tab is selected, or any overlay is open, the view is hidden from the engine: \`requestAnimationFrame\` stops, timers are throttled, lazy content never loads. So "the element is not there" may mean "it was never rendered" — and a \`browser_wait\` on anything that depends on a transition will time out no matter how long you give it. When a tool result reports a hidden view, bring it to the front before drawing conclusions; \`browser_screenshot\` on a hidden view can hand back a stale frame rather than an empty one.
 - **Prototypes show the happy path only.** Field types, validation rules, enumerations, permissions and error states are usually absent. Extract what is drawn, and mark what you had to infer — do not present an inference as something the design states.
 
 ## Site adapters live in \`references/\`
@@ -85,7 +87,9 @@ Write one script that returns exactly the fields you need, then run it. If you n
 ## Contract
 
 - **Return a small object**, never \`document.body.outerHTML\` and never the whole DOM. The value of the last expression is JSON-serialised into your context.
-- **Return your own envelope**: \`{ok: true, ...}\` / \`{ok: false, error: "..."}\`. If your script throws, \`browser_eval\` reports \`null\`, which is indistinguishable from a script that legitimately returned null — you lose the reason. Catch it yourself and say what went wrong.
+- **It may be async.** \`browser_eval\` awaits the value, so \`(async () => { const r = await fetch(...); return {ok:true, rows: r} })()\` returns the resolved object. You do not need to park results on \`window\` and read them in a second call.
+- **An exception is reported as an exception.** Throwing is no longer indistinguishable from returning null — you get the error text. Returning your own \`{ok: true, ...}\` / \`{ok: false, error: "..."}\` envelope is still worth it, because it lets you say *which part* failed.
+- **It is one EXPRESSION, not a program.** \`var x = 1; x + 2\` will not parse. Wrap statements: \`(() => { ... })()\`.
 - **Cap everything**: rows, columns, text lengths. Add \`truncated: true\` when you hit a cap, so a partial answer never looks complete.
 - **Resolve through the live DOM on every run.** Do not carry element handles or indices between calls — the page re-renders and they go stale silently. Re-find by selector or text each time.
 - **Say what you could not read.** Cross-origin frames, canvas-rendered content and closed shadow roots are invisible to a script on the parent page. Report them as unreadable rather than omitting them.
@@ -117,6 +121,15 @@ What to look for once you are in there:
 - **Interaction hints: the cursor and the handlers.** \`cursor: pointer\`, a click-ish \`onclick\`, or a role attribute tell you what is clickable — usable afterwards with \`browser_act\`.
 
 Write the result into your own \`{ok: true, ...}\` envelope, cap the size, and return it. Do not return the raw DOM — a prototype page's markup is mostly noise.
+
+## Verifying your own app through the embedded browser
+
+The same tools are how you check a change you just made in the app the user is running — an interceptor that rewrites a request, a CSS refactor that should change nothing. Two traps, both of which cost real time before they were written down:
+
+- **A dynamic \`import()\` of your own source gets a cached module, not the current one.** Vite serves modules keyed by a \`?t=<timestamp>\` cache-buster; importing \`/src/foo.ts\` without it hands you the copy from before your edit, and you end up asserting against stale code and "discovering" that your fix does not work. Append the buster — import the module with a \`?t=\` query carrying the current time — or verify through the rendered app rather than by importing its modules.
+- **Never poll from inside the page.** A \`setTimeout\` loop in a hidden view is throttled to as little as once a minute, so a "5 second" wait can poll four times and report a false negative. Use \`browser_wait\`, which polls from the host.
+
+When you are checking \`getComputedStyle\` values or geometry, remember the result depends on the view having actually laid out — on a hidden view that may not have happened.
 `;
 
 /**

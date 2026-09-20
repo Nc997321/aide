@@ -11,10 +11,20 @@
  * 所以必须有兜底；而兜底不是等价的（仍非可信事件），**必须在返回文本里说明用了哪条路**，
  * 让模型自己判断这次点击的可靠性。静默降级会制造"点了但没反应"的幽灵故障。
  *
+ * # 方法级错误：比降级更坏的是**报假成功**
+ *
+ * CDP 的调用失败有两种形状，而桥只认得其中一种：传输层失败会回 `ok:false`，但**方法级拒绝**
+ * （`{error:{code,message}}`）是一个合法 JSON 响应体，`drill`（`native.rs:71-78`）只做 JSON
+ * 解析，于是它带着 `ok:true` 一路回到这里。不看这个字段，运行时拒绝一次点击时我们会回
+ * "Clicked … with a real mouse event via CDP"——**而它根本没点**。
+ * （`screenshot.ts:88-98` 早就这么判了，这条路径当初漏了；2026-09-20 走查发现。）
+ *
  * 设值（`fill`）不走 CDP：置 value + 派发 `input`/`change` 是纯脚本操作，没有可信事件的问题。
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
+import { runEval, type EvalProbe } from "./runEval.js";
+import { appendHiddenNote } from "./visibility.js";
 import {
   buildClickFallbackScript,
   buildFillScript,
@@ -29,16 +39,6 @@ function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : null;
-}
-
-/** 从 eval 回包里取脚本返回值（`{view_id, value}`）。 */
-function valueOf(data: unknown): Record<string, unknown> | null {
-  return asRecord(asRecord(data)?.["value"]);
-}
-
-function viewIdOf(data: unknown): string {
-  const id = asRecord(data)?.["view_id"];
-  return typeof id === "string" ? id : "";
 }
 
 /** 目标解析失败时的文本：错误 + 候选清单（帮模型改口径，而不是让它瞎猜）。 */
@@ -67,25 +67,65 @@ function describeHit(v: Record<string, unknown>): string {
   return bits.join(" ");
 }
 
-/** 跑一段 eval 脚本、把结果规整成 `{ok, value}`；桥失败走 `failure`。 */
+/** 跑一段求值脚本、把结果规整成 `{ok, value, probe}`；失败走 `text`。 */
 async function evalScript(
   viewId: string | undefined,
   script: string,
   emit: (e: ChatEvent) => void,
-): Promise<{ ok: true; value: Record<string, unknown>; viewId: string } | { ok: false; text: TextOut }> {
-  const resp = await queryBrowser({ op: "eval", view_id: viewId, script }, emit);
-  if (!resp.ok) {
-    return {
-      ok: false,
-      text: resp.timedOut
-        ? "Browser call timed out — the desktop host did not reply (was the view closed mid-call?)."
-        : `Browser call failed: ${resp.error ?? "unknown error"}`,
-    };
+): Promise<{ ok: true; value: Record<string, unknown>; probe: EvalProbe } | { ok: false; text: TextOut }> {
+  const r = await runEval(script, { viewId }, emit);
+  // 抛异常 / 不可序列化 / 桥失败，runEval 已经定性并给出面向模型的文本，不加工。
+  if (!r.ok) return { ok: false, text: r.error };
+  const value = asRecord(r.value);
+  // 走到这里还不是对象，只可能是脚本自己返回了非对象（抛异常那一支已在上面分流）。
+  if (!value) {
+    return { ok: false, text: "The page script returned no usable object (it returned a non-object)." };
   }
-  const value = valueOf(resp.data);
-  // 脚本抛异常时 ExecuteScript 回 null —— 与"确实返回 null"不可区分，一律当失败。
-  if (!value) return { ok: false, text: "The page script returned no usable value (it likely threw)." };
-  return { ok: true, value, viewId: viewIdOf(resp.data) };
+  return { ok: true, value, probe: r.probe };
+}
+
+/**
+ * CDP 回包里的**方法级错误**——`{error:{code,message}}`。
+ *
+ * 返回 null = 这次调用真的成了。**不看它的调用点都会报假成功**，见文件头。
+ */
+function cdpMethodError(data: unknown): string | null {
+  const err = asRecord(asRecord(data)?.["value"])?.["error"];
+  const e = asRecord(err);
+  if (!e) return null;
+  return String(e["message"] ?? e["code"] ?? "unknown");
+}
+
+/**
+ * 隐藏视图对**动作类**结果意味着什么。
+ *
+ * 点击本身多半能落下（CDP 派发的是真实输入，不依赖合成），但**点击之后的过渡不会推进**——
+ * 于是"点完了页面没动"会被误判成"点了没反应 / 控件坏了"。
+ */
+const HIDDEN_CONSEQUENCE =
+  "A click can still land, but any transition or animation it starts will not progress, and content " +
+  "that loads lazily may never appear — bring the view to the front before judging the result.";
+
+/** 动作类结果统一附上隐藏告警。 */
+function withHidden(text: string, probe: EvalProbe): string {
+  return appendHiddenNote(text, probe.visibility, HIDDEN_CONSEQUENCE);
+}
+
+/** 一次 CDP 鼠标输入。成了回 `null`，否则回**面向模型的失败原因**。 */
+async function cdpMouse(
+  viewId: string | undefined,
+  params: Record<string, unknown>,
+  label: string,
+  emit: (e: ChatEvent) => void,
+): Promise<string | null> {
+  const resp = await queryBrowser(
+    { op: "call_cdp", view_id: viewId, method: "Input.dispatchMouseEvent", params },
+    emit,
+  );
+  if (!resp.ok) return `${label} failed: ${resp.error ?? "unknown"}`;
+  const rejected = cdpMethodError(resp.data);
+  if (rejected) return `${label} was rejected by the runtime: ${rejected}`;
+  return null;
 }
 
 /**
@@ -99,21 +139,16 @@ async function cdpClick(
   emit: (e: ChatEvent) => void,
 ): Promise<{ ok: true } | { ok: false; reason: string }> {
   const base = { x, y, button: "left", clickCount: 1 };
-  const pressed = await queryBrowser(
-    { op: "call_cdp", view_id: viewId, method: "Input.dispatchMouseEvent", params: { type: "mousePressed", ...base } },
-    emit,
-  );
-  if (!pressed.ok) return { ok: false, reason: pressed.error ?? "mousePressed failed" };
 
-  const released = await queryBrowser(
-    { op: "call_cdp", view_id: viewId, method: "Input.dispatchMouseEvent", params: { type: "mouseReleased", ...base } },
-    emit,
-  );
-  if (!released.ok) {
+  const pressed = await cdpMouse(viewId, { type: "mousePressed", ...base }, "mousePressed", emit);
+  if (pressed) return { ok: false, reason: pressed };
+
+  const released = await cdpMouse(viewId, { type: "mouseReleased", ...base }, "mouseReleased", emit);
+  if (released) {
     // 危险中间态：已按下未抬起。必须说清，让模型知道页面可能停在半按下。
     return {
       ok: false,
-      reason: `mousePressed succeeded but mouseReleased failed (${released.error ?? "unknown"}) — the element may be left in a pressed state`,
+      reason: `${released} — mousePressed succeeded, so the element may be left in a pressed state`,
     };
   }
   return { ok: true };
@@ -129,7 +164,8 @@ export async function performClick(
   if (!resolved.ok) return resolved.text;
 
   const v = resolved.value;
-  if (v["ok"] !== true) return describeResolveFailure(v);
+  // 找不到目标时也该带上隐藏告警：懒加载内容在隐藏视图里根本不会渲染出来。
+  if (v["ok"] !== true) return withHidden(describeResolveFailure(v), resolved.probe);
 
   const x = Number(v["x"]);
   const y = Number(v["y"]);
@@ -140,7 +176,7 @@ export async function performClick(
 
   const viaCdp = await cdpClick(viewId, x, y, emit);
   if (viaCdp.ok) {
-    return `Clicked ${hit} with a real mouse event via CDP at (${x}, ${y}).`;
+    return withHidden(`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y}).`, resolved.probe);
   }
 
   // 兜底：CDP 不可用（WebView2 版本差异）。**必须说清这不是等价路径。**
@@ -152,11 +188,12 @@ export async function performClick(
   if (fv["ok"] !== true) {
     return `Click failed. CDP path: ${viaCdp.reason}. Script fallback: ${String(fv["error"] ?? "unknown")}`;
   }
-  return (
+  return withHidden(
     `Clicked ${describeHit(fv)} using a SYNTHETIC event (script fallback) — ` +
-    `CDP real input was unavailable (${viaCdp.reason}). ` +
-    `The click is not a trusted event, so widgets that only react to real input (some dropdowns, ` +
-    `file pickers, drag targets) may not respond. Verify the page actually changed.`
+      `CDP real input was unavailable (${viaCdp.reason}). ` +
+      `The click is not a trusted event, so widgets that only react to real input (some dropdowns, ` +
+      `file pickers, drag targets) may not respond. Verify the page actually changed.`,
+    fallback.probe,
   );
 }
 
@@ -179,9 +216,9 @@ export async function performFill(
     }
     const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
     if (candidates.length) lines.push("", `${candidates.length} other clickable element(s) on the page — retry with a selector.`);
-    return lines.join("\n");
+    return withHidden(lines.join("\n"), r.probe);
   }
-  return `Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}.`;
+  return withHidden(`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}.`, r.probe);
 }
 
 /**
@@ -196,16 +233,16 @@ export async function performHover(
   const resolved = await evalScript(viewId, buildResolveScript(target), emit);
   if (!resolved.ok) return resolved.text;
   const v = resolved.value;
-  if (v["ok"] !== true) return describeResolveFailure(v);
+  if (v["ok"] !== true) return withHidden(describeResolveFailure(v), resolved.probe);
 
   const x = Number(v["x"]);
   const y = Number(v["y"]);
-  const resp = await queryBrowser(
-    { op: "call_cdp", view_id: viewId, method: "Input.dispatchMouseEvent", params: { type: "mouseMoved", x, y } },
-    emit,
-  );
-  if (!resp.ok) {
-    return `Hover failed at (${x}, ${y}): ${resp.error ?? "unknown error"}. Real hover needs CDP, which is unavailable in this WebView2 runtime.`;
+  const failed = await cdpMouse(viewId, { type: "mouseMoved", x, y }, "mouseMoved", emit);
+  if (failed) {
+    return (
+      `Hover failed at (${x}, ${y}): ${failed}. ` +
+      `Real hover needs CDP, which is unavailable in this WebView2 runtime.`
+    );
   }
-  return `Hovered ${describeHit(v)} at (${x}, ${y}).`;
+  return withHidden(`Hovered ${describeHit(v)} at (${x}, ${y}).`, resolved.probe);
 }

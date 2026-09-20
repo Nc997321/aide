@@ -25,14 +25,22 @@ function reply(q: any, body: { ok: boolean; data?: unknown; error?: string }): v
 /** CDP 回包形状：{view_id, method, value}，value 即 CDP 的返回值本身。 */
 const cdpOk = (value: unknown) => ({ ok: true, data: { view_id: "browser-1", method: "x", value } });
 
+/** `Runtime.evaluate` 的成功回包：参数是**脚本的返回值**，包成 CDP 的 result 形状。 */
+const cdpEval = (value: unknown, type = "object") => cdpOk({ result: { type, value } });
+
+/**
+ * `runEval` 成功后会**再取一次可见性**（`probeVisibility`）——帧内求值也因此是两发。
+ * 这个 helper 把第二发答掉。
+ */
+const probeOk = async (events: ChatEvent[], i: number): Promise<void> =>
+  reply(await waitForQuery(events, i), cdpEval("visible", "string"));
+
 afterEach(() => cancelAllBrowserQueries("test cleanup"));
 
 describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", () => {
-  const envelope = (value: unknown) => ({ value });
-
   it("页面没有 iframe → undefined（不做多余往返）", async () => {
     const { events, emit } = emitCollector();
-    const out = await readFramesFromResult("browser-1", envelope({ ok: true, frames: [] }), emit);
+    const out = await readFramesFromResult("browser-1", { ok: true, frames: [] }, emit);
     expect(out).toBeUndefined();
     expect(events).toHaveLength(0);
   });
@@ -41,7 +49,7 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     const { events, emit } = emitCollector();
     const out = await readFramesFromResult(
       "browser-1",
-      envelope({ ok: true, frames: [{ src: "https://a/x", sameOrigin: true, content: { title: "t" } }] }),
+      { ok: true, frames: [{ src: "https://a/x", sameOrigin: true, content: { title: "t" } }] },
       emit,
     );
     expect(out).toBeUndefined();
@@ -50,8 +58,8 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
 
   it("骨架本身失败（ok:false / null）→ undefined，不去补帧", async () => {
     const { events, emit } = emitCollector();
-    expect(await readFramesFromResult("browser-1", envelope({ ok: false }), emit)).toBeUndefined();
-    expect(await readFramesFromResult("browser-1", envelope(null), emit)).toBeUndefined();
+    expect(await readFramesFromResult("browser-1", { ok: false }, emit)).toBeUndefined();
+    expect(await readFramesFromResult("browser-1", null, emit)).toBeUndefined();
     expect(await readFramesFromResult("browser-1", {}, emit)).toBeUndefined();
     expect(events).toHaveLength(0);
   });
@@ -60,11 +68,11 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     const { events, emit } = emitCollector();
     const p = readFramesFromResult(
       "browser-1",
-      envelope({
+      {
         ok: true,
         url: "https://host/page",
         frames: [{ src: "https://other/frame", sameOrigin: false, content: null }],
-      }),
+      },
       emit,
     );
 
@@ -87,7 +95,8 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     expect(evaluated.method).toBe("Runtime.evaluate");
     expect(evaluated.params.contextId).toBe(42);
     expect(evaluated.params.returnByValue).toBe(true);
-    reply(evaluated, cdpOk({ result: { type: "object", value: { ok: true, title: "原型", tables: [] } } }));
+    reply(evaluated, cdpEval({ ok: true, title: "原型", tables: [] }));
+    await probeOk(events, 3);
 
     const out = await p;
     expect(out?.frames).toHaveLength(1);
@@ -100,14 +109,14 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     const { events, emit } = emitCollector();
     const p = readFramesFromResult(
       "browser-1",
-      envelope({
+      {
         ok: true,
         url: "https://host/page",
         frames: [
           { src: "https://host/same", sameOrigin: true, content: { title: "s" } },
           { src: "https://other/frame", sameOrigin: false, content: null },
         ],
-      }),
+      },
       emit,
     );
 
@@ -123,7 +132,8 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     const world = await waitForQuery(events, 1);
     expect(world.params.frameId).toBe("OTHER"); // 只读了真正需要的那一帧
     reply(world, cdpOk({ executionContextId: 1 }));
-    reply(await waitForQuery(events, 2), cdpOk({ result: { type: "object", value: { ok: true } } }));
+    reply(await waitForQuery(events, 2), cdpEval({ ok: true }));
+    await probeOk(events, 3);
 
     await p;
   });
@@ -156,9 +166,12 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
     reply(world, cdpOk({ executionContextId: 9 }));
 
     const evaluated = await waitForQuery(events, 2);
-    expect(evaluated.params.expression).toBe("({ok:true, tables:1})"); // 跑的是 agent 的脚本
+    // 脚本**原样**送（不加包装——那会把多语句弄坏，见 runEval 文件头）；解 Promise 靠 awaitPromise
+    expect(evaluated.params.expression).toBe("({ok:true, tables:1})");
+    expect(evaluated.params.awaitPromise).toBe(true);
     expect(evaluated.params.contextId).toBe(9);
-    reply(evaluated, cdpOk({ result: { type: "object", value: { ok: true, tables: 1 } } }));
+    reply(evaluated, cdpEval({ ok: true, tables: 1 }));
+    await probeOk(events, 3);
 
     const r = await p;
     expect(r.ok).toBe(true);
@@ -203,7 +216,8 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
 
     const r = await p;
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("frame script threw");
+    // 异常由 runEval 定性（CDP exceptionDetails），不再退化成"回 null 说不清"
+    if (!r.ok) expect(r.error).toContain("The page script threw");
   });
 
   it("脚本返回非对象也照收（browser_eval 要能跑任意脚本，不受投影的对象约束）", async () => {
@@ -211,7 +225,8 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
     const p = evalInFrame("browser-1", "proto.html", "document.title", emit);
     reply(await waitForQuery(events, 0), cdpOk(TREE));
     reply(await waitForQuery(events, 1), cdpOk({ executionContextId: 2 }));
-    reply(await waitForQuery(events, 2), cdpOk({ result: { type: "string", value: "工作台" } }));
+    reply(await waitForQuery(events, 2), cdpEval("工作台", "string"));
+    await probeOk(events, 3);
 
     const r = await p;
     expect(r.ok).toBe(true);
@@ -251,7 +266,8 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
     reply(await waitForQuery(events, 1), { ok: false, error: "frame detached" });
     // F2：正常
     reply(await waitForQuery(events, 2), cdpOk({ executionContextId: 7 }));
-    reply(await waitForQuery(events, 3), cdpOk({ result: { type: "object", value: { ok: true, title: "F2" } } }));
+    reply(await waitForQuery(events, 3), cdpEval({ ok: true, title: "F2" }));
+    await probeOk(events, 4);
 
     const out = await p;
     expect(out.frames).toHaveLength(2);
@@ -273,7 +289,7 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
 
     const out = await p;
     expect(out.frames[0].value).toBeNull();
-    expect(out.frames[0].error).toContain("frame script threw");
+    expect(out.frames[0].error).toContain("The page script threw");
   });
 
   it("missing executionContextId → 如实报错，不拿 NaN 去求值", async () => {

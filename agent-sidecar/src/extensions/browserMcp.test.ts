@@ -36,11 +36,12 @@ describe("browserMcpRegistration — 门控矩阵", () => {
 });
 
 describe("放行规则是**工具级**的（server 级会连 eval 之外的语义一起放行）", () => {
-  it("五条常量逐字固定", () => {
+  it("六条常量逐字固定", () => {
     expect(BROWSER_ALLOW_RULES).toEqual([
       "mcp__aide-browser__browser_tabs",
       "mcp__aide-browser__browser_read",
       "mcp__aide-browser__browser_act",
+      "mcp__aide-browser__browser_wait",
       "mcp__aide-browser__browser_eval",
       "mcp__aide-browser__browser_screenshot",
     ]);
@@ -87,7 +88,11 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     // 多行 instructions 常量永远不是序列化结果的子串——整串断言必假（假绿）。
     expect(json).toContain("START WITH browser_tabs");
     expect(json).toContain("TO READ A PAGE use browser_read");
+    expect(json).toContain("AFTER AN ACTION, WAIT WITH browser_wait");
     expect(json).toContain("TO DO ANYTHING ELSE use browser_eval");
+    // 这条是隐藏视图的**唯一**预警渠道：面板被浮层盖住是常态，不写模型就无从知道
+    // "元素不在"可能是"根本没渲染"。
+    expect(json).toContain("A HIDDEN VIEW BEHAVES DIFFERENTLY");
     expect(json).toContain("DESKTOP ONLY");
   });
 

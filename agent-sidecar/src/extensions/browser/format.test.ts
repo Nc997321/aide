@@ -5,6 +5,7 @@ import {
   formatEval,
   formatRead,
   formatTabs,
+  type EvalView,
 } from "./format.js";
 
 describe("formatBridgeFailure", () => {
@@ -56,17 +57,18 @@ describe("formatTabs", () => {
 });
 
 describe("formatRead", () => {
-  const envelope = (value: unknown, viewId = "browser-1") => ({ view_id: viewId, value });
+  const VISIBLE = { visibility: "visible" as const, readyState: "complete", pending: false };
+  const envelope = (value: unknown, viewId = "browser-1") => ({ value, viewId, probe: VISIBLE });
 
   /**
-   * 最关键的一条：`ExecuteScript` 在**页面脚本抛异常**时回 null，与「脚本确实返回 null」
-   * 不可区分。格式化器必须把它报成失败——否则「抽取炸了」会被静默当成「页面是空的」，
-   * agent 会据此宣布"这页没内容"。
+   * 投影脚本回了非对象 → 必须报成失败，不能渲染成"空页面"。
+   *
+   * ⚠️ **抛异常已不在这条路径上**：`runEval` 拿 CDP 的 `exceptionDetails` 把「抛了」与
+   * 「返回了非对象」分开了（见 `runEval.test.ts`）。这里只剩后者。
    */
-  it("value 为 null → 明确说这是脚本抛异常，而不是空页面", () => {
+  it("value 非对象 → 明确说没拿到可用值，而不是空页面", () => {
     const s = formatRead(envelope(null));
     expect(s).toContain("returned no usable value");
-    expect(s).toContain("thrown exception");
     expect(s).not.toContain("## Tables");
   });
 
@@ -227,22 +229,67 @@ describe("formatRead", () => {
   });
 
   it("字段全缺 / 类型错乱都不抛（data 是 unknown，畸形形状下解引用就会炸成 isError）", () => {
+    // 刻意喂垃圾：签名是 EvalView，但格式化器不许假设调用方给对了形状。
     for (const bad of [undefined, 42, "x", [], {}, { value: "not-an-object" }]) {
-      expect(() => formatRead(bad)).not.toThrow();
+      expect(() => formatRead(bad as unknown as EvalView)).not.toThrow();
     }
     expect(() => formatRead(envelope({ ok: true, tables: "nope", fields: 3, headings: null }))).not.toThrow();
   });
 });
 
 describe("formatEval", () => {
+  const VISIBLE = { visibility: "visible" as const, readyState: "complete", pending: false };
+
   it("把值 JSON 化并标明来源视图", () => {
-    const s = formatEval({ view_id: "browser-3", value: { ok: true, count: 2 } });
+    const s = formatEval({ viewId: "browser-3", value: { ok: true, count: 2 }, probe: VISIBLE });
     expect(s).toContain("view browser-3");
     expect(s).toContain('"count": 2');
   });
 
   it("undefined 结果如实写 undefined（不是空串）", () => {
-    expect(formatEval({ view_id: "browser-1" })).toContain("undefined");
+    expect(formatEval({ viewId: "browser-1", value: undefined, probe: VISIBLE })).toContain("undefined");
+  });
+});
+
+/**
+ * 可见性旁注：**只在隐藏时出现**。
+ *
+ * 正常路径上它每个结果都跟着一行，就成了噪音——模型会学会忽略它，那藏在里面的那条真信息
+ * 也就白写了。所以要同时钉住"说"和"不说"两边。
+ */
+describe("可见性旁注", () => {
+  const probe = (visibility: "visible" | "hidden" | "unknown") => ({ visibility, pending: false });
+
+  it("隐藏 → 明说视图不可见，且点名「空结果是没渲染，不是没有」", () => {
+    const s = formatEval({ viewId: "browser-1", value: { ok: true }, probe: probe("hidden") });
+    expect(s).toContain("hidden from the engine");
+    expect(s).toContain("not rendered");
+  });
+
+  it("可见 / 未知 → 一个字都不加（未知时说「可能不可见」也是编的）", () => {
+    for (const v of ["visible", "unknown"] as const) {
+      const s = formatEval({ viewId: "browser-1", value: { ok: true }, probe: probe(v) });
+      expect(s).not.toContain("hidden from the engine");
+    }
+  });
+
+  it("read 走同一条判据（两处文案会漂移，判据不会）", () => {
+    const s = formatRead({
+      viewId: "browser-1",
+      value: { ok: true, title: "T" },
+      probe: probe("hidden"),
+    });
+    expect(s).toContain("hidden from the engine");
+  });
+
+  it("pending（降级路径上 async 脚本没等到）→ 说清拿到的是 Promise 本身，并给出出路", () => {
+    const s = formatEval({
+      viewId: "browser-1",
+      value: null,
+      probe: { visibility: "visible", pending: true },
+    });
+    expect(s).toContain("cannot await it");
+    expect(s).toContain("window");
   });
 });
 

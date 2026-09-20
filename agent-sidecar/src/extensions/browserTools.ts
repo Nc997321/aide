@@ -12,10 +12,21 @@ import { z } from "zod";
 import { tool } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../engine/types.js";
 import { queryBrowser, type BrowserCall } from "./browserClient.js";
+import { runEval } from "./browser/runEval.js";
 import { PAGE_PROJECTION_SCRIPT } from "./browser/projection.js";
 import { performClick, performFill, performHover } from "./browser/act.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
+import type { ScreenshotFormat } from "./browser/screenshot.js";
+import { probeVisibility } from "./browser/runEval.js";
+import { hiddenNote } from "./browser/visibility.js";
+import {
+  waitForBrowser,
+  WAIT_INTERVAL_DEFAULT_MS,
+  WAIT_INTERVAL_MIN_MS,
+  WAIT_TIMEOUT_DEFAULT_MS,
+  WAIT_TIMEOUT_MAX_MS,
+} from "./browser/wait.js";
 import type { ActTarget } from "./browser/actions.js";
 import {
   NO_BROWSER_HOST_TEXT,
@@ -110,15 +121,15 @@ export function buildBrowserReadTool(
     async (args) => {
       if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
       try {
-        const resp = await queryBrowser(
-          { op: "eval", view_id: args.view_id, script: PAGE_PROJECTION_SCRIPT },
-          emit,
-        );
-        if (!resp.ok) return textResult(formatBridgeFailure(resp));
+        const r = await runEval(PAGE_PROJECTION_SCRIPT, { viewId: args.view_id }, emit);
+        // runEval 的失败文本已是面向模型的（异常/不可序列化/桥失败各自不同），不加工。
+        if (!r.ok) return textResult(r.error);
         // 骨架里若含**读不到的** iframe，再走一趟 CDP 做帧级读取（见 frames.ts）。
         // 不是失败——跨域 iframe 是浏览器的硬边界，CDP 是绕过去的那条路。
-        const frameOutcome = await readFramesFromResult(args.view_id, resp.data, emit);
-        return textResult(formatRead(resp.data, frameOutcome));
+        const frameOutcome = await readFramesFromResult(args.view_id, r.value, emit);
+        return textResult(
+          formatRead({ value: r.value, viewId: r.viewId, probe: r.probe }, frameOutcome),
+        );
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         return textResult(`Browser tool failed unexpectedly: ${detail}`);
@@ -163,12 +174,9 @@ export function buildBrowserEvalTool(
           const outcome = await evalInFrame(args.view_id, args.frame, args.script, emit);
           return textResult(formatFrameEval(outcome));
         }
-        const resp = await queryBrowser(
-          { op: "eval", view_id: args.view_id, script: args.script },
-          emit,
-        );
-        if (!resp.ok) return textResult(formatBridgeFailure(resp));
-        return textResult(formatEval(resp.data));
+        const r = await runEval(args.script, { viewId: args.view_id }, emit);
+        if (!r.ok) return textResult(r.error);
+        return textResult(formatEval({ value: r.value, viewId: r.viewId, probe: r.probe }));
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         return textResult(`Browser tool failed unexpectedly: ${detail}`);
@@ -235,6 +243,30 @@ export function buildBrowserActTool(
 }
 
 /**
+ * 截图块的说明文本。
+ *
+ * 隐藏视图**必须点破**：`Page.captureScreenshot` 在隐藏视图上交出来的往往是**上一次合成的那
+ * 一帧**——图像看着完全正常，内容却是旧的。不说这句，模型会把一张过期的画面当成"用户此刻
+ * 看到的"。可见性额外花一次往返，只加在这条本来就最贵的路径上。
+ */
+async function screenshotCaption(
+  viewId: string | undefined,
+  opts: { fullPage: boolean; format: ScreenshotFormat },
+  emit: (e: ChatEvent) => void,
+): Promise<string> {
+  const base =
+    `Screenshot of the embedded browser ${opts.fullPage ? "page (full)" : "visible viewport"} as ` +
+    `${opts.format.toUpperCase()}. Reminder: this is the visual fallback — use browser_read / ` +
+    `browser_eval when the question is about content or structure.`;
+  const note = hiddenNote(
+    await probeVisibility(viewId, emit),
+    "Page.captureScreenshot hands back the last composited frame for a hidden view, so this image may be " +
+      "STALE rather than empty. Bring the view to the front before trusting what it shows.",
+  );
+  return note ? `${base}\n${note}` : base;
+}
+
+/**
  * 截图：agent 的**视觉兜底**。
  *
  * 描述里刻意反复申明"少用"——图像进上下文很贵，而读页面有结构化通道。它存在的理由是
@@ -281,9 +313,7 @@ export function buildBrowserScreenshotTool(
           content: [
             {
               type: "text" as const,
-              text:
-                `Screenshot of the embedded browser ${fullPage ? "page (full)" : "visible viewport"} as ${format.toUpperCase()}. ` +
-                `Reminder: this is the visual fallback — use browser_read / browser_eval when the question is about content or structure.`,
+              text: await screenshotCaption(args.view_id, { fullPage, format }, emit),
             },
             { type: "image" as const, data: shot.data, mimeType: shot.mimeType ?? `image/${format}` },
           ],
@@ -296,12 +326,98 @@ export function buildBrowserScreenshotTool(
   );
 }
 
+/**
+ * `browser_wait`：**时序原语**。
+ *
+ * 存在的理由：`browser_act` 点完就返回，而"点了之后发生了什么"需要等待。没有这个工具时
+ * agent 只能写一句 eval 手搓轮询——写进页面里的 `setTimeout` 在隐藏视图里会被降频，等待本身
+ * 被冻住，超时变成假阴性。轮询跑在主机侧（`browser/wait.ts`）对这个病免疫。
+ *
+ * 它也是"合成点击降级后页面没变"那类抱怨的正解：真正的缺口不是 act 该自动断言（那会让
+ * 「点了但本就不该变」变成假失败），而是**调用点需要能表达自己的期望**。
+ */
+export function buildBrowserWaitTool(
+  env: NodeJS.ProcessEnv,
+  emit: (e: ChatEvent) => void,
+) {
+  return tool(
+    "browser_wait",
+    "Wait in an embedded browser view until something becomes true, then return. Use this after browser_act " +
+      "when your next step depends on what the click triggered — do not hand-roll a polling loop with browser_eval. " +
+      "TWO MODES. `until:\"condition\"` (default) polls a JavaScript EXPRESSION you give; a truthy value means done. " +
+      "The expression must be SYNCHRONOUS and it may throw while the thing you are waiting for does not exist yet " +
+      "(that is treated as not-yet-true, not as a failure). `until:\"load\"` waits for the view to finish loading, " +
+      "which no in-page expression can express (document.readyState is answered by the OLD document during a " +
+      "navigation). A timeout is REPORTED, not raised: you get how many times it polled, the last value it saw, and " +
+      "whether the view was hidden — read that before concluding the page is broken.",
+    {
+      view_id: viewIdArg,
+      until: z
+        .enum(["condition", "load"])
+        .optional()
+        .describe("condition (default) = poll `condition`; load = wait for the view to finish a navigation."),
+      condition: z
+        .string()
+        .optional()
+        .describe(
+          "Required when until=condition. A JavaScript EXPRESSION evaluated in the page — truthy means satisfied. " +
+            "Keep it cheap and synchronous (no await). While the target does not exist yet it will throw; that is " +
+            "expected and counts as not-yet-true.",
+        ),
+      timeout_ms: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          `How long to wait, default ${WAIT_TIMEOUT_DEFAULT_MS}. Capped at ${WAIT_TIMEOUT_MAX_MS} — treat a timeout ` +
+            `as "did not happen within the budget", not as "will never happen".`,
+        ),
+      interval_ms: z
+        .number()
+        .int()
+        .min(WAIT_INTERVAL_MIN_MS)
+        .optional()
+        .describe(`Poll interval, default ${WAIT_INTERVAL_DEFAULT_MS}. Polling happens on the host, not in the page.`),
+    },
+    async (args) => {
+      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+
+      const mode = args.until === "load" ? "load" : "condition";
+      if (mode === "condition" && !args.condition) {
+        return textResult(
+          "until=condition needs `condition` — a JavaScript EXPRESSION whose truthy value means done. " +
+            "If you meant to wait for a navigation to finish, pass until=\"load\" instead.",
+        );
+      }
+      try {
+        return textResult(
+          await waitForBrowser(
+            {
+              viewId: args.view_id,
+              mode,
+              condition: args.condition,
+              timeoutMs: Math.min(args.timeout_ms ?? WAIT_TIMEOUT_DEFAULT_MS, WAIT_TIMEOUT_MAX_MS),
+              intervalMs: args.interval_ms ?? WAIT_INTERVAL_DEFAULT_MS,
+            },
+            emit,
+          ),
+        );
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        return textResult(`Browser wait failed unexpectedly: ${detail}`);
+      }
+    },
+  );
+}
+
 /** 工具总装：上层只需读这张表。新增工具 = 这里加一项（并同步 browserMcp 的规则与前端镜像）。 */
 export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void) {
   return [
     buildBrowserTabsTool(env, emit),
     buildBrowserReadTool(env, emit),
     buildBrowserActTool(env, emit),
+    buildBrowserWaitTool(env, emit),
     buildBrowserEvalTool(env, emit),
     buildBrowserScreenshotTool(env, emit),
   ];

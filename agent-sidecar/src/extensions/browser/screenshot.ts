@@ -23,6 +23,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
+import { probeVisibility } from "./runEval.js";
 
 /**
  * 图像格式。默认 **jpeg**。
@@ -106,3 +107,7 @@ export async function captureScreenshot(
   }
   return { ok: true, data, mimeType: `image/${opts.format}` };
 }
+
+// 可见性探测住在 runEval.ts（`probeVisibility`）——求值的出口只有一处，别在这儿再开一份。
+// 截图必须问它：`Page.captureScreenshot` 自己不报可见性，而隐藏视图交出来的往往是**上一次
+// 合成的那一帧**——图像看着正常，内容却是旧的。调用点见 `browserTools.ts` 的截图 caption。

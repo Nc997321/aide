@@ -29,6 +29,7 @@
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
 import { PAGE_PROJECTION_SCRIPT } from "./projection.js";
+import { runEval, type EvalProbe } from "./runEval.js";
 
 /** 一帧的读取结果。 */
 export interface FrameRead {
@@ -121,8 +122,9 @@ async function frameTree(
 /**
  * 在指定帧的隔离世界里求值。**任何一步失败都折成 `error`，不抛。**
  *
- * 返回值刻意是 `unknown` 而非对象：`browser_eval` 要能跑任意脚本（可能回字符串/数组），
- * 对象形状的约束由需要它的调用方（投影）自己加。
+ * 求值本体交给 `runEval`（同一个出口，同一套失败判据）——这里只负责**先把上下文建出来**：
+ * 跨域帧够不着，CDP 得为它开一个隔离世界。`runEval` 认得 `contextId`，所以帧内求值也
+ * 自动获得 `awaitPromise`（调用方的 async 脚本在帧里同样能 await）与 `probe`（该帧的可见性）。
  */
 async function evalInContext(
   viewId: string | undefined,
@@ -130,7 +132,7 @@ async function evalInContext(
   script: string,
   worldName: string,
   emit: (e: ChatEvent) => void,
-): Promise<{ value: unknown; error?: string }> {
+): Promise<{ value: unknown; probe?: EvalProbe; error?: string }> {
   // 只传 frameId + worldName：`grantUniveralAccess` 那个历史拼写（CDP 规范原文如此）不必碰，
   // 省一个版本差异面。
   const world = await queryBrowser(
@@ -149,24 +151,10 @@ async function evalInContext(
     return { value: null, error: "createIsolatedWorld returned no executionContextId" };
   }
 
-  const evaluated = await queryBrowser(
-    {
-      op: "call_cdp",
-      view_id: viewId,
-      method: "Runtime.evaluate",
-      params: { expression: script, contextId, returnByValue: true },
-    },
-    emit,
-  );
-  if (!evaluated.ok) return { value: null, error: `Runtime.evaluate failed: ${evaluated.error ?? "unknown"}` };
-
-  const result = asRecord(cdpValue(evaluated.data));
-  // CDP 的约定：脚本抛异常**不算调用失败**，而是回 ok + exceptionDetails。
-  const exception = asRecord(result?.["exceptionDetails"]);
-  if (exception) {
-    return { value: null, error: `frame script threw: ${String(exception["text"] ?? "unknown")}` };
-  }
-  return { value: asRecord(result?.["result"])?.["value"] };
+  const r = await runEval(script, { viewId, contextId }, emit);
+  // 不额外加前缀：调用方本来就按帧渲染（"- frame N <url> — …: <error>"），再加一层只是啰嗦。
+  if (!r.ok) return { value: null, error: r.error };
+  return { value: r.value, probe: r.probe };
 }
 
 /** 单帧：建隔离世界 → 跑投影脚本。任何一步失败都回成一个 `error`，不抛。 */
@@ -232,10 +220,10 @@ export async function readCrossOriginFrames(
  */
 export async function readFramesFromResult(
   viewId: string | undefined,
-  data: unknown,
+  projection: unknown,
   emit: (e: ChatEvent) => void,
 ): Promise<{ frames: FrameRead[]; error?: string } | undefined> {
-  const value = asRecord(asRecord(data)?.["value"]);
+  const value = asRecord(projection);
   if (!value || value["ok"] !== true) return undefined;
 
   const frames = asArray(value["frames"]).map(asRecord).filter((f): f is Record<string, unknown> => f !== null);
@@ -258,7 +246,7 @@ export async function readFramesFromResult(
 
 /** `browser_eval` 在帧里跑脚本的结果。 */
 export type FrameEvalOutcome =
-  | { ok: true; url: string; value: unknown }
+  | { ok: true; url: string; value: unknown; probe?: EvalProbe }
   | { ok: false; error: string; available: string[] };
 
 /**
@@ -297,5 +285,5 @@ export async function evalInFrame(
 
   const r = await evalInContext(viewId, hit.id, script, "aide-eval", emit);
   if (r.error) return { ok: false, error: r.error, available: [hit.url] };
-  return { ok: true, url: hit.url, value: r.value };
+  return { ok: true, url: hit.url, value: r.value, probe: r.probe };
 }
