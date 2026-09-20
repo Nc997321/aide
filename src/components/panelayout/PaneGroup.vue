@@ -8,6 +8,12 @@ import type { PermissionRuleDraft } from "../../types/permissions";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { useSessionWorkspaces } from "../../composables/useSessionWorkspaces";
 import { useWorkspaces } from "../../composables/useWorkspaces";
+import {
+  dailyWorkspaceBind,
+  ensureDailyWorkspace,
+  isDailyKey,
+} from "@aide/sdk/utils/dailyWorkspace";
+import type { HeroMode } from "../ChatPanel/hero/modes";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import type { GroupNode } from "../../composables/paneLayout/tree";
@@ -91,7 +97,7 @@ const effectiveWorkspacePath = computed(() => {
  * 零 tab（欢迎态）时先现场建一个空白 tab，之后走同一条路径。
  */
 async function onSend(prompt: string, opts: SendOptions) {
-  if (!activeTab.value) onNewTab();
+  if (!activeTab.value) await onNewTab();
   const tab = activeTab.value;
   if (!tab) return;
   // 空白 tab 的归属在创建时已绑定（pendingWs）；切工作区后发送仍落创建时的
@@ -129,13 +135,16 @@ function onTabContext(tabId: string, x: number, y: number) {
   showContextMenu(x, y, paneTabMenuItems(props.group.id, tabId));
 }
 
-function onNewTab() {
+async function onNewTab() {
   pl.focusGroup(props.group.id);
-  // 空白面板创建时绑定工作区：hero 归属选择器选定的 defaultWs 优先，用后即清
-  // （归属选择只作用于紧随其后的第一个新会话）；否则快照当前活动工作区——
-  // 布局全局一份，切工作区不动 tab，不快照的话首条消息会落到「当前」工作区
-  // 而不是创建时的那个
-  const ws = pl.layout.defaultWs ?? wsSnapshot();
+  // 新建对话的默认落点听**模式意图**：日常 → 日常工作区（先确保归属已装载）；
+  // 工程 → hero 上选定的归属（defaultWs），没选就快照当前活动工作区——布局全局
+  // 一份、切工作区不动 tab，不快照的话首条消息会落到「当前」工作区而不是创建时的那个。
+  if (pl.layout.heroMode === "daily") await ensureDailyWorkspace();
+  const ws =
+    pl.layout.heroMode === "daily"
+      ? (dailyWorkspaceBind() ?? undefined)
+      : (pl.layout.defaultWs ?? wsSnapshot());
   if (pl.layout.defaultWs) pl.setDefaultWs(null);
   pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`, ws);
 }
@@ -151,6 +160,33 @@ function onPickWorkspace(ws: WorkspaceInfo) {
     pl.setTabPendingWs(tab.id, bind);
   } else {
     pl.setDefaultWs(bind);
+  }
+}
+
+/** 当前在用什么模式：有 tab 就看那个 tab 的归属，没有 tab 看布局上的意图。
+ *  空白 tab 绑了日常就是日常；其余（含未绑）算工程 —— 未绑时首条消息会落到活动
+ *  工作区（后端 cwd 链第三级），与「工程」的语义一致。 */
+const currentMode = computed<HeroMode>(() => {
+  const tab = activeTab.value;
+  if (!tab) return pl.layout.heroMode;
+  return isDailyKey(tab.pendingWs?.wsKey) ? "daily" : "project";
+});
+
+/**
+ * 模式切换：写模式意图 + 归属，**不切活动工作区**（同 onPickWorkspace 的范式）。
+ * 归属按模式取：日常 → 日常工作区（懒加载一次）；工程 → 当前活动工作区快照，
+ * 快照为空就绑「无」——「工程 + 还没选工作区」是能表达的真实状态，hero 上就地
+ * 用 WorkspacePicker 选。
+ */
+async function onPickMode(mode: HeroMode) {
+  pl.setHeroMode(mode);
+  if (mode === "daily") await ensureDailyWorkspace();
+  const bind = mode === "daily" ? dailyWorkspaceBind() : wsSnapshot();
+  const tab = activeTab.value;
+  if (tab && !tab.sessionId) {
+    pl.setTabPendingWs(tab.id, bind ?? undefined);
+  } else {
+    pl.setDefaultWs(bind ?? null);
   }
 }
 </script>
@@ -196,9 +232,11 @@ function onPickWorkspace(ws: WorkspaceInfo) {
       :permission-queue-count="pendingPermissionCount"
       :rollback-text="rollbackText"
       class="pane-group__chat"
+      :hero-mode="currentMode"
       @send="onSend"
       @send-btw="onSendBtw"
       @select-workspace="onPickWorkspace"
+      @select-mode="onPickMode"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-effort="setEffort"

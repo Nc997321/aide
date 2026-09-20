@@ -19,6 +19,9 @@ import {
   type TabItem,
 } from "./paneLayout/tree";
 import { useSessionState } from "./useSessionState";
+// 模式表是全项目唯一一份定义（hero/modes.ts，零依赖的叶子模块）：这里只借它的
+// 字面量联合与默认值，不反向耦合——布局层与 hero 组件都用同一份，别各写一个。
+import { DEFAULT_HERO_MODE, type HeroMode } from "@/components/ChatPanel/hero/modes";
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { disposeSession, getLastDispatchedPrompt, stopSessionById } from "./useChatSession";
@@ -43,12 +46,21 @@ interface LayoutState {
    * （openBlankTab 的 pendingWs），取用后即清。不落盘（快照恢复与此无关）。
    */
   defaultWs?: TabItem["pendingWs"] | null;
+  /**
+   * 零 tab 欢迎态的**模式意图**（日常 / 工程）。只在没有 tab 时用 —— 一旦有了
+   * 空白 tab，模式就由那个 tab 的 pendingWs 派生（isDailyKey），而 pendingWs 是
+   * 落盘的，所以切走再回来不会丢。这里必须单独存，不能从 defaultWs 推：「工程 +
+   * 还没选工作区」与「日常」都表现为「没有归属」，光看 defaultWs 分不开。
+   * 与 defaultWs 同生命周期（不落盘、reset 清）。
+   */
+  heroMode: HeroMode;
 }
 
 /** 初始/兜底状态：空根组（零会话欢迎态——无 tab 栏，居中 hero 输入区）。 */
 function emptyState(): LayoutState {
   const root = createEmptyRoot();
-  return { root, focusedGroupId: root.id };
+  // 新建对话页默认「日常」（spec 2026-09-20）。这是全新安装的第一屏。
+  return { root, focusedGroupId: root.id, heroMode: DEFAULT_HERO_MODE };
 }
 
 const layout = reactive<LayoutState>(emptyState());
@@ -175,6 +187,11 @@ export function usePaneLayout() {
    *  调用方 setDefaultWs(null) 清除。 */
   function setDefaultWs(ws: TabItem["pendingWs"] | null) {
     layout.defaultWs = ws ?? null;
+  }
+
+  /** hero（零 tab）模式意图：只在没有 tab 时有效（有 tab 时模式由 pendingWs 派生）。 */
+  function setHeroMode(mode: HeroMode) {
+    layout.heroMode = mode;
   }
 
   /** 侧栏右键「在新标签页打开」：显式动作，无论启动与否都开固定 tab。 */
@@ -440,6 +457,7 @@ export function usePaneLayout() {
     openBlankTab,
     setTabPendingWs,
     setDefaultWs,
+    setHeroMode,
     openSessionInNewTab,
     openSessionInSplit,
     splitFocusedGroup,
@@ -469,6 +487,7 @@ export function __resetPaneLayoutForTest(startedProbe?: (sid: string) => boolean
   layout.root = s.root;
   layout.focusedGroupId = s.focusedGroupId;
   layout.defaultWs = null;
+  layout.heroMode = DEFAULT_HERO_MODE;
   isStarted = startedProbe ?? defaultIsStarted;
   mru.length = 0;
   mruFrozen = false;

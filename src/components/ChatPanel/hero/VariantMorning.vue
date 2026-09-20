@@ -1,17 +1,34 @@
 <script setup lang="ts">
 import type { WorkspaceInfo } from "@/types";
 import WorkspacePicker from "../../../ui/WorkspacePicker.vue";
+import { HERO_MODES, type HeroMode } from "./modes";
 import type { HeroViewProps } from "./types";
 
 defineProps<HeroViewProps>();
 
 const emit = defineEmits<{
   "select-workspace": [ws: WorkspaceInfo];
+  "select-mode": [mode: HeroMode];
 }>();
 </script>
 
 <template>
   <div class="va">
+    <!-- 模式切换：日常 / 工程（默认日常）。选中的判定来自归属，不由本组件持有 -->
+    <div class="va-modes" role="tablist" aria-label="新建对话模式">
+      <button
+        v-for="m in HERO_MODES"
+        :key="m.id"
+        class="va-mode-btn"
+        :class="{ 'is-active': m.id === mode }"
+        role="tab"
+        :aria-selected="m.id === mode"
+        @click="emit('select-mode', m.id)"
+      >
+        {{ m.label }}
+      </button>
+    </div>
+
     <!-- 问候行：日期 + 时钟在「下午好」前作前缀（带等宽字距、像时间戳），图标已移除 -->
     <div class="va-greeting">
       <span class="va-eyebrow">
@@ -27,11 +44,14 @@ const emit = defineEmits<{
 
     <div class="va-rule" />
 
-    <!-- 环境脚注：归属 + 模型，交互保留在 WorkspacePicker -->
+    <!-- 环境脚注：工程给「归属 + 模型」，交互保留在 WorkspacePicker；
+         日常**没有工作区这个概念**，只留模型名（档位在输入盒工具栏那颗药丸上） -->
     <div class="va-meta">
-      <span class="va-meta-label">新会话位于</span>
-      <WorkspacePicker :path="workspacePath" @select="(ws) => emit('select-workspace', ws)" />
-      <span class="va-meta-sep">·</span>
+      <template v-if="mode === 'project'">
+        <span class="va-meta-label">新会话位于</span>
+        <WorkspacePicker :path="workspacePath" @select="(ws) => emit('select-workspace', ws)" />
+        <span class="va-meta-sep">·</span>
+      </template>
       <span class="va-meta-model">{{ modelName }}</span>
     </div>
   </div>
@@ -48,6 +68,38 @@ const emit = defineEmits<{
   align-items: center;
   gap: 10px;
   user-select: none;
+}
+
+/* 模式分段控件（日常 / 工程）：与下方问候行的间距 = 父 .va 的 gap 10px + 这里的
+   margin-bottom 20px。选中态用 accent 渐变，与输入盒发送键同一套视觉语言。 */
+.va-modes {
+  display: inline-flex;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 20px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: 999px;
+}
+.va-mode-btn {
+  appearance: none;
+  border: 0;
+  cursor: pointer;
+  padding: 7px 22px;
+  border-radius: 999px;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--aide-text-secondary);
+  background: transparent;
+  transition: color var(--aide-ease-t), background var(--aide-ease-t);
+}
+.va-mode-btn:hover {
+  color: var(--aide-text-primary);
+}
+.va-mode-btn.is-active {
+  color: var(--aide-text-on-accent);
+  background: var(--aide-accent-gradient);
+  box-shadow: var(--aide-accent-glow);
 }
 
 .va-greeting {

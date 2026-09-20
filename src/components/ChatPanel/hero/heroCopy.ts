@@ -2,6 +2,7 @@
  * hero 欢迎页的文案核心：时间问候 + 轮换文案，纯函数、无 IO/时钟/随机，
  * 同输入必同输出。UI 组件负责喂时间与 seed，这里只回答「现在该说什么」。
  */
+import type { HeroMode } from "./modes";
 
 /** 一天问候时段。跨时段页面开着不动时，由组件层定时重算（见 HeroWelcome）。 */
 export type Period = "morning" | "noon" | "afternoon" | "evening" | "late";
@@ -64,8 +65,8 @@ function clockLabelOf(d: Date): string {
   return `${hh}:${mm}`;
 }
 
-/** 轮换文案池：全部是「下一步做什么」的行动邀请，body 说明怎么开始。 */
-const COPY_POOL: readonly HeroCopy[] = [
+/** 工程池：全部是「下一步做什么」的行动邀请，body 说明怎么开始。 */
+const PROJECT_COPY_POOL: readonly HeroCopy[] = [
   {
     headline: "今天想从哪块代码开始？",
     body: "发个目标、贴段报错，或直接指个文件——我先读代码再动手。",
@@ -89,11 +90,43 @@ const COPY_POOL: readonly HeroCopy[] = [
 ];
 
 /**
- * seed 取模轮换：负数与越界 seed 都落到合法槽（数学模），同 seed 必同文案。
- * idx 经数学模恒 ∈ [0, n)，池为 readonly 非空元组——索引必命中，无兜底臂。
+ * 日常池：不假设手上有什么，邀请「说点什么」而不是「推进什么」。
+ * 与工程池的 headline 刻意不重叠——模式切换要让用户**看得见**。
  */
-export function pickHeroCopy(seed: number): HeroCopy {
-  const n = COPY_POOL.length;
-  const idx = ((seed % n) + n) % n;
-  return COPY_POOL[idx];
+const DAILY_COPY_POOL: readonly HeroCopy[] = [
+  {
+    headline: "今天想聊点什么？",
+    body: "随便问，不用先想清楚要干什么。",
+  },
+  {
+    headline: "有什么想弄明白的？",
+    body: "概念、原理、一段看不懂的文字，贴过来就行。",
+  },
+  {
+    headline: "要写点什么吗？",
+    body: "措辞、总结、翻译、换个口气 —— 说个大概，我来起草。",
+  },
+  {
+    headline: "在琢磨什么事？",
+    body: "先把想法倒出来，我帮你理一理。",
+  },
+  {
+    headline: "有什么要查的？",
+    body: "问一句就行，我整理好再给你。",
+  },
+];
+
+/** 模式 → 文案池。新增模式时必须在这里给它一个池子（类型系统会强制）。 */
+export function heroCopyPool(mode: HeroMode): readonly HeroCopy[] {
+  return mode === "daily" ? DAILY_COPY_POOL : PROJECT_COPY_POOL;
+}
+
+/**
+ * seed 取模轮换：负数与越界 seed 都落到合法槽（数学模），同 seed 同模式必同文案。
+ * idx 经数学模恒 ∈ [0, n)，池为 readonly 非空数组——索引必命中，无兜底臂。
+ */
+export function pickHeroCopy(mode: HeroMode, seed: number): HeroCopy {
+  const pool = heroCopyPool(mode);
+  const n = pool.length;
+  return pool[((seed % n) + n) % n];
 }

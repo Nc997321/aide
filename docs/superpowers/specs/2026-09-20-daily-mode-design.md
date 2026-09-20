@@ -115,10 +115,15 @@ isDaily(wsKey) = (wsKey === dailyKey)
 
 | 场景 | 现状机制 | 日常写什么 | 工程写什么 |
 |---|---|---|---|
-| 零 tab（hero） | `pl.setDefaultWs(bind)` | `dailyBind` | `null`（回落现状：活动工作区快照） |
-| 空白 tab | `pl.setTabPendingWs(tabId, bind)` | `dailyBind` | `wsSnapshot()` |
+| 零 tab（hero） | `pl.setDefaultWs(bind)` + `pl.setHeroMode(mode)` | `dailyBind` / `"daily"` | `null` / `"project"` |
+| 空白 tab | `pl.setTabPendingWs(tabId, bind)` | `dailyBind` | `wsSnapshot()`（可能是 undefined） |
 
-  说明：`onNewTab()` 当前默认绑 `pl.layout.defaultWs ?? wsSnapshot()`（`PaneGroup.vue:132-141`）；改为**默认绑 `dailyBind`**，切到「工程」时改写为 `wsSnapshot()`。
+  说明：`onNewTab()` 当前默认绑 `pl.layout.defaultWs ?? wsSnapshot()`（`PaneGroup.vue:132-141`）；改为**按模式意图取**：日常 → `dailyBind`，工程 → `defaultWs ?? wsSnapshot()`。
+
+- **实现期修正（2026-09-21）：零 tab 欢迎态必须多一个模式意图字段 `layout.heroMode`。**
+  初稿以为模式可以完全从归属派生（零新增字段），但「**工程 + 还没选工作区**」与「日常」在数据上都是"没有归属"，光看 `defaultWs` / `pendingWs` 分不开 —— 而前者是真实可达状态（全新安装没有活动工作区，用户切到工程后会就地用 WorkspacePicker 选）。
+  所以：**零 tab 看 `layout.heroMode`（新字段，默认 `"daily"`，与 `defaultWs` 同生命周期、同样不落盘），有 tab 后模式由那个 tab 的 `pendingWs` 派生**（`isDailyKey`，且 `pendingWs` 本就落盘，所以切走再回来不丢）。一个字段、一个写入者（`setHeroMode`，只由 hero 的模式切换调用），不会漂移。
+  初稿的"零新增**会话**字段"仍然成立 —— 这条是布局层的 UI 意图，不是会话属性。
 
 ### 侧栏
 

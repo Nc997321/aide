@@ -9,6 +9,7 @@ import InterruptButton from "../InterruptButton.vue";
 import PermissionDialog from "../PermissionDialog.vue";
 import BgTaskDock from "../BgTaskDock.vue";
 import HeroWelcome from "./hero/HeroWelcome.vue";
+import { DEFAULT_HERO_MODE, type HeroMode } from "./hero/modes";
 import ChatInputBox from "./ChatInputBox.vue";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
@@ -40,6 +41,8 @@ import { useToast } from "@/composables/useToast";
 const props = defineProps<{
   sessionId: string | null;
   workspacePath?: string;
+  /** hero 模式（日常 / 工程）：归属与文案都由它分叉，见 PaneGroup 的 currentMode */
+  heroMode?: HeroMode;
   /** 父层经模板自动解包后传入的纯值（PaneGroup 传 useChatSession computed，模板解包成数组） */
   messages: ChatMessageType[];
   isBusy: boolean;
@@ -90,6 +93,8 @@ const emit = defineEmits<{
   "update:bgDockSelectedId": [id: string];
   /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
   "select-workspace": [ws: WorkspaceInfo];
+  /** hero 模式切换（日常 / 工程）：同样只改归属与意图，不切活动工作区 */
+  "select-mode": [mode: HeroMode];
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
 }>();
@@ -592,9 +597,11 @@ function onOpenBgDock(taskId: string) {
     <Transition name="hero-fade">
       <HeroWelcome
         v-if="isHero"
+        :mode="props.heroMode ?? DEFAULT_HERO_MODE"
         :workspace-path="props.workspacePath ?? ''"
         :model-name="heroModelName"
         @select-workspace="(ws) => emit('select-workspace', ws)"
+        @select-mode="(m) => emit('select-mode', m)"
       />
     </Transition>
 

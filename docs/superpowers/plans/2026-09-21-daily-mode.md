@@ -632,7 +632,9 @@ git commit -m "feat(hero): 模式表 + 日常文案池（pickHeroCopy 带上模�
   - `HeroWelcome` props 加 `mode: HeroMode`、emit 加 `select-mode: [mode: HeroMode]`
   - `PaneGroup.onPickMode(mode: HeroMode): void`
 
-**关键设计（别改成新字段）**：模式的选中态**从落点派生**，不新增 per-tab 字段 —— 有 `pendingWs` 的空白 tab 看 `isDailyKey(tab.pendingWs?.wsKey)`，零 tab 看 `layout.defaultWs`。落点写回仍走既有 `pl.setTabPendingWs` / `pl.setDefaultWs`。
+**关键设计**：模式的选中态**从落点派生**，不给会话或 tab 加字段 —— 有 `pendingWs` 的空白 tab 看 `isDailyKey(tab.pendingWs?.wsKey)`，落点写回仍走既有 `pl.setTabPendingWs` / `pl.setDefaultWs`。
+
+**⚠️ 执行期修正（2026-09-21，已落地）**：零 tab 欢迎态额外需要一个**布局层意图字段** `layout.heroMode`（`usePaneLayout.ts`，默认 `"daily"`，与 `defaultWs` 同生命周期、不落盘）。原计划的"零新增字段"在这里站不住：「工程 + 还没选工作区」与「日常」在数据上都是"无归属"，只看绑定分不开，而前者真实可达（全新安装）。详见 spec 的同名修正段。
 
 - [ ] **Step 1: 写失败测试（组件测试）**
 
