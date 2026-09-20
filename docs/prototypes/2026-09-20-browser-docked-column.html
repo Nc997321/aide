@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>内嵌浏览器 · 停靠式侧列方案原型</title>
+<style>
+/* ── 主题 token（glass 默认主题实值，抄自 themes/glass） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.14);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-success:#6ee7a8;
+  --aide-danger:#ff8f9c;
+  --aide-info:#7fd7f0;
+  --aide-warning:#f0c987;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-radius-md:9px;
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC',sans-serif;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:var(--aide-font-ui); color:var(--aide-text-primary);
+  background:radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+             radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%), #0a0b11;
+  min-height:100vh; padding:22px 26px 70px; font-size:13px;
+}
+h1{font-size:16px;font-weight:600}
+.page-head p{margin-top:7px;font-size:12px;color:var(--aide-text-muted);line-height:1.85;max-width:1080px}
+.page-head code{font-family:var(--aide-font-mono);color:var(--aide-text-secondary);font-size:11px}
+.page-head b{color:var(--aide-text-secondary);font-weight:600}
+
+/* ── 控制条 ── */
+.bar{display:flex;align-items:center;gap:8px;margin:16px 0 12px;flex-wrap:wrap}
+.btn{background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary);
+     padding:5px 11px;border-radius:7px;font-size:12px;cursor:pointer;font-family:inherit}
+.btn:hover{background:var(--aide-surface-hover);color:var(--aide-text-primary)}
+.btn.on{background:color-mix(in srgb, var(--aide-accent) 20%, transparent);border-color:var(--aide-accent);color:var(--aide-text-primary)}
+.hint{font-size:11px;color:var(--aide-text-muted);font-family:var(--aide-font-mono)}
+
+/* ── 应用外壳（照 App.vue：左侧栏 | 把手 | 主区 | 把手 | 右栏） ── */
+.app{display:flex;height:700px;border:1px solid var(--aide-border);border-radius:12px;overflow:hidden;
+     background:var(--aide-bg-deep);position:relative}
+.side{width:190px;flex:none;border-right:1px solid var(--aide-border-subtle);background:rgba(255,255,255,.02);
+      padding:10px 9px;display:flex;flex-direction:column;gap:9px}
+.side .ws{font-size:12px;font-weight:600}
+.side .sess{font-size:11.5px;color:var(--aide-text-muted);padding:5px 7px;border-radius:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.side .sess.on{background:var(--aide-surface-default);color:var(--aide-text-primary)}
+.side .entry{margin-top:auto;font-size:11.5px;color:var(--aide-text-secondary);padding:5px 7px;border-radius:6px;
+             display:flex;gap:6px;align-items:center;background:var(--aide-surface-default)}
+
+.center{flex:1;min-width:0;display:flex;position:relative}
+.chat{flex:1;min-width:0;display:flex;flex-direction:column;border-right:1px solid var(--aide-border-subtle)}
+.chat-head{padding:8px 12px;font-size:12px;color:var(--aide-text-muted);border-bottom:1px solid var(--aide-border-subtle)}
+.chat-body{flex:1;overflow:auto;padding:12px;display:flex;flex-direction:column;gap:11px}
+.msg-u{align-self:flex-end;max-width:78%;background:color-mix(in srgb, var(--aide-accent) 16%, transparent);
+       border:1px solid color-mix(in srgb, var(--aide-accent) 30%, transparent);border-radius:10px;padding:7px 10px;font-size:12.5px}
+.msg-a{max-width:92%;font-size:12.5px;line-height:1.75;color:var(--aide-text-secondary)}
+.msg-a code{font-family:var(--aide-font-mono);font-size:11.5px;color:var(--aide-text-primary)}
+.tool{border:1px solid var(--aide-border);border-radius:8px;background:var(--aide-bg-base);padding:7px 9px;
+      font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-muted)}
+.tool b{color:var(--aide-info);font-weight:600}
+.composer{margin:10px;border:1px solid var(--aide-border);border-radius:10px;padding:8px 10px;min-height:64px;
+          color:var(--aide-text-muted);font-size:12px;background:rgba(255,255,255,.02)}
+
+/* ── 拖拽把手（照 App.vue .resize-handle） ── */
+.handle{width:5px;flex:none;cursor:col-resize;background:transparent;position:relative}
+.handle:hover,.handle.dragging{background:color-mix(in srgb, var(--aide-accent) 45%, transparent)}
+
+/* ── 停靠列：浏览器 ── */
+.browser{width:var(--dock-w,440px);flex:none;display:flex;flex-direction:column;background:rgba(255,255,255,.02);
+         border-left:1px solid var(--aide-border-subtle)}
+.browser.closed{display:none}
+.btabs{display:flex;align-items:center;gap:4px;padding:5px 7px;border-bottom:1px solid var(--aide-border-subtle)}
+.btab{font-size:11px;color:var(--aide-text-muted);padding:4px 9px;border-radius:6px;white-space:nowrap;
+      display:flex;gap:6px;align-items:center;background:var(--aide-surface-default)}
+.btab.on{color:var(--aide-text-primary);background:var(--aide-surface-active)}
+.btab .x{opacity:.5}
+.btools{display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid var(--aide-border-subtle)}
+.btools .ico{width:22px;height:22px;display:grid;place-items:center;border-radius:6px;background:var(--aide-surface-default);
+             color:var(--aide-text-muted);font-size:11px}
+.addr{flex:1;font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-secondary);
+      background:var(--aide-surface-default);border-radius:6px;padding:4px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* 洞：原生 WebView2 子视图占位（真机上是浮在 HTML 之上的原生画面） */
+.hole{flex:1;position:relative;margin:0;overflow:hidden}
+.hole .frame{position:absolute;inset:0;background:#fff;color:#111;font-size:12px;overflow:hidden}
+.hole .topbar{background:#1f2937;color:#e5e7eb;padding:6px 10px;font-size:11px;display:flex;gap:8px;align-items:center}
+.hole .pane{padding:14px}
+.hole .row{height:9px;border-radius:4px;background:#e5e7eb;margin-bottom:8px}
+.hole .row.short{width:45%}
+.hole .row.mid{width:72%}
+.hole .chip{display:inline-block;background:#eef2ff;color:#3730a3;border-radius:999px;padding:3px 9px;font-size:11px;margin-right:6px}
+.hole .card{border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-top:12px}
+.rect-out{position:absolute;left:8px;bottom:8px;background:rgba(10,12,20,.86);border:1px solid var(--aide-border);
+          border-radius:6px;padding:4px 8px;font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-info)}
+.hole.yield .frame{display:none}
+.hole.yield::after{content:"视图已让位 · set_visible(false)——原生 WebView2 浮在全部 HTML 之上，任何浮层压不住它";
+                   position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:0 24px;
+                   font-size:11.5px;color:var(--aide-text-muted);border:1px dashed var(--aide-border);border-radius:8px}
+
+/* 最大化 = 现状形态：浏览器占满主区，聊天被 v-show 换下 */
+.center.max .chat,.center.max .handle.chat-split{display:none}
+.center.max .browser{width:auto;flex:1;border-left:none}
+
+/* 浮层（设置/命令面板/权限弹窗）：原生视图必须让位 */
+.overlay{position:absolute;inset:0;background:rgba(6,8,14,.62);backdrop-filter:blur(2px);display:none;
+         place-items:center;z-index:5}
+.overlay.on{display:grid}
+.overlay .box{width:320px;border:1px solid var(--aide-border);border-radius:10px;background:#151826;padding:14px;font-size:12.5px}
+.overlay .box .t{font-weight:600;margin-bottom:6px}
+.overlay .box .d{color:var(--aide-text-muted);font-size:11.5px;line-height:1.7}
+
+.right{width:180px;flex:none;border-left:1px solid var(--aide-border-subtle);background:rgba(255,255,255,.02);padding:9px}
+.rtabs{display:flex;gap:4px;font-size:11px;color:var(--aide-text-muted);flex-wrap:wrap}
+.rtabs .rt{padding:3px 7px;border-radius:5px;background:var(--aide-surface-default)}
+.rtabs .rt.on{color:var(--aide-text-primary);background:var(--aide-surface-active)}
+
+/* ── 注解 ── */
+.notes{margin-top:22px;display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px}
+.note{border:1px solid var(--aide-border);border-radius:10px;background:var(--aide-bg-base);padding:12px 14px}
+.note h3{font-size:12px;font-weight:600;margin-bottom:7px;color:var(--aide-text-primary)}
+.note ul{margin-left:16px;font-size:11.5px;color:var(--aide-text-muted);line-height:1.85}
+.note li b{color:var(--aide-text-secondary);font-weight:600}
+.note code{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-secondary)}
+.q{border-left:2px solid var(--aide-accent);padding-left:10px;margin-top:9px;font-size:11.5px;color:var(--aide-text-secondary);line-height:1.8}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>内嵌浏览器 · 停靠式侧列（方案 A）</h1>
+  <p>
+    现状：浏览器是<b>主区一级视图</b>，与聊天区在同一个 <code>v-show</code> 条件上互斥（<code>App.vue:1031-1037</code>）——打开面板就看不见聊天，
+    于是「边聊边看页面」和「agent 截图（需要视图真的在合成）」两件事都不可能。
+    本方案把浏览器降为 <b><code>.panel-center</code> 内的一列</b>：聊天与页面同屏，左侧栏/右侧栏不动，<code>PaneLayout</code> 与聊天接线一行不改。
+  </p>
+  <p>
+    下面是一个假壳子（左侧栏 / 聊天 / 右侧栏都是示意图，只有<b>中间那条浏览器列与把手的交互是真的</b>）：
+    拖中间的把手改列宽，看着左下角那个 <code>rect</code> 读数变——那就是真机上要喂给 <code>set_bounds</code> 的数字。
+  </p>
+</div>
+
+<div class="bar">
+  <button class="btn on" id="m-dock">停靠（聊天 + 页面同屏）</button>
+  <button class="btn" id="m-max">最大化（现状形态）</button>
+  <button class="btn" id="m-close">关闭面板</button>
+  <span class="hint">|</span>
+  <button class="btn" id="m-overlay">模拟浮层（设置 / 权限弹窗）</button>
+  <span class="hint">原生视图此时必须让位 —— 既有语义，不是本方案新增</span>
+</div>
+
+<div class="app" id="app">
+  <!-- 左侧栏 -->
+  <div class="side">
+    <div class="ws">aide</div>
+    <div class="sess on">变更卡改静态 diff</div>
+    <div class="sess">浏览器停靠列</div>
+    <div class="sess">LSP 按名查询</div>
+    <div class="entry">🌐 浏览器</div>
+  </div>
+
+  <!-- 主区 -->
+  <div class="center" id="center">
+    <div class="chat">
+      <div class="chat-head">变更卡改静态 diff · claude-sonnet-5</div>
+      <div class="chat-body">
+        <div class="msg-u">看看 localhost:3000 那个页面现在长什么样，日期筛选是不是没生效</div>
+        <div class="tool"><b>⚙ browser_read</b> — 74 elements, 12 tables …</div>
+        <div class="msg-a">
+          读到的结构里筛选器是 <code>&lt;select&gt;</code>，当前值 <code>2026-09-01</code>，但表格首行日期是 <code>2026-09-18</code>。
+          这条 DOM 答不了「你此刻看到的是不是同一块」，我截一张。
+        </div>
+        <div class="tool"><b>⚙ browser_screenshot</b> — viewport, jpeg q80 ✓</div>
+        <div class="msg-a">
+          截图里筛选器显示的是「近 7 天」，表格却是全量——页面上的值和你以为的不一致。要不要我把 select 的 change 事件补上重试？
+        </div>
+      </div>
+      <div class="composer">继续对话…　<span class="hint">（⌘/Ctrl+Enter 发送）</span></div>
+    </div>
+
+    <div class="handle chat-split" id="split"></div>
+
+    <!-- 停靠列：浏览器 -->
+    <div class="browser" id="browser">
+      <div class="btabs">
+        <div class="btab on">localhost:3000 <span class="x">✕</span></div>
+        <div class="btab">element-plus.org <span class="x">✕</span></div>
+        <div class="btab">＋</div>
+      </div>
+      <div class="btools">
+        <div class="ico">←</div><div class="ico">→</div><div class="ico">⟳</div>
+        <div class="addr">http://localhost:3000/orders?range=7d</div>
+        <div class="ico">★</div><div class="ico" id="b-close" title="关闭面板（保活：只隐藏视图）">✕</div>
+      </div>
+      <div class="hole" id="hole">
+        <div class="frame">
+          <div class="topbar"><span>订单看板</span><span style="opacity:.6">本地开发</span></div>
+          <div class="pane">
+            <span class="chip">近 7 天</span><span class="chip">全部</span><span class="chip">已发货</span>
+            <div class="row mid" style="margin-top:14px"></div>
+            <div class="card">
+              <div class="row short"></div>
+              <div class="row"></div>
+              <div class="row mid"></div>
+            </div>
+            <div class="card">
+              <div class="row short"></div>
+              <div class="row"></div>
+            </div>
+          </div>
+        </div>
+        <div class="rect-out" id="rect">set_bounds( x, y, w, h )</div>
+      </div>
+    </div>
+
+    <div class="overlay" id="overlay">
+      <div class="box">
+        <div class="t">允许执行 Bash？</div>
+        <div class="d">权限弹窗。它带全屏遮罩 → 原生视图让位（<code>overlayLayerOpen</code>）。<br><br>这条语义既有：原生 WebView2 浮在所有 HTML 之上，遮罩压不住它，只能整个藏掉。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 右侧栏（照旧） -->
+  <div class="right">
+    <div class="rtabs">
+      <div class="rt on">文件</div><div class="rt">变更</div><div class="rt">Git</div>
+    </div>
+  </div>
+</div>
+
+<div class="notes">
+  <div class="note">
+    <h3>这条方案拿到什么</h3>
+    <ul>
+      <li><b>边聊边看</b>：聊天与页面同屏，会话切换不再把浏览器踢掉（现状 <code>App.vue:401</code> 选会话就关面板）。</li>
+      <li><b>agent 工具回到主路径</b>：视图可见 ⇒ 有合成帧 ⇒ <code>browser_screenshot</code> / 过渡类断言可用；不用再要求用户"切到前台"。</li>
+      <li><b>改动面小</b>：<code>PaneLayout</code>、聊天渲染、tab 联合类型一行不动；<code>rectOf()</code> / <code>viewAllowed</code> / 注册表保活全部复用。</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>机制不变的那部分（别被原型骗了）</h3>
+    <ul>
+      <li>原型里的页面是 <code>&lt;div&gt;</code>，真机上是<b>原生 WebView2 子视图</b>，按那个 <code>rect</code> 浮在窗口上。</li>
+      <li>所以：<b>任何浮层压上来都必须让位</b>（点上面的按钮看效果），洞那一列不能有 HTML 覆盖物，工具栏要排在洞外。</li>
+      <li>窗口最小化 / 被完全遮挡时，Chromium 照样判后台 —— 这一条谁也躲不掉。</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>待你拍板的（原型里都做成了开关）</h3>
+    <ul>
+      <li>默认落哪边：<b>主区右侧</b>（聊天左、页面右，本原型）还是左侧？</li>
+      <li>要不要保留<b>最大化</b>形态（点按钮看）——读长文档/调试时铺满更舒服，代价是多一个状态。</li>
+      <li>默认列宽与是否记忆（本原型拖到 440px 起步，右栏 180px 保持不动）。</li>
+      <li>与「插件 / 知识库 / 自动化」的关系：它们开时本列是<b>收起</b>（保持现状互斥）还是继续停靠、只让出主区？</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+// 状态：docked | max | closed
+var mode = 'docked';
+var app = document.getElementById('app');
+var center = document.getElementById('center');
+var browser = document.getElementById('browser');
+var hole = document.getElementById('hole');
+var rectOut = document.getElementById('rect');
+var split = document.getElementById('split');
+
+function render() {
+  center.classList.toggle('max', mode === 'max');
+  browser.classList.toggle('closed', mode === 'closed');
+  document.getElementById('m-dock').classList.toggle('on', mode === 'docked');
+  document.getElementById('m-max').classList.toggle('on', mode === 'max');
+  document.getElementById('m-close').classList.toggle('on', mode === 'closed');
+  updateRect();
+}
+
+// 洞的 rect 读数：真机上这就是 getBoundingClientRect() → set_bounds 的那四个数
+function updateRect() {
+  if (mode === 'closed') { rectOut.textContent = 'set_visible(false) — 面板收起，视图保活'; return; }
+  var r = hole.getBoundingClientRect();
+  var a = app.getBoundingClientRect();
+  rectOut.textContent = 'set_bounds( x=' + Math.round(r.left - a.left) + ', y=' + Math.round(r.top - a.top) +
+                        ', w=' + Math.round(r.width) + ', h=' + Math.round(r.height) + ' )';
+}
+
+document.getElementById('m-dock').onclick = function () { mode = 'docked'; browser.style.width = ''; render(); };
+document.getElementById('m-max').onclick = function () { mode = 'max'; render(); };
+document.getElementById('m-close').onclick = function () { mode = 'closed'; render(); };
+document.getElementById('b-close').onclick = function () { mode = 'closed'; render(); };
+document.getElementById('m-overlay').onclick = function () {
+  var on = document.getElementById('overlay').classList.toggle('on');
+  hole.classList.toggle('yield', on);
+  document.getElementById('m-overlay').classList.toggle('on', on);
+  updateRect();
+};
+
+// 拖把手改列宽（与真机同构：列宽变 → 洞 rect 变 → set_bounds）
+var dragging = false;
+split.addEventListener('pointerdown', function (e) {
+  if (mode !== 'docked') return;
+  dragging = true; split.classList.add('dragging');
+  split.setPointerCapture(e.pointerId);
+});
+split.addEventListener('pointermove', function (e) {
+  if (!dragging) return;
+  var a = app.getBoundingClientRect();
+  var right = document.querySelector('.right').getBoundingClientRect();
+  var w = Math.max(280, Math.min(right.left - e.clientX, a.width - 420));
+  browser.style.width = w + 'px';
+  updateRect();
+});
+split.addEventListener('pointerup', function (e) {
+  dragging = false; split.classList.remove('dragging');
+  split.releasePointerCapture(e.pointerId);
+});
+
+window.addEventListener('resize', updateRect);
+render();
+</script>
+</body>
+</html>
