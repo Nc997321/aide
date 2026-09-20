@@ -30,6 +30,7 @@ import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionI
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
+import { defaultEffortFor } from "./effortDefault";
 import { inputPlaceholder } from "./inputPlaceholder";
 import type { ChatMode } from "./modes";
 import { memoryObservatoryApi } from "@aide/sdk/api";
@@ -167,7 +168,8 @@ watch(
 
 // ── Effort 选择器 ──
 // 会话级思考深度：三档制（快速/进阶/极致，@aide/sdk/utils/effort）。默认解析顺序：
-// 会话记忆（sessionEffort 元数据）→ provider 配置的 effortLevel → "high"。切换经
+// 会话记忆（sessionEffort 元数据）→ **日常会话的快速** → provider 配置的 effortLevel
+// → "high"（见 effortDefault.ts）。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、
 // 实测不碰 prompt 缓存）；进程没起时选择随下一条消息的 initialEffort（env 通道）带上。
 // sidecar 坐实/回滚由 props.currentEffort 同步。**快速(low) 另外会请求关掉思考**，
@@ -198,6 +200,15 @@ let lastEffortToastValue = "";
  *  历史 medium/xhigh 值经 normalizeEffortOption 迁移到 进阶/极致。 */
 function providerDefaultEffort(): string {
   return normalizeEffortOption(props.sessionProvider.effortLevel);
+}
+
+/** 本 tab 的默认档位：记住的 > 日常快速 > provider 默认（见 effortDefault.ts）。 */
+function fallbackEffort(): string {
+  return defaultEffortFor({
+    remembered: null,
+    daily: props.mode === "daily",
+    providerDefault: providerDefaultEffort(),
+  });
 }
 
 function handleEffortChange(value: string) {
@@ -282,7 +293,7 @@ watch(
     if (!sid) {
       effortTouchedByUser = false;
       lastEffortToastValue = "";
-      selectedEffort.value = providerDefaultEffort();
+      selectedEffort.value = fallbackEffort();
       return;
     }
     // pending 临时会话（首轮已发送、等 SDK 定名）：不恢复不重置；touched 保留
@@ -291,16 +302,20 @@ watch(
     effortTouchedByUser = false;
     lastEffortToastValue = "";
     // 先按存活会话坐实的 currentEffort 落值，不带上个会话的 selectedEffort（跨会话串）；
-    // currentEffort 无效（停止会话/还没学到）时退 provider 默认。再异步恢复 remembered
+    // currentEffort 无效（停止会话/还没学到）时退默认。再异步恢复 remembered
     // （用户持久化选择优先）——pre-send 选档（pending 时未持久化）靠 currentEffort 兜。
     const ce = props.currentEffort;
-    selectedEffort.value = ce ? normalizeEffortOption(ce) : providerDefaultEffort();
+    selectedEffort.value = ce ? normalizeEffortOption(ce) : fallbackEffort();
     const remembered = await api.sessionEffort(sid).catch(() => null);
     // 读回期间切走了别的会话，或用户已经手动改过 → 放弃恢复
     if (props.sessionId !== sid || effortTouchedByUser) return;
-    if (remembered) {
-      selectedEffort.value = normalizeEffortOption(remembered);
-    }
+    // 优先用记忆；**没有记忆就保留上面按 currentEffort 落的值**（pre-send 选档靠它兜），
+    // 两者都没有才退默认 —— 顺序：记忆 > 坐实值 > 日常快速 > provider 默认。
+    selectedEffort.value = defaultEffortFor({
+      remembered: remembered ?? (ce ? normalizeEffortOption(ce) : null),
+      daily: props.mode === "daily",
+      providerDefault: providerDefaultEffort(),
+    });
   },
   { immediate: true },
 );
@@ -310,7 +325,7 @@ watch(
 watch(() => props.sessionProvider.id, () => {
   if (effortTouchedByUser) return;
   if (props.sessionId && !isPendingSession(props.sessionId)) return;
-  selectedEffort.value = providerDefaultEffort();
+  selectedEffort.value = fallbackEffort();
 });
 
 // ── 权限模式（plan / auto / manual）——和模型下拉同一套模式：
