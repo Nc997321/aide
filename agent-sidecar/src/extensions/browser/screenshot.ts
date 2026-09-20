@@ -20,10 +20,18 @@
  *
  * 所以这里不是绕过端口，是**组合端口**——和 `browser_read` 组合 `eval` 同一个范式。
  * 端口上的 `capture` 留作 CDP 不可用时的兜底实现（尚未实现，如实标注）。
+ *
+ * # 先判可见，再截图（2026-09-20）
+ *
+ * 隐藏的视图**截不了图**：WebView2 的隐藏是内核级的（不合成、rAF 停摆），`Page.captureScreenshot`
+ * 等不到帧就是 10s 超时（`native.rs` 的 `NATIVE_TIMEOUT`），而那条超时文案还说 `view closed`——
+ * 真机实测（rAF 一帧不跑、JS 上下文却活着）之后，改成本模块**先探可见性**：隐藏 → 立即如实失败。
+ * 探测结果顺带交给调用方做 caption，**同一轮不再二次探测**。
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
 import { probeVisibility } from "./runEval.js";
+import type { PageVisibility } from "./runEval.js";
 
 /**
  * 图像格式。默认 **jpeg**。
@@ -45,7 +53,27 @@ export interface ScreenshotOutcome {
   /** 与 `data` 匹配的 MIME——**必须回给模型**，猜错会让图像被当成坏数据丢掉。 */
   mimeType?: string;
   error?: string;
+  /**
+   * 截图**之前**探到的页面可见性。caption 直接复用它——同一轮里再探一次没有新信息，
+   * 白多一发往返（这条路径本来就是最贵的那条）。
+   */
+  visibility: PageVisibility;
 }
+
+/**
+ * 隐藏视图的失败文案：**不试**。
+ *
+ * 说清三件事，缺一条模型就会去猜：① 原因（视图隐藏、引擎不合成帧，不是页面问题）；
+ * ② 谁把它藏了（右栏折叠 / 别的 tab 在前 / 有浮层）；③ 出路（让用户把浏览器 tab 切到前台，
+ * 或改用对隐藏视图同样有效的 `browser_read` / `browser_eval`）。
+ */
+const HIDDEN_ERROR =
+  'Not taken: this browser view is hidden from the engine (document.visibilityState = "hidden"), and a ' +
+  "hidden WebView2 stops compositing — Page.captureScreenshot cannot get a frame, so the call would hang " +
+  "until it timed out. This is an Aide/engine state, not a page problem. The view is hidden whenever its " +
+  "panel is not showing: the right panel is collapsed, another right-panel tab (Files / Changes / Git / …) " +
+  "is active, or an overlay (settings, command palette, permission dialog) is up. Ask the user to bring the " +
+  "Browser tab to the front, or use browser_read / browser_eval — both work on hidden views.";
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -68,6 +96,10 @@ export async function captureScreenshot(
   opts: { fullPage: boolean; format: ScreenshotFormat },
   emit: (e: ChatEvent) => void,
 ): Promise<ScreenshotOutcome> {
+  // 先判可见：隐藏视图的截图注定超时，不如立刻如实失败（见文件头「先判可见，再截图」）。
+  const visibility = await probeVisibility(viewId, emit);
+  if (visibility === "hidden") return { ok: false, error: HIDDEN_ERROR, visibility };
+
   const params: Record<string, unknown> = { format: opts.format };
   // `quality` 只对 jpeg 有意义（CDP 对 png 传它会报错，别顺手带上）。
   if (opts.format === "jpeg") params["quality"] = JPEG_QUALITY;
@@ -80,8 +112,10 @@ export async function captureScreenshot(
   if (!resp.ok) {
     return {
       ok: false,
+      visibility,
       error: resp.timedOut
-        ? "Screenshot timed out — the desktop host did not reply (was the view closed mid-call?)."
+        ? "Screenshot timed out — the desktop host did not reply. A view hidden mid-call cannot produce a " +
+          "frame; the view may also have been closed."
         : `Screenshot failed: ${resp.error ?? "unknown error"}`,
     };
   }
@@ -92,6 +126,7 @@ export async function captureScreenshot(
   if (cdpError) {
     return {
       ok: false,
+      visibility,
       error:
         `Page.captureScreenshot was rejected by the runtime: ${String(cdpError["message"] ?? cdpError["code"] ?? "unknown")}. ` +
         `This is a WebView2 runtime capability, not a page problem — fall back to browser_read / browser_eval.`,
@@ -102,12 +137,9 @@ export async function captureScreenshot(
   if (typeof data !== "string" || data.length === 0) {
     return {
       ok: false,
+      visibility,
       error: "Page.captureScreenshot returned no image data (the runtime accepted the call but sent nothing back).",
     };
   }
-  return { ok: true, data, mimeType: `image/${opts.format}` };
+  return { ok: true, data, mimeType: `image/${opts.format}`, visibility };
 }
-
-// 可见性探测住在 runEval.ts（`probeVisibility`）——求值的出口只有一处，别在这儿再开一份。
-// 截图必须问它：`Page.captureScreenshot` 自己不报可见性，而隐藏视图交出来的往往是**上一次
-// 合成的那一帧**——图像看着正常，内容却是旧的。调用点见 `browserTools.ts` 的截图 caption。

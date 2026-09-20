@@ -433,17 +433,19 @@ describe("browser_screenshot — 视觉兜底", () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
 
-    const q = await waitForQuery(events, 0);
+    // ① 先判可见：隐藏视图的截图**注定**超时（隐藏的 WebView2 不合成帧），不如立刻如实失败
+    await probeOk(events, 0);
+    const q = await waitForQuery(events, 1);
     expect(q.op).toBe("call_cdp");
     expect(q.method).toBe("Page.captureScreenshot");
     // 默认 jpeg q80：截图会进会话历史、后续每轮重发，体积是真成本。
     // 默认也不带 captureBeyondViewport——整页会把屏幕外的噪音也带进来。
     expect(q.params).toEqual({ format: "jpeg", quality: 80 });
     reply(q, { ok: true, data: { value: { data: "BASE64JPG" } } });
-    // 截图之后还要问一次可见性（隐藏视图给的可能是旧帧）
-    reply(await waitForQuery(events, 1), evalOk("visible"));
 
     const r = await p;
+    // caption 复用①那次探测：同一轮里再探一次没有新信息，白多一发往返
+    expect(events).toHaveLength(2);
     expect(r.content).toHaveLength(2);
     expect(r.content[0].type).toBe("text");
     expect(r.content[0].text).toContain("visible viewport");
@@ -459,10 +461,10 @@ describe("browser_screenshot — 视觉兜底", () => {
       { full_page: true },
       {},
     );
-    const q = await waitForQuery(events, 0);
+    await probeOk(events, 0);
+    const q = await waitForQuery(events, 1);
     expect(q.params).toEqual({ format: "jpeg", quality: 80, captureBeyondViewport: true });
     reply(q, { ok: true, data: { value: { data: "X" } } });
-    reply(await waitForQuery(events, 1), evalOk("visible"));
     expect((await p).content[0].text).toContain("full");
   });
 
@@ -472,15 +474,33 @@ describe("browser_screenshot — 视觉兜底", () => {
       { format: "png" },
       {},
     );
-    const q = await waitForQuery(events, 0);
+    await probeOk(events, 0);
+    const q = await waitForQuery(events, 1);
     expect(q.params).toEqual({ format: "png" });
     expect(q.params.quality).toBeUndefined();
     reply(q, { ok: true, data: { value: { data: "BASE64PNG" } } });
-    reply(await waitForQuery(events, 1), evalOk("visible"));
 
     const r = await p;
     expect(r.content[0].text).toContain("PNG");
     expect(r.content[1]).toMatchObject({ type: "image", mimeType: "image/png" });
+  });
+
+  /**
+   * 视图隐藏 → **压根不试**。隐藏的 WebView2 不合成帧（2026-09-20 真机实测：rAF 一帧不跑），
+   * `Page.captureScreenshot` 等不到帧就是 10s 超时，而旧文案还把原因说成 "view closed"。
+   * 这条钉住：不发截图请求、不烧那 10 秒、文案点名隐藏与出路。
+   */
+  it("视图隐藏 → 不发截图请求，文案点名隐藏与出路", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
+    reply(await waitForQuery(events, 0), evalOk("hidden", "string"));
+
+    const r = await p;
+    expect(events).toHaveLength(1); // 只有那一次探测
+    expect(r.content).toHaveLength(1); // 不发图像块
+    expect(r.content[0].type).toBe("text");
+    expect(r.content[0].text).toContain("hidden");
+    expect(r.content[0].text).toContain("browser_read");
   });
 
   /**
@@ -490,7 +510,8 @@ describe("browser_screenshot — 视觉兜底", () => {
   it("运行期拒绝 → 回文本说明 + 指向 browser_read/eval，不发图像块", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
-    reply(await waitForQuery(events, 0), {
+    await probeOk(events, 0);
+    reply(await waitForQuery(events, 1), {
       ok: true,
       data: { value: { error: { code: -32601, message: "'Page.captureScreenshot' wasn't found" } } },
     });
@@ -507,7 +528,8 @@ describe("browser_screenshot — 视觉兜底", () => {
   it("回了 ok 但没有图像数据 → 如实报错，不塞空图", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
-    reply(await waitForQuery(events, 0), { ok: true, data: { value: {} } });
+    await probeOk(events, 0);
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
     const r = await p;
     expect(r.content).toHaveLength(1);
     expect(r.content[0].text).toContain("no image data");

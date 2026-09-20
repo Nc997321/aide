@@ -18,8 +18,6 @@ import { performClick, performFill, performHover } from "./browser/act.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
 import type { ScreenshotFormat } from "./browser/screenshot.js";
-import { probeVisibility } from "./browser/runEval.js";
-import { hiddenNote } from "./browser/visibility.js";
 import {
   waitForBrowser,
   WAIT_INTERVAL_DEFAULT_MS,
@@ -245,25 +243,16 @@ export function buildBrowserActTool(
 /**
  * 截图块的说明文本。
  *
- * 隐藏视图**必须点破**：`Page.captureScreenshot` 在隐藏视图上交出来的往往是**上一次合成的那
- * 一帧**——图像看着完全正常，内容却是旧的。不说这句，模型会把一张过期的画面当成"用户此刻
- * 看到的"。可见性额外花一次往返，只加在这条本来就最贵的路径上。
+ * **不再自带可见性告警**：隐藏视图在 `captureScreenshot` 里已经被拦下（压根走不到这里），
+ * 而 `unknown` 按 `visibility.ts` 的纪律也不说——没有依据的"可能过期"正是要消灭的那种噪音。
+ * 可见性探测移到截图**之前**做，代价同样是零额外往返（见 `screenshot.ts`）。
  */
-async function screenshotCaption(
-  viewId: string | undefined,
-  opts: { fullPage: boolean; format: ScreenshotFormat },
-  emit: (e: ChatEvent) => void,
-): Promise<string> {
-  const base =
+function screenshotCaption(opts: { fullPage: boolean; format: ScreenshotFormat }): string {
+  return (
     `Screenshot of the embedded browser ${opts.fullPage ? "page (full)" : "visible viewport"} as ` +
     `${opts.format.toUpperCase()}. Reminder: this is the visual fallback — use browser_read / ` +
-    `browser_eval when the question is about content or structure.`;
-  const note = hiddenNote(
-    await probeVisibility(viewId, emit),
-    "Page.captureScreenshot hands back the last composited frame for a hidden view, so this image may be " +
-      "STALE rather than empty. Bring the view to the front before trusting what it shows.",
+    `browser_eval when the question is about content or structure.`
   );
-  return note ? `${base}\n${note}` : base;
 }
 
 /**
@@ -283,7 +272,9 @@ export function buildBrowserScreenshotTool(
       "to read a page: an image costs far more context than the structured read and gives you pixels instead of structure. " +
       "Reach for it when the question is genuinely visual — which panel is actually visible on screen, whether something " +
       "rendered at all, what a canvas or image-only region contains — or when the structured read came back empty and you " +
-      "need to see why. It captures the visible viewport by default; pass full_page for the entire page.",
+      "need to see why. It captures the visible viewport by default; pass full_page for the entire page. " +
+    "Requires the view to be showing on screen: a hidden view cannot be captured, and the tool says so " +
+    "instead of guessing.",
     {
       view_id: viewIdArg,
       full_page: z
@@ -313,7 +304,7 @@ export function buildBrowserScreenshotTool(
           content: [
             {
               type: "text" as const,
-              text: await screenshotCaption(args.view_id, { fullPage, format }, emit),
+              text: screenshotCaption({ fullPage, format }),
             },
             { type: "image" as const, data: shot.data, mimeType: shot.mimeType ?? `image/${format}` },
           ],
