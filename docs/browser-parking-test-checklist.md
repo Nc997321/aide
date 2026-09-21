@@ -19,11 +19,32 @@ pnpm build:sidecar && pnpm tauri build
 
 **② 重启 Aide**（Rust 与 sidecar 都变了，热重载不够）。
 
+**②′ 确认跑的是新构建**——本机可能同时有安装版与 dev 版（`tasklist | grep aide.exe` 会看到两个），
+**agent 必须在新的那个里跑**，否则 `browser_tab` 会回 `unknown op: open`。最快的判据：让 agent 跑一次
+`browser_tabs`，**看它的输出用词**：
+
+| 新构建 | 旧构建 |
+|---|---|
+| `[ready, displayed, …]` / `[ready, parked, …]`，可能带 `"label"` | `[ready, visible, …]` / `[hidden]` |
+
+旧构建一律重跑前置，别在它上面验——那验的是上一版行为。
+
 **③ 起夹具服务**（仓库根执行，前面那个终端留着）：
 
 ```bash
 node -e "const h=require('http'),f=require('fs');h.createServer((q,s)=>{s.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});s.end(f.readFileSync('docs/testing/browser-parking-fixture.html'))}).listen(8777,'127.0.0.1',()=>console.log('fixture → http://127.0.0.1:8777/'))"
 ```
+
+**③′ 自检夹具（省得白跑一轮）**——**必须做**，两个坑都在这条命令上现形：
+
+```bash
+curl -s "http://127.0.0.1:8777/?who=preflight" | grep -c __probe     # 期望 1；0 = 夹具没上
+netstat -ano | grep LISTENING | grep ":8777"                        # 只该有一条，PID 是你刚起的那个
+```
+
+- **回 `no` / 404**：8777 上蹲着**别的**静态服务（它把带 query 的请求当文件名，找不到就 404）。
+  先 `taskkill /PID <PID> /F` 腾出端口再起夹具——这是 2026-09-21 实际踩过的坑。
+- **回 200 但没有 `__probe`**：那是**旧夹具页**（早期探针版），同样要换掉。
 
 **④ 你自己开一个 tab 给 Agent B 用**：右栏浏览器地址栏输入
 
