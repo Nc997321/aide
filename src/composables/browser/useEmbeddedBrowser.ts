@@ -28,6 +28,19 @@ export interface BrowserViewDto {
   can_go_forward: boolean;
   bounds: BoundsDto;
   displayed: boolean;
+  /** 创建时给的名字（页面标题为空时标签条用它）。 */
+  label: string | null;
+  /** 谁开的：面板路径恒为 "user"，agent 建的后台视图是 "agent"。 */
+  origin: "user" | "agent";
+}
+
+/** 视图生命周期事件载荷（Rust `ViewEventDto`）。 */
+export interface ViewEventDto {
+  id: string;
+  kind: "created" | "closed";
+  label: string | null;
+  origin: "user" | "agent";
+  displayed: boolean;
 }
 
 /**
@@ -70,6 +83,13 @@ export function useEmbeddedBrowser() {
     },
     setDisplayed(id: string, displayed: boolean): Promise<void> {
       return invoke("browser_set_displayed", { id, displayed });
+    },
+    /**
+     * 列出全部视图（面板挂载时的对账来源）。视图可能**先于面板**被创建——
+     * agent 先开 tab、用户还没点开面板，那条 `browser-view` 事件就没人接。
+     */
+    listViews(): Promise<BrowserViewDto[]> {
+      return invoke<BrowserViewDto[]>("browser_views_list");
     },
     goBack(id: string): Promise<BrowserViewDto> {
       return invoke<BrowserViewDto>("browser_go_back", { id });

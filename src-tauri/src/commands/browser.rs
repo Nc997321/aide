@@ -28,6 +28,15 @@ pub async fn browser_create(app: AppHandle, dto: CreateBrowserDto) -> CmdResult<
         .map_err(|e| e.to_string())
 }
 
+/// 列出全部视图（面板挂载时对账用）。**与 agent 的 `list_views` 同一个门面方法**——
+/// 两条消费路径不能各查一份状态（那正是"面板看不见 agent 开的 tab"的来源）。
+#[tauri::command]
+pub async fn browser_views_list(app: AppHandle) -> CmdResult<Vec<BrowserViewDto>> {
+    BrowserFacade::new(&app)
+        .list_views()
+        .map_err(|e| e.to_string())
+}
+
 /// 导航到新 URL（与当前相同则按重载处理）。
 #[tauri::command]
 pub async fn browser_navigate(

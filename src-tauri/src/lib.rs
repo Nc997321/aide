@@ -343,6 +343,7 @@ pub fn run() {
             commands::browser::browser_navigate,
             commands::browser::browser_set_bounds,
             commands::browser::browser_set_displayed,
+            commands::browser::browser_views_list,
             commands::browser::browser_go_back,
             commands::browser::browser_go_forward,
             commands::browser::browser_close,
