@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>parking fixture</title>
+<style>
+  body { font: 14px/1.7 system-ui, sans-serif; margin: 0; padding: 24px; background: #0f1317; color: #e6edf3 }
+  h1 { margin: 0 0 6px; font-size: 20px }
+  code { background: #1b2430; padding: 1px 5px; border-radius: 4px }
+  #box { width: 0; height: 14px; background: #4aa3ff; border-radius: 3px; margin: 10px 0 }
+  button { margin: 6px 8px 6px 0; padding: 10px 16px; font-size: 15px; border-radius: 8px;
+           border: 1px solid #4aa3ff; background: #1b2a3a; color: #e6edf3; cursor: pointer }
+  button.hit { background: #2ecc71; border-color: #2ecc71; color: #04150a }
+  label { display: inline-block; margin-right: 18px }
+  input, select { padding: 6px 8px; font-size: 14px; border-radius: 6px; border: 1px solid #556;
+                  background: #131a22; color: #e6edf3 }
+  table { border-collapse: collapse; margin-top: 10px }
+  td { padding: 1px 14px 1px 0; font-family: ui-monospace, Consolas, monospace }
+  .k { color: #8b98a5 }
+</style>
+</head>
+<body>
+<h1 id="who">fixture</h1>
+<div>本页自报状态，agent 用 <code>browser_eval("window.__probe()")</code> 一次读完：</div>
+
+<table>
+  <tr><td class="k">rAF 帧数（合成是否在跑）</td><td id="raf">0</td></tr>
+  <tr><td class="k">真实点击计数</td><td id="clicks">0</td></tr>
+  <tr><td class="k">过渡是否跑完（transitionend）</td><td id="anim">pending</td></tr>
+  <tr><td class="k">懒加载块是否就绪</td><td id="lazy">pending</td></tr>
+  <tr><td class="k">输入回显</td><td id="echo">(空)</td></tr>
+  <tr><td class="k">visibilityState / visibilitychange 次数</td><td id="vis">?</td></tr>
+</table>
+
+<div id="box"></div>
+<button id="btn">CLICK ME</button>
+<button id="anim-btn">START TRANSITION</button>
+
+<div style="margin-top:14px">
+  <label>名称 <input id="name" placeholder="填我"></label>
+  <label>类型
+    <select id="pick">
+      <option value="">--</option>
+      <option value="jia">甲</option>
+      <option value="yi">乙</option>
+    </select>
+  </label>
+</div>
+
+<script>
+// ── 自报状态（agent 的断言面） ───────────────────────────────────────────────
+// 每个字段都对应"旧世界会坏掉"的一类行为：rAF/过渡/懒加载在隐藏视图里全灭，
+// 真实点击与填值也各有各的死法。`?who=` 让并发跑的两个 tab 一眼分得开；
+// `?lazy=<ms>` 让托盘测试可以拉长等待窗口（人趁这段时间把窗口藏起来）。
+const qs = new URLSearchParams(location.search);
+const WHO = qs.get("who") || "unnamed";
+const LAZY_MS = Number(qs.get("lazy") || 3000);
+
+const $ = (id) => document.getElementById(id);
+let raf = 0, clicks = 0, vc = 0, animDone = "no", lazyReady = "no";
+let blurSeen = false, changeSeen = false;
+
+$("who").textContent = "fixture: " + WHO;
+
+function tick() {
+  raf++;
+  $("raf").textContent = raf;
+  $("vis").textContent = document.visibilityState + " / " + vc;
+  requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+// ① 真实点击：只有可信输入才该让它 +1（脚本合成的 click 也会 +1，所以计数器只证明"事件到了"）
+$("btn").addEventListener("click", () => {
+  clicks++;
+  $("clicks").textContent = clicks;
+  $("btn").classList.add("hit");
+  $("btn").textContent = "CLICKED ✓";
+});
+
+// ② 过渡：CSS transition 的 transitionend 只在**合成器在跑**时才会来。
+//    隐藏视图（SetIsVisible(false)）里 rAF 停摆、过渡永远不结束——这就是旧世界 agent 报的
+//    "点了没反应"的真身，也是本特性的正面判据。
+$("anim-btn").addEventListener("click", () => {
+  const box = $("box");
+  box.style.transition = "width 900ms linear";
+  box.style.width = "320px";
+  box.addEventListener("transitionend", () => {
+    animDone = "yes";
+    $("anim").textContent = "done";
+  }, { once: true });
+});
+
+// ③ 懒加载：定时器 + DOM 变更（旧世界里 timer 会被降频到 1 次/分钟）
+setTimeout(() => {
+  lazyReady = "yes";
+  $("lazy").textContent = "ready";
+}, LAZY_MS);
+
+// ④ 表单：input/change 各自的回显（fill 走脚本派发，纯 blur 校验的控件另说）
+$("name").addEventListener("input", () => { $("echo").textContent = echoText(); });
+$("name").addEventListener("blur", () => { blurSeen = true; $("echo").textContent = echoText(); });
+$("pick").addEventListener("change", () => { changeSeen = true; $("echo").textContent = echoText(); });
+
+function echoText() {
+  return JSON.stringify({ name: $("name").value, pick: $("pick").value, blur: blurSeen, change: changeSeen });
+}
+$("echo").textContent = echoText();
+
+window.addEventListener("visibilitychange", () => {
+  vc++;
+  $("vis").textContent = document.visibilityState + " / " + vc;
+});
+
+// ── agent 的断言入口：一次求值读完所有判据 ──────────────────────────────────
+window.__probe = () => ({
+  who: WHO,
+  raf,                     // 采样两次，第二次更大 = 合成在跑
+  clicks,                  // 真实点击是否落进页面
+  animDone,                // "yes" = 过渡真的跑完了（旧世界恒 "no"）
+  lazyReady,               // "yes" = 定时器/DOM 变更生效
+  name: $("name").value,
+  pick: $("pick").value,
+  blur: blurSeen,          // 真值 = blur 事件来过（脚本 fill 不一定触发）
+  change: changeSeen,      // change 事件来过（fill 会派发它）
+  vis: document.visibilityState,   // parking 之后应恒为 "visible"
+  vc,                      // visibilitychange 次数（parking 后不该再涨）
+  focus: document.hasFocus(),
+});
+</script>
+</body>
+</html>
