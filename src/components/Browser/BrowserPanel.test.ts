@@ -9,10 +9,17 @@ import { defineComponent, h, nextTick, withDirectives } from "vue";
 
 import { vOverlayLayer } from "../../directives/overlayLayer";
 
-const { invokeMock } = vi.hoisted(() => ({ invokeMock: vi.fn() }));
+const { invokeMock, listenMock } = vi.hoisted(() => ({
+  invokeMock: vi.fn(),
+  listenMock: vi.fn(),
+}));
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
-vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+
+/** 事件通道的订阅者（按事件名）。收起 `listen` 的回调，测试才能自己投递**导航事件**
+ *  ——它和视图生命周期事件是两条独立的真相通道，驱逐重复标签的路径也因此有两条。 */
+const listeners = new Map<string, (ev: { payload: unknown }) => void>();
 
 import BrowserPanel from "./BrowserPanel.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
@@ -87,6 +94,12 @@ function lastArgsOf(cmd: string): unknown[] | null {
 
 beforeEach(() => {
   invokeMock.mockReset();
+  listenMock.mockReset();
+  listeners.clear();
+  listenMock.mockImplementation(async (name: string, cb: (ev: { payload: unknown }) => void) => {
+    listeners.set(name, cb);
+    return () => {};
+  });
   // jsdom 不做布局：不打桩的话 rectOf() 恒为 0×0，BrowserPanel 会拒绝建视图（"占位区未就绪"）。
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockReturnValue(rect);
   vi.stubGlobal(
@@ -384,5 +397,136 @@ describe("agent 的 tab", () => {
     expect(w.findAll(".bp-tab-label").map((n) => n.text())).not.toContain("dev");
     // 视图已经是别人关的：面板**不许**再发一次 close
     expect(lastArgsOf("browser_close")).toBeNull();
+  });
+});
+
+// ── 自己 create 的回声：先行到达，不许长出第二个标签 ──
+//
+// 面板自己开的网页也走"认不出的视图 id"这条路。`browser_create` 是 async 命令：Rust 在
+// **create 内部**就广播了 `browser-view created`（facade.rs 里 `broadcast_view` 在回快照之前），
+// 而应答要绕 tokio worker 回来——**回声恒先于应答**，所以真机上每次都犯，不是偶发竞态。
+// 那一刻新标签还没有 viewId（id 在应答里），两条采纳路径（created 事件、nav 事件）都会把它当成
+// "别人开的 tab"再长一个：同一个视图两个标签，后长的那个再也收不到后续事件（`find` 只认第一个），
+// 永远空白——真机上就是"访问一个新网页就多一个空标签页"。
+describe("自己 create 的回声", () => {
+  /** 扣住 `browser_create` 的应答，让"回声先到"这个真实时序在测试里确定发生。 */
+  function stallCreate() {
+    let release!: (v: unknown) => void;
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "browser_create") {
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      if (cmd === "browser_views_list") return [];
+      if (cmd === "browser_bookmarks_list") return [];
+      if (cmd === "browser_favicons") return {};
+      return undefined;
+    });
+    return () =>
+      release({
+        id: VIEW_ID,
+        nav: { state: "ready", url: "https://example.com/", title: "example" },
+        can_go_back: false,
+        can_go_forward: false,
+        bounds: { x: 0, y: 0, w: 0, h: 0 },
+        displayed: true,
+        label: null,
+        origin: "user",
+      });
+  }
+
+  /** 地址栏回车 → 面板开始建视图（应答被扣住，还在飞）。 */
+  async function startOpen(w: VueWrapper) {
+    const addr = w.find(".bp-address");
+    await addr.setValue("https://example.com");
+    await addr.trigger("keydown.enter");
+    await flushPromises();
+    expect(lastArgsOf("browser_create")).not.toBeNull(); // 确实在飞，别让用例空跑
+  }
+
+  function createdEcho(id: string, label: string | null, origin: "user" | "agent") {
+    useBrowserViews().__handleViewForTest({ id, kind: "created", label, origin, displayed: true });
+  }
+
+  it("created 回声先到 → 只有一个标签（不是同一个页面两个标签）", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    const release = stallCreate();
+    await startOpen(w);
+
+    createdEcho(VIEW_ID, null, "user");
+    await flushPromises();
+
+    release();
+    await flushPromises();
+
+    expect(w.findAll(".bp-tab")).toHaveLength(1);
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).not.toContain("新标签页");
+  });
+
+  it("导航回声先到（加载信号抢在 created 前面）→ 同样只有一个标签", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    const release = stallCreate();
+    await startOpen(w);
+
+    // 页面加载信号可能在 create 期间就发出来（facade 注释明说）——那时 created 还没广播，
+    // 标签条上认不出这个 id。
+    listeners.get("browser-nav")?.({
+      payload: {
+        id: VIEW_ID,
+        can_go_back: false,
+        can_go_forward: false,
+        state: "loading",
+        url: "https://example.com/",
+      },
+    });
+    await flushPromises();
+
+    release();
+    await flushPromises();
+
+    expect(w.findAll(".bp-tab")).toHaveLength(1);
+  });
+
+  it("自己 create 期间到达的 agent 视图：押后回放，最后照旧长出来", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    const release = stallCreate();
+    await startOpen(w);
+
+    createdEcho(VIEW_ID, null, "user");
+    createdEcho("browser-9", "vue-admin dev", "agent");
+    await flushPromises();
+
+    release();
+    await flushPromises();
+
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toContain("vue-admin dev");
+    expect(w.findAll(".bp-tab")).toHaveLength(2);
+  });
+
+  it("押后期间视图被关掉 → 回放不该补出一个幽灵标签", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    const release = stallCreate();
+    await startOpen(w);
+
+    createdEcho("browser-9", "dev", "agent");
+    await flushPromises();
+    useBrowserViews().__handleViewForTest({
+      id: "browser-9",
+      kind: "closed",
+      label: "dev",
+      origin: "agent",
+      displayed: false,
+    });
+    await flushPromises();
+
+    release();
+    await flushPromises();
+
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).not.toContain("dev");
   });
 });

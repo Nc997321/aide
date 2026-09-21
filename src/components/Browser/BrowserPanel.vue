@@ -22,6 +22,7 @@ import {
   onBrowserNav,
   type BrowserViewDto,
   type BoundsDto,
+  type NavEventDto,
   type NavStateDto,
   type ViewEventDto,
 } from "../../composables/browser/useEmbeddedBrowser";
@@ -228,22 +229,89 @@ function dropGone(views: BrowserViewDto[]) {
   }
 }
 
-/** 应用生命周期增量：created 补标签、closed 摘标签。重复投递是安全的（幂等）。 */
-function applyViewEvents(events: ViewEventDto[]) {
-  for (const e of events) {
-    const existing = tabs.value.find((t) => t.viewId === e.id);
-    if (e.kind === "created") {
-      if (existing) {
-        existing.label = e.label;
-        existing.origin = e.origin;
-      } else {
-        tabs.value.push({ ...blankTab(), viewId: e.id, label: e.label, origin: e.origin });
-      }
-    } else if (existing) {
-      dropTab(existing.id);
-    }
-  }
+// ── 自己 create 的回声：押后到应答落地 ──
+//
+// 面板自己开的网页也走"认不出的视图 id"这条路。`browser_create` 是 async 命令，而 Rust 在
+// **create 内部**就广播了 `browser-view created`（facade.rs：`broadcast_view` 在回快照之前），
+// 应答要绕 tokio worker 回来——**回声恒先于应答**（真机每次必犯，不是偶发竞态）。那一刻新标签
+// 还没有 viewId（id 在应答里），两条采纳路径都会把它当成"别人开的 tab"再长一个：同一个视图两个
+// 标签，后长的那个再也收不到后续事件（`find` 只认第一个），于是永远空白。
+//
+// 所以：**自己有 create 在飞时，认不出的视图事件先押后**。不猜归属——这个特性的应用场景恰恰是
+// 多个 agent 并发开 tab，猜错就是把 agent 的页面绑到你的标签上；押后不需要猜：等应答把 id 绑上
+// 再回放，命中的是自己的视图（幂等），仍然认不出的才是别人开的。
+
+/** 正在等 `browser_create` 应答的标签（id 还没回来）。 */
+const creatingTabs = new Set<Tab>();
+
+/** 押后的回声（带 id：视图没了就别回放）。 */
+let heldEchoes: Array<{ id: string; replay: () => void }> = [];
+
+/** 有 create 在飞就把这件事押后（回 true = 已押后，调用方别再采纳）。 */
+function deferWhileCreating(viewId: string, replay: () => void): boolean {
+  if (creatingTabs.size === 0) return false;
+  heldEchoes.push({ id: viewId, replay });
+  return true;
+}
+
+/** create 落定后回放押后的事件（那时自己的 id 已经绑上，回放都落在"已知"这条路上）。 */
+function flushHeldEchoes() {
+  if (creatingTabs.size > 0) return;
+  const pending = heldEchoes;
+  heldEchoes = [];
+  for (const { replay } of pending) replay();
+  // 回放可能才把某个标签长出来（agent 的 tab）——focus 请求正等着它，补一次机会。
   applyPendingFocus();
+}
+
+/** 视图已经没了：押着的回声别再回放，否则补出一个再也摘不掉的幽灵标签。 */
+function forgetHeldEchoes(viewId: string) {
+  heldEchoes = heldEchoes.filter((h) => h.id !== viewId);
+}
+
+/** 应用一条生命周期增量：created 补标签、closed 摘标签。重复投递是安全的（幂等）。 */
+function applyViewEvent(e: ViewEventDto) {
+  const existing = tabs.value.find((t) => t.viewId === e.id);
+  if (e.kind === "created") {
+    if (existing) {
+      existing.label = e.label;
+      existing.origin = e.origin;
+      return;
+    }
+    // 认不出的视图：可能正是自己在建的那个（应答还没回来）——押后，别急着自己建标签。
+    if (deferWhileCreating(e.id, () => applyViewEvent(e))) return;
+    tabs.value.push({ ...blankTab(), viewId: e.id, label: e.label, origin: e.origin });
+    return;
+  }
+  forgetHeldEchoes(e.id);
+  if (existing) dropTab(existing.id);
+}
+
+/** 应用一批增量（常驻层缓冲来的），随后处理可能已就位的 focus 请求。 */
+function applyViewEvents(events: ViewEventDto[]) {
+  for (const e of events) applyViewEvent(e);
+  applyPendingFocus();
+}
+
+/** 应用一条导航事件——**多驱动者共用的真相通道**：页面是被用户点出来的、还是 agent 工具驱动的，
+ *  状态都从这里到 UI（CLAUDE.md 红线：UI 状态只认事件，不做乐观更新）。 */
+function applyNav(e: NavEventDto) {
+  let t = tabs.value.find((x) => x.viewId === e.id);
+  if (!t) {
+    // 视图生命周期事件还没到（或面板错过了）→ 就地长一个标签，免得"页面在跑但标签条上没有它"。
+    // 自己 create 的回声也走这条路（应答未回、id 未绑）——押后，等绑上了再回放。
+    if (deferWhileCreating(e.id, () => applyNav(e))) return;
+    t = { ...blankTab(), viewId: e.id };
+    tabs.value.push(t);
+  }
+  t.nav = navOfEvent(e);
+  t.canGoBack = e.can_go_back;
+  t.canGoForward = e.can_go_forward;
+  const url = urlOfNav(t.nav);
+  if (url) {
+    t.url = url;
+    if (t.id === activeId.value) syncAddressFromTab();
+  }
 }
 
 /** 待切视图到了就切过去（focus 请求可能先于标签出现，也可能先于面板挂载）。 */
@@ -267,6 +335,8 @@ async function ensureView(t: Tab, url: string): Promise<boolean> {
     setError("占位区未就绪（宽高为 0）");
     return false;
   }
+  // 回声已经在路上（见「自己 create 的回声」）：先登记，押后的事件要等这次应答落地才回放。
+  creatingTabs.add(t);
   try {
     applyView(t, await browser.create(url, b));
     clearMessage();
@@ -274,6 +344,9 @@ async function ensureView(t: Tab, url: string): Promise<boolean> {
   } catch (e) {
     setError(e);
     return false;
+  } finally {
+    creatingTabs.delete(t);
+    flushHeldEchoes();
   }
 }
 
@@ -485,25 +558,8 @@ onMounted(() => {
   watch(buffered, () => applyViewEvents(takeViewEvents()));
   watch(pendingFocusViewId, applyPendingFocus);
 
-  // 导航事件：**多驱动者共用的真相通道**——页面是被用户点出来的、还是 agent 工具驱动的，
-  // 状态都从这里到 UI（CLAUDE.md 红线：UI 状态只认事件，不做乐观更新）。
-  void onBrowserNav((e) => {
-    let t = tabs.value.find((x) => x.viewId === e.id);
-    if (!t) {
-      // 视图生命周期事件还没到（或面板错过了）→ 就地长一个标签，免得"页面在跑但标签条上没有它"。
-      // 随后到达的 created 事件会把 label/origin 补齐（`applyViewEvents` 对已有标签做更新）。
-      t = { ...blankTab(), viewId: e.id };
-      tabs.value.push(t);
-    }
-    t.nav = navOfEvent(e);
-    t.canGoBack = e.can_go_back;
-    t.canGoForward = e.can_go_forward;
-    const url = urlOfNav(t.nav);
-    if (url) {
-      t.url = url;
-      if (t.id === activeId.value) syncAddressFromTab();
-    }
-  }).then((fn) => {
+  // 导航事件订阅（应用逻辑见 `applyNav`）。
+  void onBrowserNav(applyNav).then((fn) => {
     unlistenNav = fn;
   });
 });
