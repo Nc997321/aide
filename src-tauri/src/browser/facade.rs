@@ -21,7 +21,7 @@ use url::Url;
 
 use crate::browser::adapter::PlatformEngine;
 use crate::browser::core::url_guard;
-use crate::browser::dto::{BoundsDto, BrowserViewDto, NavEventDto, NavStateDto};
+use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavEventDto, NavStateDto};
 use crate::browser::port::engine::{BrowserEngine, CreateCfg, EngineError, PageLoadObserver};
 use crate::browser::port::types::{
     Bounds, BrowserView, BrowserViewId, NavState, PageLoadSignal, SizeError,
@@ -94,16 +94,21 @@ impl BrowserFacade {
 
     /// 创建视图并加载首个 URL。**id 由注册表发**（身份归状态主人：面板与未来的 agent 工具
     /// 拿到的都是同一个可寻址 id）。
-    pub fn create(&self, url_raw: &str, bounds: BoundsDto) -> Result<BrowserViewDto, FacadeError> {
-        let url = url_guard::guard(url_raw).map_err(|e| FacadeError::UrlRejected(e.to_string()))?;
-        let bounds = Bounds::try_from(bounds).map_err(FacadeError::BoundsRejected)?;
+    pub fn create(&self, dto: &CreateBrowserDto) -> Result<BrowserViewDto, FacadeError> {
+        let url = url_guard::guard(&dto.url).map_err(|e| FacadeError::UrlRejected(e.to_string()))?;
+        let bounds = Bounds::try_from(dto.bounds).map_err(FacadeError::BoundsRejected)?;
+        // 缺省露头（面板路径不传）；agent 的后台 tab 显式 false → 直接建在停靠点。
+        let displayed = dto.displayed.unwrap_or(true);
 
         // **先入库、再建引擎视图**：加载信号可能在 `create` 返回前就到达（它们在主线程上跑），
         // 注册表里必须先有这一条，否则首个 Started 会被当成「视图不存在」丢掉。
+        // 领域与引擎的显示状态在入库时就对齐——否则 `browser_tabs` 会把 parked 报成 displayed。
         let id = {
             let mut reg = self.lock()?;
             let id = reg.allocate_id();
-            reg.insert(BrowserView::new(id.clone(), bounds));
+            let mut view = BrowserView::new(id.clone(), bounds);
+            view.set_displayed(displayed);
+            reg.insert(view);
             id
         };
 
@@ -116,6 +121,7 @@ impl BrowserFacade {
             bounds,
             user_agent: None,
             devtools: false,
+            displayed,
             on_page_load: Some(self.observer(id.clone())),
         };
         if let Err(e) = self.engine.create(&window, id.clone(), cfg) {

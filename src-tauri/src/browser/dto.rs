@@ -170,4 +170,6 @@ impl From<ImportReport> for ImportReportDto {
 pub struct CreateBrowserDto {
     pub url: String,
     pub bounds: BoundsDto,
+    /// `None` = 露在面板上（面板路径的既有语义）；agent 建的后台视图显式传 `false`。
+    pub displayed: Option<bool>,
 }

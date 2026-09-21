@@ -24,7 +24,7 @@ type CmdResult<T> = Result<T, String>;
 #[tauri::command]
 pub async fn browser_create(app: AppHandle, dto: CreateBrowserDto) -> CmdResult<BrowserViewDto> {
     BrowserFacade::new(&app)
-        .create(&dto.url, dto.bounds)
+        .create(&dto)
         .map_err(|e| e.to_string())
 }
 

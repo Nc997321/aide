@@ -55,6 +55,9 @@ pub struct CreateCfg {
     /// 是否**主动**开 devtools（`false` = 不动内核默认：debug 构建仍可开，release 本就没有）。
     /// 不是"强制关"——那样会把 dev 下的排查能力也关掉（plan §8 的安全要求由 release 构建保证）。
     pub devtools: bool,
+    /// 建出来时**露不露在面板上**。`false` = 直接建在停靠点（parked），不闪一帧——
+    /// agent 开的 tab 属于这种：它要在后台干活，不该抢用户的前台。
+    pub displayed: bool,
     /// 页面加载信号回传口。`None` = 不关心（无广播需求）。
     pub on_page_load: Option<PageLoadObserver>,
 }
@@ -158,4 +161,25 @@ pub trait BrowserEngine: Send + Sync {
     fn cookies_clear(&self, id: &BrowserViewId) -> Result<(), EngineError>;
 
     fn close(&self, id: &BrowserViewId) -> Result<(), EngineError>;
+}
+
+#[cfg(test)]
+mod engine_test {
+    use super::*;
+    use crate::browser::port::types::{Bounds, Position, Size};
+
+    /// 初始显示状态必须**显式**：agent 要能"建了但不露头"，否则会先在面板上闪一帧
+    /// （旧路径是 create 可见 → 随即被隐藏）。
+    #[test]
+    fn create_cfg_carries_explicit_displayed() {
+        let cfg = CreateCfg {
+            initial_url: url::Url::parse("https://example.com/").unwrap(),
+            bounds: Bounds::new(Position::new(0.0, 0.0), Size::try_new(10.0, 10.0).unwrap()),
+            user_agent: None,
+            devtools: false,
+            displayed: false,
+            on_page_load: None,
+        };
+        assert!(!cfg.displayed);
+    }
 }

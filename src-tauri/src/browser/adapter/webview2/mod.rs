@@ -27,6 +27,16 @@ use url::Url;
 use crate::browser::port::engine::{BrowserEngine, CreateCfg, EngineError};
 use crate::browser::port::types::{Bounds, BrowserViewId, PageLoadSignal};
 
+/// 停靠点：远超任何真实客户区的固定逻辑坐标。子窗口被父窗口裁剪 ⇒ 用户看不见；
+/// 而 HWND 保持 WS_VISIBLE、`SetIsVisible` **不动** ⇒ 引擎照常合成。
+///
+/// 依据（2026-09-21 一次性 wry 探针实测，`%TEMP%\wry-park-probe`）：parked 视图的 rAF 帧率、
+/// `Page.captureScreenshot`、CDP 真实点击与前台视图**逐项等价**；对照组 `set_visible(false)`
+/// 三项全灭（rAF 0 帧、截图永远不回包）。规格见
+/// `docs/superpowers/specs/2026-09-21-agent-tabs-and-parking-design.md`。
+const PARK_X: f64 = 20000.0;
+const PARK_Y: f64 = 20000.0;
+
 /// WebView2 引擎。`handles` 持有各视图的原生 `Webview` 句柄（id → handle），是句柄的唯一主人。
 #[derive(Debug, Default)]
 pub struct Webview2Engine {
@@ -102,7 +112,13 @@ impl BrowserEngine for Webview2Engine {
             builder = builder.devtools(true);
         }
 
-        let pos = LogicalPosition::new(cfg.bounds.position().x(), cfg.bounds.position().y());
+        // 落点：displayed 的建在占位洞的矩形上；parked 的直接建在停靠点——
+        // **不要"先建在洞上再挪走"**，那会闪一帧。
+        let pos = if cfg.displayed {
+            LogicalPosition::new(cfg.bounds.position().x(), cfg.bounds.position().y())
+        } else {
+            LogicalPosition::new(PARK_X, PARK_Y)
+        };
         let size = LogicalSize::new(cfg.bounds.size().w(), cfg.bounds.size().h());
 
         // add_child 内部 run_on_main_thread + 阻塞 recv——调用方须在非主线程（async 命令）。
@@ -149,12 +165,16 @@ impl BrowserEngine for Webview2Engine {
     fn set_displayed(&self, id: &BrowserViewId, displayed: bool) -> Result<(), EngineError> {
         let wv = self.handle(id)?;
         if displayed {
-            wv.show()
-                .map_err(|e| EngineError::Internal(format!("show: {e}")))
-        } else {
-            wv.hide()
-                .map_err(|e| EngineError::Internal(format!("hide: {e}")))
+            // 位置由随后的 `set_bounds` 给（面板的 showActive 就是这个顺序）；
+            // 期间视图停在停靠点，没人看得见 ⇒ 不存在"闪在错位置"的问题。
+            return wv
+                .show()
+                .map_err(|e| EngineError::Internal(format!("show: {e}")));
         }
+        // **绝不调 `hide()`/`SetIsVisible(false)`**：那是内核级制动（不合成、rAF 停摆、
+        // 截图取不到帧、输入丢弃）。parking 的全部理由就是绕开它——探针实测见 PARK 常量注释。
+        wv.set_position(LogicalPosition::new(PARK_X, PARK_Y))
+            .map_err(|e| EngineError::Internal(format!("park: {e}")))
     }
 
     fn eval(&self, id: &BrowserViewId, script: &str) -> Result<serde_json::Value, EngineError> {
