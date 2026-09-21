@@ -20,11 +20,8 @@ use tokio::sync::Mutex as TokioMutex;
 use crate::browser::agent_bridge::{
     build_result_command, err_payload, ok_payload, BrowserQuery, BrowserQueryRequest,
 };
-use crate::browser::dto::{BrowserViewDto, NavStateDto};
-
-#[cfg(test)]
-use crate::browser::dto::OriginDto;
-use crate::browser::facade::BrowserFacade;
+use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavStateDto, OriginDto};
+use crate::browser::facade::{BrowserFacade, FacadeError};
 
 /// 执行一条浏览器查询并回写结果。
 pub async fn handle(app: AppHandle, stdin: Arc<TokioMutex<ChildStdin>>, req: BrowserQueryRequest) {
@@ -120,59 +117,145 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
                 Err(e) => err_payload(format!("cannot request focus for view {id}: {e}")),
             }
         }
+
+        BrowserQuery::Open { url, label } => {
+            let dto = CreateBrowserDto {
+                url,
+                // 默认视口是**策略**（门面不认识"默认多大"）：parked 期间页面按这个宽度布局，
+                // 用户切过去看时会响应式重排一次——spec 记为已知代价。
+                bounds: BoundsDto {
+                    x: 0.0,
+                    y: 0.0,
+                    w: DEFAULT_VIEW_W,
+                    h: DEFAULT_VIEW_H,
+                },
+                displayed: Some(false), // parked：后台干活，不抢用户前台
+                label,
+                origin: Some(OriginDto::Agent),
+            };
+            match facade.create(&dto) {
+                Ok(view) => ok_payload(serde_json::json!({ "view_id": view.id, "view": view })),
+                Err(e) => err_payload(format!("cannot open a browser view: {e}")),
+            }
+        }
+
+        BrowserQuery::Close { view_id } => {
+            let id = match resolve_view(&facade, view_id.as_deref()) {
+                Ok(id) => id,
+                Err(message) => return err_payload(message),
+            };
+            match facade.close(&id) {
+                Ok(()) => ok_payload(serde_json::json!({ "view_id": id, "closed": true })),
+                Err(e) => err_payload(format!("cannot close view {id}: {e}")),
+            }
+        }
+
+        BrowserQuery::Navigate { view_id, url } => {
+            let id = match resolve_view(&facade, view_id.as_deref()) {
+                Ok(id) => id,
+                Err(message) => return err_payload(message),
+            };
+            match facade.navigate(&id, &url) {
+                Ok(view) => ok_payload(serde_json::json!({ "view_id": id, "view": view })),
+                Err(e) => err_payload(format!("cannot navigate view {id}: {e}")),
+            }
+        }
+
+        BrowserQuery::Back { view_id } => {
+            move_in_history(&facade, view_id, "back", BrowserFacade::go_back)
+        }
+        BrowserQuery::Forward { view_id } => {
+            move_in_history(&facade, view_id, "forward", BrowserFacade::go_forward)
+        }
+    }
+}
+
+/// agent 建视图的默认视口（**策略**：门面不认识"默认多大"）。
+/// parked 期间页面按这个宽度布局；用户切过去看时会响应式重排一次（spec 记为已知代价）。
+const DEFAULT_VIEW_W: f64 = 1280.0;
+const DEFAULT_VIEW_H: f64 = 800.0;
+
+/// 前进/后退共用的外壳：解析 id → 移动游标 → 回快照。两边只有方向不同。
+fn move_in_history(
+    facade: &BrowserFacade,
+    view_id: Option<String>,
+    direction: &str,
+    step: fn(&BrowserFacade, &str) -> Result<BrowserViewDto, FacadeError>,
+) -> Value {
+    let id = match resolve_view(facade, view_id.as_deref()) {
+        Ok(id) => id,
+        Err(message) => return err_payload(message),
+    };
+    match step(facade, &id) {
+        Ok(view) => ok_payload(serde_json::json!({ "view_id": id, "view": view })),
+        Err(e) => err_payload(format!("cannot go {direction} in view {id}: {e}")),
     }
 }
 
 /// 解析要操作的视图 id（**策略层**，门面不参与）。
-///
-/// 规则——缺省**不猜**，歧义时如实报错并给出清单让 agent 自己选：
-/// 1. 显式给了 `view_id` → 必须存在；
-/// 2. 缺省 + 恰一个**可见**视图 → 用它（面板切标签走 `set_displayed`，同时至多一个可见）；
-/// 3. 缺省 + 无可见但恰一个视图 → 用它（面板收起但视图保活）；
-/// 4. 其余 → 报错 + 全量清单。
 fn resolve_view(facade: &BrowserFacade, want: Option<&str>) -> Result<String, String> {
     let views = facade
         .list_views()
         .map_err(|e| format!("cannot list browser views: {e}"))?;
+    resolve_from(&views, want)
+}
 
+/// 解析规则本体（取列表的依赖抽成参数，四条规则才好单测）。
+///
+/// 缺省**不猜**，歧义时如实报错并给出清单让 agent 自己选：
+/// 1. 显式给了 `view_id` → 必须存在；
+/// 2. 缺省 + 全库**恰好一个**视图 → 用它（单 agent 的常态）；
+/// 3. 缺省 + 一个都没有 → 报错，并引导怎么开一个；
+/// 4. 其余 → 报错 + 全量清单（带 label 与 displayed/parked）。
+///
+/// ⚠️ 旧的"缺省 + 恰一个**可见**视图 → 用它"**已去掉**：多 agent 下它会静默落到
+/// **用户正看着的那个 tab**（或另一个 agent 的 tab）上——错目标的静默故障比报错坏得多。
+fn resolve_from(views: &[BrowserViewDto], want: Option<&str>) -> Result<String, String> {
     if let Some(want) = want {
         return if views.iter().any(|v| v.id == want) {
             Ok(want.to_string())
         } else {
             Err(format!(
                 "browser view `{want}` not found. open views: {}",
-                summarise(&views)
+                summarise(views)
             ))
         };
     }
 
-    let displayed: Vec<&BrowserViewDto> = views.iter().filter(|v| v.displayed).collect();
-    if let [only] = displayed.as_slice() {
-        return Ok(only.id.clone());
-    }
     if views.is_empty() {
         return Err(
-            "no embedded browser view is open — open one in the browser panel first.".into(),
+            "no embedded browser view is open — open one in the browser panel first, or create \
+             one with `browser_tab` (action=open)."
+                .into(),
         );
     }
-    if let [only] = views.as_slice() {
+    if let [only] = views {
         return Ok(only.id.clone());
     }
 
     Err(format!(
-        "{} browser views are open and none is uniquely visible — pass `view_id` explicitly. open views: {}",
+        "{} browser views are open — pass `view_id` explicitly (the view you opened is the id \
+         that `browser_tab` returned when you opened it). open views: {}",
         views.len(),
-        summarise(&views)
+        summarise(views)
     ))
 }
 
-/// 视图清单摘要（错误文案里给 agent 挑 id 用）：`browser-1 https://… (hidden); browser-2 …`
+/// 视图清单摘要（错误文案里给 agent 挑 id 用）：
+/// `browser-2 "vue-admin dev" http://localhost:5173 (parked); browser-1 https://… (displayed)`
+///
+/// **label 是关键**：三个 tab 挂同一个 dev server 时 URL 与标题完全一样，只有 label 分得开。
 fn summarise(views: &[BrowserViewDto]) -> String {
     views
         .iter()
         .map(|v| {
-            let suffix = if v.displayed { "" } else { " (hidden)" };
-            format!("{} {}{suffix}", v.id, url_of(v))
+            let label = v
+                .label
+                .as_deref()
+                .map(|l| format!("\"{l}\" "))
+                .unwrap_or_default();
+            let state = if v.displayed { "displayed" } else { "parked" };
+            format!("{} {label}{} ({state})", v.id, url_of(v))
         })
         .collect::<Vec<_>>()
         .join("; ")
@@ -193,6 +276,12 @@ fn url_of(view: &BrowserViewDto) -> &str {
 mod tests {
     use super::*;
     use crate::browser::dto::BoundsDto;
+
+    /// 给夹具补个 label（agent 建的 tab 会带名字）。
+    fn labelled(mut v: BrowserViewDto, label: &str) -> BrowserViewDto {
+        v.label = Some(label.into());
+        v
+    }
 
     fn view(id: &str, displayed: bool, url: Option<&str>) -> BrowserViewDto {
         BrowserViewDto {
@@ -219,15 +308,50 @@ mod tests {
     }
 
     /// `summarise` 是错误文案的唯一内容来源——agent 靠它挑 id，形状错了就是选错视图。
+    /// 带 label 与 displayed/parked：三个 tab 挂同一个 dev server 时，URL 分不出来。
     #[test]
-    fn summarise_shows_id_url_and_hidden_marker() {
+    fn summarise_shows_id_label_url_and_display_state() {
         let views = vec![
             view("browser-1", true, Some("https://a.example/x")),
-            view("browser-2", false, None),
+            labelled(view("browser-2", false, None), "vue-admin dev"),
         ];
         let s = summarise(&views);
-        assert!(s.contains("browser-1 https://a.example/x"), "{s}");
-        assert!(s.contains("browser-2 (not navigated yet) (hidden)"), "{s}");
+        assert!(s.contains("browser-1 https://a.example/x (displayed)"), "{s}");
+        assert!(
+            s.contains("browser-2 \"vue-admin dev\" (not navigated yet) (parked)"),
+            "{s}"
+        );
+    }
+
+    /// 收紧后的缺省解析：**多视图一律要求显式 `view_id`**。
+    /// 旧规则"缺省 + 恰一个可见视图 → 用它"在多 agent 下会让 A 的调用落到**用户正看的那个 tab**。
+    #[test]
+    fn default_view_resolution_requires_a_single_view() {
+        assert!(resolve_from(
+            &[
+                view("browser-1", true, Some("http://a/")),
+                view("browser-2", false, Some("http://a/")),
+                view("browser-3", false, Some("http://a/")),
+            ],
+            None
+        )
+        .is_err());
+
+        // 恰好一个视图 → 用它（单 agent 的常态）
+        assert_eq!(
+            resolve_from(&[view("browser-1", false, Some("http://a/"))], None).unwrap(),
+            "browser-1"
+        );
+
+        // 一个都没有 → 报错里要引导怎么开
+        let err = resolve_from(&[], None).unwrap_err();
+        assert!(err.contains("no embedded browser view is open"), "{err}");
+
+        // 显式 id：库里没有就报错 + 清单
+        let err = resolve_from(&[view("browser-1", true, Some("http://a/"))], Some("nope"))
+            .unwrap_err();
+        assert!(err.contains("not found"), "{err}");
+        assert!(err.contains("browser-1"), "{err}");
     }
 
     #[test]

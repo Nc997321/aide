@@ -36,6 +36,21 @@ pub enum BrowserQuery {
     Focus {
         view_id: Option<String>,
     },
+    /// 建一个**自己的**后台视图（默认视口、parked）。返回的 `view_id` 由 agent 自己记着——
+    /// 多 agent 下这就是"哪个 tab 是我的"的唯一可靠答案（三个 tab 挂同一个 dev server 时
+    /// URL 与标题都分不出来）。
+    Open {
+        url: String,
+        label: Option<String>,
+    },
+    /// 关掉一个视图（agent 用完自己收）。
+    Close { view_id: Option<String> },
+    Navigate {
+        view_id: Option<String>,
+        url: String,
+    },
+    Back { view_id: Option<String> },
+    Forward { view_id: Option<String> },
     /// op 缺失/未知或载荷不全。
     ///
     /// **刻意不静默丢弃**（对比 codegraph 的「解析失败即忽略」）：回一条错误让 sidecar 立刻
@@ -51,6 +66,11 @@ impl BrowserQuery {
             Self::Eval { .. } => "eval",
             Self::CallCdp { .. } => "call_cdp",
             Self::Focus { .. } => "focus",
+            Self::Open { .. } => "open",
+            Self::Close { .. } => "close",
+            Self::Navigate { .. } => "navigate",
+            Self::Back { .. } => "back",
+            Self::Forward { .. } => "forward",
             Self::Malformed(_) => "malformed",
         }
     }
@@ -101,6 +121,29 @@ fn parse_query(event: &Value) -> BrowserQuery {
             None => BrowserQuery::Malformed("call_cdp requires a string `method`".into()),
         },
         "focus" => BrowserQuery::Focus {
+            view_id: opt_str(event, "view_id"),
+        },
+        "open" => match event.get("url").and_then(|v| v.as_str()) {
+            Some(url) => BrowserQuery::Open {
+                url: url.to_string(),
+                label: opt_str(event, "label"),
+            },
+            None => BrowserQuery::Malformed("open requires a string `url`".into()),
+        },
+        "close" => BrowserQuery::Close {
+            view_id: opt_str(event, "view_id"),
+        },
+        "navigate" => match event.get("url").and_then(|v| v.as_str()) {
+            Some(url) => BrowserQuery::Navigate {
+                view_id: opt_str(event, "view_id"),
+                url: url.to_string(),
+            },
+            None => BrowserQuery::Malformed("navigate requires a string `url`".into()),
+        },
+        "back" => BrowserQuery::Back {
+            view_id: opt_str(event, "view_id"),
+        },
+        "forward" => BrowserQuery::Forward {
             view_id: opt_str(event, "view_id"),
         },
         other => BrowserQuery::Malformed(format!("unknown op: {other}")),
@@ -167,6 +210,80 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(r.query, BrowserQuery::Focus { view_id: None });
+    }
+
+    /// tab 级 op 的解析：`open` 必填 url、`navigate` 必填 url，缺了**不静默丢弃**。
+    #[test]
+    fn parses_tab_lifecycle_ops() {
+        let open = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r", "op": "open",
+            "url": "http://localhost:5173/", "label": "vue-admin dev"
+        }))
+        .unwrap();
+        assert_eq!(
+            open.query,
+            BrowserQuery::Open {
+                url: "http://localhost:5173/".into(),
+                label: Some("vue-admin dev".into()),
+            }
+        );
+        assert_eq!(open.query.op_name(), "open");
+
+        let nav = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r", "op": "navigate",
+            "view_id": "browser-1", "url": "http://localhost:5173/x"
+        }))
+        .unwrap();
+        assert_eq!(
+            nav.query,
+            BrowserQuery::Navigate {
+                view_id: Some("browser-1".into()),
+                url: "http://localhost:5173/x".into(),
+            }
+        );
+
+        for (op, raw) in [
+            ("open", json!({"type": "browser_query", "request_id": "r", "op": "open"})),
+            (
+                "navigate",
+                json!({"type": "browser_query", "request_id": "r", "op": "navigate"}),
+            ),
+        ] {
+            assert!(
+                matches!(
+                    parse_browser_query(&raw).unwrap().query,
+                    BrowserQuery::Malformed(_)
+                ),
+                "{op} 缺 url 必须 Malformed"
+            );
+        }
+
+        assert_eq!(
+            parse_browser_query(&json!({
+                "type": "browser_query", "request_id": "r", "op": "close", "view_id": "browser-3"
+            }))
+            .unwrap()
+            .query,
+            BrowserQuery::Close {
+                view_id: Some("browser-3".into())
+            }
+        );
+        assert_eq!(
+            parse_browser_query(&json!({"type": "browser_query", "request_id": "r", "op": "back"}))
+                .unwrap()
+                .query,
+            BrowserQuery::Back { view_id: None }
+        );
+        assert_eq!(
+            parse_browser_query(&json!({
+                "type": "browser_query", "request_id": "r", "op": "forward", "view_id": "browser-1"
+            }))
+            .unwrap()
+            .query,
+            BrowserQuery::Forward {
+                view_id: Some("browser-1".into())
+            }
+        );
     }
 
     #[test]
