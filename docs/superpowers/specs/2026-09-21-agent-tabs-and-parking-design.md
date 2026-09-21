@@ -1,7 +1,12 @@
 # agent 自建 tab + parking：让后台标签页继续干活
 
 日期：2026-09-21
-状态：**待用户 review**（技术前提已由一次性探针实测确认，见「实测记录」）
+状态：**已实现**（2026-09-21；T1–T10 全部落地且单测绿：Rust 919 / 前端+sidecar 3243 / typecheck 通过。
+**真机验收（T11）待做**，见 `docs/superpowers/plans/2026-09-21-agent-tabs-and-parking.md`）
+
+实现落地清单（提交）：`9b04dc8d` 改名 → `67292c88` parking → `06a733b6` label/origin + 生命周期事件 →
+`06ec76fb` 列表命令 → `611c11db` focus → `050fc30c` agent 的五个 tab op + 缺省不猜 →
+`4c5525d5` 面板消费 → `85e4c462` browser_tab 工具 → `352a9d85` 可见性收编 → `3715598e` SDK 文案。
 基线：v2 spec《内置浏览器 agent 工具 v2》（`docs/superpowers/specs/2026-09-20-browser-agent-tools-v2-design.md`）
 ——本文档**推翻其两条非目标**，见「偏离记录」。
 
