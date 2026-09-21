@@ -45,7 +45,9 @@ export interface ActTarget {
  *
  * 并集而非替换，两条理由：① 只按可点击判据取候选会**回归**今天能用的路径（点 `td` 靠父级
  * handler 生效的表格行）；② 并集保证「`browser_read` 里看得见的可点元素，这里按文本一定点得到」。
- * 精度由 `byText` 的「精确匹配优先 + 标签最短优先」兜着。
+ *
+ * 但这个集合是**文本载体**、不是**可点断言**：挑目标前 `byText` 还要过一道 `landable`
+ * （自己或 ≤6 层祖先带可点线索）——否则裸 div 会让"文本在、但不像可点击"那条分支永远够不着。
  */
 const TEXT_CANDIDATE_SELECTOR =
   'button,a,[role="button"],input,select,textarea,label,td,th,li,div,span,p,h1,h2,h3,h4,h5,h6,' +
@@ -132,6 +134,26 @@ ${CLICKABLE_JS}
     return hits;
   }
 
+  /**
+   * 点下去会不会落在某个"看起来能点"的元素里：**自己算，或某个祖先算**。
+   *
+   * 为什么必须看祖先：文字常常装在子元素里，而 handler / role 挂在父级
+   * （<div role="button"><span>保存</span></div>、<button>保存 <span>草稿</span></button>）——
+   * 点击靠冒泡生效，只看自己会把这类全部误判成"不可点"。
+   * 样式那一半不必往上找：cursor 是**继承属性**，祖先设了 pointer，自己就报 pointer。
+   *
+   * 上限 6 层：够覆盖常见包裹层级，又不至于把"整页裹在一个可点容器里"这种病态结构当成处处可点。
+   */
+  function landable(el) {
+    if (clickableByMarkup(el) || clickableByStyle(el)) return true;
+    var p = el.parentElement;
+    for (var hop = 0; p && hop < 6; hop++) {
+      if (clickableByMarkup(p)) return true;
+      p = p.parentElement;
+    }
+    return false;
+  }
+
   /** 「找不到」的三种分支（见文件头）。 */
   function notFound(want) {
     var hits = textHits(want, 12);
@@ -186,6 +208,17 @@ ${CLICKABLE_JS}
     }
     var pool = exact.length ? exact : partial;
     if (!pool.length) return notFound(want);
+    // **能承载文本 ≠ 能点**：池子是"文本载体"的宽集合（裸 div/span/td 都在里面，见
+    // TEXT_CANDIDATE_SELECTOR 的注释），所以挑目标前先滤成"点下去会落在可点元素里"的那堆。
+    // 一个都没留下 → 交给 notFound：它给的是「文本在、但它的元素不像可点击」+ 选择器建议
+    // （不猜着点）。少了这一步，宽池子会让**任何**装在 div 里的文字都"点得到"，
+    // 那条分支就成了真页面上够不着的死代码（2026-09-22 夹具实测）。
+    var live = [];
+    for (var m = 0; m < pool.length; m++) {
+      if (landable(pool[m])) live.push(pool[m]);
+    }
+    if (!live.length) return notFound(want);
+    pool = live;
     // 最具体的优先：文本最短的那个通常就是目标，而不是包含它的整个容器；文本等长时取
     // **子元素更少**的那个（<div class="aclick"><span>查看</span></div> 里该点 span ——
     // 点内层文字一定落在 handler 作用域内，点外层只在外层真的挂了 handler 时才生效）。

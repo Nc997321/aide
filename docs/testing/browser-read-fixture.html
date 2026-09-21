@@ -22,6 +22,8 @@
        `div.plain` 这样的选择器建议（**不许**回一句"没找到"）。
     ④ `browser_act {view_id, action:"click", text:"光标型按钮"}`：点到；再 `browser_eval` 读
        `window.__hits` 应为 1。
+    ⑤ `browser_act {view_id, action:"click", text:"嵌套文字"}`：点到（线索在祖先 `role=button` 上，
+       文字在子 `span` 里 —— 点是靠冒泡生效的，只看元素自己会误拒这一类）。
 
   前提：改的是 sidecar（`agent-sidecar/src/extensions/browser/*`）→ 必须先
   `pnpm build:sidecar` 并让**新进程**跑起来（dev 实例开新会话 / 重启 tauri dev）。
@@ -52,6 +54,8 @@
 <div onclick="void 0">内联 onclick 型</div>
 <span role="button" tabindex="0">role 型</span>
 <button>真 button</button>
+<!-- 文字在子元素、线索在祖先：点是靠冒泡生效的，所以 act 按文本要能点到里面那个 span -->
+<div role="button"><span id="nested-span">嵌套文字</span></div>
 
 <h2>② 文本在页面上，但不该被认成可点击</h2>
 <div class="plain">纯文本块</div>
@@ -79,7 +83,7 @@ document.getElementById("cursor-btn").addEventListener("click", function () { wi
 
 window.__expect = function () {
   return {
-    clickablesContain: ["光标型按钮", "光标型标签页", "内联 onclick 型", "role 型", "真 button"],
+    clickablesContain: ["光标型按钮", "光标型标签页", "内联 onclick 型", "role 型", "真 button", "嵌套文字"],
     clickablesAbsent: ["纯文本块", "也不是按钮", "隐藏的光标按钮"],
     tablesContain: "可见列 A",
     tablesAbsent: "隐藏列",
