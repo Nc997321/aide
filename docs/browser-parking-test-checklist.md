@@ -161,20 +161,32 @@ browser_tab {action:"focus", view_id:"<Agent A 报的 VID>"}
 
 | # | 判据 | 谁验 | 期望 | 结果 |
 |---|---|---|---|---|
-| 1 | 自己开 tab 返回 view_id + 提到 parked | A | 返回含 id 与 parked 说明 | |
-| 2 | parked 视图 rAF 在涨 | A / B | 3 秒内涨 > 30 帧 | |
-| 3 | 后台真实点击落地 | A / B | clicks 1 → 2 | |
-| 4 | **后台过渡跑完** | A / B | `browser_wait` 条件成立 | |
-| 5 | 后台懒加载生效 | A | `lazyReady === "yes"` | |
-| 6 | 后台填值 + change 事件 | A / B | name/pick 对得上、`change` true | |
-| 7 | 后台截图 | A | 拿到图像块 | |
-| 8 | `vis` 恒为 `visible` **且 `vc === 0`** | A | 见下（`vc=0` 更硬：证明从头到尾没被隐藏过，不是"藏了又露回来"） | |
-| 9 | navigate / back / forward | B | who: user → beta → user → beta | |
-| 10 | 缺省 view_id 不猜 | B | 报错 + 列出两个视图 | |
+| 1 | 自己开 tab 返回 view_id + 提到 parked | A | 返回含 id 与 parked 说明 | ✅ 首轮 PASS（browser-2，返回文本含 "It is PARKED"） |
+| 2 | parked 视图 rAF 在涨 | A / B | 3 秒内涨 > 30 帧 | ✅ A: 77→345；B: 225→491 |
+| 3 | 后台真实点击落地 | A / B | clicks 1 → 2 | ✅ A/B 均 clicks=1（CDP 真实鼠标 @(76,312)） |
+| 4 | **后台过渡跑完** | A / B | `browser_wait` 条件成立 | ✅ A/B 均 400ms 内成立 |
+| 5 | 后台懒加载生效 | A | `lazyReady === "yes"` | ✅ PASS |
+| 6 | 后台填值 | A / B | name/pick 对得上（`change` 仅 `#pick` 被填时才是 true，见下） | ✅ A: name+pick+change=true；B: name（未碰 select → change=false，正常） |
+| 7 | 后台截图 | A | 拿到图像块 | ✅ 真实图像块 |
+| 8 | `vis` 恒为 `visible` **且 `vc === 0`** | A | 见下（`vc=0` 更硬） | ✅ A/B 均 `vis="visible"`、`vc=0` |
+| 9 | navigate / back / forward | B | who: user → beta → user → beta | ✅ 逐次实测一致 |
+| 10 | 缺省 view_id 不猜 | B | 报错 + 列出两个视图 | ✅ 报错并列出 browser-1/browser-2 |
 | 11 | 前台全程没被抢 | 你 | 面板一直停在自己的 tab | |
 | 12 | focus 才切 + 不收起面板 | 你 | 切过去且面板仍展开 | |
 | 13 | 托盘里继续跑 | 你 | `lazy=25000` 的条件成立 | |
 | 14 | 回归三条 | 你 | 见第 5 节 | |
+
+### 夹具的字段接线（首轮踩过的误读）
+
+`change` 与 `blur` 是**按元素分别挂钩**的，不是"填了任意字段就置位"：
+
+| 字段 | 只有谁会置它 |
+|---|---|
+| `change` | `#pick`（select）的 `change` |
+| `blur` | `#name`（input）的 `blur` |
+
+所以「只填了 `#name`」的那条路径上 `change === false`、`pick === ""` **是正确结果**，不是 fill 没派发事件；
+反之填了 `#pick` 才会看到 `change === true`。判定时别把两者混起来读。
 
 **两条容易看错的实测现象**（2026-09-21 首轮真机遇到，别误读）：
 
