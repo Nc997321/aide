@@ -29,6 +29,28 @@ describe("select 的三态裁决（沿用旧 onRailSelect）", () => {
   });
 });
 
+describe("ensureBrowserShown：幂等展开（agent 的 focus 请求走它）", () => {
+  it("用户正看着浏览器时不会把面板收起来", () => {
+    const p = useRightPanel();
+    p.select("browser"); // 展开
+    expect(p.collapsed.value).toBe(false);
+
+    p.ensureBrowserShown();
+    p.ensureBrowserShown(); // 幂等：调几次都一样
+
+    expect(p.collapsed.value).toBe(false);
+    expect(p.tab.value).toBe("browser");
+  });
+
+  it("从别的 tab 切回浏览器，并保证面板是展开的", () => {
+    const p = useRightPanel();
+    p.select("files");
+    p.ensureBrowserShown();
+    expect(p.tab.value).toBe("browser");
+    expect(p.collapsed.value).toBe(false);
+  });
+});
+
 describe("browserActive / maximized 都是派生值", () => {
   it("选中浏览器且展开 → browserActive 为真", () => {
     const p = useRightPanel();

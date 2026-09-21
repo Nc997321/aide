@@ -65,6 +65,27 @@ export function onBrowserNav(cb: (e: NavEventDto) => void): Promise<UnlistenFn> 
 }
 
 /**
+ * 订阅视图生命周期（Rust `browser-view` 广播：created / closed）。
+ *
+ * 面板靠它把 **agent 开的 tab** 长出来——标签页集合是 UI 状态，而视图可能由别的驱动者创建
+ * （`runtime/browser_agent.rs` 的 open op），所以只能走事件通道（CLAUDE.md 红线）。
+ *
+ * ⚠️ 面板**不要**直接用它：`useBrowserViews` 是唯一的常驻订阅点（它带缓冲，保证面板挂载前的
+ * 事件不丢、也不会被 live 与缓冲各应用一次）。这里只提供通道。
+ */
+export function onBrowserView(cb: (e: ViewEventDto) => void): Promise<UnlistenFn> {
+  return listen<ViewEventDto>("browser-view", (ev) => cb(ev.payload));
+}
+
+/**
+ * 订阅 focus 请求（Rust `browser-focus` 广播）。**是请求不是命令**：显示权在面板，
+ * 消费方（`useBrowserViews`）负责幂等展开 + 交给面板切标签。
+ */
+export function onBrowserFocus(cb: (e: { id: string }) => void): Promise<UnlistenFn> {
+  return listen<{ id: string }>("browser-focus", (ev) => cb(ev.payload));
+}
+
+/**
  * 内嵌浏览器命令封装。命令名/参数与 src-tauri/src/commands/browser.rs 一一对应。
  *
  * 无状态：视图 id **由 Rust 注册表发**（`create` 的返回值里取），前端不造 id——这样面板、

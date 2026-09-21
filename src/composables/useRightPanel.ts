@@ -66,6 +66,18 @@ function setMaximized(on: boolean) {
   wantMaximized.value = on;
 }
 
+/**
+ * **幂等**展开浏览器面板（agent 的 focus 请求走它）。
+ *
+ * 不能用 `select('browser')`：那是 toggle，用户正看着浏览器时会把面板**收起来**
+ * ——一个"给我看看"的请求变成"把你的面板关掉"。
+ */
+function ensureBrowserShown() {
+  browserEverActive.value = true;
+  tab.value = "browser";
+  collapsed.value = false;
+}
+
 // ── 宽度：两档（窄工具 tab / 浏览器宽档），值只存内存（跨重启按窗口重算，用户 2026-09-20 定）──
 
 /** 中心轨道 minmax(400px,1fr) 的保底：**聊天底线优先于"五五开"**。 */
@@ -118,6 +130,7 @@ export function useRightPanel() {
     select,
     collapse,
     setMaximized,
+    ensureBrowserShown,
     widths,
     widthProfile,
     setWidth,

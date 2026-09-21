@@ -5,7 +5,7 @@
 // 可见，其余被网页整个吃掉（导入书签的文件选择器只剩标题 + 地址行，取消/确认按钮全不见）。
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises, type VueWrapper } from "@vue/test-utils";
-import { defineComponent, h, withDirectives } from "vue";
+import { defineComponent, h, nextTick, withDirectives } from "vue";
 
 import { vOverlayLayer } from "../../directives/overlayLayer";
 
@@ -17,6 +17,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 import BrowserPanel from "./BrowserPanel.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
 import { useRightPanel, __resetRightPanelForTest } from "../../composables/useRightPanel";
+import {
+  __resetBrowserViewsForTest,
+  useBrowserViews,
+} from "../../composables/browser/useBrowserViews";
 
 const VIEW_ID = "view-1";
 
@@ -104,6 +108,8 @@ beforeEach(() => {
         displayed: true,
       };
     }
+    // 挂载对账：默认库里没有别处建出来的视图（要测对账的用例自己覆盖这条）。
+    if (cmd === "browser_views_list") return [];
     if (cmd === "browser_bookmarks_list") return [];
     // 图标回**空表**（不是 undefined/空数组）：回错类型会静默变成"所有图标都没有"。
     if (cmd === "browser_favicons") return {};
@@ -111,6 +117,7 @@ beforeEach(() => {
   });
   // 面板开合现在归 useRightPanel：select('browser') = 展开右栏并激活浏览器 tab。
   __resetRightPanelForTest();
+  __resetBrowserViewsForTest();
   useRightPanel().select("browser");
 });
 
@@ -120,6 +127,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   __resetRightPanelForTest();
+  __resetBrowserViewsForTest();
 });
 
 describe("BrowserPanel 浮层与原生视图的让位", () => {
@@ -293,5 +301,88 @@ describe("收藏夹目录", () => {
     await flushPromises();
 
     expect((w.find(".bp-address").element as HTMLInputElement).value).toBe(before);
+  });
+});
+
+// ── agent 自建 tab：走视图生命周期事件长出来 ──
+//
+// 这是本批特性的正面回归：视图可以由**别的驱动者**创建（Rust 的 open op），面板只能靠
+// `browser-view` 事件知道它存在——旧实现里"认不出的视图 id 一律忽略"，agent 的 tab 就永远
+// 不会出现在标签条上。
+describe("agent 的 tab", () => {
+  it("收到 created 事件 → 标签条上长出一个带归属标记的标签", async () => {
+    const w = mountPanel();
+    await flushPromises();
+
+    const v = useBrowserViews();
+    v.__handleViewForTest({
+      id: "browser-9",
+      kind: "created",
+      label: "vue-admin dev",
+      origin: "agent",
+      displayed: false,
+    });
+    await nextTick();
+
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toContain("vue-admin dev");
+    expect(w.findAll(".bp-tab-agent")).toHaveLength(1);
+  });
+
+  it("挂载时对账：事件早于面板的视图也要补出标签", async () => {
+    invokeMock.mockImplementation(async (cmd: string) => {
+      if (cmd === "browser_views_list") {
+        return [
+          {
+            id: "browser-9",
+            nav: { state: "ready", url: "http://localhost:5173/", title: "Vite App" },
+            can_go_back: false,
+            can_go_forward: false,
+            bounds: { x: 0, y: 0, w: 0, h: 0 },
+            displayed: false,
+            label: "vue-admin dev",
+            origin: "agent",
+          },
+        ];
+      }
+      if (cmd === "browser_bookmarks_list") return [];
+      if (cmd === "browser_favicons") return {};
+      return undefined;
+    });
+
+    const w = mountPanel();
+    await flushPromises();
+
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toContain("vue-admin dev");
+  });
+
+  it("focus 请求 → 切到那个标签；视图被关掉 → 标签跟着消失", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    const v = useBrowserViews();
+
+    v.__handleViewForTest({
+      id: "browser-9",
+      kind: "created",
+      label: "dev",
+      origin: "agent",
+      displayed: false,
+    });
+    await nextTick();
+
+    v.__handleFocusForTest({ id: "browser-9" });
+    await nextTick();
+    expect(w.find(".bp-tab.on .bp-tab-label").text()).toBe("dev");
+
+    v.__handleViewForTest({
+      id: "browser-9",
+      kind: "closed",
+      label: "dev",
+      origin: "agent",
+      displayed: false,
+    });
+    await nextTick();
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).not.toContain("dev");
+    // 视图已经是别人关的：面板**不许**再发一次 close
+    expect(lastArgsOf("browser_close")).toBeNull();
   });
 });

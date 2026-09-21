@@ -23,9 +23,11 @@ import {
   type BrowserViewDto,
   type BoundsDto,
   type NavStateDto,
+  type ViewEventDto,
 } from "../../composables/browser/useEmbeddedBrowser";
 import { useRightPanel } from "../../composables/useRightPanel";
 import { useBrowserBookmarks } from "../../composables/browser/useBrowserBookmarks";
+import { useBrowserViews } from "../../composables/browser/useBrowserViews";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
 import Icon from "../Icon.vue";
@@ -43,6 +45,8 @@ import {
 
 const { browserActive, select } = useRightPanel();
 const browser = useEmbeddedBrowser();
+// 常驻层（App 已安装）：挂载前收到的生命周期事件与 focus 请求都在它那儿缓冲着。
+const { pendingFocusViewId, buffered, takeViewEvents, consumePendingFocus } = useBrowserViews();
 
 /** 一个浏览器标签页。`viewId=null` = 还没开原生视图的空标签（首次导航才 create）。 */
 interface Tab {
@@ -53,6 +57,10 @@ interface Tab {
   nav: NavStateDto | null;
   canGoBack: boolean;
   canGoForward: boolean;
+  /** 创建时给的名字（agent 靠它给 tab 起名），页面没标题时标签条用它。 */
+  label: string | null;
+  /** 谁开的：agent 的 tab 在标签条上带归属标记。 */
+  origin: "user" | "agent";
 }
 
 function blankTab(): Tab {
@@ -63,6 +71,8 @@ function blankTab(): Tab {
     nav: null,
     canGoBack: false,
     canGoForward: false,
+    label: null,
+    origin: "user",
   };
 }
 
@@ -168,6 +178,82 @@ function applyView(t: Tab, view: BrowserViewDto) {
   t.canGoBack = view.can_go_back;
   t.canGoForward = view.can_go_forward;
   t.url = urlOfNav(view.nav) || t.url;
+  t.label = view.label;
+  t.origin = view.origin;
+}
+
+// ── 视图生命周期：与 agent 共处一张标签条 ──
+
+/** 标签显示名：agent 起的名 > 页面标题 > 主机名。 */
+function tabTitle(t: Tab): string {
+  const titled = t.nav?.state === "ready" ? t.nav.title : "";
+  return t.label || titled || tabLabelOf(t.url);
+}
+
+/** 用一份视图快照建标签（对账与 created 事件共用）。 */
+function adoptView(v: BrowserViewDto): Tab {
+  const t = blankTab();
+  applyView(t, v);
+  return t;
+}
+
+/** 摘掉一个标签，**不动视图**（视图已被销毁，或由别的驱动者负责）。空表时补一个空标签。 */
+function dropTab(id: string) {
+  const i = tabs.value.findIndex((t) => t.id === id);
+  if (i < 0) return;
+  tabs.value.splice(i, 1);
+  if (tabs.value.length === 0) {
+    const t = blankTab();
+    tabs.value.push(t);
+    activeId.value = t.id;
+    return;
+  }
+  if (activeId.value === id) {
+    activeId.value = tabs.value[Math.min(i, tabs.value.length - 1)].id;
+  }
+}
+
+/** 库里有的视图而标签条上没有 → 补标签（agent 开 tab 时面板还没挂载就是这条路径）。 */
+function adoptMissing(views: BrowserViewDto[]) {
+  for (const v of views) {
+    if (!tabs.value.some((t) => t.viewId === v.id)) tabs.value.push(adoptView(v));
+  }
+}
+
+/** 标签条上有视图而库里没有 → 摘掉（视图已被别人关掉，**不能再调 close**）。 */
+function dropGone(views: BrowserViewDto[]) {
+  const live = new Set(views.map((v) => v.id));
+  for (const t of tabs.value.filter((x) => x.viewId && !live.has(x.viewId))) {
+    dropTab(t.id);
+  }
+}
+
+/** 应用生命周期增量：created 补标签、closed 摘标签。重复投递是安全的（幂等）。 */
+function applyViewEvents(events: ViewEventDto[]) {
+  for (const e of events) {
+    const existing = tabs.value.find((t) => t.viewId === e.id);
+    if (e.kind === "created") {
+      if (existing) {
+        existing.label = e.label;
+        existing.origin = e.origin;
+      } else {
+        tabs.value.push({ ...blankTab(), viewId: e.id, label: e.label, origin: e.origin });
+      }
+    } else if (existing) {
+      dropTab(existing.id);
+    }
+  }
+  applyPendingFocus();
+}
+
+/** 待切视图到了就切过去（focus 请求可能先于标签出现，也可能先于面板挂载）。 */
+function applyPendingFocus() {
+  const want = pendingFocusViewId.value;
+  if (!want) return;
+  const t = tabs.value.find((x) => x.viewId === want);
+  if (!t) return; // 视图还没在标签条上出现：留着 pending，等下一次
+  activeId.value = t.id;
+  consumePendingFocus(want);
 }
 
 // ── 导航动作 ──
@@ -254,23 +340,12 @@ function addTab() {
   nextTick(() => addressEl.value?.focus());
 }
 
+/** 关标签 = 销毁该视图（与面板关闭不同：那是保活，只 parking）。 */
 function closeTab(id: string) {
-  const i = tabs.value.findIndex((t) => t.id === id);
-  if (i < 0) return;
-  const [removed] = tabs.value.splice(i, 1);
-  // 关标签 = 销毁该视图（与面板关闭不同：那是保活，只隐藏）。
-  if (removed.viewId) void browser.close(removed.viewId).catch(() => {});
-
-  if (tabs.value.length === 0) {
-    // 浏览器惯例：永远留一个标签页。
-    const t = blankTab();
-    tabs.value.push(t);
-    activeId.value = t.id;
-    return;
-  }
-  if (activeId.value === id) {
-    activeId.value = tabs.value[Math.min(i, tabs.value.length - 1)].id;
-  }
+  const t = tabs.value.find((x) => x.id === id);
+  if (t?.viewId) void browser.close(t.viewId).catch(() => {});
+  // 空表补一页、活动标签接替：都在 dropTab 里（与"视图被别人关掉"共用同一条路径）。
+  dropTab(id);
 }
 
 function activateTab(id: string) {
@@ -393,13 +468,33 @@ onMounted(() => {
   // 收藏条数据（模块级单例状态，挂载时拉一次；之后每次写操作各自刷新）。
   void refreshBookmarks();
 
-  // 导航事件：**多驱动者共用的真相通道**——页面是被用户点出来的、还是将来 agent 工具驱动的，
+  // **对账**：视图可能先于面板被创建（agent 先开 tab、用户还没点开面板），那条 `browser-view`
+  // 事件就没人接。所以挂载时先拉一次快照补齐，再吃增量——快照是权威、事件是增量。
+  void browser
+    .listViews()
+    .then((views) => {
+      adoptMissing(views);
+      dropGone(views);
+      applyPendingFocus();
+    })
+    .catch(() => {
+      /* 对账失败不该挡住面板本身：增量通道仍然有效 */
+    });
+
+  // 常驻层缓冲的增量（挂载前收到的都在它那儿）。
+  watch(buffered, () => applyViewEvents(takeViewEvents()));
+  watch(pendingFocusViewId, applyPendingFocus);
+
+  // 导航事件：**多驱动者共用的真相通道**——页面是被用户点出来的、还是 agent 工具驱动的，
   // 状态都从这里到 UI（CLAUDE.md 红线：UI 状态只认事件，不做乐观更新）。
   void onBrowserNav((e) => {
-    const t = tabs.value.find((x) => x.viewId === e.id);
-    // 认不出的视图 id → 忽略（本面板只认自己建的）。将来 agent 自建视图的标签页在这里长出来
-    // ——那需要视图生命周期事件，见续作路线。
-    if (!t) return;
+    let t = tabs.value.find((x) => x.viewId === e.id);
+    if (!t) {
+      // 视图生命周期事件还没到（或面板错过了）→ 就地长一个标签，免得"页面在跑但标签条上没有它"。
+      // 随后到达的 created 事件会把 label/origin 补齐（`applyViewEvents` 对已有标签做更新）。
+      t = { ...blankTab(), viewId: e.id };
+      tabs.value.push(t);
+    }
     t.nav = navOfEvent(e);
     t.canGoBack = e.can_go_back;
     t.canGoForward = e.can_go_forward;
@@ -444,7 +539,13 @@ onBeforeUnmount(() => {
           @click="activateTab(t.id)"
         >
           <span v-if="t.nav?.state === 'loading'" class="bp-spin" aria-hidden="true" />
-          <span class="bp-tab-label">{{ tabLabelOf(t.url) }}</span>
+          <span
+            v-if="t.origin === 'agent'"
+            class="bp-tab-agent"
+            title="agent 开的标签页（后台在跑，不抢你的前台）"
+            >◆</span
+          >
+          <span class="bp-tab-label">{{ tabTitle(t) }}</span>
           <button class="bp-tab-x" title="关闭标签页" @click.stop="closeTab(t.id)">✕</button>
         </div>
         <button class="bp-add" title="新建标签页" @click="addTab">＋</button>
@@ -630,6 +731,14 @@ onBeforeUnmount(() => {
   color: var(--aide-text-primary);
   background: var(--aide-bg-base);
   border-color: var(--aide-accent);
+}
+
+/* agent 开的 tab：一枚小菱形（与"自己开的"一眼分开）。颜色走语义 token，不硬编码。 */
+.bp-tab-agent {
+  flex: 0 0 auto;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--aide-accent);
 }
 
 .bp-tab-label {

@@ -21,6 +21,7 @@ import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
 import { useRightPanel, rightPanelWidthSource, type RightTabId } from "./composables/useRightPanel";
+import { useBrowserViews } from "./composables/browser/useBrowserViews";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
 import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
@@ -75,6 +76,9 @@ const leftCollapsed = ref(false);
 // 三态裁决也搬到了它的 `select`。这两个别名只为少改模板与既有函数——它们就是 store 里的 ref 本身。
 // 注意调用层级面板在 rootQuery 变化时会强制展开（见下方 watch）。
 const rightPanel = useRightPanel();
+// 浏览器视图的常驻订阅在这里安装**一次**（面板是懒挂载的，agent 可能在它之前就开 tab / 请求 focus）。
+// 逻辑全在 useBrowserViews 里，App 只负责"活着"这件事。
+useBrowserViews();
 const rightCollapsed = rightPanel.collapsed;
 const rightTab = rightPanel.tab;
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
