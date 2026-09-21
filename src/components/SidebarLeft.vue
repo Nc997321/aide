@@ -524,10 +524,24 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
     <!-- 导航区 ↔ 分区树 的分界（见 .nav-sep 注释） -->
     <div class="nav-sep" aria-hidden="true" />
 
-    <!-- 分区树：日常（第一个根分区，见下方 SidebarDailySection）+ 工作区树「项目」
-         + 自动化。三个根分区同区滚动。
+    <!-- 分区树：日常（第一个根分区）+ 工作区树「项目」+ 自动化。三个根分区同区滚动。
          session-style-* 挂会话列表样式皮肤（card/row，设置「主题样式」tab 切换） -->
     <div class="session-list" :class="`session-style-${settings.sessionListStyle ?? 'card'}`">
+      <!-- 日常分区：分区树的第一个根分区，**独立一档**（用户 2026-09-21 定）。上边界是
+           导航区那条分界线，下边界是紧随其后的 .sec-sep —— 中间只夹着日常，自成一段。
+           会话直接挂它下面，没有工作区那一层。 -->
+      <SidebarDailySection
+        :sessions="dailySessions"
+        :active-session-id="props.activeSessionId"
+        :collapsed="dailyCollapsed"
+        @toggle="dailyCollapsed = !dailyCollapsed"
+        @menu="onSessionSectionMenu"
+        @select="(sid: string) => emit('session-changed', sid)"
+        @contextmenu="onDailySessionContextMenu"
+      />
+      <!-- 日常 ↔ 项目 的分界：与导航区那条（.nav-sep）同一语言——两端化开的 1px 渐隐线 -->
+      <div class="sec-sep" aria-hidden="true" />
+
       <SidebarSectionHead
         label="项目"
         :count="totalSessionCount || undefined"
@@ -645,18 +659,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       </div>
       </template>
 
-      <!-- 日常分区：分区树的**第一个**根分区（用户 2026-09-21 定：与「项目」平级，
-           主栏在最上）。会话直接挂它下面，没有工作区那一层。 -->
-      <SidebarDailySection
-        :sessions="dailySessions"
-        :active-session-id="props.activeSessionId"
-        :collapsed="dailyCollapsed"
-        @toggle="dailyCollapsed = !dailyCollapsed"
-        @menu="onSessionSectionMenu"
-        @select="(sid: string) => emit('session-changed', sid)"
-        @contextmenu="onDailySessionContextMenu"
-      />
-
       <!-- 自动化分区：分区树的第三个根分区（日常、工作区树之下，同区滚动），
            选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
       <AutomationSidebarSection />
@@ -722,66 +724,29 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   </div>
 </template>
 
-<style scoped>
-.sidebar-left {
-  position: relative; /* AToast 锚定 */
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
-}
+<style>
+/* ── 会话行的视觉（**刻意不 scoped**，2026-09-21）────────────────────────
+   两棵树共用这一份：项目树（SidebarLeft 自己的模板）与「日常」树（SidebarDailySection
+   —— 独立组件）。Vue 的 scoped 只把父级作用域加到子组件的**根元素**上，行内部的
+   .session-name / .session-time / .row-dots 一律够不着，于是日常分区渲染成没有样式的
+   裸文本（实机：空态文案贴着引导线、行没有卡片底和状态流光）。这里把「会话行 + 空态
+   + 子树容器」的语言整体挪到 scoped 之外，两棵树吃同一份定义——而不是在子组件里再抄
+   一遍（抄一遍就是两份皮肤/流光/动画，漂移只是时间问题）。
 
-.session-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 4px 0 8px;
-}
-
-/* ── 导航区 ↔ 分区树 分界线（2026-09-13）──
-   顶部导航组（功能入口：新增会话/插件/观测台/知识库）与分区树（会话/自动化）是
-   两种东西，但两侧左内边距同为 22px、字号字重同为 13.5px/600，中间只有空档没有
-   界线，整栏读起来像一条连续列表。1px 渐隐线：中段实、两端化开，不产生硬端点
-   （与满栏的卡片/圆角语言一致）。
-   颜色取 borderStrong 而非 border——border 是贴着面板背景的贴边档（深色主题
-   白 10%），做分割线在 glass 下几乎不可见，等于没加。
-   上下留白分居两侧容器：上 = 导航组 padding-bottom 8 + margin-top 10，
-   下 = margin-bottom 8 + 会话区 padding-top 4 + 分区头 margin-top 6（各 18px）。 */
-.nav-sep {
+   前提是这些类名全仓唯一（session-* / row-dots / sec-subtree 只出现在侧栏）。新增用到
+   它们的组件要意识到：这里的规则对它的元素同样生效。 */
+.session-slot {
+  position: relative;
   flex-shrink: 0;
-  height: 1px;
-  margin: 10px 6px 8px;
-  background: linear-gradient(
-    90deg,
-    transparent,
-    var(--aide-border-strong) 18%,
-    var(--aide-border-strong) 82%,
-    transparent
-  );
-}
-
-/* ── 品牌区（WorkBuddy 式，固定不滚动）── */
-.brand {
   display: flex;
   align-items: center;
-  gap: 11px;
-  padding: 16px 16px 12px;
-  flex-shrink: 0;
 }
-.brand :deep(.app-logo) {
-  border-radius: 10px;
+
+.session-row:hover .session-time {
+  opacity: 0;
 }
-.brand-name {
-  font-size: 15px;
-  font-weight: 700;
-  letter-spacing: 0.2px;
-  color: var(--aide-text-primary);
-}
-.brand-ver {
-  font-size: 10.5px;
-  color: var(--aide-text-muted);
-  margin-top: 2px;
+.session-row:hover .row-dots {
+  opacity: 1;
 }
 
 /* ── 分区子树（v3.1 层级修正方案A：缩进 + 引导线）──
@@ -790,104 +755,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .sec-subtree {
   margin-left: 28px;
   border-left: 1px solid var(--aide-border-subtle);
-}
-
-/* ── Workspace item ── */
-
-.workspace-item {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 9px 12px;
-  margin: 4px 8px 0 7px;
-  cursor: pointer;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--aide-text-secondary);
-  background: transparent;
-  border-radius: var(--aide-radius-md);
-  transition: all 0.15s ease;
-  letter-spacing: 0.2px;
-}
-
-.workspace-item:hover {
-  color: var(--aide-text-secondary);
-  background: var(--aide-surface-default);
-}
-
-.workspace-item.active {
-  color: var(--aide-text-primary);
-}
-
-.workspace-item.expanded {
-  color: var(--aide-text-primary);
-  box-shadow: var(--aide-highlight-inset);
-}
-
-.ws-chevron {
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-  transition: transform 0.2s ease, color 0.15s;
-}
-
-.ws-chevron.expanded {
-  transform: rotate(90deg);
-  color: var(--aide-accent);
-}
-
-.workspace-item:hover .ws-chevron {
-  color: var(--aide-text-secondary);
-}
-
-.ws-icon {
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-  transition: color 0.15s;
-}
-
-.workspace-item.active .ws-icon,
-.workspace-item.expanded .ws-icon {
-  color: var(--aide-accent);
-}
-
-.ws-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  flex: 1;
-  /* flex 项下限兜底：缺了它名字长时不收缩，会把行尾 ⋯ 槽位顶出行外（.session-name 同款） */
-  min-width: 0;
-}
-
-/* ── 行右槽位（工作区/会话行共用）：元信息 ⇄ ⋯，hover 整行互换。
-   元信息流内撑开槽位（「17分钟前」这类长文本不溢出行边界）；
-   ⋯ absolute 覆盖同一区域，hover 互换时槽位宽度不变、布局不抖。 ── */
-.ws-slot,
-.session-slot {
-  position: relative;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-}
-
-.ws-count {
-  min-width: 26px;
-  box-sizing: border-box;
-  text-align: center;
-  padding: 2px 7px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--aide-text-muted);
-  background: var(--aide-surface-default);
-  border-radius: 8px;
-  transition: opacity 0.12s;
-}
-
-/* 无计数的工作区行（未展开/0 会话/失效）：槽位没有流内内容会塌成 0×0，
-   absolute 的 ⋯ 只剩半颗悬在行外、hover 底色与 tooltip 锚点全无；
-   给 26px 地板（= 计数徽标 min-width），⋯ 列跨行对齐、命中区域恒定。 */
-.ws-slot {
-  min-width: 26px;
 }
 
 .row-dots {
@@ -914,32 +781,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   width: 15px;
   height: 15px;
 }
-.workspace-item:hover .ws-count,
-.session-row:hover .session-time {
-  opacity: 0;
-}
-.workspace-item:hover .row-dots,
-.session-row:hover .row-dots {
-  opacity: 1;
-}
 .row-dots:hover {
   background: var(--aide-surface-active);
   color: var(--aide-text-primary);
-}
-
-.workspace-item.missing {
-  cursor: not-allowed;
-  opacity: 0.55;
-}
-
-.workspace-item.missing:hover {
-  background: color-mix(in srgb, var(--aide-warning) 8%, transparent);
-  color: var(--aide-warning);
-}
-
-.ws-warn-icon {
-  flex-shrink: 0;
-  color: var(--aide-warning);
 }
 
 /* ── Session card 公共布局（两档皮肤共享：间距/圆角骨架/流光/动画）──
@@ -1127,6 +971,204 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   padding: 10px 12px 10px 20px;
   margin: 1px 8px 0 7px;
 }
+</style>
+
+<style scoped>
+.sidebar-left {
+  position: relative; /* AToast 锚定 */
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
+}
+
+.session-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 0 8px;
+}
+
+/* ── 导航区 ↔ 分区树 分界线（2026-09-13）──
+   顶部导航组（功能入口：新增会话/插件/观测台/知识库）与分区树（会话/自动化）是
+   两种东西，但两侧左内边距同为 22px、字号字重同为 13.5px/600，中间只有空档没有
+   界线，整栏读起来像一条连续列表。1px 渐隐线：中段实、两端化开，不产生硬端点
+   （与满栏的卡片/圆角语言一致）。
+   颜色取 borderStrong 而非 border——border 是贴着面板背景的贴边档（深色主题
+   白 10%），做分割线在 glass 下几乎不可见，等于没加。
+   上下留白分居两侧容器：上 = 导航组 padding-bottom 8 + margin-top 10，
+   下 = margin-bottom 8 + 会话区 padding-top 4 + 分区头 margin-top 6（各 18px）。 */
+.nav-sep {
+  flex-shrink: 0;
+  height: 1px;
+  margin: 10px 6px 8px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--aide-border-strong) 18%,
+    var(--aide-border-strong) 82%,
+    transparent
+  );
+}
+
+/* 「日常」档的下边界（日常 ↔ 项目）：与 .nav-sep 同一语言——两端化开的 1px 渐隐线。
+   上边距吃日常子树最后一行自带的 margin，这里只补一点；分区头自带 margin-top 6px。 */
+.sec-sep {
+  height: 1px;
+  margin: 6px 6px 0;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--aide-border-strong) 18%,
+    var(--aide-border-strong) 82%,
+    transparent
+  );
+}
+
+/* ── 品牌区（WorkBuddy 式，固定不滚动）── */
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 16px 16px 12px;
+  flex-shrink: 0;
+}
+.brand :deep(.app-logo) {
+  border-radius: 10px;
+}
+.brand-name {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: var(--aide-text-primary);
+}
+.brand-ver {
+  font-size: 10.5px;
+  color: var(--aide-text-muted);
+  margin-top: 2px;
+}
+
+
+/* ── Workspace item ── */
+
+.workspace-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 12px;
+  margin: 4px 8px 0 7px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--aide-text-secondary);
+  background: transparent;
+  border-radius: var(--aide-radius-md);
+  transition: all 0.15s ease;
+  letter-spacing: 0.2px;
+}
+
+.workspace-item:hover {
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-default);
+}
+
+.workspace-item.active {
+  color: var(--aide-text-primary);
+}
+
+.workspace-item.expanded {
+  color: var(--aide-text-primary);
+  box-shadow: var(--aide-highlight-inset);
+}
+
+.ws-chevron {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: transform 0.2s ease, color 0.15s;
+}
+
+.ws-chevron.expanded {
+  transform: rotate(90deg);
+  color: var(--aide-accent);
+}
+
+.workspace-item:hover .ws-chevron {
+  color: var(--aide-text-secondary);
+}
+
+.ws-icon {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+  transition: color 0.15s;
+}
+
+.workspace-item.active .ws-icon,
+.workspace-item.expanded .ws-icon {
+  color: var(--aide-accent);
+}
+
+.ws-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  /* flex 项下限兜底：缺了它名字长时不收缩，会把行尾 ⋯ 槽位顶出行外（.session-name 同款） */
+  min-width: 0;
+}
+
+/* ── 行右槽位（工作区/会话行共用）：元信息 ⇄ ⋯，hover 整行互换。
+   元信息流内撑开槽位（「17分钟前」这类长文本不溢出行边界）；
+   ⋯ absolute 覆盖同一区域，hover 互换时槽位宽度不变、布局不抖。 ── */
+.ws-slot {
+  position: relative;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+
+.ws-count {
+  min-width: 26px;
+  box-sizing: border-box;
+  text-align: center;
+  padding: 2px 7px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--aide-text-muted);
+  background: var(--aide-surface-default);
+  border-radius: 8px;
+  transition: opacity 0.12s;
+}
+
+/* 无计数的工作区行（未展开/0 会话/失效）：槽位没有流内内容会塌成 0×0，
+   absolute 的 ⋯ 只剩半颗悬在行外、hover 底色与 tooltip 锚点全无；
+   给 26px 地板（= 计数徽标 min-width），⋯ 列跨行对齐、命中区域恒定。 */
+.ws-slot {
+  min-width: 26px;
+}
+
+.workspace-item:hover .ws-count {
+  opacity: 0;
+}
+.workspace-item:hover .row-dots {
+  opacity: 1;
+}
+
+.workspace-item.missing {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.workspace-item.missing:hover {
+  background: color-mix(in srgb, var(--aide-warning) 8%, transparent);
+  color: var(--aide-warning);
+}
+
+.ws-warn-icon {
+  flex-shrink: 0;
+  color: var(--aide-warning);
+}
+
 
 /* ── 会话加载骨架（per-workspace）──
    加载态按工作区隔离后，「加载中」从全局文本变成本工作区展开区内的假会话条目：

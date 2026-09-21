@@ -68,8 +68,17 @@ const sessionNames = useSessionNames();
       >
         <div class="session-row-r1">
           <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
+          <!-- 右槽位与项目树的会话行一字对齐：时间 ⇄ ⋯ hover 互换（同一份
+               .session-slot / .row-dots 规则，见 SidebarLeft 的非 scoped 样式块） -->
           <span class="session-slot" @click.stop>
             <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+            <button
+              class="row-dots"
+              v-tooltip="'更多操作'"
+              @click="emit('contextmenu', { event: $event, sid: s.id })"
+            >
+              <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+            </button>
           </span>
         </div>
       </div>
