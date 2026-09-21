@@ -34,7 +34,7 @@ afterEach(() => cancelAllBrowserQueries("test cleanup"));
 describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", () => {
   it("页面没有 iframe → undefined（不做多余往返）", async () => {
     const { events, emit } = emitCollector();
-    const out = await readFramesFromResult("browser-1", { ok: true, frames: [] }, emit);
+    const out = await readFramesFromResult("browser-1", { ok: true, frames: [] }, {}, emit);
     expect(out).toBeUndefined();
     expect(events).toHaveLength(0);
   });
@@ -44,6 +44,7 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     const out = await readFramesFromResult(
       "browser-1",
       { ok: true, frames: [{ src: "https://a/x", sameOrigin: true, content: { title: "t" } }] },
+      {},
       emit,
     );
     expect(out).toBeUndefined();
@@ -52,9 +53,9 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
 
   it("骨架本身失败（ok:false / null）→ undefined，不去补帧", async () => {
     const { events, emit } = emitCollector();
-    expect(await readFramesFromResult("browser-1", { ok: false }, emit)).toBeUndefined();
-    expect(await readFramesFromResult("browser-1", null, emit)).toBeUndefined();
-    expect(await readFramesFromResult("browser-1", {}, emit)).toBeUndefined();
+    expect(await readFramesFromResult("browser-1", { ok: false }, {}, emit)).toBeUndefined();
+    expect(await readFramesFromResult("browser-1", null, {}, emit)).toBeUndefined();
+    expect(await readFramesFromResult("browser-1", {}, {}, emit)).toBeUndefined();
     expect(events).toHaveLength(0);
   });
 
@@ -67,6 +68,7 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
         url: "https://host/page",
         frames: [{ src: "https://other/frame", sameOrigin: false, content: null }],
       },
+      {},
       emit,
     );
 
@@ -110,6 +112,7 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
           { src: "https://other/frame", sameOrigin: false, content: null },
         ],
       },
+      {},
       emit,
     );
 
@@ -227,7 +230,7 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
 describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
   it("Page.getFrameTree 失败 → 回带原因的空结果（而不是抛）", async () => {
     const { events, emit } = emitCollector();
-    const p = readCrossOriginFrames("browser-1", [], emit);
+    const p = readCrossOriginFrames("browser-1", [], {}, emit);
     reply(await waitForQuery(events, 0), { ok: false, error: "Page domain not supported" });
 
     const out = await p;
@@ -240,7 +243,7 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
 
   it("单帧失败只影响该帧，后续帧继续读", async () => {
     const { events, emit } = emitCollector();
-    const p = readCrossOriginFrames("browser-1", [], emit);
+    const p = readCrossOriginFrames("browser-1", [], {}, emit);
 
     reply(await waitForQuery(events, 0), cdpOk({
       frameTree: {
@@ -267,7 +270,7 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
 
   it("帧脚本抛异常（CDP 回 ok + exceptionDetails，不算调用失败）→ 该帧记错误", async () => {
     const { events, emit } = emitCollector();
-    const p = readCrossOriginFrames("browser-1", [], emit);
+    const p = readCrossOriginFrames("browser-1", [], {}, emit);
 
     reply(await waitForQuery(events, 0), cdpOk({
       frameTree: { frame: { id: "MAIN", url: "https://host/" }, childFrames: [{ frame: { id: "F1", url: "https://x/f" } }] },
@@ -283,7 +286,7 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
 
   it("missing executionContextId → 如实报错，不拿 NaN 去求值", async () => {
     const { events, emit } = emitCollector();
-    const p = readCrossOriginFrames("browser-1", [], emit);
+    const p = readCrossOriginFrames("browser-1", [], {}, emit);
     reply(await waitForQuery(events, 0), cdpOk({
       frameTree: { frame: { id: "MAIN", url: "https://host/" }, childFrames: [{ frame: { id: "F1", url: "https://x/f" } }] },
     }));

@@ -171,8 +171,6 @@ interface NavSnapshot {
   state: string;
   url: string;
   title: string;
-  /** 宿主认为这个视图可不可见（页面侧那个在条件模式里拿，这里只有宿主这份）。 */
-  visible: boolean;
 }
 
 /** 取一跳导航快照。视图消失如实报出来，不当成"还在加载"。 */
@@ -198,7 +196,6 @@ async function navTick(
       state: typeof nav["state"] === "string" ? nav["state"] : "unknown",
       url: typeof nav["url"] === "string" ? nav["url"] : "",
       title: typeof nav["title"] === "string" ? nav["title"] : "",
-      visible: hit["visible"] === true,
     },
   };
 }
@@ -222,7 +219,7 @@ async function waitForLoad(
   const deadline = Date.now() + input.timeoutMs;
   let attempts = 0;
   let sawLoading = false;
-  let last: NavSnapshot = { state: "(never polled)", url: "", title: "", visible: false };
+  let last: NavSnapshot = { state: "(never polled)", url: "", title: "" };
 
   while (Date.now() < deadline) {
     attempts += 1;

@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>browser_read fixture</title>
+<!--
+  `browser_read` / `browser_act` 的**正向判据页**（2026-09-22）。
+
+  为什么要有这一页：投影脚本是注入页面的源码，单元测试只能钉判定逻辑（`clickable.test.ts`
+  用桩元素），**真实 DOM 上的抽取行为只能靠真页面**。这一页把"该出现的"和"不该出现的"都摆好，
+  agent 两三次调用就能验完。
+
+  起服务（仓库根）：
+    node -e "const h=require('http'),f=require('fs');h.createServer((q,s)=>{s.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});s.end(f.readFileSync('docs/testing/browser-read-fixture.html'))}).listen(8779,'127.0.0.1',()=>console.log('fixture → http://127.0.0.1:8779/'))"
+
+  期望（`window.__expect()` 把这份期望也发给页面外的调用方）：
+    ① `browser_read {view_id}`：Clickable elements 里**有**那 5 个（含只靠 cursor:pointer 认出的
+       div/span）；**没有**「纯文本块」「也不是按钮」「隐藏的光标按钮」；表格只有「可见列 A」那一个；
+       结果里有一行 NOTE 说明隐藏项被跳过（1 tables, 1 fields, 1 clickables）。
+    ② `browser_read {view_id, include_hidden:true}`：隐藏的表格/输入/按钮都出现，NOTE 行消失。
+    ③ `browser_act {view_id, action:"click", text:"纯文本块"}`：报「recognized as clickable」并给出
+       `div.plain` 这样的选择器建议（**不许**回一句"没找到"）。
+    ④ `browser_act {view_id, action:"click", text:"光标型按钮"}`：点到；再 `browser_eval` 读
+       `window.__hits` 应为 1。
+
+  前提：改的是 sidecar（`agent-sidecar/src/extensions/browser/*`）→ 必须先
+  `pnpm build:sidecar` 并让**新进程**跑起来（dev 实例开新会话 / 重启 tauri dev）。
+-->
+<style>
+  body { font: 14px/1.7 system-ui, sans-serif; margin: 0; padding: 24px; background: #0f1317; color: #e6edf3 }
+  h1 { margin: 0 0 8px; font-size: 20px }
+  h2 { margin: 22px 0 8px; font-size: 15px; color: #9fb0c0; font-weight: 600 }
+  code { background: #1b2430; padding: 1px 5px; border-radius: 4px }
+  .aclick { display: inline-block; padding: 8px 14px; margin-right: 8px; cursor: pointer;
+            border: 1px solid #4aa3ff; border-radius: 8px }
+  .aclick:hover { background: #17324a }
+  .tab-btn { display: inline-block; padding: 6px 12px; margin-right: 8px; cursor: pointer;
+             border: 1px solid #556; border-radius: 8px }
+  .plain { display: inline-block; padding: 8px 14px; margin-right: 8px; border: 1px dashed #556; border-radius: 8px }
+  table { border-collapse: collapse; margin-top: 6px }
+  td, th { border: 1px solid #334; padding: 4px 10px }
+  .hidden-zone { display: none }
+</style>
+</head>
+<body>
+<h1 id="who">browser_read 夹具</h1>
+<div>页面自报期望：<code>browser_eval("window.__expect()")</code>。</div>
+
+<h2>① 该被认成可点击（含只能靠 cursor:pointer 认出的 div/span）</h2>
+<div class="aclick" id="cursor-btn">光标型按钮</div>
+<span class="tab-btn">光标型标签页</span>
+<div onclick="void 0">内联 onclick 型</div>
+<span role="button" tabindex="0">role 型</span>
+<button>真 button</button>
+
+<h2>② 文本在页面上，但不该被认成可点击</h2>
+<div class="plain">纯文本块</div>
+<div class="weird-name">也不是按钮</div>
+
+<h2>③ 可见结构（该出现）</h2>
+<table>
+  <thead><tr><th>可见列 A</th><th>可见列 B</th></tr></thead>
+  <tbody><tr><td>a1</td><td>b1</td></tr><tr><td>a2</td><td>b2</td></tr></tbody>
+</table>
+<label>可见输入 <input id="vis-input" value="hello"></label>
+
+<h2>④ 隐藏结构（默认不列，但要报数；include_hidden 时才出现）</h2>
+<div class="hidden-zone">
+  <table><thead><tr><th>隐藏列</th></tr></thead><tbody><tr><td>h1</td></tr></tbody></table>
+  <label>隐藏输入 <input id="hid-input" value="nope"></label>
+  <div class="aclick">隐藏的光标按钮</div>
+</div>
+
+<script>
+// 只在"只有 cursor:pointer 能认出它"的前提下计数：**不写 inline onclick**（那会变成标记线索，
+// 这条判据就废了），用 addEventListener 挂。
+window.__hits = 0;
+document.getElementById("cursor-btn").addEventListener("click", function () { window.__hits++; });
+
+window.__expect = function () {
+  return {
+    clickablesContain: ["光标型按钮", "光标型标签页", "内联 onclick 型", "role 型", "真 button"],
+    clickablesAbsent: ["纯文本块", "也不是按钮", "隐藏的光标按钮"],
+    tablesContain: "可见列 A",
+    tablesAbsent: "隐藏列",
+    fieldsContain: "vis-input",
+    fieldsAbsent: "hid-input",
+    hiddenSkipped: { tables: 1, fields: 1, clickables: 1 },
+  };
+};
+</script>
+</body>
+</html>

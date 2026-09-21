@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from "vitest";
 import type { ChatEvent } from "../engine/types.js";
 import { buildBrowserTools } from "./browserTools.js";
-import { PAGE_PROJECTION_SCRIPT } from "./browser/projection.js";
+import { buildProjectionScript } from "./browser/projection.js";
 import { NO_BROWSER_HOST_TEXT } from "./browser/format.js";
 import { cancelAllBrowserQueries, resolveBrowserResult } from "./browserClient.js";
 
@@ -87,11 +87,57 @@ describe("browser_read", () => {
     );
 
     const q = events[0] as any;
-    expectEvalRequest(q, PAGE_PROJECTION_SCRIPT);
+    expectEvalRequest(q, buildProjectionScript());
     expect(q.view_id).toBe("browser-2");
 
     reply(q, evalOk({ ok: true, title: "T" }));
     expect((await p).content[0].text).toContain("title: T");
+  });
+
+  it("include_hidden:true → 注入的脚本真的把它打开（默认是关的）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+      { view_id: "browser-2", include_hidden: true },
+      {},
+    );
+
+    const q = events[0] as any;
+    expect(q.params.expression).toContain("var INCLUDE_HIDDEN = true;");
+    expect(buildProjectionScript()).toContain("var INCLUDE_HIDDEN = false;"); // 缺省那一份仍是关的
+
+    reply(q, evalOk({ ok: true }));
+    await p;
+  });
+
+  /**
+   * 隐藏项默认不列，但**必须报数**：少了这行，"页面结构全空"与"结构全被隐藏筛掉了"在模型
+   * 眼里长得一样——正是本项目反复踩的"没读到 ≠ 没有"。
+   */
+  it("隐藏项计数 → 结果里出一行 NOTE，并给出开关", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+      { view_id: "browser-2" },
+      {},
+    );
+    const q = events[0] as any;
+    reply(
+      q,
+      evalOk({
+        ok: true,
+        title: "T",
+        tables: [],
+        fields: [],
+        clickables: [],
+        headings: [],
+        frames: [],
+        text: "",
+        hiddenSkipped: { tables: 2, fields: 12, clickables: 0, headings: 0 },
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("2 tables, 12 fields hidden");
+    expect(text).toContain("include_hidden");
   });
 
   /**
@@ -106,7 +152,7 @@ describe("browser_read", () => {
     );
 
     const q = events[0] as any;
-    expect(q.params.expression).toContain(PAGE_PROJECTION_SCRIPT);
+    expect(q.params.expression).toContain(buildProjectionScript());
     expect(q.params.expression).not.toContain("/api/delete");
 
     reply(q, evalOk({ ok: true }));

@@ -19,12 +19,31 @@
  * 3. **零站点名词**：这个文件的任何一行都不许出现站点名/站点专属选择器。
  *    站点差异走 skill 的 reference 文件（数据），不进这里。
  *
+ * # 两条筛选约定（都不是"猜"，都如实报数）
+ *
+ * - **可点元素 = 标记线索 ∪ 光标线索**：判据住在 `clickable.ts`（与 `actions.ts` 共用同一份，
+ *   保证「read 里看得见的，act 就点得到」）。
+ * - **默认只列渲染中的东西**：`display:none` 系的 popper / 隐藏面板是纯噪音，默认不列并回一行
+ *   计数（`hiddenSkipped`）——**不静默丢**。原型页那种「一页叠好几个隐藏状态」需要它们，
+ *   用 `include_hidden` 打开。
+ *
  * # 已知边界（如实，不假装）
  *
  * - 跨域 iframe 只能给 `src`（`contentDocument` 拿不到），标 `sameOrigin: false`。
  * - `rowspan`/`colspan` 不展开：表格按 DOM 单元格矩阵给，合并单元格会错位。
  * - `password` 输入框的值**刻意不读**（红acted）——那是用户的凭据，不该进模型上下文。
+ * - 可见性只看「有没有盒」：`visibility:hidden` / `opacity:0` 藏的东西仍会列出来（逐元素算样式太贵）。
  */
+import { CLICKABLE_JS } from "./clickable.js";
+
+/** 投影选项。 */
+export interface ProjectionOptions {
+  /**
+   * `true` = 连隐藏的（`display:none` 系）表格/字段/可点元素一起列。
+   * 缺省 false：隐藏的 popper 是噪音，但**计数会回报**，不会静默消失。
+   */
+  includeHidden?: boolean;
+}
 
 /** 一次投影的产出上限（保护模型上下文；触顶时 `truncated: true`）。 */
 const LIMITS = {
@@ -35,6 +54,8 @@ const LIMITS = {
   headings: 80,
   clickables: 120,
   frames: 20,
+  /** `cursor:pointer` 扫描的样式探针预算（`getComputedStyle` 逐元素，是这里最贵的一步）。 */
+  styleProbes: 2000,
 } as const;
 
 /**
@@ -43,10 +64,12 @@ const LIMITS = {
  * 注意：这是**注入进页面的 JS 源码字符串**，不是 TS。写的时候别用反引号或 `${}`——
  * 会把外层模板字面量撕开。同理正则里的反斜杠要按模板字面量规则转义。
  */
-export const PAGE_PROJECTION_SCRIPT = `(() => {
+export function buildProjectionScript(opts: ProjectionOptions = {}): string {
+  return `(() => {
   'use strict';
 
   var LIMITS = ${JSON.stringify(LIMITS)};
+  var INCLUDE_HIDDEN = ${opts.includeHidden ? "true" : "false"};
   var budget = LIMITS.nodes;
   var truncated = false;
 
@@ -60,7 +83,7 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
     var t = (s === null || s === undefined ? '' : String(s)).replace(/\\s+/g, ' ').trim();
     return t.length > n ? t.slice(0, n) + '\\u2026' : t;
   }
-
+${CLICKABLE_JS}
   // ---- 标签关联（"这个框填什么"的唯一可靠答案） ----
   // 四级兜底，最后一级是**表格布局启发式**：国内企业后台大量用 <td>标签</td><td><input></td>
   // 而不用 label/for。这是通用启发式（任何表格布局页面都成立），不是站点适配。
@@ -145,6 +168,14 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
 
   function project(doc) {
     var out = {};
+    // 隐藏项计数**每份投影各算各的**（同源帧会递归投影，共用一份会串味）。
+    var skipped = { tables: 0, fields: 0, clickables: 0, headings: 0 };
+    /** 这个元素要不要因为"没在渲染"而跳过（默认跳，计数；include_hidden 时一律不跳）。 */
+    function hidden(el, key) {
+      if (INCLUDE_HIDDEN || isRendered(el)) return false;
+      skipped[key]++;
+      return true;
+    }
 
     out.title = cut(doc.title, LIMITS.text);
     out.url = cut(doc.location && doc.location.href, 500);
@@ -154,6 +185,7 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
     var hs = [];
     var hn = doc.querySelectorAll('h1,h2,h3,h4,h5,h6');
     for (var i = 0; i < hn.length && hs.length < LIMITS.headings; i++) {
+      if (hidden(hn[i], 'headings')) continue;
       hs.push({ level: Number(hn[i].tagName.charAt(1)), text: cut(hn[i].textContent, LIMITS.text) });
     }
     out.headings = hs;
@@ -162,6 +194,7 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
     out.tables = [];
     var ts = doc.querySelectorAll('table');
     for (var j = 0; j < ts.length; j++) {
+      if (hidden(ts[j], 'tables')) continue;
       if (!spend(1)) break;
       out.tables.push(tableOf(ts[j]));
     }
@@ -170,22 +203,30 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
     out.fields = [];
     var fs = doc.querySelectorAll('input,select,textarea');
     for (var k = 0; k < fs.length; k++) {
-      if (!spend(1)) break;
       var el = fs[k];
       var t = (el.type || '').toLowerCase();
       if (t === 'hidden') continue;
+      if (hidden(el, 'fields')) continue;
+      if (!spend(1)) break;
       out.fields.push(fieldOf(el));
     }
 
-    // 可点元素（按钮 / 链接 / role=button）——agent 找"点哪里"的输入
+    // 可点元素（判据见 clickable.ts）：**标记线索 ∪ 光标线索**，agent 找"点哪里"的输入
     out.clickables = [];
-    var cs = doc.querySelectorAll('button,[role="button"],input[type="submit"],input[type="button"],a[href]');
-    for (var m = 0; m < cs.length && out.clickables.length < LIMITS.clickables; m++) {
-      var c = cs[m];
+    var taken = [];
+    function collect(c) {
+      if (out.clickables.length >= LIMITS.clickables) { truncated = true; return; }
+      for (var i = 0; i < taken.length; i++) {
+        // 祖先已入册：这个只是它的内容（同一目标的重复项，列出来是噪音）
+        if (taken[i] === c || (taken[i].contains && taken[i].contains(c))) return;
+      }
+      if (hidden(c, 'clickables')) return;
       var text = cut(c.textContent, LIMITS.text) ||
         cut(c.value, LIMITS.text) ||
-        cut(c.getAttribute && c.getAttribute('aria-label'), LIMITS.text);
-      if (!text) continue;
+        cut(c.getAttribute && c.getAttribute('aria-label'), LIMITS.text) ||
+        cut(c.getAttribute && c.getAttribute('title'), LIMITS.text);
+      if (!text) return;
+      taken.push(c);
       out.clickables.push({
         tag: c.tagName.toLowerCase(),
         text: text,
@@ -193,6 +234,32 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
         disabled: !!c.disabled
       });
     }
+
+    // ① 标记线索：便宜且精确，先跑
+    var cs = doc.querySelectorAll(CLICKABLE_MARKUP);
+    for (var m = 0; m < cs.length && out.clickables.length < LIMITS.clickables; m++) {
+      collect(cs[m]);
+    }
+
+    // ② 光标线索：用 div/span 拼的按钮只在这一趟被认出来。逐元素 getComputedStyle 很贵，
+    //    所以先剪枝（容器 / 没有名字的点它说不清点什么）、再限预算；预算耗尽**如实标 truncated**。
+    var probes = LIMITS.styleProbes;
+    var all = doc.querySelectorAll('*');
+    for (var q = 0; q < all.length && probes > 0 && out.clickables.length < LIMITS.clickables; q++) {
+      var e = all[q];
+      if (e.children && e.children.length > 2) continue;
+      var own = cut(e.textContent, 60) ||
+        cut(e.getAttribute && (e.getAttribute('aria-label') || e.getAttribute('title')), 60);
+      if (!own) continue;
+      var inside = false;
+      for (var w = 0; w < taken.length; w++) {
+        if (taken[w].contains && taken[w].contains(e)) { inside = true; break; }
+      }
+      if (inside) continue;
+      probes--;
+      if (clickableByStyle(e)) collect(e);
+    }
+    if (probes <= 0) truncated = true;
 
     // 正文文本（剥掉 script/style/noscript）
     try {
@@ -230,6 +297,7 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
       out.frames.push(entry);
     }
 
+    out.hiddenSkipped = skipped;
     return out;
   }
 
@@ -246,3 +314,4 @@ export const PAGE_PROJECTION_SCRIPT = `(() => {
     };
   }
 })()`;
+}

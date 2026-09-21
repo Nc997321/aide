@@ -45,12 +45,21 @@ function describeResolveFailure(v: Record<string, unknown>): string {
   const lines = [`Could not find the target: ${String(v["error"] ?? "unknown")}`];
   const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
   if (candidates.length) {
-    lines.push("", "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):");
+    // 候选有两种来源（页面脚本给 `candidatesKind`）：页面上**能点的**元素 / 只是**带着这段
+    // 文本**的元素。后者来自"文本在、但它的元素不被认为可点击"那条分支——把它说成"可点击元素"
+    // 会让模型以为点它就行，实际得改用选择器。
+    lines.push(
+      "",
+      v["candidatesKind"] === "text-hits"
+        ? "Elements carrying that text (not recognized as clickable — retry with a `selector` from one of these):"
+        : "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):",
+    );
     for (const c of candidates) {
       const r = asRecord(c);
       if (!r) continue;
       const bits = [`<${String(r["tag"])}>`, `"${String(r["text"])}"`];
       if (r["id"]) bits.push(`#${String(r["id"])}`);
+      else if (r["cls"]) bits.push(`.${String(r["cls"])}`);
       if (r["name"]) bits.push(`name=${String(r["name"])}`);
       lines.push(`- ${bits.join(" ")}`);
     }

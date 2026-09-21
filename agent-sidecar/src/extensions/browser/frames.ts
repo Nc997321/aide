@@ -28,13 +28,13 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
-import { PAGE_PROJECTION_SCRIPT } from "./projection.js";
+import { buildProjectionScript, type ProjectionOptions } from "./projection.js";
 import { runEval, type EvalProbe } from "./runEval.js";
 
 /** 一帧的读取结果。 */
 export interface FrameRead {
   url: string;
-  /** 读到的投影（形同 `PAGE_PROJECTION_SCRIPT` 的返回）；失败为 null。 */
+  /** 读到的投影（形同 `buildProjectionScript()` 的返回）；失败为 null。 */
   value: Record<string, unknown> | null;
   /** 失败原因（CDP 不可用 / 帧已消失 / 求值抛异常）。**如实**带出，不吞。 */
   error?: string;
@@ -161,9 +161,10 @@ async function evalInContext(
 async function readOneFrame(
   viewId: string | undefined,
   frame: CdpFrame,
+  opts: ProjectionOptions,
   emit: (e: ChatEvent) => void,
 ): Promise<FrameRead> {
-  const r = await evalInContext(viewId, frame.id, PAGE_PROJECTION_SCRIPT, "aide-read", emit);
+  const r = await evalInContext(viewId, frame.id, buildProjectionScript(opts), "aide-read", emit);
   const value = asRecord(r.value);
   if (!value) {
     return {
@@ -187,6 +188,7 @@ async function readOneFrame(
 export async function readCrossOriginFrames(
   viewId: string | undefined,
   alreadyRead: string[],
+  opts: ProjectionOptions,
   emit: (e: ChatEvent) => void,
 ): Promise<{ frames: FrameRead[]; error?: string }> {
   const t = await frameTree(viewId, emit);
@@ -205,7 +207,7 @@ export async function readCrossOriginFrames(
 
   const frames: FrameRead[] = [];
   for (const frame of targets) {
-    frames.push(await readOneFrame(viewId, frame, emit));
+    frames.push(await readOneFrame(viewId, frame, opts, emit));
   }
   return { frames };
 }
@@ -221,6 +223,7 @@ export async function readCrossOriginFrames(
 export async function readFramesFromResult(
   viewId: string | undefined,
   projection: unknown,
+  opts: ProjectionOptions,
   emit: (e: ChatEvent) => void,
 ): Promise<{ frames: FrameRead[]; error?: string } | undefined> {
   const value = asRecord(projection);
@@ -241,7 +244,7 @@ export async function readFramesFromResult(
   }
   if (unread === 0) return undefined;
 
-  return readCrossOriginFrames(viewId, alreadyRead, emit);
+  return readCrossOriginFrames(viewId, alreadyRead, opts, emit);
 }
 
 /** `browser_eval` 在帧里跑脚本的结果。 */

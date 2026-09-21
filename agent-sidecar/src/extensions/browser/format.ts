@@ -213,6 +213,29 @@ function renderClickables(raw: unknown, level = 2): string[] {
   return out;
 }
 
+/**
+ * 隐藏项计数 → 一行 NOTE。
+ *
+ * 默认不列隐藏的东西（`display:none` 的 popper / teleport 面板是纯噪音），但**绝不静默**：
+ * 报数 + 给出 `include_hidden` 这个开关。少了这行，"页面结构全空"与"结构都被隐藏筛掉了"
+ * 在模型眼里长得一样——正是本项目反复踩的"没读到 ≠ 没有"。
+ */
+function hiddenSkippedNote(value: Record<string, unknown>): string | null {
+  const skipped = asRecord(value["hiddenSkipped"]);
+  if (!skipped) return null;
+  const parts = (["headings", "tables", "fields", "clickables"] as const)
+    .map((key) => {
+      const n = Number(skipped[key]) || 0;
+      return n > 0 ? `${n} ${key}` : null;
+    })
+    .filter((x): x is string => x !== null);
+  if (!parts.length) return null;
+  return (
+    `NOTE: ${parts.join(", ")} hidden (display:none / zero-size) and not listed — ` +
+    `pass include_hidden to include them.`
+  );
+}
+
 /** 结构面（表格 / 表单字段 / 可点元素）是否全空。 */
 function hasNoStructure(value: Record<string, unknown>): boolean {
   return (
@@ -312,6 +335,8 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
   if (value["truncated"] === true) {
     out.push("NOTE: content was truncated against the size caps — this is a partial view of the page.");
   }
+  const hiddenNote = hiddenSkippedNote(value);
+  if (hiddenNote) out.push(hiddenNote);
 
   const headings = asArray(value["headings"]);
   if (headings.length) {
@@ -346,6 +371,9 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
     out.push(...renderClickables(fr.value["clickables"], 3));
     // 说明放文本**之前**——它是在为下面那段作注解。
     out.push(...emptyShapeNote(fr.value));
+    // 帧自己的隐藏计数（同一份脚本跑出来的，别只报主文档的）。
+    const frameHidden = hiddenSkippedNote(fr.value);
+    if (frameHidden) out.push(frameHidden);
     // 帧文本**必须渲染**。漏了它，结构面全空、内容全在文本里的页面（设计工具导出的绝对定位
     // div 画布正是如此）就只剩一行 title，与空帧无法区分。主文档一直有 `## Raw text`，
     // 帧这边当初漏了——2026-09-16 agent 实测踩到。

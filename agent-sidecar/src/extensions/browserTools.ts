@@ -13,7 +13,7 @@ import { tool } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../engine/types.js";
 import { queryBrowser, type BrowserCall } from "./browserClient.js";
 import { runEval } from "./browser/runEval.js";
-import { PAGE_PROJECTION_SCRIPT } from "./browser/projection.js";
+import { buildProjectionScript } from "./browser/projection.js";
 import { performClick, performFill, performHover } from "./browser/act.js";
 import { performTabAction } from "./browser/tab.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
@@ -90,6 +90,16 @@ const viewIdArg = z
       "if it is ambiguous the call fails and lists the open views.",
   );
 
+/** `browser_read` 的隐藏项开关（默认不列，但**报数**——见 format.ts 的那行 NOTE）。 */
+const includeHiddenArg = z
+  .boolean()
+  .optional()
+  .describe(
+    "Include hidden (display:none) tables / form fields / clickable elements in the skeleton. " +
+      "Default false: hidden poppers (date pickers, teleported menus) are noise. Pass true when the page " +
+      "stacks whole screens that way — design-tool prototypes are the common case.",
+  );
+
 export function buildBrowserTabsTool(
   env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
@@ -117,17 +127,20 @@ export function buildBrowserReadTool(
       "Use this to read a page — do not probe the DOM with browser_eval first. " +
       "It reads the top document plus same-origin frames, and reaches into CROSS-ORIGIN frames too when the WebView2 " +
       "runtime allows it (so you do not have to navigate away to read an embedded prototype). Anything it could not " +
-      "read is reported as such, with the reason. It does NOT run arbitrary script — use browser_eval for that.",
-    { view_id: viewIdArg },
+      "read is reported as such, with the reason. Hidden (display:none) tables/fields/clickables are skipped by default " +
+      "and counted in a note — pass include_hidden to list them too (prototype pages that stack whole screens that way). " +
+      "It does NOT run arbitrary script — use browser_eval for that.",
+    { view_id: viewIdArg, include_hidden: includeHiddenArg },
     async (args) => {
       if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+      const projection = { includeHidden: args.include_hidden === true };
       try {
-        const r = await runEval(PAGE_PROJECTION_SCRIPT, { viewId: args.view_id }, emit);
+        const r = await runEval(buildProjectionScript(projection), { viewId: args.view_id }, emit);
         // runEval 的失败文本已是面向模型的（异常/不可序列化/桥失败各自不同），不加工。
         if (!r.ok) return textResult(r.error);
         // 骨架里若含**读不到的** iframe，再走一趟 CDP 做帧级读取（见 frames.ts）。
         // 不是失败——跨域 iframe 是浏览器的硬边界，CDP 是绕过去的那条路。
-        const frameOutcome = await readFramesFromResult(args.view_id, r.value, emit);
+        const frameOutcome = await readFramesFromResult(args.view_id, r.value, projection, emit);
         return textResult(
           formatRead({ value: r.value, viewId: r.viewId, probe: r.probe }, frameOutcome),
         );

@@ -14,11 +14,19 @@
  * **真实**输入。但 WebView2 是 Evergreen 运行时，各机器版本不同，**CDP 域名可用性是运行期
  * 变量**，所以必须有兜底，且**如实报告走了哪条路**（不静默降级）。
  *
+ * # 「找不到」有三种，分开报
+ *
+ * ① 页面上根本没有这段文本 ② 有、但全部匹配不可见 ③ 有且可见、但它的元素**不被认为可点击**
+ * （用 div 拼的按钮，且没写 `cursor:pointer`/role/handler）。三者的下一步完全不同：改词 /
+ * 先点开或等渲染 / 改用选择器。合成一句"没找到"，模型只能在三种假设里瞎试。
+ * 判据本身（什么算可点击）住在 `clickable.ts`，与 `browser_read` 的索引共用同一份。
+ *
  * # 上限与安全
  *
  * - 只做「解析目标」和「设值/派发事件」，**不提交表单**——提交与否由模型按用户意图决定。
  * - 目标解析不到时回 `ok:false` + 候选清单，让模型改口径重试，而不是点错元素。
  */
+import { CLICKABLE_JS, CLICKABLE_MARKUP_SELECTOR } from "./clickable.js";
 
 /** 目标描述：`selector` 与 `text` 至少给一个；两个都给时 `selector` 优先。 */
 export interface ActTarget {
@@ -32,9 +40,16 @@ export interface ActTarget {
   index?: number;
 }
 
-/** 文本匹配的默认候选范围——够宽以覆盖常见 UI，又不至于把整个 body 当候选。 */
+/**
+ * 文本匹配的默认候选范围：内容元素的宽集合 **∪「可点击」判据**（`clickable.ts`）。
+ *
+ * 并集而非替换，两条理由：① 只按可点击判据取候选会**回归**今天能用的路径（点 `td` 靠父级
+ * handler 生效的表格行）；② 并集保证「`browser_read` 里看得见的可点元素，这里按文本一定点得到」。
+ * 精度由 `byText` 的「精确匹配优先 + 标签最短优先」兜着。
+ */
 const TEXT_CANDIDATE_SELECTOR =
-  'button,a,[role="button"],input,select,textarea,label,td,th,li,span,p,h1,h2,h3,h4,h5,h6';
+  'button,a,[role="button"],input,select,textarea,label,td,th,li,div,span,p,h1,h2,h3,h4,h5,h6,' +
+  CLICKABLE_MARKUP_SELECTOR;
 
 /**
  * 解析目标的公共前导（三个脚本共用）：把目标注入脚本、并提供统一的查找/可见性工具。
@@ -47,7 +62,7 @@ function preamble(target: ActTarget): string {
   'use strict';
   var TARGET = ${JSON.stringify(target)};
   var TEXT_CANDIDATES = ${JSON.stringify(TEXT_CANDIDATE_SELECTOR)};
-
+${CLICKABLE_JS}
   function visible(el) {
     if (!el || !el.getBoundingClientRect) return false;
     var r = el.getBoundingClientRect();
@@ -69,13 +84,79 @@ function preamble(target: ActTarget): string {
     return '';
   }
 
+  /** 元素的自述（给模型看的候选行）：标签 + 文本 + id/name/class 线索。 */
   function describe(el) {
+    var cls = '';
+    try {
+      if (el.className && typeof el.className === 'string') cls = el.className.trim().split(/\\s+/)[0] || '';
+    } catch (e) { /* SVG 的 className 是对象：忽略 */ }
     return {
       tag: el.tagName ? el.tagName.toLowerCase() : '?',
       text: labelOf(el).slice(0, 120),
       id: el.id || null,
-      name: (el.getAttribute && el.getAttribute('name')) || null
+      name: (el.getAttribute && el.getAttribute('name')) || null,
+      cls: cls || null
     };
+  }
+
+  /** 给模型改口用的选择器建议（能直接用在下一次调用里）。 */
+  function selectorHint(el) {
+    if (el.id) return '#' + el.id;
+    var tag = el.tagName ? el.tagName.toLowerCase() : '?';
+    var d = describe(el);
+    return d.cls ? tag + '.' + d.cls : tag;
+  }
+
+  /**
+   * 页面上**真的**带着这段文本的元素：按文本节点找，**不看可点性、不看可见性**
+   * （正因为要区分这两种情况，才必须绕开候选池）。
+   * 只在"候选池为空"的失败路径上跑——成功路径零成本。
+   */
+  function textHits(want, cap) {
+    var hits = [];
+    try {
+      var root = document.body || document.documentElement;
+      if (!root) return hits;
+      var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+      var seen = 0;
+      var n;
+      while ((n = walker.nextNode())) {
+        if (++seen > 4000) break;
+        if (!n.data || n.data.indexOf(want) < 0) continue;
+        var el = n.parentElement;
+        if (!el) continue;
+        if (hits.indexOf(el) < 0) hits.push(el);
+        if (hits.length >= cap) break;
+      }
+    } catch (e) { /* 补充说明拿不到就算了，别把失败变成异常 */ }
+    return hits;
+  }
+
+  /** 「找不到」的三种分支（见文件头）。 */
+  function notFound(want) {
+    var hits = textHits(want, 12);
+    var shown = [], hiddenHits = [];
+    for (var i = 0; i < hits.length; i++) {
+      (visible(hits[i]) ? shown : hiddenHits).push(hits[i]);
+    }
+    if (shown.length) {
+      return {
+        error: 'text ' + JSON.stringify(want) + ' is on the page and visible, but its element is not ' +
+          'recognized as clickable (no cursor:pointer, role or handler) — retry with an explicit ' +
+          'selector such as ' + selectorHint(shown[0]),
+        candidatesKind: 'text-hits',
+        candidates: shown.slice(0, 6).map(describe)
+      };
+    }
+    if (hiddenHits.length) {
+      return {
+        error: 'text ' + JSON.stringify(want) + ' exists on the page but every match is hidden ' +
+          '(display:none / zero-size) — open it or wait for the page to render first',
+        candidatesKind: 'text-hits',
+        candidates: hiddenHits.slice(0, 6).map(describe)
+      };
+    }
+    return { error: 'no element on the page contains that text ' + JSON.stringify(want) };
   }
 
   function bySelector() {
@@ -104,9 +185,15 @@ function preamble(target: ActTarget): string {
       else if (t.indexOf(want) >= 0) partial.push(el);
     }
     var pool = exact.length ? exact : partial;
-    if (!pool.length) return { error: 'no visible element with text ' + JSON.stringify(want) };
-    // 最具体的优先：文本最短的那个通常就是目标，而不是包含它的整个容器
-    pool.sort(function (a, b) { return labelOf(a).length - labelOf(b).length; });
+    if (!pool.length) return notFound(want);
+    // 最具体的优先：文本最短的那个通常就是目标，而不是包含它的整个容器；文本等长时取
+    // **子元素更少**的那个（<div class="aclick"><span>查看</span></div> 里该点 span ——
+    // 点内层文字一定落在 handler 作用域内，点外层只在外层真的挂了 handler 时才生效）。
+    pool.sort(function (a, b) {
+      var d = labelOf(a).length - labelOf(b).length;
+      if (d !== 0) return d;
+      return (a.children ? a.children.length : 0) - (b.children ? b.children.length : 0);
+    });
     return { el: pool[Math.min(TARGET.index || 0, pool.length - 1)], count: pool.length };
   }
 
@@ -115,21 +202,33 @@ function preamble(target: ActTarget): string {
     if (TARGET.text) return byText();
     return { error: 'no target given: provide selector or text' };
   }
-`;
-}
 
-/** 目标找不到时给模型看的候选（帮它改口径，而不是让它瞎猜）。 */
-const CANDIDATE_HINT = `
+  /**
+   * 解析失败的统一信封：notFound 已经给了**定性**的候选（文本命中）就用它；
+   * 否则补一份"页面上现在有哪些能点的"，让模型改口径。
+   */
+  function failure(err, extra) {
+    var out = { ok: false, error: err };
+    if (extra && extra.candidates && extra.candidates.length) {
+      out.candidates = extra.candidates;
+      out.candidatesKind = extra.candidatesKind || 'clickable';
+      return out;
+    }
     var hint = [];
     try {
-      var cands = document.querySelectorAll('button,a[href],[role="button"],input[type="submit"]');
+      var cands = document.querySelectorAll(CLICKABLE_MARKUP);
       for (var ci = 0; ci < cands.length && hint.length < 15; ci++) {
         if (!visible(cands[ci])) continue;
         var lbl = labelOf(cands[ci]);
         if (lbl) hint.push(describe(cands[ci]));
       }
     } catch (e) { /* 候选只是锦上添花，拿不到就算了 */ }
+    out.candidates = hint;
+    out.candidatesKind = 'clickable';
+    return out;
+  }
 `;
+}
 
 /**
  * 解析目标并**算好屏幕坐标**（点击用）。返回值里带 `hit` 描述，让模型知道点到了什么。
@@ -142,10 +241,7 @@ export function buildResolveScript(target: ActTarget): string {
   return `(() => {${preamble(target)}
   try {
     var r = resolve();
-    if (r.error) {
-      var err = r.error;${CANDIDATE_HINT}
-      return { ok: false, error: err, candidates: hint };
-    }
+    if (r.error) return failure(r.error, r);
     var el = r.el;
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }
     catch (e) { el.scrollIntoView(); }
@@ -176,10 +272,7 @@ export function buildFillScript(target: ActTarget, value: string): string {
   return `(() => {${preamble(target)}
   try {
     var r = resolve();
-    if (r.error) {
-      var err = r.error;${CANDIDATE_HINT}
-      return { ok: false, error: err, candidates: hint };
-    }
+    if (r.error) return failure(r.error, r);
     var el = r.el;
     var VALUE = ${JSON.stringify(value)};
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) { /* 非必需 */ }
@@ -225,10 +318,7 @@ export function buildClickFallbackScript(target: ActTarget): string {
   return `(() => {${preamble(target)}
   try {
     var r = resolve();
-    if (r.error) {
-      var err = r.error;${CANDIDATE_HINT}
-      return { ok: false, error: err, candidates: hint };
-    }
+    if (r.error) return failure(r.error, r);
     var el = r.el;
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) { /* 非必需 */ }
     var rect = el.getBoundingClientRect();
