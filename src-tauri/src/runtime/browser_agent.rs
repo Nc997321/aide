@@ -108,6 +108,18 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
                 Err(e) => err_payload(format!("cdp {method} failed on view {id}: {e}")),
             }
         }
+
+        BrowserQuery::Focus { view_id } => {
+            let id = match resolve_view(&facade, view_id.as_deref()) {
+                Ok(id) => id,
+                Err(message) => return err_payload(message),
+            };
+            match facade.request_focus(&id) {
+                // `requested` 而不是 `displayed`：面板收到事件才会切，这里只保证请求发出去了。
+                Ok(()) => ok_payload(serde_json::json!({ "view_id": id, "requested": true })),
+                Err(e) => err_payload(format!("cannot request focus for view {id}: {e}")),
+            }
+        }
     }
 }
 

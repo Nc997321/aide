@@ -41,6 +41,9 @@ pub const NAV_EVENT: &str = "browser-nav";
 /// 面板靠它把 agent 开的 tab 长出来，而不是靠"面板自己知道"。
 pub const VIEW_EVENT: &str = "browser-view";
 
+/// 「请把某个视图露到前台」的广播名。**是请求不是命令**：显示权在面板（方案 A）。
+pub const FOCUS_EVENT: &str = "browser-focus";
+
 /// 门面错误：把各层具体错误汇总成调用方能读的形态（应用层汇总传播）。
 #[derive(Debug, Clone, PartialEq)]
 pub enum FacadeError {
@@ -212,13 +215,30 @@ impl BrowserFacade {
         Ok(())
     }
 
-    /// 显隐：面板切走必须隐藏原生视图（它浮在全部 HTML 之上，不受 DOM 生命周期约束）。
+    /// 露头/让位。让位是 **parking**（挪出可见区、引擎照常活着），不是 `hide()`——
+    /// 视图浮在全部 HTML 之上、不受 DOM 生命周期约束，所以"看不见"只解决遮挡，
+    /// "引擎别停"才是这条命令存在的理由（见 `adapter/webview2/mod.rs` 的 PARK 常量）。
     pub fn set_displayed(&self, id_raw: &str, displayed: bool) -> Result<(), FacadeError> {
         let id = self.parse_id(id_raw)?;
         self.engine.set_displayed(&id, displayed)?;
         if let Some(view) = self.lock()?.get_mut(&id) {
             view.set_displayed(displayed);
         }
+        Ok(())
+    }
+
+    /// **请求**把某个视图露到面板上。只校验 id 存在 + 广播，**不改任何状态**——
+    /// 显示权在面板（空标签没有视图，还有宽度档、浮层让位这些纯 UI 状态，领域不该被卷进来）。
+    pub fn request_focus(&self, id_raw: &str) -> Result<(), FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        if self.lock()?.get(&id).is_none() {
+            return Err(FacadeError::ViewNotFound(id_raw.to_string()));
+        }
+        let app = self.app.clone();
+        let payload = serde_json::json!({ "id": id.as_str() });
+        let _ = tauri::async_runtime::spawn_blocking(move || {
+            let _ = app.emit(FOCUS_EVENT, payload);
+        });
         Ok(())
     }
 

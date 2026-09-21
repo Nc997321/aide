@@ -31,6 +31,11 @@ pub enum BrowserQuery {
         method: String,
         params: Value,
     },
+    /// 请面板把某个视图露到前台。**只是请求**：显示权在 UI（空标签没有视图、还有宽度档与
+    /// 浮层让位这些纯 UI 状态），所以这一条不改任何领域状态，只广播 `browser-focus`。
+    Focus {
+        view_id: Option<String>,
+    },
     /// op 缺失/未知或载荷不全。
     ///
     /// **刻意不静默丢弃**（对比 codegraph 的「解析失败即忽略」）：回一条错误让 sidecar 立刻
@@ -45,6 +50,7 @@ impl BrowserQuery {
             Self::ListViews => "list_views",
             Self::Eval { .. } => "eval",
             Self::CallCdp { .. } => "call_cdp",
+            Self::Focus { .. } => "focus",
             Self::Malformed(_) => "malformed",
         }
     }
@@ -94,6 +100,9 @@ fn parse_query(event: &Value) -> BrowserQuery {
             },
             None => BrowserQuery::Malformed("call_cdp requires a string `method`".into()),
         },
+        "focus" => BrowserQuery::Focus {
+            view_id: opt_str(event, "view_id"),
+        },
         other => BrowserQuery::Malformed(format!("unknown op: {other}")),
     }
 }
@@ -135,6 +144,29 @@ mod tests {
         assert!(
             parse_browser_query(&json!({"type": "browser_query", "op": "list_views"})).is_none()
         );
+    }
+
+    /// focus 是**请求**（显示权在面板）：桥只认识这一个 op，不做任何状态迁移。
+    #[test]
+    fn parses_focus_op() {
+        let r = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r1", "op": "focus", "view_id": "browser-2"
+        }))
+        .unwrap();
+        assert_eq!(
+            r.query,
+            BrowserQuery::Focus {
+                view_id: Some("browser-2".into())
+            }
+        );
+        assert_eq!(r.query.op_name(), "focus");
+
+        // view_id 缺省 → None（由执行体解析）
+        let r = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r2", "op": "focus"
+        }))
+        .unwrap();
+        assert_eq!(r.query, BrowserQuery::Focus { view_id: None });
     }
 
     #[test]
