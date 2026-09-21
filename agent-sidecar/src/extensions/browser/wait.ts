@@ -22,8 +22,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
-import { probeVisibility, runEval, type PageVisibility } from "./runEval.js";
-import { hiddenNote } from "./visibility.js";
+import { runEval } from "./runEval.js";
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -96,8 +95,7 @@ async function resolveView(
   viewId: string | undefined,
   emit: (e: ChatEvent) => void,
 ): Promise<{ ok: true; viewId?: string } | { ok: false; text: string }> {
-  // `probe: "none"`：解析只要 view_id，顺带取可见性是白花一次往返。
-  const r = await runEval("0", { viewId, probe: "none" }, emit);
+  const r = await runEval("0", { viewId }, emit);
   if (!r.ok) return { ok: false, text: r.error };
   return { ok: true, viewId: r.viewId };
 }
@@ -105,15 +103,13 @@ async function resolveView(
 /**
  * 条件模式的一跳。桥层失败**直接放弃**——理由见 `waitForCondition`。
  *
- * `probe: "none"`：可见性**不在热循环里问**（每 200ms 一跳，问它是纯浪费），只在超时那一次
- * 单独取（见 `timeoutReport` 的调用点）。
  */
 async function conditionTick(
   viewId: string | undefined,
   condition: string,
   emit: (e: ChatEvent) => void,
 ): Promise<{ ok: true; tick: ConditionTick } | { ok: false; text: string }> {
-  const r = await runEval(conditionScript(condition), { viewId, probe: "none" }, emit);
+  const r = await runEval(conditionScript(condition), { viewId }, emit);
   // 求值器自己的 throw 已被包装器兜住，所以走不到这一步；**能走到说明条件本身有问题**
   // （语法错误、视图没了、两条通道都不可用）——没有一种会靠等待变好。
   if (!r.ok) return { ok: false, text: `The condition could not be evaluated at all: ${r.error}` };
@@ -132,19 +128,12 @@ async function conditionTick(
 }
 
 /** 超时说明——**诊断，不是错误**。 */
-function timeoutReport(head: string, last: string, attempts: number, input: WaitInput, visibility: PageVisibility): string {
+function timeoutReport(head: string, last: string, attempts: number, input: WaitInput): string {
   const lines = [
     head,
     `Polled ${attempts} time(s) over ${input.timeoutMs}ms at ${input.intervalMs}ms intervals.`,
     `Last observation: ${last}`,
   ];
-  const note = hiddenNote(
-    visibility,
-    "Conditions that depend on rendering will never become true here — the engine does not " +
-      "advance transitions, animations or lazy loading in a hidden view. Bring the view to the " +
-      "front, or rewrite the condition to something that does not depend on rendering.",
-  );
-  if (note) lines.push("", note);
   return lines.join("\n");
 }
 
@@ -169,13 +158,11 @@ async function waitForCondition(
     await sleep(input.intervalMs);
   }
 
-  // 可见性只在**这一条**路径上取：轮询循环里问它是纯浪费（见 `conditionTick`）。
   return timeoutReport(
     "Timed out — the condition never became true.",
     last.detail,
     attempts,
     input,
-    await probeVisibility(viewId, emit),
   );
 }
 
@@ -263,13 +250,11 @@ async function waitForLoad(
     await sleep(input.intervalMs);
   }
 
-  const visibility: PageVisibility = last.visible ? "visible" : "hidden";
   return timeoutReport(
     "Timed out — the view never finished loading.",
     `nav.state = ${last.state} at ${last.url || "(no url)"}`,
     attempts,
     input,
-    visibility,
   );
 }
 

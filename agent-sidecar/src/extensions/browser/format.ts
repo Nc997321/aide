@@ -1,6 +1,5 @@
 import type { FrameEvalOutcome, FrameRead } from "./frames.js";
 import type { EvalProbe } from "./runEval.js";
-import { hiddenNote, readVisibility } from "./visibility.js";
 
 /**
  * 浏览器工具的结果 → 模型可读文本。
@@ -71,11 +70,10 @@ export interface EvalView {
  * 与动作类不同：读到的内容**多半是真的**（DOM 在，`textContent` 在），但依赖渲染的东西会缺
  * ——懒加载没触发、过渡没跑完、`innerText` 类取值可能为空。所以措辞落在"结果是可信的这一句
  * 不成立"，而不是"结果不可信"。
+ *
+ * （曾经这里还有一句"视图隐藏 → 渲染类内容可能没发生"的告警。parking 落地后不显示的视图照样
+ *   合成，那句只剩噪音，删了。）
  */
-const HIDDEN_CONSEQUENCE =
-  "The DOM is still readable, but anything that depends on rendering (lazy-loaded content, " +
-  "transitions, layout that only settles once visible) may not have happened — treat a thin or " +
-  'empty result as "not rendered", not as "not there".';
 
 /** 异步没等到（只可能出现在 CDP 不可用的降级路径上）。 */
 const PENDING_NOTE =
@@ -85,18 +83,14 @@ const PENDING_NOTE =
   "and read it in a second call.";
 
 /**
- * 求值结果的两条旁注：视图隐藏 / 异步没等到（都只在**真的发生时**出现）。
+ * 求值结果的旁注：异步没等到（只在**真的发生时**出现）。
  *
  * 入参刻意是 `unknown`：本模块的铁律是"data 是 unknown，畸形形状下解引用就会炸成 isError"，
  * 所以这里自己收窄，不假设调用方给对了形状。
  */
 function evalNotes(raw: unknown): string[] {
   const probe = asRecord(raw);
-  const out: string[] = [];
-  const hidden = hiddenNote(readVisibility(probe?.["visibility"]), HIDDEN_CONSEQUENCE);
-  if (hidden) out.push(hidden);
-  if (probe?.["pending"] === true) out.push(PENDING_NOTE);
-  return out;
+  return probe?.["pending"] === true ? [PENDING_NOTE] : [];
 }
 
 /** CDP 帧级读取的结果（跨域 iframe）。见 `frames.ts`。 */

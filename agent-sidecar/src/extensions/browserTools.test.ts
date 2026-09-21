@@ -91,7 +91,6 @@ describe("browser_read", () => {
     expect(q.view_id).toBe("browser-2");
 
     reply(q, evalOk({ ok: true, title: "T" }));
-    await probeOk(events, 1);
     expect((await p).content[0].text).toContain("title: T");
   });
 
@@ -111,7 +110,6 @@ describe("browser_read", () => {
     expect(q.params.expression).not.toContain("/api/delete");
 
     reply(q, evalOk({ ok: true }));
-    await probeOk(events, 1);
     await p;
   });
 
@@ -131,9 +129,8 @@ describe("browser_read", () => {
         frames: [{ src: "https://other/proto", sameOrigin: false, content: null }],
       }),
     );
-    await probeOk(events, 1);
 
-    const tree = await waitForQuery(events, 2);
+    const tree = await waitForQuery(events, 1);
     expect(tree.op).toBe("call_cdp");
     expect(tree.method).toBe("Page.getFrameTree");
     reply(tree, {
@@ -148,9 +145,8 @@ describe("browser_read", () => {
       },
     });
 
-    reply(await waitForQuery(events, 3), { ok: true, data: { value: { executionContextId: 5 } } });
-    reply(await waitForQuery(events, 4), evalOk({ ok: true, title: "设备台账管理" }));
-    await probeOk(events, 5);
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: { executionContextId: 5 } } });
+    reply(await waitForQuery(events, 3), evalOk({ ok: true, title: "设备台账管理" }));
 
     const text = (await p).content[0].text;
     expect(text).toContain("## Frame content 1 — https://other/proto");
@@ -161,9 +157,8 @@ describe("browser_read", () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
     reply(await waitForQuery(events, 0), evalOk({ ok: true, title: "T", frames: [] }));
-    await probeOk(events, 1);
     await p;
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(1); // 只有投影那一发（可见性探测已删）
   });
 
   it("桥失败 → Rust 的错误文本原样回到模型", async () => {
@@ -190,7 +185,6 @@ describe("browser_eval", () => {
     expectEvalRequest(q, "document.title");
 
     reply(q, evalOk("设备台账", "string"));
-    await probeOk(events, 1);
     expect((await p).content[0].text).toContain("设备台账");
   });
 });
@@ -217,15 +211,6 @@ function evalOk(value: unknown, type = "object"): { ok: boolean; data: unknown }
   return { ok: true, data: { view_id: "browser-1", value: { result: { type, value } } } };
 }
 
-/**
- * `runEval` 成功后会**再取一次可见性**（`probeVisibility`）——所以每个成功的求值都是两发。
- * 答掉第二发，省得每条用例自己数下标。
- */
-async function probeOk(events: ChatEvent[], i: number): Promise<void> {
-  const q = await waitForQuery(events, i);
-  expect((q.params as any).expression).toBe("document.visibilityState");
-  reply(q, evalOk("visible", "string"));
-}
 
 /** 求值请求的断言门面：`op` 与包装形态变了，用例关心的是"跑的是不是那段脚本"。 */
 function expectEvalRequest(q: any, scriptFragment: string): void {
@@ -248,22 +233,21 @@ describe("browser_act — 点击的两条路", () => {
     const q0 = await waitForQuery(events, 0);
     expectEvalRequest(q0, "TARGET");
     reply(q0, RESOLVED);
-    await probeOk(events, 1);
 
-    const q2 = await waitForQuery(events, 2);
+    const q2 = await waitForQuery(events, 1);
     expect(q2.op).toBe("call_cdp");
     expect(q2.method).toBe("Input.dispatchMouseEvent");
     expect(q2.params).toMatchObject({ type: "mousePressed", x: 10, y: 20, button: "left" });
     reply(q2, { ok: true, data: { value: {} } });
 
-    const q3 = await waitForQuery(events, 3);
+    const q3 = await waitForQuery(events, 2);
     expect(q3.params).toMatchObject({ type: "mouseReleased", x: 10, y: 20 });
     reply(q3, { ok: true, data: { value: {} } });
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
     expect(text).toContain("刷新");
-    expect(events).toHaveLength(4);
+    expect(events).toHaveLength(3); // 解析 + press + release（旧实现还多一发可见性探测）
   });
 
   /**
@@ -278,15 +262,13 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     reply(await waitForQuery(events, 0), RESOLVED);
-    await probeOk(events, 1);
-    reply(await waitForQuery(events, 2), { ok: false, error: "Input domain not supported" });
+    reply(await waitForQuery(events, 1), { ok: false, error: "Input domain not supported" });
 
-    const q3 = await waitForQuery(events, 3);
+    const q3 = await waitForQuery(events, 2);
     // 兜底走 sidecar 里的合成事件脚本——**不是**再次 CDP
     expect(q3.op).toBe("call_cdp");
     expect((q3.params as any).expression).toContain("pointerdown");
     reply(q3, evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
-    await probeOk(events, 4);
 
     const text = (await p).content[0].text;
     expect(text).toContain("SYNTHETIC");
@@ -302,10 +284,9 @@ describe("browser_act — 点击的两条路", () => {
       {},
     );
     reply(await waitForQuery(events, 0), RESOLVED);
-    await probeOk(events, 1);
-    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
-    reply(await waitForQuery(events, 3), { ok: false, error: "boom" });
-    reply(await waitForQuery(events, 4), { ok: false, error: "fallback also failed" });
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 2), { ok: false, error: "boom" });
+    reply(await waitForQuery(events, 3), { ok: false, error: "fallback also failed" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("pressed state");
@@ -326,13 +307,11 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     reply(await waitForQuery(events, 0), RESOLVED);
-    await probeOk(events, 1);
-    reply(await waitForQuery(events, 2), {
+    reply(await waitForQuery(events, 1), {
       ok: true, // ← 桥层成功
       data: { value: { error: { code: -32601, message: "'Input.dispatchMouseEvent' wasn't found" } } },
     });
-    reply(await waitForQuery(events, 3), evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
-    await probeOk(events, 4);
+    reply(await waitForQuery(events, 2), evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
 
     const text = (await p).content[0].text;
     expect(text).toContain("SYNTHETIC"); // 走了兜底，而不是报成功
@@ -348,8 +327,7 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     reply(await waitForQuery(events, 0), RESOLVED);
-    await probeOk(events, 1);
-    reply(await waitForQuery(events, 2), {
+    reply(await waitForQuery(events, 1), {
       ok: true,
       data: { value: { error: { code: -32601, message: "mouseMoved rejected" } } },
     });
@@ -361,10 +339,11 @@ describe("browser_act — 点击的两条路", () => {
   });
 
   /**
-   * 隐藏视图：点击可能落下，但点击后的过渡不会推进——不说这句，模型会把"点完没反应"
-   * 判断成"控件坏了"或"没点到"。
+  /**
+   * 反向钉子：parking 之后**不再有可见性探测**（不显示的视图照样合成），所以既不多发那一发，
+   * 结果里也不该出现任何「隐藏视图」的告警。
    */
-  it("视图隐藏时，结果里明说过渡不会推进", async () => {
+  it("点击成功后**没有**可见性告警，也不多发探测那一发", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
       { action: "click", text: "刷新" },
@@ -372,15 +351,13 @@ describe("browser_act — 点击的两条路", () => {
     );
 
     reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 }));
-    // 可见性来自随后那次独立探测
-    reply(await waitForQuery(events, 1), evalOk("hidden", "string"));
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
     reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
-    reply(await waitForQuery(events, 3), { ok: true, data: { value: {} } });
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
-    expect(text).toContain("hidden from the engine");
-    expect(text).toContain("will not progress");
+    expect(text).not.toContain("hidden");
+    expect(events).toHaveLength(3); // 解析 + press + release，没有第四发
   });
 
   it("目标解析失败 → 带候选清单，且**不发** CDP", async () => {
@@ -397,12 +374,11 @@ describe("browser_act — 点击的两条路", () => {
         candidates: [{ tag: "button", text: "刷新" }],
       }),
     );
-    await probeOk(events, 1);
 
     const text = (await p).content[0].text;
     expect(text).toContain("Could not find the target");
     expect(text).toContain("刷新"); // 候选清单给模型改口径用
-    expect(events).toHaveLength(2); // 解析 + 可见性，没瞎点
+    expect(events).toHaveLength(1); // 只有解析那一发，没瞎点
   });
 });
 
@@ -433,9 +409,8 @@ describe("browser_screenshot — 视觉兜底", () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
 
-    // ① 先判可见：隐藏视图的截图**注定**超时（隐藏的 WebView2 不合成帧），不如立刻如实失败
-    await probeOk(events, 0);
-    const q = await waitForQuery(events, 1);
+    // 第一发就是截图本身：parking 之后不显示的视图照样合成，不再先探可见性
+    const q = await waitForQuery(events, 0);
     expect(q.op).toBe("call_cdp");
     expect(q.method).toBe("Page.captureScreenshot");
     // 默认 jpeg q80：截图会进会话历史、后续每轮重发，体积是真成本。
@@ -444,8 +419,7 @@ describe("browser_screenshot — 视觉兜底", () => {
     reply(q, { ok: true, data: { value: { data: "BASE64JPG" } } });
 
     const r = await p;
-    // caption 复用①那次探测：同一轮里再探一次没有新信息，白多一发往返
-    expect(events).toHaveLength(2);
+    expect(events).toHaveLength(1); // 只发截图那一发
     expect(r.content).toHaveLength(2);
     expect(r.content[0].type).toBe("text");
     expect(r.content[0].text).toContain("visible viewport");
@@ -461,8 +435,7 @@ describe("browser_screenshot — 视觉兜底", () => {
       { full_page: true },
       {},
     );
-    await probeOk(events, 0);
-    const q = await waitForQuery(events, 1);
+    const q = await waitForQuery(events, 0);
     expect(q.params).toEqual({ format: "jpeg", quality: 80, captureBeyondViewport: true });
     reply(q, { ok: true, data: { value: { data: "X" } } });
     expect((await p).content[0].text).toContain("full");
@@ -474,8 +447,7 @@ describe("browser_screenshot — 视觉兜底", () => {
       { format: "png" },
       {},
     );
-    await probeOk(events, 0);
-    const q = await waitForQuery(events, 1);
+    const q = await waitForQuery(events, 0);
     expect(q.params).toEqual({ format: "png" });
     expect(q.params.quality).toBeUndefined();
     reply(q, { ok: true, data: { value: { data: "BASE64PNG" } } });
@@ -486,21 +458,22 @@ describe("browser_screenshot — 视觉兜底", () => {
   });
 
   /**
-   * 视图隐藏 → **压根不试**。隐藏的 WebView2 不合成帧（2026-09-20 真机实测：rAF 一帧不跑），
-   * `Page.captureScreenshot` 等不到帧就是 10s 超时，而旧文案还把原因说成 "view closed"。
-   * 这条钉住：不发截图请求、不烧那 10 秒、文案点名隐藏与出路。
+  /**
+   * parking 之后截图不再先探可见性：不显示的视图照样合成（探针实测同字节数），
+   * 所以第一发就是 `Page.captureScreenshot` 本身——少一次往返，也没有「隐藏就拒绝」的分支。
    */
-  it("视图隐藏 → 不发截图请求，文案点名隐藏与出路", async () => {
+  it("不先探可见性：第一发就是 Page.captureScreenshot，并回图像块", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
-    reply(await waitForQuery(events, 0), evalOk("hidden", "string"));
+
+    const q = await waitForQuery(events, 0);
+    expect(q.method).toBe("Page.captureScreenshot");
+    reply(q, { ok: true, data: { value: { data: "QUJD" } } });
 
     const r = await p;
-    expect(events).toHaveLength(1); // 只有那一次探测
-    expect(r.content).toHaveLength(1); // 不发图像块
-    expect(r.content[0].type).toBe("text");
-    expect(r.content[0].text).toContain("hidden");
-    expect(r.content[0].text).toContain("browser_read");
+    expect(r.content).toHaveLength(2); // [文本, 图像]
+    expect(r.content[1].type).toBe("image");
+    expect(r.content[1].data).toBe("QUJD");
   });
 
   /**
@@ -510,8 +483,7 @@ describe("browser_screenshot — 视觉兜底", () => {
   it("运行期拒绝 → 回文本说明 + 指向 browser_read/eval，不发图像块", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
-    await probeOk(events, 0);
-    reply(await waitForQuery(events, 1), {
+    reply(await waitForQuery(events, 0), {
       ok: true,
       data: { value: { error: { code: -32601, message: "'Page.captureScreenshot' wasn't found" } } },
     });
@@ -528,8 +500,7 @@ describe("browser_screenshot — 视觉兜底", () => {
   it("回了 ok 但没有图像数据 → 如实报错，不塞空图", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
-    await probeOk(events, 0);
-    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 0), { ok: true, data: { value: {} } });
     const r = await p;
     expect(r.content).toHaveLength(1);
     expect(r.content[0].text).toContain("no image data");

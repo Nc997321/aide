@@ -23,8 +23,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
-import { runEval, type EvalProbe } from "./runEval.js";
-import { appendHiddenNote } from "./visibility.js";
+import { runEval } from "./runEval.js";
 import {
   buildClickFallbackScript,
   buildFillScript,
@@ -67,12 +66,12 @@ function describeHit(v: Record<string, unknown>): string {
   return bits.join(" ");
 }
 
-/** 跑一段求值脚本、把结果规整成 `{ok, value, probe}`；失败走 `text`。 */
+/** 跑一段求值脚本、把结果规整成 `{ok, value}`；失败走 `text`。 */
 async function evalScript(
   viewId: string | undefined,
   script: string,
   emit: (e: ChatEvent) => void,
-): Promise<{ ok: true; value: Record<string, unknown>; probe: EvalProbe } | { ok: false; text: TextOut }> {
+): Promise<{ ok: true; value: Record<string, unknown> } | { ok: false; text: TextOut }> {
   const r = await runEval(script, { viewId }, emit);
   // 抛异常 / 不可序列化 / 桥失败，runEval 已经定性并给出面向模型的文本，不加工。
   if (!r.ok) return { ok: false, text: r.error };
@@ -81,7 +80,7 @@ async function evalScript(
   if (!value) {
     return { ok: false, text: "The page script returned no usable object (it returned a non-object)." };
   }
-  return { ok: true, value, probe: r.probe };
+  return { ok: true, value };
 }
 
 /**
@@ -94,21 +93,6 @@ function cdpMethodError(data: unknown): string | null {
   const e = asRecord(err);
   if (!e) return null;
   return String(e["message"] ?? e["code"] ?? "unknown");
-}
-
-/**
- * 隐藏视图对**动作类**结果意味着什么。
- *
- * 点击本身多半能落下（CDP 派发的是真实输入，不依赖合成），但**点击之后的过渡不会推进**——
- * 于是"点完了页面没动"会被误判成"点了没反应 / 控件坏了"。
- */
-const HIDDEN_CONSEQUENCE =
-  "A click can still land, but any transition or animation it starts will not progress, and content " +
-  "that loads lazily may never appear — bring the view to the front before judging the result.";
-
-/** 动作类结果统一附上隐藏告警。 */
-function withHidden(text: string, probe: EvalProbe): string {
-  return appendHiddenNote(text, probe.visibility, HIDDEN_CONSEQUENCE);
 }
 
 /** 一次 CDP 鼠标输入。成了回 `null`，否则回**面向模型的失败原因**。 */
@@ -165,7 +149,7 @@ export async function performClick(
 
   const v = resolved.value;
   // 找不到目标时也该带上隐藏告警：懒加载内容在隐藏视图里根本不会渲染出来。
-  if (v["ok"] !== true) return withHidden(describeResolveFailure(v), resolved.probe);
+  if (v["ok"] !== true) return (describeResolveFailure(v));
 
   const x = Number(v["x"]);
   const y = Number(v["y"]);
@@ -176,7 +160,7 @@ export async function performClick(
 
   const viaCdp = await cdpClick(viewId, x, y, emit);
   if (viaCdp.ok) {
-    return withHidden(`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y}).`, resolved.probe);
+    return (`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y}).`);
   }
 
   // 兜底：CDP 不可用（WebView2 版本差异）。**必须说清这不是等价路径。**
@@ -188,12 +172,11 @@ export async function performClick(
   if (fv["ok"] !== true) {
     return `Click failed. CDP path: ${viaCdp.reason}. Script fallback: ${String(fv["error"] ?? "unknown")}`;
   }
-  return withHidden(
+  return (
     `Clicked ${describeHit(fv)} using a SYNTHETIC event (script fallback) — ` +
       `CDP real input was unavailable (${viaCdp.reason}). ` +
       `The click is not a trusted event, so widgets that only react to real input (some dropdowns, ` +
-      `file pickers, drag targets) may not respond. Verify the page actually changed.`,
-    fallback.probe,
+      `file pickers, drag targets) may not respond. Verify the page actually changed.`
   );
 }
 
@@ -216,9 +199,9 @@ export async function performFill(
     }
     const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
     if (candidates.length) lines.push("", `${candidates.length} other clickable element(s) on the page — retry with a selector.`);
-    return withHidden(lines.join("\n"), r.probe);
+    return (lines.join("\n"));
   }
-  return withHidden(`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}.`, r.probe);
+  return (`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}.`);
 }
 
 /**
@@ -233,7 +216,7 @@ export async function performHover(
   const resolved = await evalScript(viewId, buildResolveScript(target), emit);
   if (!resolved.ok) return resolved.text;
   const v = resolved.value;
-  if (v["ok"] !== true) return withHidden(describeResolveFailure(v), resolved.probe);
+  if (v["ok"] !== true) return (describeResolveFailure(v));
 
   const x = Number(v["x"]);
   const y = Number(v["y"]);
@@ -244,5 +227,5 @@ export async function performHover(
       `Real hover needs CDP, which is unavailable in this WebView2 runtime.`
     );
   }
-  return withHidden(`Hovered ${describeHit(v)} at (${x}, ${y}).`, resolved.probe);
+  return (`Hovered ${describeHit(v)} at (${x}, ${y}).`);
 }

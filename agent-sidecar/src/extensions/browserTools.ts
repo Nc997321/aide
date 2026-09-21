@@ -96,7 +96,9 @@ export function buildBrowserTabsTool(
 ) {
   return tool(
     "browser_tabs",
-    "List the browser views (tabs) currently open in Aide's embedded browser, with each one's id, url, title and visibility. " +
+    "List the browser views (tabs) currently open in Aide's embedded browser, with each one's id, " +
+      "url, title, label and whether it is displayed (on screen for the user) or parked (alive in the " +
+      "background — it still renders). " +
       "Call this FIRST when a task involves a page: the other browser tools take a `view_id` and this is where you learn it. " +
       "A view stays alive even when the browser panel is closed or the tab is switched away, so the page you need may already be open.",
     {},
@@ -244,9 +246,8 @@ export function buildBrowserActTool(
 /**
  * 截图块的说明文本。
  *
- * **不再自带可见性告警**：隐藏视图在 `captureScreenshot` 里已经被拦下（压根走不到这里），
- * 而 `unknown` 按 `visibility.ts` 的纪律也不说——没有依据的"可能过期"正是要消灭的那种噪音。
- * 可见性探测移到截图**之前**做，代价同样是零额外往返（见 `screenshot.ts`）。
+ * **不带任何可见性告警**：parking 之后不显示的视图照样合成，截图与前台视图同质
+ * （探针实测同字节数）——没有需要预警的状态。
  */
 function screenshotCaption(opts: { fullPage: boolean; format: ScreenshotFormat }): string {
   return (

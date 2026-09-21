@@ -22,19 +22,11 @@ function cdpOk(requestId: string, result: unknown): void {
 }
 
 /**
- * 求值成功 = **两发往返**：主求值 + 随后那次可见性探测（`probeVisibility`）。
- * 这个 helper 把两发都答掉，省得每条用例手写。
+ * 求值成功 = **一发往返**（可见性探测已随 parking 删除——不显示的视图照样合成）。
+ * 这个 helper 把那一发答掉，省得每条用例手写。
  */
-async function answerEvalAndProbe(
-  events: ChatEvent[],
-  index: number,
-  cdpBody: unknown,
-  visibility = "visible",
-): Promise<void> {
+async function answerEval(events: ChatEvent[], index: number, cdpBody: unknown): Promise<void> {
   cdpOk((events[index] as any).request_id, cdpBody);
-  const probe = await waitForQuery(events, index + 1);
-  expect((probe.params as any).expression).toBe("document.visibilityState");
-  cdpOk(probe.request_id, { result: { type: "string", value: visibility } });
 }
 
 afterEach(() => cancelAllBrowserQueries("test cleanup"));
@@ -55,7 +47,7 @@ describe("runEval 主路径（CDP）", () => {
     expect(q.params.returnByValue).toBe(true);
     expect(q.params.expression).toBe("1 + 1");
 
-    await answerEvalAndProbe(events, 0, { result: { type: "number", value: 2 } });
+    await answerEval(events, 0, { result: { type: "number", value: 2 } });
     const r = await p;
 
     expect(r).toEqual({
@@ -63,7 +55,7 @@ describe("runEval 主路径（CDP）", () => {
       via: "cdp",
       value: 2,
       viewId: "browser-1",
-      probe: { visibility: "visible", pending: false },
+      probe: { pending: false },
     });
   });
 
@@ -72,7 +64,7 @@ describe("runEval 主路径（CDP）", () => {
     const p = runEval("(async () => 42)()", {}, emit);
 
     expect((events[0] as any).params.expression).toBe("(async () => 42)()");
-    await answerEvalAndProbe(events, 0, { result: { type: "number", value: 42 } });
+    await answerEval(events, 0, { result: { type: "number", value: 42 } });
 
     expect((await p) as any).toMatchObject({ ok: true, value: 42 });
   });
@@ -82,7 +74,7 @@ describe("runEval 主路径（CDP）", () => {
     const p = runEval("var x = 1; x + 2", {}, emit);
 
     expect((events[0] as any).params.expression).toBe("var x = 1; x + 2");
-    await answerEvalAndProbe(events, 0, { result: { type: "number", value: 3 } });
+    await answerEval(events, 0, { result: { type: "number", value: 3 } });
 
     expect((await p) as any).toMatchObject({ ok: true, value: 3 });
   });
@@ -91,13 +83,13 @@ describe("runEval 主路径（CDP）", () => {
     const { events, emit } = emitCollector();
     const p = runEval("void 0", {}, emit);
 
-    await answerEvalAndProbe(events, 0, { result: { type: "undefined" } });
+    await answerEval(events, 0, { result: { type: "undefined" } });
     expect(await p).toEqual({
       ok: true,
       via: "cdp",
       value: undefined,
       viewId: "browser-1",
-      probe: { visibility: "visible", pending: false },
+      probe: { pending: false },
     });
   });
 
@@ -112,15 +104,16 @@ describe("runEval 主路径（CDP）", () => {
     expect((r as any).error).toContain("() => {}");
   });
 
-  it("probe:\"none\" → 不求可见性（轮询热路径用，省一次往返）", async () => {
+  it("每次求值**只发一发**：可见性探测已随 parking 删除（以前每跳多一次往返）", async () => {
     const { events, emit } = emitCollector();
-    const p = runEval("1", { probe: "none" }, emit);
+    const p = runEval("1", {}, emit);
 
     cdpOk((events[0] as any).request_id, { result: { type: "number", value: 1 } });
     const r = await p;
 
-    expect((r as any).probe.visibility).toBe("unknown");
-    expect(events).toHaveLength(1); // 没有第二发
+    expect(r.ok).toBe(true);
+    expect(events).toHaveLength(1); // 没有第二发（旧实现会再问一次 document.visibilityState）
+    expect((r as any).probe).toEqual({ pending: false });
   });
 });
 
@@ -181,17 +174,13 @@ describe("runEval 失败判据", () => {
       ok: true,
       data: { view_id: "browser-1", value: { value: 2, pending: false } },
     });
-    // 降级成功也要取可见性
-    const probe = await waitForQuery(events, 2);
-    cdpOk(probe.request_id, { result: { type: "string", value: "visible" } });
-
     const r = await p;
     expect(r).toEqual({
       ok: true,
       via: "executescript",
       value: 2,
       viewId: "browser-1",
-      probe: { visibility: "visible", pending: false },
+      probe: { pending: false },
     });
   });
 
@@ -224,9 +213,6 @@ describe("runEval 失败判据", () => {
       ok: true,
       data: { value: { value: null, pending: true } },
     });
-    const probe = await waitForQuery(events, 2);
-    cdpOk(probe.request_id, { result: { type: "string", value: "visible" } });
-
     expect((await p) as any).toMatchObject({ ok: true, probe: { pending: true } });
   });
 
@@ -249,9 +235,6 @@ describe("runEval 失败判据", () => {
     expect(bare.op).toBe("eval");
     expect(bare.script).toBe("var x = 1; x + 2"); // 原脚本，没有包装
     resolveBrowserResult({ request_id: bare.request_id, ok: true, data: { value: 3 } });
-
-    const probe = await waitForQuery(events, 3);
-    cdpOk(probe.request_id, { result: { type: "string", value: "visible" } });
 
     expect((await p) as any).toMatchObject({ ok: true, value: 3, via: "executescript" });
   });
@@ -282,7 +265,7 @@ describe("runEval 的上下文与透传", () => {
     expect(q.view_id).toBe("browser-3");
     expect(q.params.contextId).toBe(77);
 
-    await answerEvalAndProbe(events, 0, { result: { type: "string", value: "T" } });
+    await answerEval(events, 0, { result: { type: "string", value: "T" } });
     await p;
   });
 });

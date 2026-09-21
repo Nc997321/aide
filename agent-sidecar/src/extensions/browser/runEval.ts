@@ -41,7 +41,6 @@
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
 import { formatBridgeFailure } from "./format.js";
-import { readVisibility } from "./visibility.js";
 
 /** 求值实际走通的通道。 */
 export type EvalVia = "cdp" | "executescript";
@@ -52,17 +51,15 @@ export type EvalVia = "cdp" | "executescript";
  */
 export type EvalFailureKind = "exception" | "unserializable" | "bridge";
 
-/** 页面是否可见。`unknown` = 拿不到（求值失败了，或视图没了）。 */
-export type PageVisibility = "visible" | "hidden" | "unknown";
-
 /**
- * 页面自述状态——由**另一次**求值取回，不额外改变主求值的语义。
+ * 求值的附带信号。
  *
- * `visibility` 是"渲染/过渡类断言可不可信"的前提：隐藏视图里 rAF 停摆、timer 降频，
- * 依赖动画的条件永远不会推进。以前 agent 完全看不到这个信号，只能把假阴性当结论。
+ * ⚠️ 曾经这里还有 `visibility`（页面侧面 `document.visibilityState`，用来判断"渲染类断言可不可信"）。
+ * parking 落地后**不显示的视图引擎照样活着**（合成、输入、截图全在），所以那个信号恒为
+ * `visible`——留着它只会骗人，连同每次求值多出来的一次 CDP 往返一起删了。
+ * 现在"有没有人在看"这个问题由 **host 侧**的 `displayed / parked` 回答（`browser_tabs`）。
  */
 export interface EvalProbe {
-  visibility: PageVisibility;
   /** true = 脚本返回了 Promise 而这条通道 await 不了它（只可能出现在降级路径）。**不许当成功。** */
   pending: boolean;
 }
@@ -75,13 +72,6 @@ export interface EvalOptions {
   viewId?: string;
   /** 帧级读取用：在指定执行上下文里求值（由 `Page.createIsolatedWorld` 得到）。 */
   contextId?: number;
-  /**
-   * 要不要顺带取回页面自述状态（多一次廉价往返）。
-   *
-   * `"none"` 是给**轮询**用的：`browser_wait` 每 200ms 一跳，每跳都问一次可见性是纯浪费，
-   * 它只在**超时那一次**需要（那里自己调 `probeVisibility`）。默认 `"page"`。
-   */
-  probe?: "page" | "none";
 }
 
 /** 内部：`unavailable` 是**唯一**该触发降级的性质，不外泄。 */
@@ -123,7 +113,7 @@ function viewIdOf(data: unknown): string | undefined {
  */
 function wrapForExecuteScript(script: string): string {
   return `(function () {
-  var __aideProbe = { visibility: document.visibilityState };
+  var __aideProbe = {};
   try {
     var __aideValue = (${script});
     __aideProbe.value = __aideValue;
@@ -266,24 +256,7 @@ async function viaExecuteScript(
   };
 }
 
-/**
- * 页面自述状态——**单独一次廉价求值**。
- *
- * 为什么不用包装器顺带拿：那会把脚本改形（见文件头，踩过两次）。这里多花一次本地往返，
- * 换的是主求值**一字不改**地送进页面。求值失败的路径上不做这次往返（拿不到就 `unknown`，
- * 不编）。
- *
- * `document.visibilityState` 在 iframe 里跟随顶层文档，所以帧内求值也问主文档即可。
- */
-export async function probeVisibility(
-  viewId: string | undefined,
-  emit: (e: ChatEvent) => void,
-): Promise<PageVisibility> {
-  const r = await evalAttempt("document.visibilityState", { viewId }, emit);
-  return r.ok ? readVisibility(r.value) : "unknown";
-}
-
-/** 求值本体：CDP 主路径 → 不可用则降级。**不含 probe**（`probeVisibility` 会调它）。 */
+/** 求值本体：CDP 主路径 → 不可用则降级。 */
 async function evalAttempt(
   script: string,
   opts: EvalOptions,
@@ -299,7 +272,7 @@ async function evalAttempt(
 }
 
 /**
- * 求值 + 页面自述状态。
+ * 求值。
  *
  * **永不抛**——失败一律折成 `{ok:false, kind, error}` 由调用方转成文本（MCP 会把抛出的
  * handler 变成 isError，是本模块的红线）。
@@ -312,13 +285,11 @@ export async function runEval(
   const attempt = await evalAttempt(script, opts, emit);
   if (!attempt.ok) return { ok: false, kind: attempt.kind, error: attempt.error };
 
-  const visibility =
-    opts.probe === "none" ? "unknown" : await probeVisibility(opts.viewId, emit);
   return {
     ok: true,
     value: attempt.value,
     via: attempt.via,
     viewId: attempt.viewId ?? opts.viewId,
-    probe: { visibility, pending: attempt.pending },
+    probe: { pending: attempt.pending },
   };
 }

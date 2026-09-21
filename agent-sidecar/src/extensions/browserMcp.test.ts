@@ -91,9 +91,9 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     expect(json).toContain("TO READ A PAGE use browser_read");
     expect(json).toContain("AFTER AN ACTION, WAIT WITH browser_wait");
     expect(json).toContain("TO DO ANYTHING ELSE use browser_eval");
-    // 这条是隐藏视图的**唯一**预警渠道：面板被浮层盖住是常态，不写模型就无从知道
-    // "元素不在"可能是"根本没渲染"。
-    expect(json).toContain("A HIDDEN VIEW BEHAVES DIFFERENTLY");
+    // parking 之后"没显示"不再等于"没渲染"——这条反向说明是给模型的**行为许可**：
+    // 不必为了"让页面动起来"去要求用户把 tab 切到前台。删了它会退回旧的世界观。
+    expect(json).toContain("A VIEW YOU CANNOT SEE KEEPS WORKING");
     expect(json).toContain("DESKTOP ONLY");
   });
 

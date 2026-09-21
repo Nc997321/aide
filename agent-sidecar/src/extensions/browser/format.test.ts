@@ -60,7 +60,7 @@ describe("formatTabs", () => {
 });
 
 describe("formatRead", () => {
-  const VISIBLE = { visibility: "visible" as const, readyState: "complete", pending: false };
+  const VISIBLE = { pending: false };
   const envelope = (value: unknown, viewId = "browser-1") => ({ value, viewId, probe: VISIBLE });
 
   /**
@@ -241,7 +241,7 @@ describe("formatRead", () => {
 });
 
 describe("formatEval", () => {
-  const VISIBLE = { visibility: "visible" as const, readyState: "complete", pending: false };
+  const VISIBLE = { pending: false };
 
   it("把值 JSON 化并标明来源视图", () => {
     const s = formatEval({ viewId: "browser-3", value: { ok: true, count: 2 }, probe: VISIBLE });
@@ -255,41 +255,32 @@ describe("formatEval", () => {
 });
 
 /**
- * 可见性旁注：**只在隐藏时出现**。
+ * 可见性旁注**已删除**（parking 让它恒为噪音）。
  *
- * 正常路径上它每个结果都跟着一行，就成了噪音——模型会学会忽略它，那藏在里面的那条真信息
- * 也就白写了。所以要同时钉住"说"和"不说"两边。
+ * 曾经：隐藏视图里 rAF 停摆、过渡不推进，所以读/动作类结果要带一句"内容可能没渲染"。
+ * 现在不显示的视图照常合成，那句话只会让模型把"元素真的不在"误判成"没渲染"——
+ * 这条钉住它不会悄悄回来。
  */
-describe("可见性旁注", () => {
-  const probe = (visibility: "visible" | "hidden" | "unknown") => ({ visibility, pending: false });
+describe("可见性旁注（已删）", () => {
+  it("任何 probe 都不产出隐藏告警（parking 后恒 visible）", () => {
+    const s = formatEval({ viewId: "browser-1", value: { ok: true }, probe: { pending: false } });
+    expect(s).not.toContain("hidden");
+    expect(s).not.toContain("not rendered");
 
-  it("隐藏 → 明说视图不可见，且点名「空结果是没渲染，不是没有」", () => {
-    const s = formatEval({ viewId: "browser-1", value: { ok: true }, probe: probe("hidden") });
-    expect(s).toContain("hidden from the engine");
-    expect(s).toContain("not rendered");
-  });
-
-  it("可见 / 未知 → 一个字都不加（未知时说「可能不可见」也是编的）", () => {
-    for (const v of ["visible", "unknown"] as const) {
-      const s = formatEval({ viewId: "browser-1", value: { ok: true }, probe: probe(v) });
-      expect(s).not.toContain("hidden from the engine");
-    }
-  });
-
-  it("read 走同一条判据（两处文案会漂移，判据不会）", () => {
-    const s = formatRead({
+    const r = formatRead({
       viewId: "browser-1",
       value: { ok: true, title: "T" },
-      probe: probe("hidden"),
+      probe: { pending: false },
     });
-    expect(s).toContain("hidden from the engine");
+    expect(r).toContain("title: T");
+    expect(r).not.toContain("hidden");
   });
 
   it("pending（降级路径上 async 脚本没等到）→ 说清拿到的是 Promise 本身，并给出出路", () => {
     const s = formatEval({
       viewId: "browser-1",
       value: null,
-      probe: { visibility: "visible", pending: true },
+      probe: { pending: true },
     });
     expect(s).toContain("cannot await it");
     expect(s).toContain("window");

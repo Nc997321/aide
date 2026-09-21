@@ -162,14 +162,14 @@ describe("browser_wait — condition 模式", () => {
   });
 
   /** 隐藏视图里依赖渲染的条件**永远不会成立**——不说这句，模型会把引擎的限制当成页面行为。 */
-  it("超时且视图隐藏 → 明说渲染类条件在这个视图里不会推进", async () => {
+  it("超时诊断只说条件本身——**不再有**「视图隐藏」分支（parking 后恒 visible）", async () => {
     const { events, emit } = emitCollector();
     const p = waitForBrowser(fast({ timeoutMs: 40, intervalMs: 10 }), emit);
-    const text = await answerUntilSettled(p, events, (q) => tick(q, { met: false, value: false }, "hidden"));
+    const text = await answerUntilSettled(p, events, (q) => tick(q, { met: false, value: false }));
 
     expect(text).toContain("Timed out");
-    expect(text).toContain("hidden from the engine");
-    expect(text).toContain("will never become true");
+    expect(text).toContain("never became true");
+    expect(text).not.toContain("hidden");
   });
 
   it("视图解析失败 → 原样回 Rust 的文案（不自己发明一套解析规则）", async () => {
@@ -253,14 +253,13 @@ describe("browser_wait — load 模式", () => {
     expect(await p).toContain("is gone");
   });
 
-  it("loading 一直不结束 → 超时诊断带上最后的状态与宿主侧可见性", async () => {
+  it("loading 一直不结束 → 超时诊断带上最后的状态与 URL", async () => {
     const { events, emit } = emitCollector();
     const p = waitForBrowser(fast({ mode: "load", timeoutMs: 40, intervalMs: 10 }), emit);
     const text = await answerUntilSettled(p, events, (q) => reply(q, views("loading", "https://a/slow", false)));
 
     expect(text).toContain("never finished loading");
     expect(text).toContain("nav.state = loading");
-    // 宿主说这个视图不可见——load 模式下这份可见性来自 list_views
-    expect(text).toContain("hidden from the engine");
+    expect(text).toContain("https://a/slow");
   });
 });

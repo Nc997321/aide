@@ -29,12 +29,6 @@ const cdpOk = (value: unknown) => ({ ok: true, data: { view_id: "browser-1", met
 const cdpEval = (value: unknown, type = "object") => cdpOk({ result: { type, value } });
 
 /**
- * `runEval` 成功后会**再取一次可见性**（`probeVisibility`）——帧内求值也因此是两发。
- * 这个 helper 把第二发答掉。
- */
-const probeOk = async (events: ChatEvent[], i: number): Promise<void> =>
-  reply(await waitForQuery(events, i), cdpEval("visible", "string"));
-
 afterEach(() => cancelAllBrowserQueries("test cleanup"));
 
 describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", () => {
@@ -96,7 +90,6 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     expect(evaluated.params.contextId).toBe(42);
     expect(evaluated.params.returnByValue).toBe(true);
     reply(evaluated, cdpEval({ ok: true, title: "原型", tables: [] }));
-    await probeOk(events, 3);
 
     const out = await p;
     expect(out?.frames).toHaveLength(1);
@@ -133,7 +126,6 @@ describe("readFramesFromResult — 只在真有读不到的帧时才走 CDP", ()
     expect(world.params.frameId).toBe("OTHER"); // 只读了真正需要的那一帧
     reply(world, cdpOk({ executionContextId: 1 }));
     reply(await waitForQuery(events, 2), cdpEval({ ok: true }));
-    await probeOk(events, 3);
 
     await p;
   });
@@ -171,7 +163,6 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
     expect(evaluated.params.awaitPromise).toBe(true);
     expect(evaluated.params.contextId).toBe(9);
     reply(evaluated, cdpEval({ ok: true, tables: 1 }));
-    await probeOk(events, 3);
 
     const r = await p;
     expect(r.ok).toBe(true);
@@ -226,7 +217,6 @@ describe("evalInFrame — 在跨域帧里跑自定义脚本", () => {
     reply(await waitForQuery(events, 0), cdpOk(TREE));
     reply(await waitForQuery(events, 1), cdpOk({ executionContextId: 2 }));
     reply(await waitForQuery(events, 2), cdpEval("工作台", "string"));
-    await probeOk(events, 3);
 
     const r = await p;
     expect(r.ok).toBe(true);
@@ -267,7 +257,6 @@ describe("降级纪律：CDP 不可用时不许让整个 read 挂掉", () => {
     // F2：正常
     reply(await waitForQuery(events, 2), cdpOk({ executionContextId: 7 }));
     reply(await waitForQuery(events, 3), cdpEval({ ok: true, title: "F2" }));
-    await probeOk(events, 4);
 
     const out = await p;
     expect(out.frames).toHaveLength(2);
