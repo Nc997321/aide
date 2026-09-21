@@ -168,13 +168,23 @@ browser_tab {action:"focus", view_id:"<Agent A 报的 VID>"}
 | 5 | 后台懒加载生效 | A | `lazyReady === "yes"` | |
 | 6 | 后台填值 + change 事件 | A / B | name/pick 对得上、`change` true | |
 | 7 | 后台截图 | A | 拿到图像块 | |
-| 8 | `vis` 恒为 `visible` | A | `window.__probe().vis === "visible"` | |
+| 8 | `vis` 恒为 `visible` **且 `vc === 0`** | A | 见下（`vc=0` 更硬：证明从头到尾没被隐藏过，不是"藏了又露回来"） | |
 | 9 | navigate / back / forward | B | who: user → beta → user → beta | |
 | 10 | 缺省 view_id 不猜 | B | 报错 + 列出两个视图 | |
 | 11 | 前台全程没被抢 | 你 | 面板一直停在自己的 tab | |
 | 12 | focus 才切 + 不收起面板 | 你 | 切过去且面板仍展开 | |
 | 13 | 托盘里继续跑 | 你 | `lazy=25000` 的条件成立 | |
 | 14 | 回归三条 | 你 | 见第 5 节 | |
+
+**两条容易看错的实测现象**（2026-09-21 首轮真机遇到，别误读）：
+
+- **`vc === 0` 比 `vis === "visible"` 硬。** 前者说明这个视图**从头到尾一次都没被隐藏过**——
+  不是"藏了又露回来"，是压根没碰可见性。这正是 parking 的实现意图（我们只挪位置、不调
+  `SetIsVisible`）。看到 `vc` 在涨才说明有东西在真隐藏它。
+- **`blur === true` 不代表"接近真实输入"。** `fill` 是先 `el.focus()` 再置值 + 派发
+  `input`/`change`（脚本路径，非 `isTrusted`）。blur 之所以会来，是因为焦点随后被移走
+  （下一次 fill、或一次真实点击）。真实键入要 CDP 的 `Input.insertText` / `dispatchKeyEvent`，
+  **本轮没做**（`type` 动作在非目标里）。
 
 ---
 
