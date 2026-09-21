@@ -233,6 +233,15 @@ live 当前值 → api.sessionEffort(sid)（用户显式改过的） → 【日�
 | 侧栏「日常」根分区 + 「项目」改名 | `SidebarDailySection.vue`、`SidebarLeft` | `4f14e1d4` |
 | 切进日常收起右栏 | `useRightPanel.collapse()`、`activeTabWsKey` | `6be6fbf0` |
 
+**真机首轮发现并修复（`7e380e99`）**：切模式没重算档位。`selectedEffort` 的重算触发点只有
+`sessionId` 与 `sessionProvider.id`，切模式两者都不动 → 日常(快速) 切到 工程 仍停在「快速」，
+而工程该落 provider 默认（实机供应商 `effort_level=MAX` ⟹ 极致）。不只是显示：首条消息的
+`initialEffort` 取的就是这个值，发出去的档位也错。修法是给 `props.mode` 加 watcher，只在
+**还没开始会话**时接管（零 tab 欢迎态 / 空 tab），已有会话一律不碰——它们的 mode 由 tab 归属
+派生，是同一次切换的副产品，档位归 `sessionId` watcher（重置/恢复记忆）。
+同族排查：hero 上其余三处按模式分叉的读数（hero 文案、placeholder、归属选择器）都是 computed，
+只有档位这一个不是——**新增"按维度分叉的读数"时先问一句它是 computed 还是只在某个 watcher 里被读到**。
+
 **非目标逐条确认未越界**：活动工作区仍未跟随焦点（右栏收起是布局动作）；未做虚拟工作区类型；
 28 个隐式取根的 git 命令与 cwd 解析链一字未动；未做远程端「日常」标记（PWA/鸿蒙调
 `daily_workspace` 会走 `ensureDailyWorkspace` 的降级分支，warn 一次后当普通工作区）；
@@ -240,14 +249,16 @@ live 当前值 → api.sessionEffort(sid)（用户显式改过的） → 【日�
 故 `getProjectInfo().root` 对新装仍为空，向导照常出现）。
 
 **验证到什么程度**：
-- 单测/组件测试：TS 259 files / 3229 tests 全绿；Rust 913 passed。
+- 单测/组件测试：TS 259 files / 3232 tests 全绿；Rust 913 passed。
+- 真机（2026-09-21 首轮）：日常页形态正确（两段控件默认日常、无归属选择器、文案来自日常池、
+  药丸「快速」）；**发现档位不随模式重算，已修 + 补 3 条组件测试**（见上）。
 - 构建守卫：`pnpm build` 通过（`check:sync-io` / `check:overlay-layers` / `vue-tsc` / vite）。
 - 后端引导做过一次性集成自检（`cargo test --lib -- --ignored smoke`）：目录被建、条目已注册、
   **活动工作区一字未动**、二次调用幂等；并做了独立的外部读盘核对（注册 key 与
   `path_to_key(daily_path_in(..))` 一致、路径串完全相等）。
-- **未做**：真机端到端冒烟（新建日常对话 → 出现在「日常」分区 → 重启后仍在；档位默认快速；
-  切进日常右栏收起）。这同时是本文件「待验证」那条（`list_sessions_for_workspace(日常key)`
-  能否列出会话）的实测装置。
+- **仍未验**（真机冒烟后半段）：发一句话 → 会话出现在「日常」分区 → **重启后仍在** → 档位药丸
+  是快速 → 工作区列表没多出日常目录 → 切进日常右栏收起。其中「重启后仍在」同时是本文件
+  「待验证」那条（`list_sessions_for_workspace(日常key)` 能否列出会话）的实测装置。
 
 ## 参考图哪里收、哪里不收（2026-09-20）
 
