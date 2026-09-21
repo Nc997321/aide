@@ -132,14 +132,17 @@ export function formatTabs(data: unknown): string {
     const state = str(nav["state"]) || "unknown";
     const url = str(nav["url"]);
     const title = str(nav["title"]);
+    // `displayed` = 露在用户面板上；`parked` = 后台活着但没人看得见（合成照跑，见 spec）。
     const flags = [
       state,
-      view["displayed"] === true ? "visible" : "hidden",
+      view["displayed"] === true ? "displayed" : "parked",
       view["can_go_back"] === true ? "can-go-back" : "",
     ].filter(Boolean);
     const head = `${str(view["id"])} [${flags.join(", ")}]`;
     const where = url ? ` ${url}` : "";
-    const named = title ? ` — ${title}` : "";
+    // label 优先于页面标题：多 agent 挂同一个 dev server 时，只有 label 分得开谁是谁。
+    const label = str(view["label"]);
+    const named = label ? ` "${label}"` : title ? ` — ${title}` : "";
     return `- ${head}${named}${where}`;
   });
 

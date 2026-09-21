@@ -547,6 +547,7 @@ describe("工具面里不许出现站点名词（换站点 MCP server 一行不�
       "browser_wait",
       "browser_eval",
       "browser_screenshot",
+      "browser_tab",
     ]);
   });
 });

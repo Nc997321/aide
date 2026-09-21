@@ -15,6 +15,7 @@ import { queryBrowser, type BrowserCall } from "./browserClient.js";
 import { runEval } from "./browser/runEval.js";
 import { PAGE_PROJECTION_SCRIPT } from "./browser/projection.js";
 import { performClick, performFill, performHover } from "./browser/act.js";
+import { performTabAction } from "./browser/tab.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
 import type { ScreenshotFormat } from "./browser/screenshot.js";
@@ -402,6 +403,75 @@ export function buildBrowserWaitTool(
   );
 }
 
+/**
+ * tab 级动作：**自己开一个 tab**、关掉它、导航、推到用户眼前。
+ *
+ * 与 `browser_act` 的分工：那是**页面里**的动作（点/填/悬停），这是**标签页**的动作。
+ * 收在一个工具里而不是散成五个——每加一个工具就是每轮请求多一份 schema。
+ */
+export function buildBrowserTabTool(
+  env: NodeJS.ProcessEnv,
+  emit: (e: ChatEvent) => void,
+) {
+  return tool(
+    "browser_tab",
+    "Open, close, navigate or show a tab in the embedded browser (a view) — the tab-level " +
+      "companion to browser_tabs / browser_act. " +
+      "action=open creates a view OF YOUR OWN and returns its view_id: use that id for every " +
+      "later call. The view is created PARKED — the page runs in the background (rendering, " +
+      "timers, navigation and screenshots all work) and the user's panel is not disturbed, so " +
+      "you can keep working while they look at something else. " +
+      "action=close destroys a view — do it when you are done: parked views keep rendering. " +
+      "action=focus asks the panel to bring a view to the front, which STEALS what the user is " +
+      "looking at; use it only when they should actually look at the page. " +
+      "WHEN SEVERAL VIEWS EXIST always pass the view_id you got from action=open — the other " +
+      "tools refuse to guess (omitting it fails rather than acting on the wrong tab).",
+    {
+      action: z
+        .enum(["open", "close", "navigate", "back", "forward", "focus"])
+        .describe(
+          "open = create a parked view of your own (returns view_id); close = destroy a view; " +
+            "navigate / back / forward = move it through history; focus = ask the user's panel " +
+            "to show it.",
+        ),
+      url: z
+        .string()
+        .optional()
+        .describe("Required for action=open and action=navigate. Bare hosts are not normalised here."),
+      label: z
+        .string()
+        .optional()
+        .describe(
+          "Only for action=open: a short name shown on the tab until the page's own title is " +
+            "known (e.g. 'vue-admin dev'). Use it when several tabs point at the same dev server.",
+        ),
+      view_id: z
+        .string()
+        .optional()
+        .describe(
+          "Target view (from browser_tabs, or the id action=open returned). Omit only when " +
+            "exactly one view exists.",
+        ),
+    },
+    async (args) => {
+      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+      try {
+        return textResult(
+          await performTabAction(
+            args.action,
+            { url: args.url, label: args.label, viewId: args.view_id },
+            emit,
+          ),
+        );
+      } catch (e) {
+        // 参数不全（buildTabCall 抛）与桥侧异常都折成文本——**永不抛**是本模块的红线。
+        const detail = e instanceof Error ? e.message : String(e);
+        return textResult(`browser_tab failed: ${detail}`);
+      }
+    },
+  );
+}
+
 /** 工具总装：上层只需读这张表。新增工具 = 这里加一项（并同步 browserMcp 的规则与前端镜像）。 */
 export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void) {
   return [
@@ -411,5 +481,6 @@ export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) =
     buildBrowserWaitTool(env, emit),
     buildBrowserEvalTool(env, emit),
     buildBrowserScreenshotTool(env, emit),
+    buildBrowserTabTool(env, emit),
   ];
 }

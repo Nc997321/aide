@@ -11,16 +11,34 @@ import type { ChatEvent } from "../engine/types.js";
  * **本模块只在桌面宿主有意义**：headless 没有 Rust 回包方，调用它只会等到超时——
  * 所以工具层必须在 headless 下**提前短路**（见 `browserTools.ts`）。
  */
-export type BrowserOp = "list_views" | "eval" | "call_cdp";
+export type BrowserOp =
+  | "list_views"
+  | "eval"
+  | "call_cdp"
+  | "open"
+  | "close"
+  | "navigate"
+  | "back"
+  | "forward"
+  | "focus";
 
 /**
  * 一次桥调用。用联合而不是「op + 可选字段袋」：**非法组合造不出来**
  * （`list_views` 不可能带 `script`，`eval` 必须有 `script`）。
+ *
+ * tab 级的六个 op（open/close/navigate/back/forward/focus）由 `browser/tab.ts` 组装；
+ * `view_id` 缺省时不在这里猜——Rust 侧按「全库恰好一个视图」解析，多视图一律要求显式传。
  */
 export type BrowserCall =
   | { op: "list_views" }
   | { op: "eval"; view_id?: string; script: string }
-  | { op: "call_cdp"; view_id?: string; method: string; params?: unknown };
+  | { op: "call_cdp"; view_id?: string; method: string; params?: unknown }
+  | { op: "open"; url: string; label?: string }
+  | { op: "close"; view_id?: string }
+  | { op: "navigate"; view_id?: string; url: string }
+  | { op: "back"; view_id?: string }
+  | { op: "forward"; view_id?: string }
+  | { op: "focus"; view_id?: string };
 
 export interface BrowserQueryResponse {
   ok: boolean;

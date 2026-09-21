@@ -37,16 +37,19 @@ describe("formatTabs", () => {
     );
   });
 
-  it("逐条列出 id / 状态 / 可见性 / url / 标题", () => {
+  it("逐条列出 id / 状态 / displayed|parked / label / url / 标题", () => {
     const s = formatTabs({
       views: [
         { id: "browser-1", nav: { state: "ready", url: "https://a.example/x", title: "设备台账" }, displayed: true, can_go_back: true },
         { id: "browser-2", nav: { state: "idle" }, displayed: false, can_go_back: false },
+        // label 优先于页面标题：三个 tab 挂同一个 dev server 时只有它分得开
+        { id: "browser-3", nav: { state: "ready", url: "http://localhost:5173/", title: "Vite App" }, displayed: false, label: "vue-admin dev", can_go_back: false },
       ],
     });
-    expect(s).toContain("2 embedded browser view(s)");
-    expect(s).toContain("browser-1 [ready, visible, can-go-back] — 设备台账 https://a.example/x");
-    expect(s).toContain("browser-2 [idle, hidden]");
+    expect(s).toContain("3 embedded browser view(s)");
+    expect(s).toContain("browser-1 [ready, displayed, can-go-back] — 设备台账 https://a.example/x");
+    expect(s).toContain("browser-2 [idle, parked]");
+    expect(s).toContain('browser-3 [ready, parked] "vue-admin dev" http://localhost:5173/');
     // 提示模型怎么用这些 id —— 否则它只能瞎猜 view_id
     expect(s).toContain("`view_id`");
   });

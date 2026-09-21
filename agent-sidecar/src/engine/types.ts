@@ -323,19 +323,35 @@ export type ChatEvent =
       workspace_root: string;
     }
   // Rust reader 拦截的内嵌浏览器查询（不转发 Vue；响应走 browser_result 命令）。
-  // op 面**刻意收窄**为三个机制词汇——页面语义（正文/表格/表单）全在 sidecar 的投影脚本里，
-  // 不进协议（见 src-tauri/src/browser/agent_bridge.rs 头注释：换站点时 Rust 一行不动）。
+  // op 面**刻意收窄**：页面语义（正文/表格/表单）全在 sidecar 的投影脚本里，不进协议
+  // （见 src-tauri/src/browser/agent_bridge.rs 头注释：换站点时 Rust 一行不动）；
+  // tab 级的六个 op 是**标签页**动作，与页面语义无关，故也在协议里。
+  // 权威定义在 `extensions/browserClient.ts` 的 `BrowserCall`（此处重复是分层方向：
+  // engine 不 import extensions）。
   | {
       type: "browser_query";
       request_id: string;
-      op: "list_views" | "eval" | "call_cdp";
-      /** 缺省 = 由 Rust 执行体按「唯一可见 → 唯一存在」解析；歧义时回错误并附清单。 */
+      op:
+        | "list_views"
+        | "eval"
+        | "call_cdp"
+        | "open"
+        | "close"
+        | "navigate"
+        | "back"
+        | "forward"
+        | "focus";
+      /** 缺省 = 由 Rust 执行体按「全库恰好一个视图」解析；多视图时回错误并附清单。 */
       view_id?: string;
       /** op=eval */
       script?: string;
       /** op=call_cdp */
       method?: string;
       params?: unknown;
+      /** op=open / op=navigate */
+      url?: string;
+      /** op=open：标签页上的短名（页面标题出来之前用它） */
+      label?: string;
     }
   // 用户消息二次防线：provider-agnostic，不携带厂商专属字段；message 是可直接展示的人类说明。
   | { type: "image_input_rejected"; message: string }

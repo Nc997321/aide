@@ -36,7 +36,7 @@ describe("browserMcpRegistration — 门控矩阵", () => {
 });
 
 describe("放行规则是**工具级**的（server 级会连 eval 之外的语义一起放行）", () => {
-  it("六条常量逐字固定", () => {
+  it("七条常量逐字固定", () => {
     expect(BROWSER_ALLOW_RULES).toEqual([
       "mcp__aide-browser__browser_tabs",
       "mcp__aide-browser__browser_read",
@@ -44,6 +44,7 @@ describe("放行规则是**工具级**的（server 级会连 eval 之外的语�
       "mcp__aide-browser__browser_wait",
       "mcp__aide-browser__browser_eval",
       "mcp__aide-browser__browser_screenshot",
+      "mcp__aide-browser__browser_tab",
     ]);
   });
 
