@@ -27,7 +27,7 @@ export interface BrowserViewDto {
   can_go_back: boolean;
   can_go_forward: boolean;
   bounds: BoundsDto;
-  visible: boolean;
+  displayed: boolean;
 }
 
 /**
@@ -68,8 +68,8 @@ export function useEmbeddedBrowser() {
     setBounds(id: string, bounds: BoundsDto): Promise<void> {
       return invoke("browser_set_bounds", { id, bounds });
     },
-    setVisible(id: string, visible: boolean): Promise<void> {
-      return invoke("browser_set_visible", { id, visible });
+    setDisplayed(id: string, displayed: boolean): Promise<void> {
+      return invoke("browser_set_displayed", { id, displayed });
     },
     goBack(id: string): Promise<BrowserViewDto> {
       return invoke<BrowserViewDto>("browser_go_back", { id });

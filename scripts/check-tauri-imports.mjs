@@ -24,8 +24,8 @@ const EXCEPTIONS = new Set([
   "src/composables/useWindowControls.ts",
   "src/composables/useWindowFocus.ts",
   "src/composables/useNotification.ts",
-  "src/composables/useEmbeddedBrowser.ts",
-  "src/composables/useBrowserBookmarks.ts",
+  "src/composables/browser/useEmbeddedBrowser.ts",
+  "src/composables/browser/useBrowserBookmarks.ts",
 ]);
 const isTest = (p) => p.endsWith(".test.ts") || p.includes("/tests/");
 

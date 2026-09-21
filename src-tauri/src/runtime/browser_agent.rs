@@ -112,7 +112,7 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
 ///
 /// 规则——缺省**不猜**，歧义时如实报错并给出清单让 agent 自己选：
 /// 1. 显式给了 `view_id` → 必须存在；
-/// 2. 缺省 + 恰一个**可见**视图 → 用它（面板切标签走 `set_visible`，同时至多一个可见）；
+/// 2. 缺省 + 恰一个**可见**视图 → 用它（面板切标签走 `set_displayed`，同时至多一个可见）；
 /// 3. 缺省 + 无可见但恰一个视图 → 用它（面板收起但视图保活）；
 /// 4. 其余 → 报错 + 全量清单。
 fn resolve_view(facade: &BrowserFacade, want: Option<&str>) -> Result<String, String> {
@@ -131,8 +131,8 @@ fn resolve_view(facade: &BrowserFacade, want: Option<&str>) -> Result<String, St
         };
     }
 
-    let visible: Vec<&BrowserViewDto> = views.iter().filter(|v| v.visible).collect();
-    if let [only] = visible.as_slice() {
+    let displayed: Vec<&BrowserViewDto> = views.iter().filter(|v| v.displayed).collect();
+    if let [only] = displayed.as_slice() {
         return Ok(only.id.clone());
     }
     if views.is_empty() {
@@ -156,7 +156,7 @@ fn summarise(views: &[BrowserViewDto]) -> String {
     views
         .iter()
         .map(|v| {
-            let suffix = if v.visible { "" } else { " (hidden)" };
+            let suffix = if v.displayed { "" } else { " (hidden)" };
             format!("{} {}{suffix}", v.id, url_of(v))
         })
         .collect::<Vec<_>>()
@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use crate::browser::dto::BoundsDto;
 
-    fn view(id: &str, visible: bool, url: Option<&str>) -> BrowserViewDto {
+    fn view(id: &str, displayed: bool, url: Option<&str>) -> BrowserViewDto {
         BrowserViewDto {
             id: id.to_string(),
             nav: match url {
@@ -197,7 +197,7 @@ mod tests {
                 w: 10.0,
                 h: 10.0,
             },
-            visible,
+            displayed,
         }
     }
 

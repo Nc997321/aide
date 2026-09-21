@@ -203,7 +203,7 @@ pub struct BrowserView {
     id: BrowserViewId,
     nav: NavState,
     bounds: Bounds,
-    visible: bool,
+    displayed: bool,
     /// 已访问 URL 栈；`cursor` 指向当前项。`Idle` 时为空、`cursor == 0`（瞬态，can_go_* 均为 false）。
     history: Vec<Url>,
     cursor: usize,
@@ -216,7 +216,7 @@ impl BrowserView {
             id,
             nav: NavState::Idle,
             bounds,
-            visible: true,
+            displayed: true,
             history: Vec::new(),
             cursor: 0,
         }
@@ -231,8 +231,10 @@ impl BrowserView {
     pub fn bounds(&self) -> Bounds {
         self.bounds
     }
-    pub fn visible(&self) -> bool {
-        self.visible
+    /// 是否露在面板上。**不是**"引擎能不能用"——parked 的视图引擎照样活着（合成/输入/截图全在），
+    /// 只是没人看得见（见 `adapter/webview2/mod.rs` 的 PARK 常量）。
+    pub fn displayed(&self) -> bool {
+        self.displayed
     }
 
     /// 当前 URL（`Loading`/`Ready`/`Failed` 携带；`Idle` 无）。
@@ -349,7 +351,7 @@ impl BrowserView {
         self.bounds = bounds;
     }
 
-    pub fn set_visible(&mut self, visible: bool) {
-        self.visible = visible;
+    pub fn set_displayed(&mut self, displayed: bool) {
+        self.displayed = displayed;
     }
 }

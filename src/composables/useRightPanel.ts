@@ -41,7 +41,7 @@ const browserActive = computed(() => tab.value === "browser" && !collapsed.value
 const maximized = computed(() => wantMaximized.value && browserActive.value);
 
 /** rail / 快捷键的统一裁决（逐字沿用 App.vue 旧 onRailSelect 的三态语义）。 */
-function select(id: RightTabId) {  // 懒挂载：第一次点就挂，之后常驻（关面板只 setVisible(false)，页面与历史都留着）。
+function select(id: RightTabId) {  // 懒挂载：第一次点就挂，之后常驻（关面板只 setDisplayed(false)，页面与历史都留着）。
   if (id === "browser") browserEverActive.value = true;
   if (collapsed.value) {
     tab.value = id;

@@ -50,9 +50,9 @@ pub async fn browser_set_bounds(app: AppHandle, id: String, bounds: BoundsDto) -
 
 /// 显隐：切走面板时隐藏原生视图（否则它浮在全部内容之上）。
 #[tauri::command]
-pub async fn browser_set_visible(app: AppHandle, id: String, visible: bool) -> CmdResult<()> {
+pub async fn browser_set_displayed(app: AppHandle, id: String, displayed: bool) -> CmdResult<()> {
     BrowserFacade::new(&app)
-        .set_visible(&id, visible)
+        .set_displayed(&id, displayed)
         .map_err(|e| e.to_string())
 }
 

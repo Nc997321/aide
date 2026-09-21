@@ -1,8 +1,8 @@
 // 内嵌浏览器面板的纯逻辑（无 DOM、无 IPC）：URL 归一、标签标题、事件载荷还原、收藏条分组。
 //
 // 抽出来的理由与其它 utils 一致：组件只留接线，判定规则可单测（`browser.test.ts`）。
-import type { NavEventDto, NavStateDto } from "../composables/useEmbeddedBrowser";
-import type { Bookmark, ImportReport } from "../composables/useBrowserBookmarks";
+import type { NavEventDto, NavStateDto } from "../composables/browser/useEmbeddedBrowser";
+import type { Bookmark, ImportReport } from "../composables/browser/useBrowserBookmarks";
 
 /**
  * 地址栏输入归一：裸域名补 `https://`（UX 便利）；带 scheme 的原样交给后端 `url_guard` 守门

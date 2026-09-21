@@ -36,7 +36,7 @@ impl BrowserEngine for UnsupportedEngine {
     fn set_bounds(&self, _id: &BrowserViewId, _bounds: Bounds) -> Result<(), EngineError> {
         Err(EngineError::PlatformUnsupported)
     }
-    fn set_visible(&self, _id: &BrowserViewId, _visible: bool) -> Result<(), EngineError> {
+    fn set_displayed(&self, _id: &BrowserViewId, _displayed: bool) -> Result<(), EngineError> {
         Err(EngineError::PlatformUnsupported)
     }
     fn eval(&self, _id: &BrowserViewId, _script: &str) -> Result<serde_json::Value, EngineError> {

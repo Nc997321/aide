@@ -136,7 +136,7 @@ fn view_dto_reflects_state_and_capabilities() {
     assert_eq!(dto.id, "v1");
     assert!(dto.can_go_back);
     assert!(!dto.can_go_forward);
-    assert!(dto.visible);
+    assert!(dto.displayed);
     assert!(matches!(dto.nav, NavStateDto::Loading { .. }));
 }
 

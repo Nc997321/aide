@@ -4,7 +4,7 @@
 //
 // 物理约束（plan §2）：原生 WebView2 子视图浮在主 webview 的 HTML **之上**，不能与 Vue 元素
 // z 序交错。所以 `.bp-surface` 是布局里的「占位洞」——原生视图被钉在它的屏幕坐标上；标签条与
-// 工具栏排在洞**外**（不重叠），否则会被原生视图吃掉。面板关闭 / 切标签都必须 `setVisible(false)`，
+// 工具栏排在洞**外**（不重叠），否则会被原生视图吃掉。面板关闭 / 切标签都必须 `setDisplayed(false)`，
 // 否则原生视图脱离 DOM 生命周期、继续浮在全部内容之上。
 // 同理，**任何 HTML 浮层盖上来时它都得让位**（`v-overlay-layer` 登记驱动，见「可见性总闸」）——
 // 浮层的 z-index 再高也压不住原生子视图，只有让位一条路。
@@ -14,7 +14,7 @@
 // 吸收滚动偏移。
 //
 // 多标签：**每个标签一个原生视图**（Rust 注册表 `id → 视图`，引擎天然支持 N 个），切换 = 旧视图
-// `setVisible(false)` + 新视图 `setVisible(true)` + 同步坐标；视图常驻注册表，切回页面状态还在。
+// `setDisplayed(false)` + 新视图 `setDisplayed(true)` + 同步坐标；视图常驻注册表，切回页面状态还在。
 // 空标签（还没导航过）不建视图——首次导航才 create，免得每个新标签都空跑一次加载。
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
 import {
@@ -23,9 +23,9 @@ import {
   type BrowserViewDto,
   type BoundsDto,
   type NavStateDto,
-} from "../../composables/useEmbeddedBrowser";
+} from "../../composables/browser/useEmbeddedBrowser";
 import { useRightPanel } from "../../composables/useRightPanel";
-import { useBrowserBookmarks } from "../../composables/useBrowserBookmarks";
+import { useBrowserBookmarks } from "../../composables/browser/useBrowserBookmarks";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
 import Icon from "../Icon.vue";
@@ -133,7 +133,7 @@ async function showActive() {
   await nextTick(); // 等 v-show 摘掉 display:none、完成布局
   const viewId = active.value?.viewId;
   if (!viewId) return;
-  await browser.setVisible(viewId, true).catch(() => {});
+  await browser.setDisplayed(viewId, true).catch(() => {});
   await nextTick();
   syncBounds();
 }
@@ -141,7 +141,7 @@ async function showActive() {
 /** 隐藏某个标签的原生视图（保活：只隐不销毁，页面状态留在注册表里）。 */
 function hideTab(t: Tab | undefined) {
   if (!t?.viewId) return;
-  void browser.setVisible(t.viewId, false).catch(() => {});
+  void browser.setDisplayed(t.viewId, false).catch(() => {});
 }
 
 // ── 可见性总闸：原生视图给 HTML 浮层让位 ──

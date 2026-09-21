@@ -40,8 +40,8 @@ describe("formatTabs", () => {
   it("逐条列出 id / 状态 / 可见性 / url / 标题", () => {
     const s = formatTabs({
       views: [
-        { id: "browser-1", nav: { state: "ready", url: "https://a.example/x", title: "设备台账" }, visible: true, can_go_back: true },
-        { id: "browser-2", nav: { state: "idle" }, visible: false, can_go_back: false },
+        { id: "browser-1", nav: { state: "ready", url: "https://a.example/x", title: "设备台账" }, displayed: true, can_go_back: true },
+        { id: "browser-2", nav: { state: "idle" }, displayed: false, can_go_back: false },
       ],
     });
     expect(s).toContain("2 embedded browser view(s)");

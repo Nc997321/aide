@@ -80,7 +80,7 @@ fn new_view_is_idle_visible_no_history() {
     let v = view();
     assert_eq!(*v.nav(), NavState::Idle);
     assert_eq!(v.current_url(), None);
-    assert!(v.visible());
+    assert!(v.displayed());
     assert!(!v.can_go_back());
     assert!(!v.can_go_forward());
 }
@@ -330,7 +330,7 @@ fn set_bounds_and_visible_take_effect() {
         Size::try_new(300.0, 200.0).unwrap(),
     );
     v.set_bounds(b);
-    v.set_visible(false);
+    v.set_displayed(false);
     assert_eq!(v.bounds(), b);
-    assert!(!v.visible());
+    assert!(!v.displayed());
 }

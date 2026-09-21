@@ -5,7 +5,7 @@ import { mount, type VueWrapper } from "@vue/test-utils";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
 import { buildBookmarkBar, type BookmarkFolder } from "../../utils/browser";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
-import type { Bookmark } from "../../composables/useBrowserBookmarks";
+import type { Bookmark } from "../../composables/browser/useBrowserBookmarks";
 
 const bm = (id: string, folders: string[] = []): Bookmark => ({
   id,

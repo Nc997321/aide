@@ -190,11 +190,11 @@ impl BrowserFacade {
     }
 
     /// 显隐：面板切走必须隐藏原生视图（它浮在全部 HTML 之上，不受 DOM 生命周期约束）。
-    pub fn set_visible(&self, id_raw: &str, visible: bool) -> Result<(), FacadeError> {
+    pub fn set_displayed(&self, id_raw: &str, displayed: bool) -> Result<(), FacadeError> {
         let id = self.parse_id(id_raw)?;
-        self.engine.set_visible(&id, visible)?;
+        self.engine.set_displayed(&id, displayed)?;
         if let Some(view) = self.lock()?.get_mut(&id) {
-            view.set_visible(visible);
+            view.set_displayed(displayed);
         }
         Ok(())
     }

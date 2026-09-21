@@ -83,7 +83,7 @@ pub struct BrowserViewDto {
     pub can_go_back: bool,
     pub can_go_forward: bool,
     pub bounds: BoundsDto,
-    pub visible: bool,
+    pub displayed: bool,
 }
 
 impl From<&BrowserView> for BrowserViewDto {
@@ -94,7 +94,7 @@ impl From<&BrowserView> for BrowserViewDto {
             can_go_back: v.can_go_back(),
             can_go_forward: v.can_go_forward(),
             bounds: BoundsDto::from(v.bounds()),
-            visible: v.visible(),
+            displayed: v.displayed(),
         }
     }
 }

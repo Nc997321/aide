@@ -2,7 +2,7 @@
 //
 // 两个消费者问的其实是同一个问题：
 // - **渲染层**：内嵌浏览器的原生 WebView2 子视图浮在所有 HTML 之上、**不受 z-index 约束**
-//   （见 BrowserPanel.vue 文件头「物理约束」）→ 浮层开着时它必须 `setVisible(false)` 让位，
+//   （见 BrowserPanel.vue 文件头「物理约束」）→ 浮层开着时它必须 `setDisplayed(false)` 让位，
 //   否则浮层被网页吃掉下半截。`BrowserPanel.vue` 的 `viewAllowed` 读这里。
 // - **键盘**：`PermissionDialog` 的 window 级 Enter/Esc 只在不被浮层挡住时才响应。
 //   （原先它在 `OVERLAY_SELECTOR` 里另抄一份遮罩类名表——同一个概念两份清单必然漂移，

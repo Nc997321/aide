@@ -131,7 +131,7 @@ pub trait BrowserEngine: Send + Sync {
 
     /// 布局同步：把占位 div 的矩形拍到原生视图。
     fn set_bounds(&self, id: &BrowserViewId, bounds: Bounds) -> Result<(), EngineError>;
-    fn set_visible(&self, id: &BrowserViewId, visible: bool) -> Result<(), EngineError>;
+    fn set_displayed(&self, id: &BrowserViewId, displayed: bool) -> Result<(), EngineError>;
 
     /// agent 网页任务：注入脚本并取回 JSON 结果（WebView2 `ExecuteScript`）。
     ///

@@ -101,7 +101,7 @@ beforeEach(() => {
         can_go_back: false,
         can_go_forward: false,
         bounds: { x: 0, y: 0, w: 0, h: 0 },
-        visible: true,
+        displayed: true,
       };
     }
     if (cmd === "browser_bookmarks_list") return [];
@@ -134,7 +134,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     await w.find(".bp-bm-import").trigger("click");
     await flushPromises();
 
-    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
   });
 
   it("关掉文件选择器 → 原生视图回来（并重新贴合占位洞坐标）", async () => {
@@ -146,7 +146,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     w.findComponent(FilePickerStub).vm.$emit("update:visible", false);
     await flushPromises();
 
-    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: true }]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: true }]);
     expect(lastArgsOf("browser_set_bounds")).toEqual([
       { id: VIEW_ID, bounds: { x: 100, y: 200, w: 800, h: 600 } },
     ]);
@@ -163,7 +163,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     useRightPanel().select("browser"); // 再展开
     await flushPromises();
 
-    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
   });
 });
 
@@ -253,7 +253,7 @@ describe("收藏夹目录", () => {
     const menu = w.findComponent(BookmarkFolderMenu);
     expect(menu.exists()).toBe(true);
     expect(menu.props("folder").name).toBe("工具");
-    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: false }]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
   });
 
   it("下拉里子目录出小标题、其书签跟着它（顺序沿用导出时的）", async () => {
@@ -280,7 +280,7 @@ describe("收藏夹目录", () => {
 
     expect(w.findComponent(BookmarkFolderMenu).exists()).toBe(false);
     expect(lastArgsOf("browser_navigate")).toEqual([{ id: VIEW_ID, url: "https://a.com/" }]);
-    expect(lastArgsOf("browser_set_visible")).toEqual([{ id: VIEW_ID, visible: true }]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: true }]);
   });
 
   it("弹菜单不改地址栏（菜单里点的那条才改）", async () => {

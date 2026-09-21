@@ -9,8 +9,8 @@ import {
   navOfEvent,
   type BookmarkEntry,
 } from "./browser";
-import type { NavEventDto } from "../composables/useEmbeddedBrowser";
-import type { Bookmark } from "../composables/useBrowserBookmarks";
+import type { NavEventDto } from "../composables/browser/useEmbeddedBrowser";
+import type { Bookmark } from "../composables/browser/useBrowserBookmarks";
 
 describe("normalizeBrowserUrl", () => {
   it("裸域名补 https", () => {

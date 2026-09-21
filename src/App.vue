@@ -1108,7 +1108,7 @@ onUnmounted(() => {
               :workspace-path="workspacePath"
             />
             <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位。首次激活才挂（异步 chunk 不在启动时拉），
-                 挂上后常驻——关面板/切 tab 只 setVisible(false)，页面、滚动位置与前进后退历史都留着。 -->
+                 挂上后常驻——关面板/切 tab 只 setDisplayed(false)，页面、滚动位置与前进后退历史都留着。 -->
             <BrowserPanel
               v-if="rightPanel.browserEverActive.value"
               v-show="rightTab === 'browser'"

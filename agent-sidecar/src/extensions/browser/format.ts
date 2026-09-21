@@ -134,7 +134,7 @@ export function formatTabs(data: unknown): string {
     const title = str(nav["title"]);
     const flags = [
       state,
-      view["visible"] === true ? "visible" : "hidden",
+      view["displayed"] === true ? "visible" : "hidden",
       view["can_go_back"] === true ? "can-go-back" : "",
     ].filter(Boolean);
     const head = `${str(view["id"])} [${flags.join(", ")}]`;

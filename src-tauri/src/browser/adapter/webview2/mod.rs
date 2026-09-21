@@ -1,7 +1,7 @@
 //! WebView2 适配器（Windows）。
 //!
 //! 实现 `BrowserEngine`：可视子集 + 页面加载信号（create / navigate / reload / stop /
-//! set_bounds / set_visible / close）走 tauri `Webview` 自带方法；**agent 路径**（`eval` 带返回值、
+//! set_bounds / set_displayed / close）走 tauri `Webview` 自带方法；**agent 路径**（`eval` 带返回值、
 //! `call_cdp`）下沉到同目录 `native.rs` —— 那是全仓库唯一 `use webview2_com` 的地方。
 //!
 //! 仍未实现、**如实报错**（不假装成功）：截图 `capture`（需 `CapturePreview`）、
@@ -146,9 +146,9 @@ impl BrowserEngine for Webview2Engine {
             .map_err(|e| EngineError::Internal(format!("set_size: {e}")))
     }
 
-    fn set_visible(&self, id: &BrowserViewId, visible: bool) -> Result<(), EngineError> {
+    fn set_displayed(&self, id: &BrowserViewId, displayed: bool) -> Result<(), EngineError> {
         let wv = self.handle(id)?;
-        if visible {
+        if displayed {
             wv.show()
                 .map_err(|e| EngineError::Internal(format!("show: {e}")))
         } else {
