@@ -89,8 +89,8 @@ export async function captureScreenshot(
     return {
       ok: false,
       error: resp.timedOut
-        ? "Screenshot timed out — the desktop host did not reply. A view hidden mid-call cannot produce a " +
-          "frame; the view may also have been closed."
+        ? "Screenshot timed out — the desktop host did not reply. The usual cause is that the view was " +
+          "closed while the call was in flight."
         : `Screenshot failed: ${resp.error ?? "unknown error"}`,
     };
   }

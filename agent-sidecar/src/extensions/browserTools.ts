@@ -81,13 +81,17 @@ async function call(
   }
 }
 
-/** 各工具共用的 `view_id` 参数：缺省时由 Rust 侧按「唯一可见 → 唯一存在」解析。 */
+/**
+ * 各工具共用的 `view_id` 参数：缺省时由 Rust 侧按「唯一可见 → 唯一存在」解析。
+ *
+ * 文案刻意短：这段说明**在每个工具里各占一份**（schema 逐工具发），7 份加起来是纯重复成本。
+ * 三条必须保留的信息（从哪拿 id / 什么时候能省 / 省错会怎样）一条不删，只删修饰。
+ */
 const viewIdArg = z
   .string()
   .optional()
   .describe(
-    "Target browser view id (from browser_tabs). Omit when exactly one view is open; " +
-      "if it is ambiguous the call fails and lists the open views.",
+    "View id from browser_tabs. Omit only when one view is open; ambiguity fails and lists them.",
   );
 
 /** `browser_read` 的隐藏项开关（默认不列，但**报数**——见 format.ts 的那行 NOTE）。 */
@@ -95,9 +99,9 @@ const includeHiddenArg = z
   .boolean()
   .optional()
   .describe(
-    "Include hidden (display:none) tables / form fields / clickable elements in the skeleton. " +
-      "Default false: hidden poppers (date pickers, teleported menus) are noise. Pass true when the page " +
-      "stacks whole screens that way — design-tool prototypes are the common case.",
+    "Include hidden (display:none) tables / fields / clickables in the skeleton. " +
+      "Default false — hidden poppers are noise. Pass true when the page stacks whole screens " +
+      "(design-tool prototypes).",
   );
 
 export function buildBrowserTabsTool(
@@ -169,16 +173,18 @@ export function buildBrowserEvalTool(
       script: z
         .string()
         .describe(
-          "JavaScript expression evaluated in the page. The value of the last expression is JSON-serialised back to you. " +
-            "Throw inside your script and the result is null — return {ok:false, error} yourself if you need to report failure.",
+          // 「抛异常回 null」是 ExecuteScript 那条老通道的说法，已过时：CDP 路径（常态）把异常
+          // 原文报回来（runEval"exception"分支）。写错会让模型以为"没报错 = 值为空"。
+          "A JavaScript EXPRESSION; the last value comes back JSON-serialised. " +
+            "A throw is reported to you as an error with its text (not as null).",
         ),
       frame: z
         .string()
         .optional()
         .describe(
-          "Run the script inside a FRAME of the page instead of the top document. Pass a substring of the frame's URL " +
-            "(browser_read lists them under 'Frames'). Use this when the content you need lives in a cross-origin frame " +
-            "that the top document cannot reach — an embedded prototype, for example.",
+          "Run the script inside a FRAME instead of the top document: pass a substring of that frame's URL " +
+            "(browser_read lists them). Needed for cross-origin frames the top document cannot reach — " +
+            "an embedded prototype, say.",
         ),
     },
     async (args) => {
@@ -288,8 +294,7 @@ export function buildBrowserScreenshotTool(
       "Reach for it when the question is genuinely visual — which panel is actually visible on screen, whether something " +
       "rendered at all, what a canvas or image-only region contains — or when the structured read came back empty and you " +
       "need to see why. It captures the visible viewport by default; pass full_page for the entire page. " +
-    "Requires the view to be showing on screen: a hidden view cannot be captured, and the tool says so " +
-    "instead of guessing.",
+      "It works on a parked view too — the page keeps rendering, so you do not need to bring it on screen first.",
     {
       view_id: viewIdArg,
       full_page: z
@@ -303,9 +308,8 @@ export function buildBrowserScreenshotTool(
         .enum(["jpeg", "png"])
         .optional()
         .describe(
-          "Image format. Default 'jpeg' (quality 80): several times smaller than PNG, which matters because a " +
-            "screenshot lands in the conversation history and is re-sent on later turns. Ask for 'png' only when you " +
-            "need pixel-exact fidelity — fine text, thin lines, exact colours.",
+          "Image format. Default 'jpeg' (quality 80) — much smaller than PNG, and a screenshot is re-sent in " +
+            "every later turn. Use 'png' only for pixel-exact fidelity (fine text, thin lines).",
         ),
     },
     async (args) => {
@@ -366,9 +370,8 @@ export function buildBrowserWaitTool(
         .string()
         .optional()
         .describe(
-          "Required when until=condition. A JavaScript EXPRESSION evaluated in the page — truthy means satisfied. " +
-            "Keep it cheap and synchronous (no await). While the target does not exist yet it will throw; that is " +
-            "expected and counts as not-yet-true.",
+          "Required when until=condition. A synchronous JS expression in the page; truthy = satisfied. " +
+            "It may throw while the target does not exist yet — that counts as not-yet-true.",
         ),
       timeout_ms: z
         .number()
@@ -463,8 +466,7 @@ export function buildBrowserTabTool(
         .string()
         .optional()
         .describe(
-          "Target view (from browser_tabs, or the id action=open returned). Omit only when " +
-            "exactly one view exists.",
+          "Target view (from browser_tabs, or the id open returned). Omit only when one view exists.",
         ),
     },
     async (args) => {
