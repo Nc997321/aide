@@ -3,9 +3,11 @@
 use crate::browser::bookmarks::ImportReport;
 use crate::browser::dto::{
     BookmarkDto, BoundsDto, BrowserViewDto, CreateBrowserDto, ImportReportDto, NavEventDto,
-    NavStateDto,
+    NavStateDto, ViewEventDto, ViewEventKind,
 };
-use crate::browser::port::types::{Bounds, BrowserView, BrowserViewId, NavState, Position, Size};
+use crate::browser::port::types::{
+    Bounds, BrowserOrigin, BrowserView, BrowserViewId, NavState, Position, Size,
+};
 
 // ── BoundsDto ↔ Bounds ──
 
@@ -118,6 +120,38 @@ fn create_dto_deserializes_without_id() {
     .expect("无 id 的创建入参应可反序列化");
     assert_eq!(dto.url, "https://a.com");
     assert_eq!(dto.bounds.w, 100.0);
+}
+
+// ── 生命周期事件：browser-view ──
+
+/// 载荷形状是**契约**：前端靠 `kind` 增删标签页、靠 `label`/`origin` 渲染归属，
+/// 少一个字段就是静默不更新（不是报错）。
+#[test]
+fn view_event_dto_carries_identity_and_kind() {
+    let mut v = BrowserView::new(
+        BrowserViewId::try_new("browser-7").unwrap(),
+        Bounds::new(Position::new(0.0, 0.0), Size::try_new(100.0, 50.0).unwrap()),
+    );
+    v.set_label(Some("dev".into()));
+    v.set_origin(BrowserOrigin::Agent);
+
+    let created = ViewEventDto::of(&v, ViewEventKind::Created);
+    assert_eq!(created.id, "browser-7");
+    assert_eq!(
+        serde_json::to_value(&created).unwrap(),
+        serde_json::json!({
+            "id": "browser-7",
+            "kind": "created",
+            "label": "dev",
+            "origin": "agent",
+            "displayed": true
+        })
+    );
+
+    assert_eq!(
+        serde_json::to_value(ViewEventDto::of(&v, ViewEventKind::Closed)).unwrap()["kind"],
+        "closed"
+    );
 }
 
 // ── BrowserView → BrowserViewDto ──

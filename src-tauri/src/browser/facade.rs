@@ -21,10 +21,13 @@ use url::Url;
 
 use crate::browser::adapter::PlatformEngine;
 use crate::browser::core::url_guard;
-use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavEventDto, NavStateDto};
+use crate::browser::dto::{
+    BoundsDto, BrowserViewDto, CreateBrowserDto, NavEventDto, NavStateDto, ViewEventDto,
+    ViewEventKind,
+};
 use crate::browser::port::engine::{BrowserEngine, CreateCfg, EngineError, PageLoadObserver};
 use crate::browser::port::types::{
-    Bounds, BrowserView, BrowserViewId, NavState, PageLoadSignal, SizeError,
+    Bounds, BrowserOrigin, BrowserView, BrowserViewId, NavState, PageLoadSignal, SizeError,
 };
 use crate::browser::state::{BrowserRegistry, BrowserState};
 
@@ -33,6 +36,10 @@ const MAIN_WINDOW: &str = "main";
 
 /// 导航事件广播名。前端 `useEmbeddedBrowser.onBrowserNav` 订阅同名事件。
 pub const NAV_EVENT: &str = "browser-nav";
+
+/// 视图生命周期广播名（created / closed）。前端 `onBrowserView` 订阅——
+/// 面板靠它把 agent 开的 tab 长出来，而不是靠"面板自己知道"。
+pub const VIEW_EVENT: &str = "browser-view";
 
 /// 门面错误：把各层具体错误汇总成调用方能读的形态（应用层汇总传播）。
 #[derive(Debug, Clone, PartialEq)]
@@ -108,6 +115,8 @@ impl BrowserFacade {
             let id = reg.allocate_id();
             let mut view = BrowserView::new(id.clone(), bounds);
             view.set_displayed(displayed);
+            view.set_label(dto.label.clone());
+            view.set_origin(dto.origin.map(BrowserOrigin::from).unwrap_or_default());
             reg.insert(view);
             id
         };
@@ -130,16 +139,24 @@ impl BrowserFacade {
             return Err(e.into());
         }
 
-        let mut reg = self.lock()?;
-        let view = reg
-            .get_mut(&id)
-            .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
-        // 首个导航入历史。**仅当还停在 Idle**：若加载信号已经先推进了状态（`create` 期间主线程
-        // 就在收事件），这里不重复记账——否则历史会多一条、甚至把 Ready 拖回 Loading。
-        if matches!(view.nav(), NavState::Idle) {
-            view.begin_nav(url);
-        }
-        Ok(BrowserViewDto::from(&*view))
+        let (snapshot, event) = {
+            let mut reg = self.lock()?;
+            let view = reg
+                .get_mut(&id)
+                .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
+            // 首个导航入历史。**仅当还停在 Idle**：若加载信号已经先推进了状态（`create` 期间主线程
+            // 就在收事件），这里不重复记账——否则历史会多一条、甚至把 Ready 拖回 Loading。
+            if matches!(view.nav(), NavState::Idle) {
+                view.begin_nav(url);
+            }
+            (
+                BrowserViewDto::from(&*view),
+                ViewEventDto::of(view, ViewEventKind::Created),
+            )
+        };
+        // 广播在锁外：面板靠它长出标签页（agent 开的 tab 尤其需要）。
+        broadcast_view(&self.app, event);
+        Ok(snapshot)
     }
 
     /// 导航。**同一 URL = 重载**（浏览器惯例：不压历史，否则「后退」退到同一页看起来像坏了）。
@@ -206,10 +223,20 @@ impl BrowserFacade {
     }
 
     /// 关闭视图：引擎销毁子 webview + 领域移除。此后该 id 不复用。
+    ///
+    /// 广播在**销毁之后**、载荷取自销毁**之前**的快照——视图没了就再也读不到 label/origin，
+    /// 而面板要靠它们把标签关对。
     pub fn close(&self, id_raw: &str) -> Result<(), FacadeError> {
         let id = self.parse_id(id_raw)?;
+        let event = self
+            .lock()?
+            .get(&id)
+            .map(|v| ViewEventDto::of(v, ViewEventKind::Closed));
         self.engine.close(&id)?;
         self.lock()?.remove(&id);
+        if let Some(event) = event {
+            broadcast_view(&self.app, event);
+        }
         Ok(())
     }
 
@@ -320,6 +347,15 @@ fn apply_page_load(app: &AppHandle, id: &BrowserViewId, url: &Url, signal: PageL
         if let Ok(event) = nav_event(&app, &id) {
             let _ = app.emit(NAV_EVENT, event);
         }
+    });
+}
+
+/// 广播视图生命周期。线程纪律同 [`apply_page_load`]：`AppHandle::emit` 的投递终点是
+/// `Webview::eval`（`run_on_main_thread` + 阻塞 `recv`），在主线程调就是主线程等自己。
+fn broadcast_view(app: &AppHandle, event: ViewEventDto) {
+    let app = app.clone();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let _ = app.emit(VIEW_EVENT, event);
     });
 }
 

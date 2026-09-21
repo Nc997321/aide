@@ -4,12 +4,28 @@
 use url::Url;
 
 use crate::browser::port::types::{
-    Bounds, BrowserView, BrowserViewId, BrowserViewIdError, NavState, PageLoadSignal, Position,
-    Size, SizeError, ViewError,
+    Bounds, BrowserOrigin, BrowserView, BrowserViewId, BrowserViewIdError, NavState, PageLoadSignal,
+    Position, Size, SizeError, ViewError,
 };
 
 fn url(s: &str) -> Url {
     Url::parse(s).unwrap()
+}
+
+/// label/origin 是**视图自持属性**（跟着视图走，不是面板标签页的状态）。
+#[test]
+fn view_keeps_label_and_origin() {
+    let mut v = view();
+    assert!(v.label().is_none(), "默认没有 label：页面标题够用时不该有假名字");
+    assert_eq!(v.origin(), BrowserOrigin::User);
+
+    v.set_label(Some("vue-admin dev".into()));
+    v.set_origin(BrowserOrigin::Agent);
+    assert_eq!(v.label(), Some("vue-admin dev"));
+    assert_eq!(v.origin(), BrowserOrigin::Agent);
+
+    v.set_label(None);
+    assert!(v.label().is_none(), "label 可以撤销");
 }
 
 fn view() -> BrowserView {

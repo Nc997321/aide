@@ -198,12 +198,25 @@ impl std::error::Error for ViewError {}
 /// **历史/游标的唯一主人**：前进后退是「移动 `cursor` 并返回目标 URL」，真正的加载 IO 由外壳
 /// （命令层）调引擎 `navigate` 执行——领域对象不碰 IO（纯核心+薄外壳）。引擎不再各自记一份历史，
 /// 避免双份记账违反「数据有且只有一个主人」。
+/// 视图是谁开的。**用户在标签条上一眼要能分**（三个 agent 各一个 tab 时尤其）。
+///
+/// 领域类型**不带 serde**：跨 IPC 的形态是 `dto::OriginDto`，转换在边界做（M3）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrowserOrigin {
+    #[default]
+    User,
+    Agent,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct BrowserView {
     id: BrowserViewId,
     nav: NavState,
     bounds: Bounds,
     displayed: bool,
+    /// 创建时给的名字（页面没有 `<title>` 时标签条用它，agent 靠它给 tab 起名）。
+    label: Option<String>,
+    origin: BrowserOrigin,
     /// 已访问 URL 栈；`cursor` 指向当前项。`Idle` 时为空、`cursor == 0`（瞬态，can_go_* 均为 false）。
     history: Vec<Url>,
     cursor: usize,
@@ -217,6 +230,8 @@ impl BrowserView {
             nav: NavState::Idle,
             bounds,
             displayed: true,
+            label: None,
+            origin: BrowserOrigin::User,
             history: Vec::new(),
             cursor: 0,
         }
@@ -353,5 +368,19 @@ impl BrowserView {
 
     pub fn set_displayed(&mut self, displayed: bool) {
         self.displayed = displayed;
+    }
+
+    /// 创建时给的名字（页面标题为空时标签条用它）。
+    pub fn label(&self) -> Option<&str> {
+        self.label.as_deref()
+    }
+    pub fn set_label(&mut self, label: Option<String>) {
+        self.label = label;
+    }
+    pub fn origin(&self) -> BrowserOrigin {
+        self.origin
+    }
+    pub fn set_origin(&mut self, origin: BrowserOrigin) {
+        self.origin = origin;
     }
 }

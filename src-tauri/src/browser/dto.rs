@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 // dto → bookmarks 是本层唯一一处兄弟依赖：边界层映射领域类型。方向仍单向
 // （bookmarks 不认识 dto），且两者都只依赖更内层。
 use crate::browser::bookmarks::{Bookmark, ImportReport};
-use crate::browser::port::types::{Bounds, BrowserView, NavState, Position, Size, SizeError};
+use crate::browser::port::types::{
+    Bounds, BrowserOrigin, BrowserView, NavState, Position, Size, SizeError,
+};
 
 // ── 几何：进/出边界 ────────────────────────────────────────────────────────
 
@@ -75,6 +77,64 @@ impl From<&NavState> for NavStateDto {
 
 // ── 视图快照 / 事件：出边界 ────────────────────────────────────────────────
 
+/// `BrowserOrigin` 的线上形态。领域类型不带 serde，转换在边界做（M3）。
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginDto {
+    User,
+    Agent,
+}
+
+impl From<BrowserOrigin> for OriginDto {
+    fn from(o: BrowserOrigin) -> Self {
+        match o {
+            BrowserOrigin::User => OriginDto::User,
+            BrowserOrigin::Agent => OriginDto::Agent,
+        }
+    }
+}
+
+impl From<OriginDto> for BrowserOrigin {
+    fn from(o: OriginDto) -> Self {
+        match o {
+            OriginDto::User => BrowserOrigin::User,
+            OriginDto::Agent => BrowserOrigin::Agent,
+        }
+    }
+}
+
+/// 生命周期事件的种类。`created` 时前端补一个标签页、`closed` 时删掉（不调 close 命令——
+/// 视图在引擎侧已经没了）。
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewEventKind {
+    Created,
+    Closed,
+}
+
+/// 视图生命周期事件（`browser-view`）：**标签页集合是 UI 状态**，agent 开关视图必须让面板知道
+/// （CLAUDE.md 红线：改变状态的操作一律走广播，不做乐观更新）。
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct ViewEventDto {
+    pub id: String,
+    pub kind: ViewEventKind,
+    pub label: Option<String>,
+    pub origin: OriginDto,
+    pub displayed: bool,
+}
+
+impl ViewEventDto {
+    pub fn of(view: &BrowserView, kind: ViewEventKind) -> Self {
+        Self {
+            id: view.id().as_str().to_string(),
+            kind,
+            label: view.label().map(str::to_string),
+            origin: OriginDto::from(view.origin()),
+            displayed: view.displayed(),
+        }
+    }
+}
+
 /// 视图完整快照（创建后、状态变更时回灌前端）。
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct BrowserViewDto {
@@ -84,6 +144,9 @@ pub struct BrowserViewDto {
     pub can_go_forward: bool,
     pub bounds: BoundsDto,
     pub displayed: bool,
+    /// 创建时给的名字（页面标题为空时用它）。
+    pub label: Option<String>,
+    pub origin: OriginDto,
 }
 
 impl From<&BrowserView> for BrowserViewDto {
@@ -95,6 +158,8 @@ impl From<&BrowserView> for BrowserViewDto {
             can_go_forward: v.can_go_forward(),
             bounds: BoundsDto::from(v.bounds()),
             displayed: v.displayed(),
+            label: v.label().map(str::to_string),
+            origin: OriginDto::from(v.origin()),
         }
     }
 }
@@ -172,4 +237,8 @@ pub struct CreateBrowserDto {
     pub bounds: BoundsDto,
     /// `None` = 露在面板上（面板路径的既有语义）；agent 建的后台视图显式传 `false`。
     pub displayed: Option<bool>,
+    /// 创建时给的名字；页面标题为空时标签条用它。
+    pub label: Option<String>,
+    /// `None` = 用户开的（面板路径不传）。
+    pub origin: Option<OriginDto>,
 }

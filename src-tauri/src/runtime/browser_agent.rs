@@ -21,6 +21,9 @@ use crate::browser::agent_bridge::{
     build_result_command, err_payload, ok_payload, BrowserQuery, BrowserQueryRequest,
 };
 use crate::browser::dto::{BrowserViewDto, NavStateDto};
+
+#[cfg(test)]
+use crate::browser::dto::OriginDto;
 use crate::browser::facade::BrowserFacade;
 
 /// 执行一条浏览器查询并回写结果。
@@ -198,6 +201,8 @@ mod tests {
                 h: 10.0,
             },
             displayed,
+            label: None,
+            origin: OriginDto::User,
         }
     }
 
