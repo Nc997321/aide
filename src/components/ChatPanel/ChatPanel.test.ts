@@ -120,10 +120,13 @@ function permValueOf(wrapper: VueWrapper): string {
   const perm = stubs.find((s) => s.props("title") === "权限模式");
   return (perm?.props("modelValue") as string) ?? "";
 }
-function effortValueOf(wrapper: VueWrapper): string {
+/** 取 effort ThemedSelect 组件本身（用户手选档位 = 给它 emit update:modelValue）。 */
+function effortStubOf(wrapper: VueWrapper) {
   const stubs = wrapper.findAllComponents({ name: "ThemedSelect" });
-  const eff = stubs.find((s) => typeof s.props("title") === "string" && (s.props("title") as string).startsWith("effort"));
-  return (eff?.props("modelValue") as string) ?? "";
+  return stubs.find((s) => typeof s.props("title") === "string" && (s.props("title") as string).startsWith("effort"));
+}
+function effortValueOf(wrapper: VueWrapper): string {
+  return (effortStubOf(wrapper)?.props("modelValue") as string) ?? "";
 }
 
 describe("ChatPanel 跨会话串修复", () => {
@@ -328,6 +331,70 @@ describe("ChatPanel — 允许并记住上下文（usePermissionRememberContext 
     expect(permGetMock).toHaveBeenCalledTimes(2);
     expect(permCreateManyMock).not.toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalledWith("现有规则已放行同类调用，无需重复记住", "success");
+    wrapper.unmount();
+  });
+});
+
+describe("ChatPanel — 档位跟随模式（日常 / 工程）", () => {
+  beforeEach(() => {
+    sessionModelMock.mockReset();
+    sessionProviderMock.mockReset();
+    sessionModelMock.mockResolvedValue(null);
+    sessionProviderMock.mockResolvedValue(null);
+    const { providers, setProvider } = useSessionProviders();
+    for (const k of Object.keys(providers)) delete providers[k];
+    setProvider("A", "p_test");
+    setProvider("B", "p_test");
+    const prov = useProviders();
+    prov.__resetForTest();
+    // 实机配置同款：活动供应商 effortLevel=MAX → provider 默认档位是「极致」
+    prov.allProviders.value = [{ ...PROVIDER_P, effortLevel: "MAX" }];
+    prov.activeProviderId.value = "p_test";
+  });
+
+  it("零 tab 欢迎态：日常默认「快速」，切到工程落回 provider 默认「极致」（此前停在快速），来回切对称", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "daily" }) });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("low");
+
+    await wrapper.setProps({ mode: "project" });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("max");
+
+    await wrapper.setProps({ mode: "daily" });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("low");
+
+    wrapper.unmount();
+  });
+
+  it("hero 上手选过档位，切模式仍按模式重算（pre-send 语境，模式赢）", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "daily" }) });
+    await flush();
+    effortStubOf(wrapper)?.vm.$emit("update:modelValue", "max");
+    await nextTick();
+    expect(effortValueOf(wrapper)).toBe("max");
+
+    await wrapper.setProps({ mode: "project" });
+    await flush();
+    // 工程默认也是 max（provider 配置），换一条反向路径验：日常把它按回 low
+    await wrapper.setProps({ mode: "daily" });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("low");
+
+    wrapper.unmount();
+  });
+
+  it("存活会话不归模式管：mode 变化不覆盖会话坐实的 currentEffort", async () => {
+    sessionProviderMock.mockImplementation(async () => "p_test");
+    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentEffort: "max" }) });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("max");
+
+    await wrapper.setProps({ mode: "daily" });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("max");
+
     wrapper.unmount();
   });
 });

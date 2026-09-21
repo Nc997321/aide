@@ -328,6 +328,19 @@ watch(() => props.sessionProvider.id, () => {
   selectedEffort.value = fallbackEffort();
 });
 
+// 模式切换（日常 ⇄ 工程）→ 按其默认值重算档位：日常「快速」、工程 provider 默认。
+// 只在**还没开始会话**时接管（零 tab 欢迎态 / 归属已定但没发过消息的空 tab）——
+// 此时模式就是用户刚表达的意图，档位默认值必须跟着它走；用户在 hero 上手选过的
+// 档位也让位：一句话都还没发出去，重选一次远比让日常会话按 hero 上的旧选择跑一轮
+// 贵推理便宜。已有会话（含 pending）一律不碰：它们的 mode 由 tab 归属推导出来，
+// 只是同一次切换的副产品，档位归 sessionId watcher（重置/恢复记忆）。
+watch(() => props.mode, () => {
+  if (props.sessionId) return;
+  effortTouchedByUser = false;
+  lastEffortToastValue = "";
+  selectedEffort.value = fallbackEffort();
+});
+
 // ── 权限模式（plan / auto / manual）——和模型下拉同一套模式：
 // 会话没起进程时用静态兜底清单，用户的选择随每条消息的 permission_mode 带走；
 // 进程活着时切换走运行时命令，显示状态靠 sidecar 回发的事件坐实。
