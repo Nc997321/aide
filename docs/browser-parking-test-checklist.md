@@ -188,10 +188,13 @@ browser_eval {view_id:"<你自己那个 tab 的 id>", script:"window.__probe().r
 | 8 | `vis` 恒为 `visible` **且 `vc === 0`** | A | 见下（`vc=0` 更硬） | ✅ A/B 均 `vis="visible"`、`vc=0` |
 | 9 | navigate / back / forward | B | who: user → beta → user → beta | ✅ 逐次实测一致 |
 | 10 | 缺省 view_id 不猜 | B | 报错 + 列出两个视图 | ✅ 报错并列出 browser-1/browser-2 |
-| 11 | 前台全程没被抢 | 你 | 面板一直停在自己的 tab | |
-| 12 | focus 才切 + 不收起面板 | 你 | 切过去且面板仍展开 | |
+| 11 | 前台全程没被抢 | 你 | 面板一直停在自己的 tab | ✅ PASS（多 agent 全程跑完后用户确认：面板没自己跳走） |
+| 12 | focus 才切 + 不收起面板 | 你 | 切过去且面板仍展开 | ✅ PASS（槽位 displayed 从 browser-2 移到 browser-5；**其余全 parked 而仍有 displayed ⇒ 面板没被收起**；用户屏幕上确认切换） |
 | 13 | 托盘里继续跑 | 你 | `lazy=25000` 的条件成立 | ✅ **PASS**（见下：时间差本身就是证据） |
-| 14 | 回归三条 | 你 | 见第 5 节 | |
+| 14 | 回归三条 | 你 | 见第 5 节 | ✅ PASS（切标签/浮层让位/关面板保活，含弹窗与收起期间 raf 照涨） |
+
+**验收结论（2026-09-21）：14/14 全 PASS。** agent 可判的 1–10 由两个并发 agent 跑（A 7/7、B 8/8），
+人判的 11–14 由用户跑。首个回归项都没退化。
 
 ### 判据 13 的实测记录（2026-09-21，托盘）
 

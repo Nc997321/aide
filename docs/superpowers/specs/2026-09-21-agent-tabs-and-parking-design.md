@@ -1,9 +1,13 @@
 # agent 自建 tab + parking：让后台标签页继续干活
 
 日期：2026-09-21
-状态：**已实现**（2026-09-21；T1–T10 全部落地且单测绿：Rust 919 / 前端+sidecar 3243 / typecheck 通过。
-**真机验收（T11）待做**——执行清单：`docs/browser-parking-test-checklist.md`，夹具页
-`docs/testing/browser-parking-fixture.html`；任务拆解见 `docs/superpowers/plans/2026-09-21-agent-tabs-and-parking.md`）
+状态：**已实现并真机验收通过**（2026-09-21）。
+
+- 单测：Rust `cargo test --lib` 919 passed / 前端+sidecar `pnpm test` 3243 passed / typecheck 通过。
+- 真机验收：**14/14 全 PASS**（台账见执行清单）。agent 可判的 1–10 由两个并发 agent 跑
+  （A 7/7、B 8/8），人判的 11–14（前台没被抢 / focus 幂等展开 / 托盘里继续跑 / 回归三条）由用户跑。
+- 执行清单：`docs/browser-parking-test-checklist.md`；夹具页：`docs/testing/browser-parking-fixture.html`；
+  任务拆解与提交对照：`docs/superpowers/plans/2026-09-21-agent-tabs-and-parking.md`。
 
 实现落地清单（提交）：`9b04dc8d` 改名 → `67292c88` parking → `06a733b6` label/origin + 生命周期事件 →
 `06ec76fb` 列表命令 → `611c11db` focus → `050fc30c` agent 的五个 tab op + 缺省不猜 →
