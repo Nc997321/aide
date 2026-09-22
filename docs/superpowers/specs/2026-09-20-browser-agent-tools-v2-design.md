@@ -261,9 +261,11 @@ agent 拿到一句没有信息量的话。现取 `description` 的第一行（�
    的 `condition` 保持**同步表达式**限制：降级路径 await 不了 Promise，而两条通道行为必须一致。
 2. **`ElMessage` 完全不在 DOM** 的现象是否真实存在（背景表第 2 行）。本批只把可见性变成可观测，
    让下次能一眼分辨；要继续追需要一次带 `MutationObserver` 的复现脚本——**不属于本批**。
-3. **下一批做什么**（`browser_network` / `browser_style` / 视觉快照 diff / `browser_open`）——
-   等本批在**真实项目**上跑过一轮（本次只做了模拟自检，Element Plus 控件、Vue 过渡、
-   拦截器断言那三类场景造不出来），按残留痛感定序，**不在本 spec 预设**。
+3. ~~**下一批做什么**（`browser_network` / `browser_style` / 视觉快照 diff / `browser_open`）~~
+   ——**已定序**：2026-09-22 那轮真实开发跑完，残留痛感最高的是 `browser_network` 与
+   `browser_console`，其次四条实测 gap。**下一批见
+   `2026-09-22-browser-observability-design.md`**（`browser_style` / 视觉 diff / `browser_open`
+   仍未做，留在该文档的未决问题里）。
 4. **工具链挂在哪个实例上**：本次实测踩到一次——对话跑在**安装版**里，而 `dist/runtime.js`
    的改动只影响 **dev 实例**（安装版用 `AppData\Local\Aide\agent-runtime\aide-agent.exe`，
    独立打包、不受仓库构建影响）。**重建 dist 后必须确认对话所在实例**，否则验的是旧代码。
