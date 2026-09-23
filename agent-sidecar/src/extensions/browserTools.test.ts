@@ -40,9 +40,9 @@ describe("headless 短路（结构性没有内嵌浏览器）", () => {
     expect(r.content[0].text).toBe(NO_BROWSER_HOST_TEXT);
   });
 
-  // 清单与工具表一一对应（`browser_console` 来了之后是九条——它还没出生，先不列，
-  // 列了 `toolByName` 会当场抛 "tool browser_console not built"）。
-  it("八个工具都短路（漏一个就会有一个挂 15s）", async () => {
+  // 清单与工具表一一对应（`browser_console` 落地后是九条；下面那张表的精确数组是同一份清单，
+  // 漏一个这里会当场抛 "tool … not built"）。
+  it("九个工具都短路（漏一个就会有一个挂 15s）", async () => {
     const env = { AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv;
     for (const name of [
       "browser_tabs",
@@ -53,6 +53,7 @@ describe("headless 短路（结构性没有内嵌浏览器）", () => {
       "browser_screenshot",
       "browser_tab",
       "browser_network",
+      "browser_console",
     ]) {
       const { events, emit } = emitCollector();
       const r = await toolByName(env, emit, name).handler({ script: "1", action: "click", text: "x" }, {});
@@ -615,6 +616,57 @@ describe("browser_network", () => {
   });
 });
 
+describe("browser_console", () => {
+  /** 级别与条数必须**同时**进读脚本（页面侧筛）与渲染器（表头如实说）——只进一头就是两套口径。 */
+  it("先注册新文档再读：level/limit 进读脚本，同一级别进表头", async () => {
+    const { events, emit } = emitCollector();
+    // id 挑一个别的用例没碰过的：注册记账（`registeredViews`）是**模块级**的，同文件里复用
+    // 上一个用例的 id 会命中记账、第一发就不是注册（读的是"注册的节奏"，不是"读的数"）。
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_console").handler(
+      { view_id: "browser-console-1", level: "error", limit: 5 },
+      {},
+    );
+
+    const reg = await waitForQuery(events, 0);
+    expect(reg.op).toBe("call_cdp");
+    expect(reg.method).toBe("Page.addScriptToEvaluateOnNewDocument");
+    reply(reg, { ok: true, data: { view_id: "browser-console-1", value: { identifier: "1" } } });
+
+    const read = await waitForQuery(events, 1);
+    expect(read.method).toBe("Runtime.evaluate");
+    expect(read.params.expression).toContain('var KIND = "logs"');
+    expect(read.params.expression).toContain('var MATCH = "error"');
+    expect(read.params.expression).toContain("var LIMIT = 5;");
+    reply(read, evalOk({
+      ok: true, armedBefore: true, cap: 100, total: 9, matched: 2, failed: { n: 0, first: null },
+      items: [{ lvl: "uncaught", t: 3, text: "Uncaught TypeError: x is not a function", cut: false, len: 36 }],
+    }));
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Console (error only, last 1 of 2 matches, 9 total):");
+    expect(text).toContain("[uncaught] Uncaught TypeError: x is not a function");
+  });
+
+  /** 缺省是 `all` + 30 条（spec §8.2）：缺省的读脚本不过滤，表头不提级别。 */
+  it("缺省 level=all、limit=30", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_console").handler({ view_id: "browser-console-2" }, {});
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-console-2", value: { identifier: "1" } } });
+
+    const read = await waitForQuery(events, 1);
+    expect(read.params.expression).toContain('var MATCH = "all"');
+    expect(read.params.expression).toContain("var LIMIT = 30;");
+    reply(read, evalOk({
+      ok: true, armedBefore: true, cap: 100, total: 1, matched: 1, failed: { n: 0, first: null },
+      items: [{ lvl: "log", t: 7, text: "hello", cut: false, len: 5 }],
+    }));
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Console (last 1 of 1):");
+    expect(text).toContain("[log]      hello");
+  });
+});
+
 describe("工具面里不许出现站点名词（换站点 MCP server 一行不动）", () => {
   it("工具名 + 描述 + 投影脚本全无站点痕迹", () => {
     const { emit } = emitCollector();
@@ -628,6 +680,7 @@ describe("工具面里不许出现站点名词（换站点 MCP server 一行不�
       "browser_screenshot",
       "browser_tab",
       "browser_network",
+      "browser_console",
     ]);
   });
 });

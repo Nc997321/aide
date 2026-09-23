@@ -40,6 +40,7 @@ export const BROWSER_ALLOW_RULES = [
   "mcp__aide-browser__browser_screenshot",
   "mcp__aide-browser__browser_tab",
   "mcp__aide-browser__browser_network",
+  "mcp__aide-browser__browser_console",
 ] as const;
 
 /**

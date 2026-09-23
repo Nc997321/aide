@@ -130,6 +130,15 @@ The same tools are how you check a change you just made in the app the user is r
 - **Never poll from inside the page.** An in-page \`setTimeout\` loop spends a call, can outlive your patience, and reports nothing structured when it gives up. \`browser_wait\` polls from the host: it has a deadline, and a timeout comes back with how many times it polled and what it last saw.
 
 When you are checking \`getComputedStyle\` values or geometry, the numbers are trustworthy as long as the view has a size — views you open with \`browser_tab\` get one from the host, and a view you cannot see keeps its last one (it still renders). A zero-size result means the element itself is collapsed, not that the view is hidden.
+
+## Diagnosing a page that is not doing what you expect
+
+Two buffers answer most of it, without a single round trip through the app's own logs:
+
+- **\`browser_network\`** — the XHR/fetch calls with status, duration and a clipped response body. A page that came up blank is very often a request that returned 500 with the real reason in the body. Unfinished requests show as \`pending\`, which is how you catch a call that never returns.
+- **\`browser_console\`** — the console messages, and separately the errors the page never caught. An error swallowed by the app's own \`try/catch\` shows up here and nowhere else.
+
+Both read a buffer that lives in the **current document only**: navigating or reloading clears it, and the first call that has to install the recorder says so in its result. If you need the requests a page made *while loading*, arm the recorder (any \`browser_network\` / \`browser_console\` call does it) and then navigate or reload — the new document is recorded from its first request.
 `;
 
 /**

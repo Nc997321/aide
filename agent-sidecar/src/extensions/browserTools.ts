@@ -29,6 +29,7 @@ import {
 import type { ActTarget } from "./browser/actions.js";
 import { readRecorder } from "./browser/recorder.js";
 import { renderNetwork } from "./browser/network.js";
+import { renderConsole } from "./browser/console.js";
 import {
   NO_BROWSER_HOST_TEXT,
   formatBridgeFailure,
@@ -543,6 +544,71 @@ export function buildBrowserNetworkTool(
   );
 }
 
+/** console 缓冲一次读回多少条（缺省）与其上限。上限 = recorder 的环形缓冲 cap，要全部就是它。 */
+const CONSOLE_LIMIT_DEFAULT = 30;
+const CONSOLE_LIMIT_MAX = 100;
+
+/**
+ * `browser_console`：**页面往控制台说了什么**（`console.*` + 页面没接住的错误）。
+ *
+ * 与 `browser_network` 的分工：那是"页面向外发了什么"，这是"页面自己报了/没报什么"。前端把
+ * 一个 500 吞进自己的 `try/catch` 时，请求侧还能看见，错误侧只剩这里——`uncaught` /
+ * `unhandled` 与 `console.error` **分开显示**就是为它（合成一类就把"谁没接住"抹掉了）。
+ *
+ * 读数与缓冲规则同 `browser_network`（见其注释）：一次求值读同一只环形缓冲，缓冲只活在
+ * **当前文档**上，所以"这次才装上"必须如实说（`armedBefore`）。
+ */
+export function buildBrowserConsoleTool(
+  env: NodeJS.ProcessEnv,
+  emit: (e: ChatEvent) => void,
+) {
+  return tool(
+    "browser_console",
+    "List what the page logged: console.* calls AND the errors it never caught (uncaught exceptions, unhandled promise " +
+      "rejections — shown separately, because those are exactly the ones the page's own error handling did not swallow). " +
+      "Reach for it when something failed silently — an API error caught by the app and never surfaced, a blank panel. " +
+      "Same buffer rules as browser_network: it lives in the CURRENT document only and a call that has to install the " +
+      "recorder first says so.",
+    {
+      view_id: viewIdArg,
+      level: z
+        .enum(["error", "warn", "all"])
+        .optional()
+        .describe(
+          "error = console.error plus uncaught exceptions and unhandled rejections; warn = console.warn only; " +
+            "all (default) = everything.",
+        ),
+      limit: z
+        .number()
+        .int()
+        .min(1)
+        .max(CONSOLE_LIMIT_MAX)
+        .optional()
+        .describe(`How many of the most recent entries to show (default ${CONSOLE_LIMIT_DEFAULT}, max ${CONSOLE_LIMIT_MAX}).`),
+    },
+    async (args) => {
+      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+      try {
+        const level = args.level ?? "all";
+        const r = await readRecorder(
+          { kind: "logs", limit: args.limit ?? CONSOLE_LIMIT_DEFAULT, match: level },
+          args.view_id,
+          emit,
+        );
+        if (!r.ok) return textResult(r.error);
+        return textResult(renderConsole(r.value, {
+          level,
+          registered: r.registered,
+          registerError: r.registerError,
+        }));
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        return textResult(`Browser tool failed unexpectedly: ${detail}`);
+      }
+    },
+  );
+}
+
 /** 工具总装：上层只需读这张表。新增工具 = 这里加一项（并同步 browserMcp 的规则与前端镜像）。 */
 export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void) {
   return [
@@ -554,5 +620,6 @@ export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) =
     buildBrowserScreenshotTool(env, emit),
     buildBrowserTabTool(env, emit),
     buildBrowserNetworkTool(env, emit),
+    buildBrowserConsoleTool(env, emit),
   ];
 }
