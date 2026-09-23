@@ -41,11 +41,19 @@ function statusText(item: Record<string, unknown>): string {
   return item["err"] ? "(failed)" : "(no status code)";
 }
 
-/** 响应体片段（含截断标记与失败原因）。 */
+/**
+ * 响应体片段（含截断标记、**没读体的旁注**、失败原因）。
+ *
+ * `bodyNote` 与 `err` 是**两回事**，所以分开取：bodyNote = "我没读体"（体积闸门 / 事件流，
+ * 关于**读取**的事实，与这条请求成没成无关）；err = "这条请求失败了"。渲染层把两者都印出来，
+ * 但只有 err 该进失败摘要——摘要行的分子在页面侧就数好了（见 recorder 读脚本）。
+ */
 function bodyText(item: Record<string, unknown>): string {
   const bits: string[] = [];
   const body = str(item["body"]);
   if (body) bits.push(item["bodyCut"] === true ? `${body}…(${Number(item["bodyLen"]) || 0} chars)` : body);
+  const note = str(item["bodyNote"]);
+  if (note) bits.push(note);
   const err = str(item["err"]);
   if (err) bits.push(err);
   return bits.length ? `  ${bits.join("  ")}` : "";

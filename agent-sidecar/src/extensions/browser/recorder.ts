@@ -29,8 +29,11 @@
  * 1. **幂等**：`if (window.__aideRec) return` —— 注册会重发（每个视图一次），重复包装会套娃。
  * 2. **不改页面行为**：fetch 的失败分支继续 `throw`；`res.clone()` 不动原响应；console 转发原实现。
  * 3. **有界**：`cap: 100` + 每条文本 `slice(0, 300)`。
- * 4. **如实标截断**：`bodyCut` / `bodyLen` / `err: 'body skipped (N bytes)'` 都要带出来
- *    （另一种 skip 形态是事件流：`err: 'body skipped (event stream)'`）。
+ * 4. **如实标截断**：`bodyCut` / `bodyLen` / `bodyNote: 'body skipped (N bytes)'` 都要带出来
+ *    （另一种 skip 形态是事件流：`bodyNote: 'body skipped (event stream)'`）。
+ *    ⚠️ skip 是**非错误的事实**，所以它有自己的字段：`err` 只留"这条请求真的失败了"
+ *    （`'body unreadable'` / fetch 抛出的错误 / 拒绝的原因）。混进 `err` 会让读脚本的
+ *    失败计数把一条 200 算成失败——摘要行（agent 最先看的那行）就在最要紧的路径上撒谎。
  *
  * # 这一层不认识"页面语义"
  *
@@ -76,7 +79,8 @@ export const RECORDER_SOURCE = `(function () {
       var t0 = now();
       var rec = { kind: 'fetch', method: String(method).toUpperCase(),
                   url: clip((typeof input === 'string') ? input : ((input && input.url) || ''), 400).text,
-                  t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0, err: null, done: false };
+                  t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0,
+                  err: null, bodyNote: null, done: false };
       push(R.reqs, rec);
       return of.apply(this, arguments).then(function (res) {
         rec.status = res.status; rec.ms = now() - t0;
@@ -87,12 +91,12 @@ export const RECORDER_SOURCE = `(function () {
           }
         } catch (e) { len = null; ctype = null; }
         var big = gate(len);
-        if (big !== null) { rec.err = 'body skipped (' + big + ' bytes)'; rec.done = true; }
+        if (big !== null) { rec.bodyNote = 'body skipped (' + big + ' bytes)'; rec.done = true; }
         else if (String(ctype || '').indexOf('event-stream') >= 0) {
           // 事件流**永不结束**：克隆一份读体等于把整条流一路攒在页面内存里（本产品自己的
           // API 就是这个形状）。读不了就如实标不读，别把"没读"伪装成"没有正文"。
           // 只有 fetch 这一路需要它：XHR 的响应体由浏览器自己收，我们读的只是它收完的那份。
-          rec.err = 'body skipped (event stream)'; rec.done = true;
+          rec.bodyNote = 'body skipped (event stream)'; rec.done = true;
         } else {
           try {
             // 克隆一份读体：原响应照样交给页面，我们只是旁听
@@ -117,14 +121,15 @@ export const RECORDER_SOURCE = `(function () {
       var x = this, t0 = now();
       var rec = { kind: 'xhr', method: String(x.__m || 'GET').toUpperCase(),
                   url: clip(x.__u || '', 400).text,
-                  t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0, err: null, done: false };
+                  t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0,
+                  err: null, bodyNote: null, done: false };
       push(R.reqs, rec);
       x.addEventListener('loadend', function () {
         rec.status = x.status; rec.ms = now() - t0;
         var len = null;
         try { len = x.getResponseHeader && x.getResponseHeader('content-length'); } catch (e) { len = null; }
         var big = gate(len);
-        if (big !== null) { rec.err = 'body skipped (' + big + ' bytes)'; }
+        if (big !== null) { rec.bodyNote = 'body skipped (' + big + ' bytes)'; }
         else {
           try {
             var c = clip(x.responseText || '', TEXT);
@@ -229,6 +234,8 @@ export function buildRecorderReadScript(opts: RecorderReadOptions): string {
   if (KIND === 'reqs') {
     for (var j = 0; j < matched.length; j++) {
       var e2 = matched[j];
+      // 只数**真失败**：状态码 >= 400，或 err 非空（err 只装真错误）。**别把 bodyNote 加进来**
+      // ——"我没读体"是关于读取的事实，不是这条请求的结局；算进来就会把 200 报成失败。
       var bad = e2.done === true && ((typeof e2.status === 'number' && e2.status >= 400) || !!e2.err);
       if (bad) { failed += 1; if (firstFailed === null) firstFailed = j + 1; }
     }
@@ -238,7 +245,7 @@ export function buildRecorderReadScript(opts: RecorderReadOptions): string {
     if (KIND === 'reqs') {
       return { kind: e.kind, method: e.method, url: e.url, status: e.status, done: e.done === true,
                ms: e.done === true ? e.ms : (nowMs - e.t), body: e.body, bodyCut: e.bodyCut === true,
-               bodyLen: e.bodyLen, err: e.err };
+               bodyLen: e.bodyLen, err: e.err, bodyNote: e.bodyNote };
     }
     return { lvl: e.lvl, t: e.t, text: e.text, cut: e.cut === true, len: e.len };
   });

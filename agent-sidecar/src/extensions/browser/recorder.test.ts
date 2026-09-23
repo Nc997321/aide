@@ -125,15 +125,25 @@ describe("recorder：有界与如实标截断", () => {
     expect(rec.bodyLen).toBe(RECORDER_TEXT_CAP + 50);
   });
 
-  it("content-length 超闸门 → 不读体，如实标 skipped", async () => {
+  /**
+   * ⚠️ skip 走 `bodyNote` **不是** `err`：`err` 只装"这条请求失败了"。写进 err 会让读脚本的
+   * 失败计数把一条 200 算成失败，摘要行——agent 最先看的那行——就在最要紧的路径上撒谎
+   * （真机判据 4 的 finding D）。这条同时钉住"没读体"仍然如实标出来。
+   */
+  it("content-length 超闸门 → 不读体，如实标 bodyNote（err 保持 null）", async () => {
     const { win } = makeWindow({ fetch: fetchStub({ len: String(300 * 1024), body: "z" }) });
     run(RECORDER_SOURCE, win, { log: () => {} });
     await win.fetch("http://x/api");
     await flush();
 
-    expect(win.__aideRec.reqs[0].body).toBeNull();
-    expect(String(win.__aideRec.reqs[0].err)).toContain("body skipped");
-    expect(win.__aideRec.reqs[0].done).toBe(true);
+    const rec = win.__aideRec.reqs[0];
+    expect(rec.body).toBeNull();
+    expect(rec.bodyNote).toBe(`body skipped (${300 * 1024} bytes)`);
+    expect(rec.err).toBeNull();
+    expect(rec.done).toBe(true);
+    // 跳过的体仍然如实报"没读到"：正文空、长度 0、没截断
+    expect(rec.bodyCut).toBe(false);
+    expect(rec.bodyLen).toBe(0);
   });
 
   /**
@@ -157,7 +167,8 @@ describe("recorder：有界与如实标截断", () => {
 
     const rec = win.__aideRec.reqs[0];
     expect(rec.body).toBeNull();
-    expect(rec.err).toBe("body skipped (event stream)");
+    expect(rec.bodyNote).toBe("body skipped (event stream)");
+    expect(rec.err).toBeNull();
     expect(rec.done).toBe(true);
   });
 
@@ -225,6 +236,36 @@ describe("recorder：XHR 包装", () => {
     expect(rec.body).toBe('{"ok":true}');
     expect(rec.done).toBe(true);
   });
+
+  /** XHR 的第三个 skip 站点与 fetch 同口径：走 `bodyNote`，`err` 保持 null。 */
+  it("XHR 的 content-length 超闸门 → bodyNote 而非 err", () => {
+    const listeners: Record<string, Function[]> = {};
+    class FakeXHR {
+      status = 200;
+      responseText = "z".repeat(10);
+      open(_m: string, _u: string) {}
+      send() {}
+      addEventListener(t: string, fn: Function) {
+        (listeners[t] ||= []).push(fn);
+      }
+      getResponseHeader(name: string) {
+        return name === "content-length" ? String(300 * 1024) : null;
+      }
+    }
+    const { win } = makeWindow({ XMLHttpRequest: FakeXHR });
+    run(RECORDER_SOURCE, win, { log: () => {} });
+
+    const x = new (win.XMLHttpRequest as any)();
+    x.open("GET", "http://x/big");
+    x.send();
+    for (const fn of listeners["loadend"] ?? []) fn();
+
+    const rec = win.__aideRec.reqs[0];
+    expect(rec.bodyNote).toBe(`body skipped (${300 * 1024} bytes)`);
+    expect(rec.err).toBeNull();
+    expect(rec.body).toBeNull();
+    expect(rec.done).toBe(true);
+  });
 });
 
 describe("recorder：没接住的错误", () => {
@@ -269,6 +310,7 @@ function req(over: Record<string, unknown> = {}) {
     bodyCut: false,
     bodyLen: 0,
     err: null,
+    bodyNote: null,
     ...over,
   };
 }
@@ -342,6 +384,50 @@ describe("recorder 读脚本：筛选 / 计数 / 条数", () => {
     const pending = v.items.find((i: any) => i.url.endsWith("pending"));
     expect(pending.done).toBe(false);
     expect(pending.ms).toBe(999); // nowMs(1000) - t(1)
+  });
+
+  /**
+   * 真机判据 4 的 finding D：`/api/big` 回 200 + 体被体积闸门跳过，摘要行却报
+   * `⚠ 1 of 1 matches failed`——一条成功的请求被数成失败，而摘要行正是 agent 最先看的那行。
+   *
+   * 根因是 skip 曾经写进 `err`（读脚本把 `!!err` 当失败）。这条把新口径钉死：**200 + 跳过体
+   * 不算失败**，而"没读体"这个事实照样进 items（不许用"不报失败"换掉"如实标跳过"）。
+   */
+  it("200 + 体被跳过（bodyNote）→ **不算失败**，但 bodyNote 照样进 items", () => {
+    const win = armedWindow({
+      reqs: [req({ url: "https://a/api/big", status: 200, bodyNote: "body skipped (307220 bytes)" })],
+    });
+
+    const v = readEnvelope({ kind: "reqs", limit: 10 }, win);
+
+    expect(v.failed).toEqual({ n: 0, first: null }); // ← 修复前是 {n: 1, first: 1}
+    expect(v.matched).toBe(1);
+    expect(v.items[0].bodyNote).toBe("body skipped (307220 bytes)");
+    expect(v.items[0].err).toBeNull();
+    // 形状照旧诚实：没读体 = 正文空 / 长度 0 / 没截断
+    expect(v.items[0].body).toBeNull();
+    expect(v.items[0].bodyLen).toBe(0);
+    expect(v.items[0].bodyCut).toBe(false);
+    expect(v.items[0].done).toBe(true);
+  });
+
+  /**
+   * 同一个缺陷的**接缝**版本：缺陷横跨两半（源码写字段 / 读脚本数字段），各自单测都能绿，
+   * 所以再来一条端到端的——用**真源码**产出一条被闸门跳过的 200，直接喂给读脚本，
+   * 断言那个数字。真机那条路径（300KB 端点 + `filter:"/api/big"`）就是这一条。
+   */
+  it("端到端：闸门跳过的 200 走完源码 → 读脚本，failed.n 仍是 0", async () => {
+    const { win } = makeWindow({ fetch: fetchStub({ len: "307220", body: "z" }) });
+    run(RECORDER_SOURCE, win, { log: () => {} });
+    await win.fetch("http://127.0.0.1:8780/api/big");
+    await flush();
+
+    const v = readEnvelope({ kind: "reqs", limit: 10, match: "/api/big" }, win);
+
+    expect(v.matched).toBe(1); // 缓冲里就这一条
+    expect(v.failed).toEqual({ n: 0, first: null }); // ← 修复前 {n: 1, first: 1}
+    expect(v.items[0].bodyNote).toBe("body skipped (307220 bytes)");
+    expect(v.items[0].err).toBeNull();
   });
 
   it("非有限的 limit 不再静默回空表（Infinity/NaN 按「要全部」夹，负数夹到 0）", () => {

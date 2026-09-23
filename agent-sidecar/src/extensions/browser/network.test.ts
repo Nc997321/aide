@@ -5,7 +5,7 @@ import { renderNetwork } from "./network.js";
 /** 一条请求的最小形状（与页面侧信封一致）。 */
 const req = (over: Record<string, unknown> = {}) => ({
   kind: "fetch", method: "GET", url: "http://127.0.0.1:8780/api/ok", status: 200, done: true,
-  ms: 95, body: '{"ok":true}', bodyCut: false, bodyLen: 11, err: null, ...over,
+  ms: 95, body: '{"ok":true}', bodyCut: false, bodyLen: 11, err: null, bodyNote: null, ...over,
 });
 
 const envelope = (over: Record<string, unknown> = {}) => ({
@@ -120,6 +120,41 @@ describe("renderNetwork", () => {
   it("注册未来文档失败 → 如实带出原因（不静默）", () => {
     const s = renderNetwork(envelope(), notes({ registered: false, registerError: "…was rejected by the runtime" }));
     expect(s).toContain("rejected by the runtime");
+  });
+
+  /**
+   * 真机判据 4 的 finding D（渲染层这一半）：体积闸门跳过的 200 曾经带出一行
+   * `⚠ 1 of 1 matches failed`——摘要行是 agent 最先看的那行，它在**最要紧的路径**上报了假警。
+   * 修法是把这个事实挪到自己的字段（`bodyNote`），失败逻辑只认 `err`。
+   *
+   * 这条同时钉住两件事：**跳过要看得见**（旁注照印）＋**不许有失败摘要**。
+   */
+  it("200 + 体被跳过（bodyNote）→ 行内有旁注，但没有失败摘要行", () => {
+    const s = renderNetwork(
+      envelope({
+        total: 5, matched: 1, failed: { n: 0, first: null },
+        items: [req({ url: "http://127.0.0.1:8780/api/big", body: null, bodyNote: "body skipped (307220 bytes)" })],
+      }),
+      notes({ filter: "/api/big" }),
+    );
+
+    expect(s).toContain("Network requests matching \"/api/big\" (last 1 of 1 matches, 5 total, newest last):");
+    expect(s).toContain("#1 GET  http://127.0.0.1:8780/api/big  → 200  95ms  body skipped (307220 bytes)");
+    expect(s).not.toContain("failed");
+  });
+
+  /** 反向：`err` 仍是唯一的失败口径——真失败还是要报（别把 bodyNote 的引入修成"摘要消失"）。 */
+  it("bodyNote 与 err 同时存在 → 旁注与失败摘要都在（两个字段互不吞并）", () => {
+    const s = renderNetwork(
+      envelope({
+        items: [req({ status: 500, body: null, bodyNote: "body skipped (307220 bytes)", err: "body unreadable" })],
+        failed: { n: 1, first: 1 },
+      }),
+      notes(),
+    );
+    expect(s).toContain("body skipped (307220 bytes)");
+    expect(s).toContain("body unreadable");
+    expect(s).toContain("⚠ 1 of 3 failed — first failure #1");
   });
 
   it("没有状态码但有 err（fetch 被拒）→ 报失败并带原因", () => {
