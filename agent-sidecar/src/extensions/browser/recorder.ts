@@ -24,7 +24,8 @@
  * 1. **幂等**：`if (window.__aideRec) return` —— 注册会重发（每个视图一次），重复包装会套娃。
  * 2. **不改页面行为**：fetch 的失败分支继续 `throw`；`res.clone()` 不动原响应；console 转发原实现。
  * 3. **有界**：`cap: 100` + 每条文本 `slice(0, 300)`。
- * 4. **如实标截断**：`bodyCut` / `bodyLen` / `err: 'body skipped (N bytes)'` 都要带出来。
+ * 4. **如实标截断**：`bodyCut` / `bodyLen` / `err: 'body skipped (N bytes)'` 都要带出来
+ *    （另一种 skip 形态是事件流：`err: 'body skipped (event stream)'`）。
  *
  * # 这一层不认识"页面语义"
  *
@@ -35,14 +36,19 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
-import { cdpMethodError, formatBridgeFailure } from "./format.js";
+import { asRecord, cdpMethodError, formatBridgeFailure } from "./format.js";
 import { runEval } from "./runEval.js";
 
 /** 环形缓冲的条目上限。 */
 export const RECORDER_CAP = 100;
 /** 单条文本（响应体片段 / console 行）的字符上限。 */
 export const RECORDER_TEXT_CAP = 300;
-/** 读体闸门：`content-length` 超过它就整段跳过（`res.clone().text()` 会把整份体复制进内存）。 */
+/**
+ * 读体闸门：`content-length` 超过它就整段跳过（`res.clone().text()` 会把整份体复制进内存）。
+ *
+ * 它是**有界**这一条的一半：没有 `content-length` 的响应（chunked / 流式）它看不到尺寸，
+ * 所以事件流另有一条按 `content-type` 判的 skip（那种体根本没有长度，见 fetch 分支）。
+ */
 export const RECORDER_BODY_GATE = 262144;
 
 export const RECORDER_SOURCE = `(function () {
@@ -69,11 +75,20 @@ export const RECORDER_SOURCE = `(function () {
       push(R.reqs, rec);
       return of.apply(this, arguments).then(function (res) {
         rec.status = res.status; rec.ms = now() - t0;
-        var len = null;
-        try { len = res.headers && res.headers.get ? res.headers.get('content-length') : null; } catch (e) { len = null; }
+        var len = null, ctype = null;
+        try {
+          if (res.headers && res.headers.get) {
+            len = res.headers.get('content-length'); ctype = res.headers.get('content-type');
+          }
+        } catch (e) { len = null; ctype = null; }
         var big = gate(len);
         if (big !== null) { rec.err = 'body skipped (' + big + ' bytes)'; rec.done = true; }
-        else {
+        else if (String(ctype || '').indexOf('event-stream') >= 0) {
+          // 事件流**永不结束**：克隆一份读体等于把整条流一路攒在页面内存里（本产品自己的
+          // API 就是这个形状）。读不了就如实标不读，别把"没读"伪装成"没有正文"。
+          // 只有 fetch 这一路需要它：XHR 的响应体由浏览器自己收，我们读的只是它收完的那份。
+          rec.err = 'body skipped (event stream)'; rec.done = true;
+        } else {
           try {
             // 克隆一份读体：原响应照样交给页面，我们只是旁听
             res.clone().text().then(function (txt) {
@@ -158,12 +173,6 @@ export interface RecorderReadOptions {
 export type RecorderOutcome =
   | { ok: true; value: Record<string, unknown>; registered: boolean; registerError?: string }
   | { ok: false; error: string };
-
-function asRecord(v: unknown): Record<string, unknown> | null {
-  return typeof v === "object" && v !== null && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : null;
-}
 
 /**
  * `limit` 是模型给的自由数字，**必须先夹**：`JSON.stringify(Infinity)` 是 `null`，页面侧

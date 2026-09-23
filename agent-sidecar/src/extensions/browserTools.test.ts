@@ -698,6 +698,24 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
     expect(r.content[0].text).not.toContain("of  in"); // 空标签留下的那个空洞
   });
 
+  /**
+   * 命中多个时裁剪**悄悄取第 0 个**：裁决在解析脚本里（`Math.min` 钳制），但"裁剪的是哪一个"
+   * 必须说出来——不说，模型会以为整张图就是它要的那个元素。这句话与 `browser_act` 用的是
+   * **同一句**（`matchNote`，从 act.ts 导出），两边不许各说各的。
+   */
+  it("命中多个 → caption 带上命中数（与 browser_act 同一句注脚）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: ".same" }, {});
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({ ok: true, hit: { tag: "button", text: "确定" }, rect: { x: 1, y: 2, w: 30, h: 30 }, matched: 2, usedIndex: 0 }),
+    );
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: { data: "QUJD" } } });
+
+    const r = await p;
+    expect(r.content[0].text).toContain("of 确定 (2 elements matched; used index 0)");
+  });
+
   it("元素找不到 → **如实失败，不退化成整页截图**", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "没有这个" }, {});

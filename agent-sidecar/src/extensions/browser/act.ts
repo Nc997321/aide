@@ -86,8 +86,11 @@ function describeHit(v: Record<string, unknown>): string {
  *
  * `index` 越界会被解析脚本钳制（`Math.min`），钳制**要说**：`used index 1` 就是那个交代。
  * 单命中与旧载荷（没有 `matched`）都不出这句——常见路径上不制造噪音。
+ *
+ * **导出**：`browser_screenshot` 的元素裁剪跑的是**同一个**解析脚本（`buildResolveScript`），
+ * 它命中的是第几个必须与这里同一个说法——第二份文案必然漂（同 `describeResolveFailure`）。
  */
-function matchNote(v: Record<string, unknown>): string {
+export function matchNote(v: Record<string, unknown>): string {
   const n = Number(v["matched"]);
   if (!Number.isFinite(n) || n <= 1) return "";
   const used = Number(v["usedIndex"]);

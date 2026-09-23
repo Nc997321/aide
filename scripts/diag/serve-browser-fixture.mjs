@@ -18,9 +18,16 @@ const PAGE = join(
   "browser-recorder-fixture.html",
 );
 
+// 每个响应都**显式写 `content-length`**：recorder 的体积闸门读的正是这个头，缺了它 node 会退回
+// `Transfer-Encoding: chunked`，闸门看不到尺寸——夹具于是测不出它本该测的那条路（判据 4 会假绿）。
 const json = (res, code, obj) => {
-  res.writeHead(code, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-  res.end(JSON.stringify(obj));
+  const payload = JSON.stringify(obj);
+  res.writeHead(code, {
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(payload),
+    "cache-control": "no-store",
+  });
+  res.end(payload);
 };
 
 createServer((req, res) => {
@@ -32,8 +39,14 @@ createServer((req, res) => {
   if (pathname === "/api/hang") return;
   if (pathname === "/api/big") {
     const pad = "x".repeat(300 * 1024);
-    res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-    return res.end(JSON.stringify({ ok: true, pad }));
+    const payload = JSON.stringify({ ok: true, pad });
+    res.writeHead(200, {
+      "content-type": "application/json; charset=utf-8",
+      // 300KB 档必须带 content-length，否则闸门看不到尺寸（见 json() 的注释）——这条是判据 4 的**前提**。
+      "content-length": Buffer.byteLength(payload),
+      "cache-control": "no-store",
+    });
+    return res.end(payload);
   }
   res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
   res.end(readFileSync(PAGE));

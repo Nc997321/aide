@@ -38,8 +38,8 @@ export function formatBridgeFailure(resp: {
 
 // ---- 形状守门（data 是 unknown，逐字段判型；缺字段不抛、不猜） ----
 //
-// 三个助手**导出**：`network.ts` / `console.ts` 的渲染器吃的是页面侧信封（同样是 `unknown`），
-// 逐字段判型的写法只该有一份——复制过去的那种，改了一处忘另一处就会漂。
+// 三个助手**导出**：`network.ts` / `console.ts` / `recorder.ts` 吃的都是页面侧信封（同样是
+// `unknown`），逐字段判型的写法只该有一份——复制过去的那种，改了一处忘另一处就会漂。
 
 export function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -282,6 +282,20 @@ function textFilterNote(value: Record<string, unknown>): string | null {
   );
 }
 
+/**
+ * 正文小节：**旁注在前 → 空行 → 标题 → 正文**。主文档与帧内容共用这一份（这段"先注解再正文"
+ * 的排布在两边各写一遍，改一处忘一处就会漂）。
+ *
+ * 旁注跟着正文走（没正文就不出）——它是在为**下面那段文本**作注解，悬空的旁注等于凭空暗示
+ * "这里有隐藏内容"（见 `textFilterNote`）。
+ */
+function renderTextBlock(value: Record<string, unknown>, heading: string): string[] {
+  const text = str(value["text"]);
+  if (!text) return [];
+  const note = textFilterNote(value);
+  return [...(note ? [note] : []), "", heading, text];
+}
+
 /** 结构面（表格 / 表单字段 / 可点元素）是否全空。 */
 function hasNoStructure(value: Record<string, unknown>): boolean {
   return (
@@ -423,22 +437,12 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
     // 帧文本**必须渲染**。漏了它，结构面全空、内容全在文本里的页面（设计工具导出的绝对定位
     // div 画布正是如此）就只剩一行 title，与空帧无法区分。主文档一直有 `## Raw text`，
     // 帧这边当初漏了——2026-09-16 agent 实测踩到。
-    const frameText = str(fr.value["text"]);
-    if (frameText) {
-      // 同一份脚本跑的，过滤成没成也在帧的信封里——主文档有的旁注，帧这半边同样要有
-      // （跨域原型的内容全在帧里，漏了它就是静默降级）。
-      const frameFilter = textFilterNote(fr.value);
-      if (frameFilter) out.push(frameFilter);
-      out.push("", "#### Text", frameText);
-    }
+    // （同一份脚本跑的，过滤成没成也在帧的信封里——主文档有的旁注，帧这半边同样要有；
+    //   跨域原型的内容全在帧里，漏了它就是静默降级。`renderTextBlock` 两件事一起做。）
+    out.push(...renderTextBlock(fr.value, "#### Text"));
   });
 
-  const text = str(value["text"]);
-  if (text) {
-    const filterNote = textFilterNote(value);
-    if (filterNote) out.push(filterNote);
-    out.push("", "## Raw text", text);
-  }
+  out.push(...renderTextBlock(value, "## Raw text"));
 
   // 旁注放最后：它是**关于上面这一整份结果**的免责说明，不是页面内容的一部分。
   const notes = evalNotes(v["probe"]);

@@ -19,14 +19,18 @@ export interface NetworkNotes {
   registerError?: string;
 }
 
-/** 一行请求。字段缺失一律按"可能缺"写，**永不抛**（格式化器铁律）。 */
+/**
+ * 一行请求。字段缺失一律按"可能缺"写，**永不抛**（格式化器铁律）。
+ *
+ * 耗时列只在**已结束**的条目上出现：pending 那一行的状态列自己就写着 `(pending, Nms so far)`，
+ * 再印一遍是同一个数字说两次（同一份事实两个来源，早晚会说岔）。
+ */
 function renderRow(item: Record<string, unknown>, n: number): string {
   const method = pad(str(item["method"]) || "?", METHOD_WIDTH);
   const url = str(item["url"]) || "(no url)";
   const ms = Number(item["ms"]);
-  const timing = Number.isFinite(ms) ? `${Math.round(ms)}ms` : "?ms";
-  const status = statusText(item);
-  return `#${n} ${method} ${url}  → ${status}  ${timing}${bodyText(item)}`;
+  const timing = item["done"] === true ? `  ${Number.isFinite(ms) ? `${Math.round(ms)}ms` : "?ms"}` : "";
+  return `#${n} ${method} ${url}  → ${statusText(item)}${timing}${bodyText(item)}`;
 }
 
 /** 状态那一列：pending / 真状态码 / 没有状态码（CORS、中止、未结束），三者不许混。 */

@@ -33,6 +33,8 @@ describe("renderNetwork", () => {
       notes(),
     );
     expect(s).toContain("(pending, 2400ms so far)");
+    // 不要第二个耗时列：状态列已经说了 `2400ms so far`，再印一遍是同一份事实两个来源。
+    expect(s.match(/2400ms/g)).toHaveLength(1);
   });
 
   it("失败前置一行摘要（first 在窗口内）", () => {

@@ -3,11 +3,14 @@
 // 用法：cd agent-sidecar && npx tsx ../scripts/diag/measure-builtin-mcp.ts
 // 纯只读：只构造定义，不发起任何查询。
 //
-// 基线（2026-09-23，换成真 JSON Schema 量尺后重量的第一版）：
-//   aide-browser 9 个工具 payload ≈3319 tok + instructions ≈1750 tok = ≈5069 tok；
-//   内建四 server 合计 ≈9565 tok。
+// 基线（2026-09-23，换成真 JSON Schema 量尺后重量的第一版；当天收官后重量过一次）：
+//   aide-browser 9 个工具 payload ≈3524 tok + instructions ≈1804 tok = ≈5328 tok；
+//   内建四 server 合计 ≈9824 tok。
 //   browser_network desc+schema 1077c≈299 tok、browser_console 1063c≈295 tok，合计 ≈594 tok
 //   （预算红线 600，未超——余量只剩 6，动这两条 description 前先重新量）。
+//   ⚠️ 收官前那一版量到的是 payload ≈3459 / ≈5263 / ≈9759：差的 ≈65 tok 全来自同一批的
+//   **描述措辞**改动（`browser_read` 的 Raw text 一句、`include_hidden` 与截图 `text` 的说明），
+//   不是代码落进来的成本——**改描述就要重量**，别拿旧数对账。
 // ⚠️ 更早的数字是用旧 `schemaChars()` 量的（schema 那一半低估约 1.5×），**不许与新数字并列比较**。
 import { buildBrowserTools } from "../../agent-sidecar/src/extensions/browserTools.js";
 import { buildKnowledgeTools } from "../../agent-sidecar/src/extensions/knowledgeTools.js";

@@ -148,7 +148,8 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 > 而 `browser_eval` 会 await 表达式的结果——只写前者会让这次 eval 一直等到 15 秒超时。
 
 **S6（判据 4）** `browser_eval {view_id:V1, script:'__probe("big")'}` → 再 `browser_network {view_id:V1, filter:"/api/big"}`。
-期望该行状态 `200`、**没有 300KB 正文**，代之以 `body skipped (3072xx bytes)`。
+期望该行状态 `200`、**没有 300KB 正文**，代之以 `body skipped (307220 bytes)`（夹具现在显式发
+`content-length: 307220`，闸门读的就是它——数字是定值，不必再猜尾数）。
 
 **S7（判据 5）** 控制台：
 
@@ -309,7 +310,7 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 | 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | | |
 | 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | | |
 | 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | | |
-| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (3072xx bytes)`，无正文 | | |
+| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (307220 bytes)`，无正文 | | |
 | 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console`；再补 `console.error` | `[uncaught] …` 与 `[error] …` **分行** | | |
 | 6 | 未装的如实说明 | V1 首次 `browser_network`；V2 首次 `browser_console` | `NOTE: the recorder was armed in this document by this call …` | | |
 | 7 | navigate 落点 | `navigate #/two`；普通 `navigate ?plain=1/2` | 7a 报实际 `#/one`（不报假成功）；7b 两次都一致 | | |

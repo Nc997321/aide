@@ -43,13 +43,27 @@ function run(source: string, win: any, consoleStub: any, perf: any = { now: () =
 /** 一个永不 settle 的 fetch 桩（验 pending 用）。 */
 const neverFetch = () => new Promise(() => {});
 
-function fetchStub(opts: { status?: number; body?: string; len?: string | null; reject?: string }) {
+function fetchStub(opts: {
+  status?: number;
+  body?: string;
+  len?: string | null;
+  ctype?: string;
+  reject?: string;
+  /** 体**不该**被读时用它：`clone()` 一被调用就炸（证明"读没发生"，而不是"回了个字符串"）。 */
+  cloneThrows?: string;
+}) {
   return () => {
     if (opts.reject) return Promise.reject(new Error(opts.reject));
     const res = {
       status: opts.status ?? 200,
-      headers: { get: (h: string) => (h === "content-length" ? (opts.len ?? null) : null) },
-      clone: () => ({ text: () => Promise.resolve(opts.body ?? "") }),
+      headers: {
+        get: (h: string) =>
+          h === "content-length" ? (opts.len ?? null) : h === "content-type" ? (opts.ctype ?? null) : null,
+      },
+      clone: () => {
+        if (opts.cloneThrows) throw new Error(opts.cloneThrows);
+        return { text: () => Promise.resolve(opts.body ?? "") };
+      },
     };
     return Promise.resolve(res);
   };
@@ -120,6 +134,31 @@ describe("recorder：有界与如实标截断", () => {
     expect(win.__aideRec.reqs[0].body).toBeNull();
     expect(String(win.__aideRec.reqs[0].err)).toContain("body skipped");
     expect(win.__aideRec.reqs[0].done).toBe(true);
+  });
+
+  /**
+   * 事件流**永不结束**：`clone().text()` 会把整条流一路攒在页面内存里（本产品自己的 API 就是这个
+   * 形状），而且没有 `content-length` 给闸门看。所以按 `content-type` 单独跳过。
+   *
+   * 这条测的是"**读没发生**"，不是"回了个字符串"：`clone()` 被调用即抛，若走了读体那条路，
+   * `err` 会是那句抛出的文案（差一步就绿）。
+   */
+  it("content-type 是事件流 → 不读体，如实标 skipped（不是静默留空）", async () => {
+    const { win } = makeWindow({
+      fetch: fetchStub({
+        ctype: "text/event-stream; charset=utf-8",
+        body: "data: never\n\n",
+        cloneThrows: "clone() must not be called for an event stream",
+      }),
+    });
+    run(RECORDER_SOURCE, win, { log: () => {} });
+    await win.fetch("http://x/events");
+    await flush();
+
+    const rec = win.__aideRec.reqs[0];
+    expect(rec.body).toBeNull();
+    expect(rec.err).toBe("body skipped (event stream)");
+    expect(rec.done).toBe(true);
   });
 
   it("未结束的请求 done=false（渲染层据此报 pending）", () => {

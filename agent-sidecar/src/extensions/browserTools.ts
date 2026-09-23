@@ -14,7 +14,7 @@ import type { ChatEvent } from "../engine/types.js";
 import { queryBrowser, type BrowserCall } from "./browserClient.js";
 import { runEval } from "./browser/runEval.js";
 import { buildProjectionScript } from "./browser/projection.js";
-import { describeResolveFailure, performClick, performFill, performHover } from "./browser/act.js";
+import { describeResolveFailure, matchNote, performClick, performFill, performHover } from "./browser/act.js";
 import { performTabAction } from "./browser/tab.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
@@ -104,7 +104,8 @@ const includeHiddenArg = z
   .boolean()
   .optional()
   .describe(
-    "Include hidden (display:none) tables / fields / clickables in the skeleton. " +
+    "Include hidden (display:none) tables / fields / clickables in the skeleton, and the hidden text in " +
+      "the raw text section (that section lists rendered text only). " +
       "Default false — hidden poppers are noise. Pass true when the page stacks whole screens " +
       "(design-tool prototypes).",
   );
@@ -138,6 +139,7 @@ export function buildBrowserReadTool(
       "runtime allows it (so you do not have to navigate away to read an embedded prototype). Anything it could not " +
       "read is reported as such, with the reason. Hidden (display:none) tables/fields/clickables are skipped by default " +
       "and counted in a note — pass include_hidden to list them too (prototype pages that stack whole screens that way). " +
+      "Raw text lists rendered text only; include_hidden applies to it too. " +
       "It does NOT run arbitrary script — use browser_eval for that.",
     { view_id: viewIdArg, include_hidden: includeHiddenArg },
     async (args) => {
@@ -330,7 +332,9 @@ async function resolveShotTarget(
   // 而 labelOf 给的就是空串——空串不是 nullish，`??` 兜不住它，caption 会退成
   // "Screenshot visible viewport …"（把一次**裁剪**说成视口截图，说的还是错的那种）。
   const label = String(asRecord(v["hit"])?.["text"] ?? "").trim();
-  return { ok: true, clip, hit: label || "the element" };
+  // 命中多个时报数——同一个解析脚本、同一句注脚（`matchNote` 从 act.ts 导出），缺了它截图会
+  // 悄悄按 index 0 裁一块，而 `browser_act` 那边却会说"命中了 N 个"。
+  return { ok: true, clip, hit: (label || "the element") + matchNote(v) };
 }
 
 /**
@@ -366,8 +370,9 @@ export function buildBrowserScreenshotTool(
         .string()
         .optional()
         .describe(
-          "Crop the shot to this element's box, matched by its visible label (e.g. the 保存 button). " +
-            "Use this instead of a full screenshot when you only need one control.",
+          "Crop the shot to this element's box, matched by its visible label (e.g. the 保存 button) — the " +
+            "same matching browser_act uses, so it only reaches interactive elements; use `selector` for " +
+            "anything else. Use this instead of a full screenshot when you only need one control.",
         ),
       selector: z
         .string()
@@ -435,8 +440,8 @@ export function buildBrowserWaitTool(
       "The expression must be SYNCHRONOUS and it may throw while the thing you are waiting for does not exist yet " +
       "(that is treated as not-yet-true, not as a failure). `until:\"load\"` waits for the view to finish loading, " +
       "which no in-page expression can express (document.readyState is answered by the OLD document during a " +
-      "navigation). A timeout is REPORTED, not raised: you get how many times it polled, the last value it saw, and " +
-      "whether the view was hidden — read that before concluding the page is broken.",
+      "navigation). A timeout is REPORTED, not raised: you get how many times it polled and the last value it saw — " +
+      "read that before concluding the page is broken.",
     {
       view_id: viewIdArg,
       until: z
