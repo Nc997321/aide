@@ -83,6 +83,11 @@ import type { PermissionRuleDraft } from "./types.js";
 
 // ---- SessionWorker ----
 
+/** interrupt 兜底终态的宽限期（ms）：打断先照常交给 SDK，宽限期内没等到本轮终态才认它
+ *  收不了尾（`currentQuery` 为空，或 CLI 卡在端点上不兑现）——见 handleCommand 的
+ *  interrupt 分支与 settleInterruptedTurn。 */
+export const INTERRUPT_SETTLE_GRACE_MS = 10_000;
+
 export interface SessionWorkerOptions {
   cwd?: string;
   initialModel?: string;
@@ -136,6 +141,8 @@ export class SessionWorker {
 
   // ---- SDK 查询状态 ----
   private currentQuery: Awaited<ReturnType<typeof query>> | null = null;
+  /** interrupt 兜底终态计时器（见 armInterruptFallback）。非空 = 已交付打断、在等它兑现。 */
+  private interruptFallbackTimer: ReturnType<typeof setTimeout> | null = null;
   private currentModel = process.env.ANTHROPIC_MODEL ?? "";
   /** 会话级 effort（low/medium/high/xhigh/max，小写）。绝不以 env 形式传给 CLI
    * （CLAUDE_CODE_EFFORT_LEVEL 会压过 applyFlagSettings、与 options.effort 就高合并，
@@ -273,6 +280,8 @@ export class SessionWorker {
     // 存进 lastStopEffort（时序：Stop hook → result → message_stop）。读取即清零——
     // 中断/出错轮次 Stop 不触发时，不会把上一轮的档位泄漏到这一轮。
     if (event.type === "message_stop") {
+      // 本轮已有终态：打断兜底不必再补（打断被 SDK 兑现是常态，宽限期专门留给慢兑现）。
+      this.clearInterruptFallback();
       if (this.lastStopEffort) event.effort = this.lastStopEffort;
       this.lastStopEffort = "";
     }
@@ -418,6 +427,44 @@ export class SessionWorker {
    *  message_stop/interrupted 会翻 isBusy，还会给上一条消息盖一个假档位徽章。 */
   private restartQueryForThinking(): void {
     this.restartPending = true;
+    this.abortController?.abort();
+  }
+
+  // ---- interrupt 兜底终态 ----
+  // 契约面：对接文档规程 7 说「超时后用 interrupt 驱动终态」，但打断只是转发给 SDK，
+  // 兑现与否取决于 CLI——引擎不做兜底时，收不了尾的那一轮会永远挂着
+  // （2026-09-23 对接方现场：轮次超时 → interrupt → 「未收尾」→ 下一轮只能重建会话）。
+
+  /** 撤掉兜底计时器（本轮已有终态、或会话要停了，都不该再补）。 */
+  private clearInterruptFallback(): void {
+    if (this.interruptFallbackTimer === null) return;
+    clearTimeout(this.interruptFallbackTimer);
+    this.interruptFallbackTimer = null;
+  }
+
+  /** 交付打断之后挂一条兜底：没有 query 可打断时没有宽限可言，直接收尾；
+   *  有 query 时先让它兑现，宽限期内没等到本轮终态才收尾。 */
+  private armInterruptFallback(): void {
+    if (!this.turnActive) return; // 没有在飞的轮次，没有可收的尾
+    this.clearInterruptFallback();
+    if (!this.currentQuery) {
+      this.settleInterruptedTurn();
+      return;
+    }
+    this.interruptFallbackTimer = setTimeout(() => {
+      this.interruptFallbackTimer = null;
+      if (!this.stopped) this.settleInterruptedTurn();
+    }, INTERRUPT_SETTLE_GRACE_MS);
+  }
+
+  /** 收不了尾的那一轮的兜底收尾：补一条 interrupted 终态（形状与 stop() 的自动化兜底
+   *  同款），并把不再响应打断的 query 真拆掉——留着一个永不回包的 query，下一轮 send
+   *  会被它吞掉（轮次永远起不来），worker 就此楔死。abort 走既有链路：catch 里作废迭代器
+   *  → while 再迭代一轮，下一条 send 原地 resume 重建。 */
+  private settleInterruptedTurn(): void {
+    if (!this.turnActive) return;
+    this.turnActive = false;
+    this.emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null });
     this.abortController?.abort();
   }
 
@@ -592,6 +639,9 @@ export class SessionWorker {
       cancelAllBrowserQueries("interrupted");
       // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
       this.currentQuery?.interrupt().catch(() => {});
+      // 兜底：打断不保证兑现——没有 query 可打断时整句是空操作，CLI 卡在端点上时投出去
+      // 也没人应答。两种情况这一轮都永远收不了尾，网关的会话状态机就回不到干净态。
+      this.armInterruptFallback();
 
     } else if (cmd.cmd === "stop_bg_task") {
       // 终止后台任务：SDK stopTask 后 CLI 会发 task_notification(status:"stopped")，
@@ -1210,6 +1260,7 @@ export class SessionWorker {
     // 极小窗口的重复也会被执行侧幂等忽略（路由摘除后事件无处路由）。
     const emitSyntheticTerminal = !!this.automationConfig && this.turnActive;
     this.stopped = true;
+    this.clearInterruptFallback();
     if (emitSyntheticTerminal) {
       this.emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null });
     }

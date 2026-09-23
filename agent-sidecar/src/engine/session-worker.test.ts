@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterAll } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { SessionWorker } from "./session-worker.js";
+import { SessionWorker, INTERRUPT_SETTLE_GRACE_MS } from "./session-worker.js";
 import { userDenyMessage } from "./permissions.js";
 import type { ChatEvent } from "./types.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
@@ -1427,6 +1427,89 @@ describe("SessionWorker — context_usage event extension", () => {
     await flushPromises();
 
     expect(events.some((e) => e.type === "context_usage")).toBe(false);
+  });
+});
+
+/**
+ * interrupt 兜底终态：对接文档规程 7 承诺「超时后用 interrupt 驱动终态」，此前有两种
+ * 形态做不到——(a) currentQuery 为空（spawn 窗口 / error 终态之后），interrupt 整句是
+ * 空操作；(b) query 在、但 CLI 卡在端点上不兑现（interrupt 投出去了，没人应答）。
+ * 两种都让网关的轮次永远收不了尾：2026-09-23 对接方现场 = 轮次超时 → interrupt →
+ * 「未收尾」→ 下一轮只能重建会话，形成循环。
+ */
+describe("SessionWorker — interrupt 兜底终态", () => {
+  const interruptCmd = { cmd: "interrupt", session_id: "test-sid" } as any;
+
+  it("轮次在飞但没有 query 可打断：立刻补一条 interrupted 终态", () => {
+    const { worker, events } = makeWorker();
+    // spawn 窗口 / error 终态之后的形态：轮次还在飞，但没有东西能结束它
+    (worker as any).turnActive = true;
+
+    worker.handleCommand(interruptCmd);
+
+    const stops = events.filter((e) => e.type === "message_stop");
+    expect(stops).toHaveLength(1);
+    expect((stops[0] as any).stop_reason).toBe("interrupted");
+    expect((worker as any).turnActive).toBe(false);
+  });
+
+  it("轮次空闲时 interrupt 不凭空造终态", () => {
+    const { worker, events } = makeWorker();
+    worker.handleCommand(interruptCmd);
+    expect(events.some((e) => e.type === "message_stop")).toBe(false);
+  });
+
+  it("有 query 在跑：先交给 SDK，宽限期内没兑现才补终态并拆掉卡住的 query", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { worker, events } = makeWorker();
+      const interrupt = vi.fn(() => Promise.resolve());
+      const abort = vi.fn();
+      (worker as any).currentQuery = { interrupt };
+      (worker as any).abortController = { abort };
+      (worker as any).turnActive = true;
+
+      worker.handleCommand(interruptCmd);
+      await flushPromises();
+
+      // 既有通道照走，且宽限期内不抢跑（正常打断的终态要来得及先到）
+      expect(interrupt).toHaveBeenCalledTimes(1);
+      expect(events.some((e) => e.type === "message_stop")).toBe(false);
+      expect(abort).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(INTERRUPT_SETTLE_GRACE_MS);
+
+      const stops = events.filter((e) => e.type === "message_stop");
+      expect(stops).toHaveLength(1);
+      expect((stops[0] as any).stop_reason).toBe("interrupted");
+      // 必须真拆掉：留着一个永不回包的 query，下一轮 send 会被它吞掉（worker 楔死）
+      expect(abort).toHaveBeenCalledTimes(1);
+      expect((worker as any).turnActive).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("SDK 兑现了打断（真实终态先到）：宽限期不再补第二条", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { worker, events } = makeWorker();
+      const abort = vi.fn();
+      (worker as any).currentQuery = { interrupt: () => Promise.resolve() };
+      (worker as any).abortController = { abort };
+      (worker as any).turnActive = true;
+
+      worker.handleCommand(interruptCmd);
+      // 真实终态到达（mapSdkMessage 的 result → message_stop）
+      (worker as any).emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: 0.01, usage: null });
+
+      vi.advanceTimersByTime(INTERRUPT_SETTLE_GRACE_MS * 3);
+
+      expect(events.filter((e) => e.type === "message_stop")).toHaveLength(1);
+      expect(abort).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
