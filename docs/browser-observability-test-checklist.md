@@ -34,7 +34,7 @@ pnpm build:sidecar && pnpm tauri build
 |---|---|---|
 | `browser_tabs` 的用词 | `parked` / `displayed` | `visible` / `hidden` |
 | `browser_network {…}` | 回一段报文（哪怕空） | `unknown op: …` |
-| 工具清单里有没有 `browser_cdp_probe` | **有**（本场专用，见判据 0） | 无 = 验收构建没做出来，**停下来告诉控制者**，别跳过判据 0 |
+| 工具清单里有没有 `browser_network` / `browser_console` | 两个都在 | 缺任一个 = 验收构建没做出来，**停下来告诉控制者** |
 
 **③ 起夹具服务**（仓库根执行，终端留着）：
 
@@ -64,34 +64,45 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 > 清单在 `docs/browser-observability-test-checklist.md`：**严格按它执行**，每步把工具返回**原文**记下来，
 > 最后把第 5 节的台账填满——**不许美化失败**，失败就把返回原文附上。夹具服务已经起好了（8780）。
 
-**⑥ 首次调用 `browser_cdp_probe` 会弹一次权限**（它是临时调试工具，**故意不进放行名单**），点一下允许即可。
+**⑥ 权限**：`browser_network` / `browser_console` 已进放行名单（与其余七个浏览器工具同款，见 `browserMcp.ts` 的
+`BROWSER_ALLOW_RULES`），**不会**弹窗——若真弹了，说明跑的不是本批构建。
 
 ---
 
-## 1. 判据 0：注入路（**门禁**——不通过就别往下跑）
+## 1. 判据 0：注册路（**门禁**——不通过就别往下跑）
 
 整套 recorder 的地基是"**在文档创建那一刻**把探针装上"（加载期请求、新文档自动带上都靠它）。
-实现走的是 CDP `Page.addScriptToEvaluateOnNewDocument`（零 Rust）。**这条路在真机 WebView2 上从未验过**，
-所以先问它，再问别的。原始回包**逐字**记下来（后面要做判断依据）。
+实现走的是 CDP `Page.addScriptToEvaluateOnNewDocument`（零 Rust），**这条路在真机 WebView2 上从未验过**。
 
-1. `browser_tab {action:"open", url:"http://127.0.0.1:8780/", label:"probe"}` → 记下 `view_id`（下文 **VP**）。
-2. `browser_cdp_probe {view_id:VP, method:"Page.addScriptToEvaluateOnNewDocument", params:{source:"window.__aideProbe = 1"}}`
-   - **期望**：回包**没有** `error` 字段（成功形态是 `{"identifier":"…"}` 之类；`identifier` 的值不重要）。
-   - **被拒**：回包是 `{"error":{"code":…,"message":…}}`（典型：`'Page.addScriptToEvaluateOnNewDocument' wasn't found`）。
-3. `browser_tab {action:"navigate", view_id:VP, url:"http://127.0.0.1:8780/?probe=1"}`（**要一份新文档**）
-4. `browser_eval {view_id:VP, script:"window.__aideProbe"}` → **期望 `1`**。
+**它不需要额外工具**：注册成没成由实现自己报出来（注册被拒 ⇒ 输出里会出现一句
+`the recorder could not be registered for future page loads: … was rejected by the runtime (…)`），
+而"注册到底交没交货"由**加载期请求在不在**直接回答。所以门禁就是下面这一小段，走完再进第 2 节。
 
-**判定**：2 与 4 都过 → 门禁过，继续第 2 节。
-**任一条不过** → **停下**，把回包原文交给控制者：计划里的条件任务（Rust 宿主 API `AddScriptToExecuteOnDocumentCreated` 兜底）
-必须先做、重建、重启，再从头跑本清单。**不要在没装上的构建上验判据 1–16**——那验的是"懒装"，而懒装恰好漏掉本批最想要的加载期请求，全绿也是假的。
+1. `browser_tab {action:"open", url:"http://127.0.0.1:8780/", label:"gate"}` → 记下 **VG**。
+2. `browser_network {view_id:VG}`（本视图的第一次 recorder 调用）→ 期望两句：`armed in this document by this call`
+   的 NOTE + `No requests recorded yet.`；**不应**出现 `could not be registered` 那句。
+3. `browser_tab {action:"navigate", view_id:VG, url:"http://127.0.0.1:8780/?gate=1"}`（**要一份新文档**）。
+4. 等 1 秒（读响应体是异步的）→ `browser_network {view_id:VG}` → 期望**两行**加载期请求：
+   `GET http://127.0.0.1:8780/api/ok → 200`，fetch 与 XHR 各一条（夹具在文档创建时同时发这两条）。
 
-**顺带记两条**（不改代码形状，但决定后续怎么读结果）：
+**判定**：
 
-- **注册挂在哪**：`browser_tab {action:"open", url:"http://127.0.0.1:8780/?probe=2"}` 开个新视图 → 直接读 `window.__aideProbe`
-  → 预期 `undefined`（注册**不跨视图**，每个视图各自装一次）；把那个视图 `close` 掉再开一个，再读一次，记下。
-- **navigate → 读到落点的往返**（`NAV_SETTLE_MS = 250ms` 的依据）：先 `browser_eval {script:"Date.now()"}` 记时刻，
-  再 `browser_tab {action:"navigate"}`，紧接着 `browser_eval {script:"location.href"}`，记下**读到的 href 是新的还是旧的**。
-  读到旧的 ⇒ 那 250ms 不能省；读到新的 ⇒ 可以调小（这条只影响判据 7 怎么读，不影响判定）。
+| 第 4 步看到什么 | 含义 | 下一步 |
+|---|---|---|
+| 两行加载期请求 | 注册生效 ✓ | 门禁过，进第 2 节 |
+| 空表，且第 2 步有 `could not be registered … rejected by the runtime` | CDP 那条路在真机不可用 | **停**，原文交控制者：计划里的条件任务（Rust 宿主 API `AddScriptToExecuteOnDocumentCreated`）必须先做、重建、重启 |
+| 空表，且第 2 步**没有**那句 | 注册被接受但**没交货** | 同上：停，原文交控制者 |
+
+**不要在没装上的构建上验判据 1–16**——那验的是"懒装"，而懒装恰好漏掉本批最想要的加载期请求，全绿也是假的。
+
+**顺带记一条**（不改判定，但决定判据 7b 怎么读）：**第 3 步的返回**是"落点一致"还是"落点不符"，以及紧接着
+`browser_eval {view_id:VG, script:"location.href"}` 读到的是新 URL 还是旧 URL：
+
+| 第 3 步 | 落点读取 | 含义 |
+|---|---|---|
+| 报一致 | 新 | `NAV_SETTLE_MS = 250ms` 够用 |
+| 报不符 | 新 | settle **太短**（正常导航被误报成不符）→ 把 `250` 调大 |
+| 报不符 | 旧 | 导航还没提交，属异常 → 原文交控制者 |
 
 ---
 
