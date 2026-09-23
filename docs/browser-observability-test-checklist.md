@@ -283,8 +283,8 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 **① 前台没被抢。** 整场跑在 agent 自己开的 parked 视图里：用户的面板**不该有任何变化**（不该跳页、不该多出标签、
 不该被推到前台）。看到面板自己动了 = **FAIL**（本批没做 UI，这是回归项）。
 
-**② 用户屏幕上"没有被弹窗打断"。** 除第 0 节的 ⑥ 那一次 `browser_cdp_probe` 权限提示外，
-全场**不该**再有任何权限弹窗（两个新工具在放行名单里）。多出来的提示 = 工具面漏登记，记下来。
+**② 用户屏幕上"没有被弹窗打断"。** 全场**不该**有任何权限弹窗（九个浏览器工具都在放行名单里，
+见 `browserMcp.ts` 的 `BROWSER_ALLOW_RULES`）。多出来的提示 = 工具面漏登记，记下来。
 
 ---
 
@@ -305,7 +305,7 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 | # | 判据 | 调用（简） | 期望（逐字/形态） | 实测片段 | 结论 |
 |---|---|---|---|---|---|
-| 0 | 注入路（门禁） | `browser_cdp_probe` → navigate → 读 `window.__aideProbe` | 无 `error` 字段；新文档读到 `1` | | |
+| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `could not be registered` 那句；新文档能看到两行加载期请求 | | |
 | 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | | |
 | 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | | |
 | 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | | |
@@ -331,9 +331,8 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 2. `docs/superpowers/specs/2026-09-22-browser-observability-design.md` 头部状态行 →「已实现并真机验收通过（N/N）」；
    第 16 节未决问题补两条：`frame` 为何不做（隔离世界观察不到主世界）、Raw text 为何用布尔旁注而非计数
    （`innerText` 与 `textContent` 的空白折叠规则不同，字符差可以是 0 甚至负数，报一个会骗人的数字更糟）。
-3. 判据 0 的原始回包 + 两条顺带结论（注册生命周期 / 往返代价）写进实现计划的「步骤 0 实测结果」节。
-4. 判据 0 若被拒 ⇒ 条件任务（Rust 兜底注入）落地后再重跑。
-5. 临时工具 `browser_cdp_probe` 验收后**必须删掉**（它不是能力；留着等于给模型一条任意 CDP 透传）。
+3. 判据 0 的实测结论（注册路通不通 / settle 够不够）写进实现计划的「步骤 0 实测结果」节。
+4. 判据 0 若被拒或"被接受但没交货" ⇒ 条件任务（Rust 兜底注入）落地后再重跑本清单。
 
 ---
 
