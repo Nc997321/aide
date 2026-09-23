@@ -23,6 +23,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
+import { cdpMethodError } from "./format.js";
 import { runEval } from "./runEval.js";
 import {
   buildClickFallbackScript,
@@ -90,18 +91,6 @@ async function evalScript(
     return { ok: false, text: "The page script returned no usable object (it returned a non-object)." };
   }
   return { ok: true, value };
-}
-
-/**
- * CDP 回包里的**方法级错误**——`{error:{code,message}}`。
- *
- * 返回 null = 这次调用真的成了。**不看它的调用点都会报假成功**，见文件头。
- */
-function cdpMethodError(data: unknown): string | null {
-  const err = asRecord(asRecord(data)?.["value"])?.["error"];
-  const e = asRecord(err);
-  if (!e) return null;
-  return String(e["message"] ?? e["code"] ?? "unknown");
 }
 
 /** 一次 CDP 鼠标输入。成了回 `null`，否则回**面向模型的失败原因**。 */

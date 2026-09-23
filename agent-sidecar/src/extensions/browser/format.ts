@@ -53,6 +53,19 @@ function str(v: unknown): string {
 }
 
 /**
+ * CDP 回包里的**方法级错误**——`{error:{code,message}}`。返回 null = 这次调用真的成了。
+ *
+ * ⚠️ 方法级拒绝是一个**合法 JSON 响应体**，桥只做 JSON 解析 → 它带着 `ok:true` 一路回来。
+ * 不看它的调用点都会**报假成功**（`act.ts` 的文件头有完整来龙去脉：一次运行时拒绝的点击
+ * 会被报成"已用真实鼠标事件点击"——而它根本没点）。原先 `act.ts` / `screenshot.ts` 各写了
+ * 一份，这里收口成唯一一份。
+ */
+export function cdpMethodError(data: unknown): string | null {
+  const e = asRecord(asRecord(asRecord(data)?.["value"])?.["error"]);
+  return e ? String(e["message"] ?? e["code"] ?? "unknown") : null;
+}
+
+/**
  * 一次成功求值的**结果视图**——`runEval` 的成功返回去掉通道细节。
  *
  * 做成对象而不是三个位置参数：`viewId` 与 `probe` 都是可缺省的旁注，摊平了容易传错位。

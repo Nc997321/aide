@@ -32,6 +32,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
+import { cdpMethodError } from "./format.js";
 
 /**
  * 图像格式。默认 **jpeg**。
@@ -97,12 +98,12 @@ export async function captureScreenshot(
 
   const value = asRecord(cdpValue(resp.data));
   // CDP 的约定：方法级错误**不算调用失败**，而是回一个 `{error: {code, message}}` 响应体。
-  const cdpError = asRecord(value?.["error"]);
-  if (cdpError) {
+  const rejected = cdpMethodError(resp.data);
+  if (rejected) {
     return {
       ok: false,
       error:
-        `Page.captureScreenshot was rejected by the runtime: ${String(cdpError["message"] ?? cdpError["code"] ?? "unknown")}. ` +
+        `Page.captureScreenshot was rejected by the runtime: ${rejected}. ` +
         `This is a WebView2 runtime capability, not a page problem — fall back to browser_read / browser_eval.`,
     };
   }
