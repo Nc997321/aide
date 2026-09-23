@@ -68,19 +68,40 @@ function cdpValue(data: unknown): unknown {
 }
 
 /**
- * 截图。`fullPage` = 整页（`captureBeyondViewport`），否则只截**视口**（用户实际看到的那一块）。
+ * 裁剪框（CDP `Page.captureScreenshot` 的 `clip`）。
+ *
+ * **页面坐标**，不是视口坐标：clip 相对文档原点。视口相对的值在滚动过的页面上会裁错位置
+ * ——而且是**看起来没报错**的那种错（裁到一片空白或别的元素）。
+ */
+export interface ScreenshotClip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 截图。`clip` = 只截**那个矩形**（元素级，页面坐标），`fullPage` = 整页
+ * （`captureBeyondViewport`），都不给则只截**视口**（用户实际看到的那一块）。
  *
  * 默认视口是有意的：agent 要回答的大多是"用户现在看到什么"，整页反而引入屏幕外的噪音。
+ * `clip` 优先于 `fullPage`：给了裁剪框，"整页"就没有意义了。
  */
 export async function captureScreenshot(
   viewId: string | undefined,
-  opts: { fullPage: boolean; format: ScreenshotFormat },
+  opts: { fullPage: boolean; format: ScreenshotFormat; clip?: ScreenshotClip },
   emit: (e: ChatEvent) => void,
 ): Promise<ScreenshotOutcome> {
   const params: Record<string, unknown> = { format: opts.format };
   // `quality` 只对 jpeg 有意义（CDP 对 png 传它会报错，别顺手带上）。
   if (opts.format === "jpeg") params["quality"] = JPEG_QUALITY;
-  if (opts.fullPage) params["captureBeyondViewport"] = true;
+  if (opts.clip) {
+    params["clip"] = { ...opts.clip, scale: 1 };
+    // 元素在视口外时，不带这个开关会得到一张空白裁剪——而"只截这个按钮"恰恰常在滚动之外。
+    params["captureBeyondViewport"] = true;
+  } else if (opts.fullPage) {
+    params["captureBeyondViewport"] = true;
+  }
 
   const resp = await queryBrowser(
     { op: "call_cdp", view_id: viewId, method: "Page.captureScreenshot", params },

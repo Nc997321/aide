@@ -305,33 +305,47 @@ ${CLICKABLE_JS}
 }
 
 /**
- * 解析目标并**算好屏幕坐标**（点击用）。返回值里带 `hit` 描述，让模型知道点到了什么。
+ * 解析目标并**算好两套坐标**：视口中心的 `x`/`y`（点击用）与页面坐标矩形 `rect`（截图裁剪用）。
+ * 返回值里带 `hit` 描述，让模型知道点到了什么。
  *
  * 坐标口径：先 `scrollIntoView({behavior:'instant'})`（**必须 instant**——smooth 是动画，
  * 同一次脚本执行里读到的 rect 会是滚动前的旧值），再读 `getBoundingClientRect()`。
- * rect 是视口相对坐标，正是 CDP `Input.dispatchMouseEvent` 要的口径。
+ * 那个 rect 是**视口相对**坐标，正是 CDP `Input.dispatchMouseEvent` 要的口径；而
+ * `Page.captureScreenshot` 的 `clip` 相对**文档原点**，所以要另加滚动偏移（脚本里的 `rect`）。
+ *
+ * `opts.scroll` 缺省 true（点击必须把元素滚进视口）。截图时传 `false`——**别动用户正在看的
+ * 滚动位置**，裁剪靠 CDP 的 `captureBeyondViewport`。
  *
  * `matched` / `usedIndex` = 命中数与**钳制后**用的是第几个（`index` 越界会被 `Math.min` 换掉）。
  * 三个脚本（本函数 / `buildFillScript` / `buildClickFallbackScript`）**都带**这一对：调用方按它
  * 报数（act.ts 的 matchNote），少一处那条路的注脚就永远不出现。
  */
-export function buildResolveScript(target: ActTarget): string {
+export function buildResolveScript(target: ActTarget, opts: { scroll?: boolean } = {}): string {
   return `(() => {${preamble(target)}
   try {
     var r = resolve();
     if (r.error) return failure(r.error, r);
     var el = r.el;
-    try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }
-    catch (e) { el.scrollIntoView(); }
+    var SCROLL = ${opts.scroll === false ? "false" : "true"};
+    if (SCROLL) {
+      try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); }
+      catch (e) { el.scrollIntoView(); }
+    }
     var rect = el.getBoundingClientRect();
     if (rect.width === 0 && rect.height === 0) {
       return { ok: false, error: 'matched element has zero size (hidden or not laid out)', hit: describe(el) };
     }
+    // 截图裁剪要**页面坐标**（CDP 的 Page.captureScreenshot 的 clip 相对文档原点，不是视口）。
+    // 本文件是注入脚本的源码：注释里不许出现反引号（会撕开外层模板字面量，见 preamble 的约定）。
+    var sx = window.pageXOffset || document.documentElement.scrollLeft || 0;
+    var sy = window.pageYOffset || document.documentElement.scrollTop || 0;
     return {
       ok: true,
       hit: describe(el),
       matched: r.count,
       usedIndex: r.used,
+      rect: { x: Math.round(rect.left + sx), y: Math.round(rect.top + sy),
+              w: Math.round(rect.width), h: Math.round(rect.height) },
       x: Math.round(rect.left + rect.width / 2),
       y: Math.round(rect.top + rect.height / 2)
     };

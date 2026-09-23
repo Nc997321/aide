@@ -582,7 +582,9 @@ describe("browser_screenshot — 视觉兜底", () => {
     const q = await waitForQuery(events, 0);
     expect(q.params).toEqual({ format: "jpeg", quality: 80, captureBeyondViewport: true });
     reply(q, { ok: true, data: { value: { data: "X" } } });
-    expect((await p).content[0].text).toContain("full");
+    expect((await p).content[0].text).toContain("page (full)");
+    // 没给 text/selector 就不解析元素：老路径一发都不多发（解析只属于裁剪）
+    expect(events).toHaveLength(1);
   });
 
   it("format=png → 不带 quality（CDP 对 png 传它会报错），mimeType 跟着变", async () => {
@@ -649,6 +651,87 @@ describe("browser_screenshot — 视觉兜底", () => {
     expect(r.content).toHaveLength(1);
     expect(r.content[0].text).toContain("no image data");
   });
+});
+
+/**
+ * 元素级截图（P3-1）：反馈原话是整页截图**全程没用**（图像进上下文很贵），而"只截这个按钮"
+ * 常常有用。所以 `text` / `selector` 把裁剪框交给 CDP 的 `clip`——**页面坐标 + scale 1**。
+ *
+ * 找不到就**如实失败**：退化成整页会让模型以为手里是局部（而它拿到的是一整页）。
+ */
+describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
+  it("给了 text → 先解析元素，再按它的矩形裁剪截图（clip 是页面坐标 + scale 1）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "保存" }, {});
+
+    const probe = await waitForQuery(events, 0);
+    expectEvalRequest(probe, "TARGET");
+    // 截图**不许**挪动用户正在看的滚动位置（裁剪靠 captureBeyondViewport，不靠滚动）
+    expect(probe.params.expression).toContain("var SCROLL = false;");
+    reply(probe, evalOk({ ok: true, hit: { tag: "button", text: "保存" }, rect: { x: 40, y: 120, w: 88, h: 32 }, matched: 1, usedIndex: 0 }));
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: { data: "QUJD" } } });
+
+    const shot = events[1] as any;
+    expect(shot.method).toBe("Page.captureScreenshot");
+    expect(shot.params.clip).toEqual({ x: 40, y: 120, width: 88, height: 32, scale: 1 });
+    expect(shot.params.captureBeyondViewport).toBe(true);
+
+    const r = await p;
+    expect(r.content[1].type).toBe("image");
+    // 说明文本要说清这是**元素的裁剪**，不是视口也不是整页
+    expect(r.content[0].text).toContain("of 保存");
+  });
+
+  it("元素找不到 → **如实失败，不退化成整页截图**", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "没有这个" }, {});
+    reply(await waitForQuery(events, 0), evalOk({ ok: false, error: 'no element on the page contains that text "没有这个"' }));
+
+    const r = await p;
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0].text).toContain("Could not find the target");
+    expect(events).toHaveLength(1); // 关键：**没有再发一次整页截图**
+  });
+
+  it("解析到了但矩形不可用（零尺寸）→ 同样如实失败，不发截图", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "隐藏的东西" }, {});
+    reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "div", text: "隐藏的东西" }, rect: { x: 0, y: 0, w: 0, h: 0 } }));
+
+    const r = await p;
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0].text).toContain("no usable box to crop");
+    expect(events).toHaveLength(1);
+  });
+
+  /** 桥侧失败（视图没了 / 脚本抛了）走 runEval 的文本——照旧原样带出，不加工。 */
+  it("解析这一发就失败 → 原样回它的文本，也不发截图", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: "#save" }, {});
+    reply(await waitForQuery(events, 0), { ok: false, error: "no embedded browser view is open" });
+
+    const r = await p;
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0].text).toContain("no embedded browser view is open");
+    expect(events).toHaveLength(1);
+  });
+
+  /**
+   * 脚本回了非对象 ≠ 页面上没有这个元素：前者要改的是脚本，后者要改的是词。混成一句
+   * （"Could not find the target: unknown"）会让模型拿着"找不到目标"的结论去换 `text` 重试。
+   */
+  it("解析脚本回了非对象 → 说脚本形状的问题，**不谎称**找不到目标", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: "#save" }, {});
+    reply(await waitForQuery(events, 0), evalOk("boom", "string"));
+
+    const r = await p;
+    expect(r.content).toHaveLength(1);
+    expect(r.content[0].text).toContain("no usable object");
+    expect(r.content[0].text).not.toContain("Could not find the target");
+    expect(events).toHaveLength(1);
+  });
+
 });
 
 describe("browser_network", () => {

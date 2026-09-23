@@ -65,18 +65,24 @@ interface StubDom {
 /**
  * `candidates` = 候选池（**文本载体**：裸 div/span/td 也在里面）；
  * `textNodes` = 页面上真的带着这段文本的节点（`parentElement` 是命中元素）；
- * `clickableHints` = 页面上"看起来能点"的元素（只在提示分支里用到）。
+ * `clickableHints` = 页面上"看起来能点"的元素（只在提示分支里用到）；
+ * `scroll` = 文档已滚动的距离（**页面坐标**换算要用，见 buildResolveScript 的 rect）。
  */
 function stubDom(opts: {
   candidates?: unknown[];
   textNodes?: Array<{ data: string; parentElement: unknown }>;
   clickableHints?: unknown[];
+  scroll?: { x: number; y: number };
 }): StubDom {
   const nodes = opts.textNodes ?? [];
   let i = 0;
   return {
     document: {
       body: {},
+      // 脚本读滚动偏移时会先看 window.pageXOffset，再退回 documentElement——两个都要在桩里，
+      // 缺一个就是解引用 undefined 抛异常，而异常会被脚本的 try 折成"resolve failed"，
+      // 让**所有**解析用例静默变成失败分支。
+      documentElement: { scrollLeft: 0, scrollTop: 0 },
       querySelectorAll: (sel: string) =>
         sel === CLICKABLE_MARKUP_SELECTOR ? (opts.clickableHints ?? []) : (opts.candidates ?? []),
       createTreeWalker: () => ({
@@ -84,6 +90,8 @@ function stubDom(opts: {
       }),
     },
     window: {
+      pageXOffset: opts.scroll?.x ?? 0,
+      pageYOffset: opts.scroll?.y ?? 0,
       getComputedStyle: (e: { cursor?: string }) => ({
         visibility: "visible",
         display: "block",
@@ -96,12 +104,16 @@ function stubDom(opts: {
 }
 
 /** 跑一次解析脚本（形态与 runEval 送进页面的完全一致）。 */
-function runResolve(target: ActTarget, dom: StubDom): Record<string, unknown> {
+function runResolve(
+  target: ActTarget,
+  dom: StubDom,
+  opts?: { scroll?: boolean },
+): Record<string, unknown> {
   const factory = new Function(
     "window",
     "document",
     "NodeFilter",
-    "return " + buildResolveScript(target),
+    "return " + buildResolveScript(target, opts),
   ) as (w: unknown, d: unknown, nf: unknown) => Record<string, unknown>;
   return factory(dom.window, dom.document, dom.NodeFilter);
 }
@@ -146,6 +158,48 @@ describe("browser_act：目标解析成功的那条路", () => {
 
     expect(out["ok"]).toBe(true);
     expect((out["hit"] as Record<string, unknown>)["tag"]).toBe("div");
+  });
+});
+
+/**
+ * `rect` 是**页面坐标**矩形（`browser_screenshot` 拿它当 CDP 的 `clip`），`x`/`y` 是**视口**坐标
+ * （CDP `Input.dispatchMouseEvent` 的口径）——两套口径同时出现在一个载荷里，正是要钉的地方。
+ */
+describe("buildResolveScript：页面坐标矩形与 scroll 开关", () => {
+  it("rect 含滚动偏移（页面坐标），x/y 仍是视口坐标（点击口径）", () => {
+    const hit = el("button", { text: "刷新", markup: true });
+    const out = runResolve({ text: "刷新" }, stubDom({ candidates: [hit], scroll: { x: 100, y: 200 } }));
+
+    expect(out["ok"]).toBe(true);
+    // 视口相对：left 10 + width 40 / 2 = 30（滚动与否都不该变）
+    expect(out["x"]).toBe(30);
+    expect(out["y"]).toBe(28);
+    // 页面坐标：视口坐标 + 滚动偏移 —— CDP 的 clip 相对**文档原点**，不是视口
+    expect(out["rect"]).toEqual({ x: 110, y: 220, w: 40, h: 16 });
+  });
+
+  it("缺省（点击路径）会 scrollIntoView —— 元素不在视口里也点得到", () => {
+    const calls: unknown[] = [];
+    const hit = el("button", { text: "刷新", markup: true });
+    hit.scrollIntoView = (arg?: unknown) => calls.push(arg);
+
+    const out = runResolve({ text: "刷新" }, stubDom({ candidates: [hit] }));
+
+    expect(out["ok"]).toBe(true);
+    // 必须带 `instant`：smooth 是动画，同一次脚本里读到的 rect 会是滚动前的旧值
+    expect(calls).toEqual([{ block: "center", inline: "center", behavior: "instant" }]);
+  });
+
+  it("scroll:false（截图路径）**不碰**元素滚动位置，照样给 rect", () => {
+    const calls: unknown[] = [];
+    const hit = el("button", { text: "刷新", markup: true });
+    hit.scrollIntoView = (arg?: unknown) => calls.push(arg);
+
+    const out = runResolve({ text: "刷新" }, stubDom({ candidates: [hit] }), { scroll: false });
+
+    expect(out["ok"]).toBe(true);
+    expect(calls).toEqual([]); // 用户正在看的滚动位置不许被动
+    expect(out["rect"]).toEqual({ x: 10, y: 20, w: 40, h: 16 });
   });
 });
 

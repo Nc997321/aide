@@ -41,8 +41,13 @@ function asRecord(v: unknown): Record<string, unknown> | null {
     : null;
 }
 
-/** 目标解析失败时的文本：错误 + 候选清单（帮模型改口径，而不是让它瞎猜）。 */
-function describeResolveFailure(v: Record<string, unknown>): string {
+/**
+ * 目标解析失败时的文本：错误 + 候选清单（帮模型改口径，而不是让它瞎猜）。
+ *
+ * **导出**：`browser_screenshot` 的元素裁剪走的**同一个**解析脚本（`buildResolveScript`），
+ * 判据自然也只有这一份——第二份文案必然漂（"判据分家"是本项目反复治过的病）。
+ */
+export function describeResolveFailure(v: Record<string, unknown>): string {
   const lines = [`Could not find the target: ${String(v["error"] ?? "unknown")}`];
   const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
   if (candidates.length) {

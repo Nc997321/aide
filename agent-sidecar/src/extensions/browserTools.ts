@@ -14,11 +14,11 @@ import type { ChatEvent } from "../engine/types.js";
 import { queryBrowser, type BrowserCall } from "./browserClient.js";
 import { runEval } from "./browser/runEval.js";
 import { buildProjectionScript } from "./browser/projection.js";
-import { performClick, performFill, performHover } from "./browser/act.js";
+import { describeResolveFailure, performClick, performFill, performHover } from "./browser/act.js";
 import { performTabAction } from "./browser/tab.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
-import type { ScreenshotFormat } from "./browser/screenshot.js";
+import type { ScreenshotClip, ScreenshotFormat } from "./browser/screenshot.js";
 import {
   waitForBrowser,
   WAIT_INTERVAL_DEFAULT_MS,
@@ -26,12 +26,14 @@ import {
   WAIT_TIMEOUT_DEFAULT_MS,
   WAIT_TIMEOUT_MAX_MS,
 } from "./browser/wait.js";
+import { buildResolveScript } from "./browser/actions.js";
 import type { ActTarget } from "./browser/actions.js";
 import { readRecorder } from "./browser/recorder.js";
 import { renderNetwork } from "./browser/network.js";
 import { renderConsole } from "./browser/console.js";
 import {
   NO_BROWSER_HOST_TEXT,
+  asRecord,
   formatBridgeFailure,
   formatEval,
   formatFrameEval,
@@ -270,13 +272,61 @@ export function buildBrowserActTool(
  *
  * **不带任何可见性告警**：parking 之后不显示的视图照样合成，截图与前台视图同质
  * （探针实测同字节数）——没有需要预警的状态。
+ *
+ * `element` 是**裁剪**时的交代：不说，模型会把一张局部图当成整页（反过来更糟：以为拿到了
+ * 局部而实际是整页，"只截这个按钮"就白说了）。
  */
-function screenshotCaption(opts: { fullPage: boolean; format: ScreenshotFormat }): string {
+function screenshotCaption(opts: { fullPage: boolean; format: ScreenshotFormat; element?: string }): string {
+  const what = opts.element ? `of ${opts.element}` : opts.fullPage ? "page (full)" : "visible viewport";
   return (
-    `Screenshot of the embedded browser ${opts.fullPage ? "page (full)" : "visible viewport"} as ` +
-    `${opts.format.toUpperCase()}. Reminder: this is the visual fallback — use browser_read / ` +
-    `browser_eval when the question is about content or structure.`
+    `Screenshot ${what} in the embedded browser as ${opts.format.toUpperCase()}. ` +
+    `Reminder: this is the visual fallback — use browser_read / browser_eval when the question is ` +
+    `about content or structure.`
   );
+}
+
+/**
+ * 元素截图的目标：**判别式联合**，不是可选字段——可选字段会让"解析失败"与"没给 text"
+ * 在类型上长得一样（本项目禁 `boolean | undefined` 假三态的同一款理由）。
+ */
+type ShotTarget = { ok: true; clip: ScreenshotClip; hit: string } | { ok: false; error: string };
+
+/**
+ * 元素截图的坐标解析：复用 `browser_act` 的解析脚本（**不写第二份元素定位**——判据分家正是
+ * 这个仓库刚治过的病），取它的页面坐标矩形当 CDP 的 `clip`。
+ *
+ * 找不到 / 零尺寸 → **如实失败**，**不退化成整页截图**：用户明确说整页截图因上下文成本全程
+ * 没用，退化会让模型以为拿到了局部。`scroll:false` 是为了**别动用户正在看的滚动位置**
+ * （裁剪靠 `captureBeyondViewport`，不靠滚动）。
+ */
+async function resolveShotTarget(
+  args: { view_id?: string; text?: string; selector?: string },
+  emit: (e: ChatEvent) => void,
+): Promise<ShotTarget> {
+  const target: ActTarget = { selector: args.selector, text: args.text };
+  const r = await runEval(buildResolveScript(target, { scroll: false }), { viewId: args.view_id }, emit);
+  if (!r.ok) return { ok: false, error: r.error };
+
+  const v = asRecord(r.value);
+  // 不是对象与"页面上没这个元素"是两回事：前者要改的是脚本，后者要改的是词——混成一句会让
+  // 模型拿着"找不到目标"的结论去换 text 重试（跟 act.ts 的 evalScript 同一款分流）。
+  if (!v) return { ok: false, error: "The page script returned no usable object (it returned a non-object)." };
+  if (v["ok"] !== true) return { ok: false, error: describeResolveFailure(v) };
+
+  const rect = asRecord(v["rect"]);
+  const clip = {
+    x: Number(rect?.["x"]),
+    y: Number(rect?.["y"]),
+    width: Number(rect?.["w"]),
+    height: Number(rect?.["h"]),
+  };
+  if (![clip.x, clip.y, clip.width, clip.height].every(Number.isFinite) || clip.width < 1 || clip.height < 1) {
+    return {
+      ok: false,
+      error: `Resolved the element but got no usable box to crop (${JSON.stringify(rect)}) — it may be zero-size.`,
+    };
+  }
+  return { ok: true, clip, hit: String(asRecord(v["hit"])?.["text"] ?? "the element") };
 }
 
 /**
@@ -296,7 +346,8 @@ export function buildBrowserScreenshotTool(
       "to read a page: an image costs far more context than the structured read and gives you pixels instead of structure. " +
       "Reach for it when the question is genuinely visual — which panel is actually visible on screen, whether something " +
       "rendered at all, what a canvas or image-only region contains — or when the structured read came back empty and you " +
-      "need to see why. It captures the visible viewport by default; pass full_page for the entire page. " +
+      "need to see why. It captures the visible viewport by default; pass full_page for the entire page, or pass `text` / " +
+      "`selector` to crop the shot to a single element (cheapest — do that when one control is all you need). " +
       "It works on a parked view too — the page keeps rendering, so you do not need to bring it on screen first.",
     {
       view_id: viewIdArg,
@@ -305,8 +356,19 @@ export function buildBrowserScreenshotTool(
         .optional()
         .describe(
           "Capture the whole page instead of just the visible viewport. Default false: the viewport is what the user " +
-            "is actually looking at, and it costs less context.",
+            "is actually looking at, and it costs less context. Ignored when `text` or `selector` is given (the crop wins).",
         ),
+      text: z
+        .string()
+        .optional()
+        .describe(
+          "Crop the shot to this element's box, matched by its visible label (e.g. the 保存 button). " +
+            "Use this instead of a full screenshot when you only need one control.",
+        ),
+      selector: z
+        .string()
+        .optional()
+        .describe("Crop to the element matching this CSS selector. Takes precedence over `text`."),
       format: z
         .enum(["jpeg", "png"])
         .optional()
@@ -320,13 +382,21 @@ export function buildBrowserScreenshotTool(
       try {
         const fullPage = args.full_page === true;
         const format = args.format === "png" ? "png" : "jpeg";
-        const shot = await captureScreenshot(args.view_id, { fullPage, format }, emit);
+        // 只有真的给了元素口径才去解析——没有 text/selector 的老路径一发都不多发。
+        const target = args.text || args.selector ? await resolveShotTarget(args, emit) : null;
+        if (target && !target.ok) return textResult(target.error);
+
+        const shot = await captureScreenshot(
+          args.view_id,
+          { fullPage, format, clip: target?.ok === true ? target.clip : undefined },
+          emit,
+        );
         if (!shot.ok || !shot.data) return textResult(shot.error ?? "Screenshot failed.");
         return {
           content: [
             {
               type: "text" as const,
-              text: screenshotCaption({ fullPage, format }),
+              text: screenshotCaption({ fullPage, format, element: target?.ok === true ? target.hit : undefined }),
             },
             { type: "image" as const, data: shot.data, mimeType: shot.mimeType ?? `image/${format}` },
           ],
