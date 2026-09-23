@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>browser recorder fixture</title>
+<!--
+  recorder / 可观测层 / 四条 gap 的**真机判据页**（2026-09-23）。
+
+  起服务（仓库根）：
+    node scripts/diag/serve-browser-fixture.mjs
+  期望（页面自报：browser_eval("window.__expect()")）：
+    ① 加载期就发过两条请求（fetch + XHR，都打 /api/ok）——探针装过之后 reload 必须看得到
+    ② /api/fail → 500 + No enum constant …；/api/hang → pending；/api/big → body skipped
+    ③ #magic 在 display:none 里：browser_read 的 Raw text **不许**出现 HIDDENMAGIC，且有一行 NOTE
+    ④「确 定」按钮（中间是 U+3000）与「确定通过审核？」文案：act {text:"确定"} 必须命中按钮
+    ⑤ 三个同 class 按钮（两个可见 + 一个隐藏）：act 的可见池里是 2 个 → 报
+       (2 elements matched; used index 0)，且点到可见的那个（隐藏的不进池）
+    ⑥ #late 延迟 3s 出现：browser_wait 的 condition 模式
+    ⑦ #/two 的守卫把 hash 弹回 #/one：browser_tab navigate 必须**不报假成功**
+
+  前提：改的是 sidecar → 必须先 `pnpm build:sidecar` 并让**新进程**跑起来（dev 实例开新会话 / 重启）。
+-->
+<style>
+  body { font: 14px/1.7 system-ui, sans-serif; margin: 0; padding: 24px; background: #0f1317; color: #e6edf3 }
+  h1 { margin: 0 0 8px; font-size: 20px }
+  h2 { margin: 22px 0 8px; font-size: 15px; color: #9fb0c0; font-weight: 600 }
+  code { background: #1b2430; padding: 1px 5px; border-radius: 4px }
+  .row { display: inline-block; padding: 8px 14px; margin-right: 8px; cursor: pointer; border: 1px solid #4aa3ff; border-radius: 8px }
+  #hidden-zone { display: none }
+</style>
+</head>
+<body>
+<h1 id="who">recorder 夹具</h1>
+<div>页面自报判据：<code>browser_eval("window.__expect()")</code></div>
+
+<h2>① 隐藏区（验 Raw text 过滤）</h2>
+<div id="hidden-zone">HIDDENMAGIC<span>隐藏的日历 1308 208 407</span></div>
+
+<h2>② CJK 空白（验文本匹配容错）</h2>
+<!-- ⚠️ `确` 与 `定` 之间是 U+3000 全角空格（别改成半角/普通空格：容错要覆盖的正是这一种） -->
+<button id="cjk-ok">确　定</button>
+<p id="copyline">确定通过审核？</p>
+
+<h2>③ 同 class 三按钮（验可见性优先 + 歧义报数）</h2>
+<!-- 两个**可见** + 一个隐藏：歧义报数要的是"可见池里有多于一个"，只留一个可见的会
+     count=1，那句脚注根本不出现（可见性优先先把它们滤掉了）。 -->
+<button class="same" id="same-a">保存</button>
+<button class="same" id="same-b">保存</button>
+<button class="same" id="same-c" style="display:none">保存</button>
+
+<h2>④ 请求 / 控制台 / 异常</h2>
+<button class="row" id="btn-log">console.log</button>
+<button class="row" id="btn-warn">console.warn</button>
+<button class="row" id="btn-throw">抛未捕获异常</button>
+
+<h2>⑤ 延迟元素（验 browser_wait）</h2>
+<div id="late-slot">（3 秒后出现）</div>
+
+<h2>⑥ hash 路由 + 守卫（验 navigate 落点）</h2>
+<div>当前 hash：<code id="hash-now"></code></div>
+<button class="row" id="btn-bounce">跳到 #/two（守卫会弹回）</button>
+
+<script>
+  // ① 加载期请求：**文档创建时就发**，探针没在文档创建前装上就会漏掉它。
+  //    两条不同通道（fetch / XHR）各一条，验 recorder 的包装都生效。
+  window.__loadStart = Date.now();
+  fetch("/api/ok").then(function (r) { return r.json(); }).catch(function () {});
+  (function () {
+    var x = new XMLHttpRequest();
+    x.open("GET", "/api/ok");
+    x.send();
+  })();
+
+  document.getElementById("btn-log").onclick = function () { console.log("direct log", { ok: true, rows: [1, 2, 3] }); };
+  document.getElementById("btn-warn").onclick = function () { console.warn("direct warn", { n: 7 }); };
+  document.getElementById("btn-throw").onclick = function () { setTimeout(function () { nope(); }, 0); };
+
+  // 打一条接口。⚠️ `hang` 那条**永不回包**，所以调用时要写成 `__probe("hang"); "fired"`
+  // ——`browser_eval` 会 await 表达式的结果，只写 `__probe("hang")` 会让它一直等到 15s 超时。
+  function probe(kind) {
+    var url = kind === "ok" ? "/api/ok" : kind === "fail" ? "/api/fail" : kind === "hang" ? "/api/hang" : "/api/big";
+    return fetch(url).then(function (r) { return r.text(); }).then(function (t) { return { status: "done", len: t.length }; },
+                          function (e) { return { status: "rejected", err: String(e) }; });
+  }
+  window.__probe = probe;
+
+  setTimeout(function () {
+    var d = document.createElement("div");
+    d.id = "late";
+    d.textContent = "迟到的元素";
+    document.getElementById("late-slot").appendChild(d);
+  }, 3000);
+
+  function renderHash() { document.getElementById("hash-now").textContent = location.hash || "(empty)"; }
+  window.addEventListener("hashchange", function () {
+    // 守卫：只允许 #/one，其它一律弹回——模拟真实 SPA 的路由守卫
+    if (location.hash !== "#/one") location.hash = "#/one";
+    renderHash();
+  });
+  document.getElementById("btn-bounce").onclick = function () { location.hash = "#/two"; };
+  renderHash();
+
+  window.__expect = function () {
+    return {
+      hiddenMagicVisible: document.body.innerText.indexOf("HIDDENMAGIC") >= 0,
+      hiddenMagicInText: document.body.textContent.indexOf("HIDDENMAGIC") >= 0,
+      hiddenMagicInClone: document.body.cloneNode(true).innerText.indexOf("HIDDENMAGIC") >= 0,
+      hash: location.hash,
+      latePresent: !!document.getElementById("late"),
+      endpoints: ["/api/ok", "/api/fail", "/api/hang", "/api/big"],
+    };
+  };
+</script>
+</body>
+</html>
