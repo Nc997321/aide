@@ -83,6 +83,10 @@ static REGISTRY: &[(&str, Handler)] = &[
     // ── 工作区与信任 ──
     ("get_active_workspace", handlers::get_active_workspace),
     ("list_workspaces", handlers::list_workspaces),
+    // 日常模式归属：工作区列表把它滤掉了（list_workspaces 服务端 retain），
+    // 远程端要进「日常」只能单独问这条。只读身份（key + path），不激活、不改
+    // 状态——配对设备与桌面同信任层，收录判据不缺（见 handlers 同名包装器）。
+    ("daily_workspace", handlers::daily_workspace),
     ("is_workspace_trusted", handlers::is_workspace_trusted),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
@@ -117,4 +121,36 @@ static REGISTRY: &[(&str, Handler)] = &[
         "get_default_permission_modes",
         handlers::get_default_permission_modes,
     ),
+    // ── 自动化任务（ohos 端自动化五屏：列表/详情/表单/运行转录/手册。
+    // 与桌面 UI 同一命令实现，能力零漂移；CRUD 与立即运行均经此处开放给
+    // 已配对远程端——配对/信任边界与聊天控制命令同层）──
+    ("list_automations", handlers::list_automations),
+    ("get_automation", handlers::get_automation),
+    ("create_automation", handlers::create_automation),
+    ("update_automation", handlers::update_automation),
+    ("delete_automation", handlers::delete_automation),
+    (
+        "set_automation_enabled",
+        handlers::set_automation_enabled,
+    ),
+    ("list_automation_runs", handlers::list_automation_runs),
+    ("automation_run_stats", handlers::automation_run_stats),
+    ("run_automation_now", handlers::run_automation_now),
+    (
+        "get_automation_playbook",
+        handlers::get_automation_playbook,
+    ),
+    ("redistill_automation", handlers::redistill_automation),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 白名单是安全边界也是功能清单：这行被"清理"掉 = 远程端当场失去日常入口，
+    /// 而编译、其余命令都不受影响（静默回归）。钉住本次收录意图。
+    #[test]
+    fn registry_exposes_daily_workspace() {
+        assert!(lookup("daily_workspace").is_some());
+    }
+}

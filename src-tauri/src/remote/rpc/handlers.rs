@@ -517,6 +517,17 @@ pub fn list_workspaces(
     Box::pin(async move { to_json(crate::commands::workspace::list_workspaces().await) })
 }
 
+/// 日常模式的归属（key + path）。对远程端而言「日常」就是工作区列表里的一项——
+/// 而 list_workspaces 恰好在服务端把它滤掉了，所以远程要进日常只能单独问这条。
+/// 与桌面同一实现（`commands::workspace::daily_workspace`）：纯计算、无 IO、
+/// **不激活**活动工作区，配对设备只读得到身份，改不了桌面状态。
+pub fn daily_workspace(
+    _app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move { to_json(Ok(crate::commands::workspace::daily_workspace())) })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PathArgs {
@@ -775,5 +786,166 @@ pub fn get_default_permission_modes(
         to_json(crate::commands::chat::get_default_permission_modes(
             app.clone(),
         ))
+    })
+}
+
+// ── 自动化任务（ohos 端自动化五屏；与桌面 UI 同一命令实现，参数形状对齐
+//    packages/aide-sdk/src/api/automation.ts——`{id}` / `{input}` / `{id, input}` /
+//    `{id, enabled}` / `{id, limit?}`，嵌套 AutomationTaskInput 自带 camelCase）──
+
+/// 仅 id 字段（自动化元数据/动作类命令共用形状）。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AutomationIdArgs {
+    id: String,
+}
+
+/// create 入参：input 单字段包装（任务 DTO 整体下发）。
+#[derive(Deserialize)]
+struct CreateAutomationArgs {
+    input: crate::automation::AutomationTaskInput,
+}
+
+/// update 入参：定位 id + 替换体。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UpdateAutomationArgs {
+    id: String,
+    input: crate::automation::AutomationTaskInput,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SetAutomationEnabledArgs {
+    id: String,
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListAutomationRunsArgs {
+    id: String,
+    limit: Option<u32>,
+}
+
+pub fn list_automations(
+    app: AppHandle,
+    _params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::list_automations(svc))
+    })
+}
+
+pub fn get_automation(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::get_automation(svc, a.id))
+    })
+}
+
+pub fn create_automation(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: CreateAutomationArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::create_automation(svc, a.input).await)
+    })
+}
+
+pub fn update_automation(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: UpdateAutomationArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::update_automation(svc, a.id, a.input).await)
+    })
+}
+
+pub fn delete_automation(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::delete_automation(svc, a.id).await)
+    })
+}
+
+pub fn set_automation_enabled(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: SetAutomationEnabledArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(
+            crate::automation::commands::set_automation_enabled(svc, a.id, a.enabled).await,
+        )
+    })
+}
+
+pub fn list_automation_runs(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: ListAutomationRunsArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::list_automation_runs(svc, a.id, a.limit).await)
+    })
+}
+
+pub fn automation_run_stats(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::automation_run_stats(svc, a.id).await)
+    })
+}
+
+pub fn run_automation_now(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::run_automation_now(svc, a.id).await)
+    })
+}
+
+pub fn get_automation_playbook(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::get_automation_playbook(svc, a.id).await)
+    })
+}
+
+pub fn redistill_automation(
+    app: AppHandle,
+    params: Value,
+) -> BoxFuture<'static, Result<Value, String>> {
+    Box::pin(async move {
+        let a: AutomationIdArgs = parse(params)?;
+        let svc = app.state::<Arc<crate::automation::scheduler::AutomationService>>();
+        to_json(crate::automation::commands::redistill_automation(svc, a.id).await)
     })
 }
