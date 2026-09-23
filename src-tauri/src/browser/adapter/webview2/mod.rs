@@ -195,6 +195,16 @@ impl BrowserEngine for Webview2Engine {
         native::call_cdp(&wv, method, params)
     }
 
+    fn add_init_script(
+        &self,
+        id: &BrowserViewId,
+        script: &str,
+    ) -> Result<serde_json::Value, EngineError> {
+        // 同 eval：下钻裸 WebView2 宿主 API（`native.rs`），**非主线程**调用。
+        let wv = self.handle(id)?;
+        native::add_init_script(&wv, script)
+    }
+
     fn capture(&self, _id: &BrowserViewId) -> Result<Vec<u8>, EngineError> {
         Err(EngineError::CaptureFailed(
             "截图未实现（需 WebView2 CapturePreview）".into(),

@@ -335,6 +335,7 @@ export type ChatEvent =
         | "list_views"
         | "eval"
         | "call_cdp"
+        | "init_script"
         | "open"
         | "close"
         | "navigate"
@@ -343,7 +344,7 @@ export type ChatEvent =
         | "focus";
       /** 缺省 = 由 Rust 执行体按「全库恰好一个视图」解析；多视图时回错误并附清单。 */
       view_id?: string;
-      /** op=eval */
+      /** op=eval / op=init_script（后者=给**后续所有文档**注入的启动脚本） */
       script?: string;
       /** op=call_cdp */
       method?: string;

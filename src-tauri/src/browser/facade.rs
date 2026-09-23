@@ -300,6 +300,18 @@ impl BrowserFacade {
         Ok(self.engine.call_cdp(&id, method, params)?)
     }
 
+    /// 给**后续所有文档**注入启动脚本（宿主 API `AddScriptToExecuteOnDocumentCreated`）——
+    /// 页面加载期就要在的探针（网络/console recorder）走这里。线程契约同 [`eval`](Self::eval)。
+    ///
+    /// **只对将来的文档生效**：注册那一刻已加载的文档不会补装上（当前文档由调用方自己补）。
+    /// 注册**累积**且**不在这里去重**——同一视图被调 N 次，每份新文档就跑 N 遍脚本；
+    /// 去重是调用方的策略（sidecar 的 recorder 按视图只发一次）。
+    pub fn add_init_script(&self, id_raw: &str, script: &str) -> Result<(), FacadeError> {
+        let id = self.parse_id(id_raw)?;
+        self.engine.add_init_script(&id, script)?;
+        Ok(())
+    }
+
     /// 加载信号观察者：引擎每报一次事件，就把信号交给 [`apply_page_load`]。
     fn observer(&self, id: BrowserViewId) -> PageLoadObserver {
         let app = self.app.clone();

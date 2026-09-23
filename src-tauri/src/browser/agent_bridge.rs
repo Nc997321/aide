@@ -6,10 +6,12 @@
 //!
 //! # op 面刻意收窄（这是「通用 vs 补丁」的落点）
 //!
-//! 内核只暴露三个**机制**词汇，不认识任何页面语义、更不认识站点：
+//! 内核只暴露四个**机制**词汇，不认识任何页面语义、更不认识站点：
 //! - `ListViews` —— 发现有哪些视图可操作（view_id 消歧的数据源）
 //! - `Eval` —— 在视图里执行脚本、取回 JSON
 //! - `CallCdp` —— 裸 CDP（真实输入事件 `Input.dispatchMouseEvent`、文件上传）
+//! - `InitScript` —— 给**后续所有文档**注入启动脚本（宿主 API；CDP 的同类方法在本机 WebView2
+//!   上被接受但不交货，那条路不能当注入路用）
 //!
 //! `read` / `snapshot` / `act` **都不进协议**：它们由 sidecar 组合投影脚本后走 `Eval`/`CallCdp`。
 //! 于是「换个站点」= 换 sidecar 里的脚本数据，本文件一行不动。
@@ -30,6 +32,15 @@ pub enum BrowserQuery {
         view_id: Option<String>,
         method: String,
         params: Value,
+    },
+    /// 给**后续所有文档**注入启动脚本（宿主 API `AddScriptToExecuteOnDocumentCreated`）。
+    ///
+    /// 与 `CallCdp` 的 `Page.addScriptToEvaluateOnNewDocument` 是同一件事的两条路：CDP 那条在
+    /// 本机 WebView2 上**被接受但不交货**（静默失败，无从凭错误回退），故单独立一条宿主通道。
+    /// 消费方是 sidecar 的 recorder（页面加载期就要在的探针）。
+    InitScript {
+        view_id: Option<String>,
+        script: String,
     },
     /// 请面板把某个视图露到前台。**只是请求**：显示权在 UI（空标签没有视图、还有宽度档与
     /// 浮层让位这些纯 UI 状态），所以这一条不改任何领域状态，只广播 `browser-focus`。
@@ -65,6 +76,7 @@ impl BrowserQuery {
             Self::ListViews => "list_views",
             Self::Eval { .. } => "eval",
             Self::CallCdp { .. } => "call_cdp",
+            Self::InitScript { .. } => "init_script",
             Self::Focus { .. } => "focus",
             Self::Open { .. } => "open",
             Self::Close { .. } => "close",
@@ -119,6 +131,13 @@ fn parse_query(event: &Value) -> BrowserQuery {
                 params: event.get("params").cloned().unwrap_or(Value::Null),
             },
             None => BrowserQuery::Malformed("call_cdp requires a string `method`".into()),
+        },
+        "init_script" => match event.get("script").and_then(|v| v.as_str()) {
+            Some(script) => BrowserQuery::InitScript {
+                view_id: opt_str(event, "view_id"),
+                script: script.to_string(),
+            },
+            None => BrowserQuery::Malformed("init_script requires a string `script`".into()),
         },
         "focus" => BrowserQuery::Focus {
             view_id: opt_str(event, "view_id"),
@@ -324,6 +343,39 @@ mod tests {
         );
     }
 
+    /// `init_script` = 给**未来文档**注入启动脚本的宿主通道（recorder 的注入接缝）。
+    /// 载荷形状与 sidecar 的 `queryBrowser({op:"init_script", …})` 逐字对齐——两边对不上
+    /// 就是"注册被静默忽略"那一类事故。
+    #[test]
+    fn parses_init_script_op() {
+        let r = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r1", "op": "init_script",
+            "view_id": "browser-2", "script": "window.__rec = 1"
+        }))
+        .unwrap();
+        assert_eq!(
+            r.query,
+            BrowserQuery::InitScript {
+                view_id: Some("browser-2".into()),
+                script: "window.__rec = 1".into(),
+            }
+        );
+        assert_eq!(r.query.op_name(), "init_script");
+
+        // view_id 缺省 → None（由执行体解析，不在解析层猜）
+        let r = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r2", "op": "init_script", "script": "1"
+        }))
+        .unwrap();
+        assert_eq!(
+            r.query,
+            BrowserQuery::InitScript {
+                view_id: None,
+                script: "1".into()
+            }
+        );
+    }
+
     /// 载荷不合法 → `Malformed` 而**不是** `None`：必须回错误让 sidecar 立刻失败，
     /// 干等超时会把一个协议 bug 伪装成"浏览器没响应"。
     #[test]
@@ -333,6 +385,7 @@ mod tests {
             json!({"type": "browser_query", "request_id": "r", "op": "nope"}), // 未知 op
             json!({"type": "browser_query", "request_id": "r", "op": "eval"}), // 缺 script
             json!({"type": "browser_query", "request_id": "r", "op": "call_cdp"}), // 缺 method
+            json!({"type": "browser_query", "request_id": "r", "op": "init_script"}), // 缺 script
         ] {
             match parse_browser_query(&bad).map(|r| r.query) {
                 Some(BrowserQuery::Malformed(_)) => {}

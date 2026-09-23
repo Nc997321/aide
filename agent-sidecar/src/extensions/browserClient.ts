@@ -15,6 +15,7 @@ export type BrowserOp =
   | "list_views"
   | "eval"
   | "call_cdp"
+  | "init_script"
   | "open"
   | "close"
   | "navigate"
@@ -33,6 +34,10 @@ export type BrowserCall =
   | { op: "list_views" }
   | { op: "eval"; view_id?: string; script: string }
   | { op: "call_cdp"; view_id?: string; method: string; params?: unknown }
+  /** 给**后续所有文档**注入启动脚本（宿主 API）。与 `call_cdp` 的
+   *  `Page.addScriptToEvaluateOnNewDocument` 是同一件事的两条路——CDP 那条在本机 WebView2 上
+   *  **被接受但不交货**（静默失败），故注入只走这条。只对将来的文档生效，注册累积。 */
+  | { op: "init_script"; view_id?: string; script: string }
   | { op: "open"; url: string; label?: string }
   | { op: "close"; view_id?: string }
   | { op: "navigate"; view_id?: string; url: string }
@@ -42,7 +47,8 @@ export type BrowserCall =
 
 export interface BrowserQueryResponse {
   ok: boolean;
-  /** op 成功时的载荷。`list_views` → `{views}`；`eval`/`call_cdp` → `{view_id, value}`。 */
+  /** op 成功时的载荷。`list_views` → `{views}`；`eval`/`call_cdp` → `{view_id, value}`；
+   *  `init_script` → `{view_id, registered}`。 */
   data?: unknown;
   /** 失败原因，**面向模型可读**（Rust 侧保证是可指导下一步的文本，不是堆栈）。 */
   error?: string;

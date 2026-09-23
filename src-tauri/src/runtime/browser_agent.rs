@@ -106,6 +106,19 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
             }
         }
 
+        BrowserQuery::InitScript { view_id, script } => {
+            let id = match resolve_view(&facade, view_id.as_deref()) {
+                Ok(id) => id,
+                Err(message) => return err_payload(message),
+            };
+            // `registered` 而不是 "installed"：这只把脚本挂到**将来**的文档上，当前这份文档
+            // 不会补装上（调用方自己补）。措辞不许越界承诺。
+            match facade.add_init_script(&id, &script) {
+                Ok(()) => ok_payload(serde_json::json!({ "view_id": id, "registered": true })),
+                Err(e) => err_payload(format!("cannot register an init script for view {id}: {e}")),
+            }
+        }
+
         BrowserQuery::Focus { view_id } => {
             let id = match resolve_view(&facade, view_id.as_deref()) {
                 Ok(id) => id,

@@ -154,6 +154,19 @@ pub trait BrowserEngine: Send + Sync {
         params: &serde_json::Value,
     ) -> Result<serde_json::Value, EngineError>;
 
+    /// 给**后续所有文档**注入启动脚本（WebView2 `AddScriptToExecuteOnDocumentCreated`）。
+    ///
+    /// 与 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 是同一件事的两条路；本机实测 CDP 那条
+    /// **被接受但不交货**（静默失败，无从凭错误回退），故注入只走这条宿主 API。
+    ///
+    /// 注册**累积**：同一视图重复调用 = 每份新文档多跑一遍脚本，去重是调用方的责任。
+    /// 返回宿主给的注册句柄（`{"identifier": …}`），失败如实上报。
+    fn add_init_script(
+        &self,
+        id: &BrowserViewId,
+        script: &str,
+    ) -> Result<serde_json::Value, EngineError>;
+
     /// agent 网页任务：截图为 PNG 字节（WebView2 `CapturePreview`）。
     fn capture(&self, id: &BrowserViewId) -> Result<Vec<u8>, EngineError>;
 

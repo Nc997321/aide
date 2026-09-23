@@ -769,14 +769,16 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
 });
 
 describe("browser_network", () => {
-  it("先注册新文档（call_cdp）再读（求值），并把缓冲渲染出来", async () => {
+  it("先注册新文档（init_script）再读（求值），并把缓冲渲染出来", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({ view_id: "browser-2" }, {});
 
     const reg = await waitForQuery(events, 0);
-    expect(reg.op).toBe("call_cdp");
-    expect(reg.method).toBe("Page.addScriptToEvaluateOnNewDocument");
-    reply(reg, { ok: true, data: { view_id: "browser-2", value: { identifier: "1" } } });
+    // 注入走宿主 API 那条 op —— CDP 的 Page.addScriptToEvaluateOnNewDocument 在本机 WebView2
+    // 上被接受但不交货（Task 13 真机取证），这条断言就是防它被换回去。
+    expect(reg.op).toBe("init_script");
+    expect(reg.script).toContain("__aideRec");
+    reply(reg, { ok: true, data: { view_id: "browser-2", registered: true } });
 
     // 读在**注册结算之后**才发（handler 串行）——先答注册这一发，读那一发才会出现。
     const read = await waitForQuery(events, 1);
@@ -802,7 +804,7 @@ describe("browser_network", () => {
     const tool = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network");
     // 第一次：注册 + 读
     const p1 = tool.handler({ view_id: "browser-9" }, {});
-    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", value: { identifier: "1" } } });
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", registered: true } });
     reply(await waitForQuery(events, 1), evalOk({ ok: true, armedBefore: false, total: 0, matched: 0, items: [], failed: { n: 0, first: null } }));
     await p1;
 
@@ -816,13 +818,21 @@ describe("browser_network", () => {
     expect(r.content[0].text).toContain("No requests recorded");
   });
 
-  it("注册被运行时拒绝 → **照样能读**，但如实说未来文档没覆盖", async () => {
+  it("注册失败（宿主 API 报错）→ **照样能读**，但如实说未来文档没覆盖", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({}, {});
-    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-1", value: { error: { code: -32601, message: "'Page.addScriptToEvaluateOnNewDocument' wasn't found" } } } });
+    const reg = await waitForQuery(events, 0);
+    expect(reg.op).toBe("init_script");
+    reply(reg, {
+      ok: false,
+      error:
+        "cannot register an init script for view browser-1: script eval failed: " +
+        "AddScriptToExecuteOnDocumentCreated: 0x80070005",
+    });
     reply(await waitForQuery(events, 1), evalOk({ ok: true, armedBefore: false, total: 0, matched: 0, items: [], failed: { n: 0, first: null } }));
     const r = await p;
-    expect(r.content[0].text).toContain("rejected by the runtime");
+    expect(r.content[0].text).toContain("cannot register an init script");
+    expect(r.content[0].text).toContain("No requests recorded");
   });
 });
 
@@ -838,9 +848,8 @@ describe("browser_console", () => {
     );
 
     const reg = await waitForQuery(events, 0);
-    expect(reg.op).toBe("call_cdp");
-    expect(reg.method).toBe("Page.addScriptToEvaluateOnNewDocument");
-    reply(reg, { ok: true, data: { view_id: "browser-console-1", value: { identifier: "1" } } });
+    expect(reg.op).toBe("init_script");
+    reply(reg, { ok: true, data: { view_id: "browser-console-1", registered: true } });
 
     const read = await waitForQuery(events, 1);
     expect(read.method).toBe("Runtime.evaluate");
@@ -861,7 +870,7 @@ describe("browser_console", () => {
   it("缺省 level=all、limit=30", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_console").handler({ view_id: "browser-console-2" }, {});
-    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-console-2", value: { identifier: "1" } } });
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-console-2", registered: true } });
 
     const read = await waitForQuery(events, 1);
     expect(read.params.expression).toContain('var MATCH = "all"');

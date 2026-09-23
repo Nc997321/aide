@@ -2,7 +2,8 @@
 //!
 //! tauri 的 `Webview` 只给到 fire-and-forget 的脚本注入；带返回值要下钻到裸 `ICoreWebView2`：
 //! `with_webview(|pw| pw.controller())` → `.CoreWebView2()` → `ExecuteScript` /
-//! `CallDevToolsProtocolMethod`。两者都是「异步调用 + completed handler」同构形状。
+//! `CallDevToolsProtocolMethod` / `AddScriptToExecuteOnDocumentCreated`。三者都是
+//! 「异步调用 + completed handler」同构形状。
 //!
 //! # 线程契约（**别踩，历史重灾区**）
 //!
@@ -25,7 +26,10 @@ use std::time::Duration;
 use tauri::webview::Webview;
 use tauri::Wry;
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
-use webview2_com::{CallDevToolsProtocolMethodCompletedHandler, ExecuteScriptCompletedHandler};
+use webview2_com::{
+    AddScriptToExecuteOnDocumentCreatedCompletedHandler,
+    CallDevToolsProtocolMethodCompletedHandler, ExecuteScriptCompletedHandler,
+};
 use windows::core::PCWSTR;
 
 use crate::browser::port::engine::EngineError;
@@ -84,8 +88,9 @@ where
 
 /// UTF-16 + NUL 终止的宽字符串。
 ///
-/// 生命周期：`ExecuteScript` / `CallDevToolsProtocolMethod` 的 `[in]` 字符串参数在**调用期间**
-/// 即被 COM 侧拷贝，故缓冲区活到调用返回即可——不需要 move 进 completed 闭包。
+/// 生命周期：`ExecuteScript` / `CallDevToolsProtocolMethod` /
+/// `AddScriptToExecuteOnDocumentCreated` 的 `[in]` 字符串参数在**调用期间**即被 COM 侧拷贝，
+/// 故缓冲区活到调用返回即可——不需要 move 进 completed 闭包。
 /// （真正需要活到回调之后的是**结果**指针，那个由 webview2-com 在回调内转成 `String`。）
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -115,6 +120,44 @@ pub fn execute_script(wv: &Webview<Wry>, script: &str) -> Result<serde_json::Val
         // 调用期间 COM 侧即拷贝 js，故 js 活到此处即可。
         if let Err(e) = unsafe { core.ExecuteScript(PCWSTR::from_raw(js.as_ptr()), &handler) } {
             let _ = tx.send(Err(format!("ExecuteScript call: {e}")));
+        }
+    })
+}
+
+/// 给**后续所有文档**注入启动脚本（WebView2 `AddScriptToExecuteOnDocumentCreated`）。
+///
+/// 与 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 是同一件事的两条路：那条走 `call_cdp`，
+/// 本机 WebView2 **收下方法但不交货**（新文档里脚本从未执行，回包却无任何错误——静默失败，
+/// "出了错再退"永远退不了）；这条是**宿主 API**，`ICoreWebView2` 上就有
+/// （`webview2-com-sys-0.38.2/src/bindings.rs:1325`）。故注入只走这条，**不回退 CDP**。
+///
+/// 注册是**累积**的：同一视图调 N 次 = 每份新文档跑 N 遍脚本，去重是调用方的责任。
+///
+/// 返回 `{"identifier":"<id>"}`——宿主给这次注册的句柄：它存在即证明注册真被收下了，
+/// 失败则走 completed handler 的 HRESULT，如实上报（不假装成功）。
+pub fn add_init_script(wv: &Webview<Wry>, script: &str) -> Result<serde_json::Value, EngineError> {
+    let script = script.to_string();
+    drill(wv, EngineError::EvalFailed, move |core, tx| {
+        let tx_handler = tx.clone();
+        let handler = AddScriptToExecuteOnDocumentCreatedCompletedHandler::create(Box::new(
+            move |result, id| {
+                let _ = tx_handler.send(match result {
+                    Ok(()) => Ok(serde_json::json!({ "identifier": id }).to_string()),
+                    Err(e) => Err(format!("AddScriptToExecuteOnDocumentCreated: {e}")),
+                });
+                Ok(())
+            },
+        ));
+
+        let js = wide(&script);
+        // 调用期间 COM 侧即拷贝 js，故 js 活到此处即可。
+        let call = unsafe {
+            core.AddScriptToExecuteOnDocumentCreated(PCWSTR::from_raw(js.as_ptr()), &handler)
+        };
+        if let Err(e) = call {
+            let _ = tx.send(Err(format!(
+                "AddScriptToExecuteOnDocumentCreated call: {e}"
+            )));
         }
     })
 }

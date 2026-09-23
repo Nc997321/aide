@@ -417,9 +417,12 @@ describe("recorder：注册按视图只发一次", () => {
     // 1) 缺省 view_id（文档化的正常调用方式）：先注册，再求值
     const first = readRecorder({ kind: "reqs", limit: 5 }, undefined, emit);
     const reg1 = await waitForQuery(events, 0);
-    expect(reg1.method).toBe("Page.addScriptToEvaluateOnNewDocument");
+    // 注入走宿主 API 那条 op（**不是** CDP 的 Page.addScriptToEvaluateOnNewDocument——
+    // 那条在本机 WebView2 上被接受但不交货，见 Task 13 的真机取证）。
+    expect(reg1.op).toBe("init_script");
+    expect(reg1.script).toBe(RECORDER_SOURCE);
     expect(reg1.view_id).toBeUndefined();
-    reply(reg1, { ok: true, data: { view_id: "browser-1", value: {} } });
+    reply(reg1, { ok: true, data: { view_id: "browser-1", registered: true } });
     reply(await waitForQuery(events, 1), { ok: true, data: envelope(false) });
     await first;
 
@@ -434,17 +437,43 @@ describe("recorder：注册按视图只发一次", () => {
     // 3) 第三次：缓存已丢 ⇒ 真的重注册（这次 Rust 解析回来的是新视图）
     const third = readRecorder({ kind: "reqs", limit: 5 }, undefined, emit);
     const reg3 = await waitForQuery(events, 3);
-    expect(reg3.method).toBe("Page.addScriptToEvaluateOnNewDocument");
-    reply(reg3, { ok: true, data: { view_id: "browser-2", value: {} } });
+    expect(reg3.op).toBe("init_script");
+    reply(reg3, { ok: true, data: { view_id: "browser-2", registered: true } });
     reply(await waitForQuery(events, 4), { ok: true, data: envelope(false) });
     await third;
+  });
+
+  /** 注入失败**不许**被记成"注册过了"：记了账下一次就再不发，未来文档永久漏装（静默劣化）。 */
+  it("注册失败 → 如实带 registerError，且不记账（下次真的重发）", async () => {
+    const { events, emit } = emitCollector();
+
+    const first = readRecorder({ kind: "reqs", limit: 5 }, "browser-fail", emit);
+    const reg1 = await waitForQuery(events, 0);
+    expect(reg1.op).toBe("init_script");
+    reply(reg1, { ok: false, error: "cannot register an init script for view browser-fail: boom" });
+    reply(await waitForQuery(events, 1), { ok: true, data: envelope(true) });
+    const outcome = await first;
+
+    // 注入失败**不阻断**本次读（当前文档那份靠读脚本里的内联装上），但要如实说未来没覆盖。
+    expect(outcome).toMatchObject({ ok: true, registered: false });
+    expect(String((outcome as { registerError?: string }).registerError)).toContain("boom");
+
+    const second = readRecorder({ kind: "reqs", limit: 5 }, "browser-fail", emit);
+    const reg2 = await waitForQuery(events, 2);
+    expect(reg2.op).toBe("init_script"); // 失败没进记账 ⇒ 再发一次
+    reply(reg2, { ok: true, data: { view_id: "browser-fail", registered: true } });
+    reply(await waitForQuery(events, 3), { ok: true, data: envelope(true) });
+    await second;
   });
 
   it("显式 view_id 也只注册一次（永久记账，不受缓存自愈影响）", async () => {
     const { events, emit } = emitCollector();
 
     const first = readRecorder({ kind: "reqs", limit: 5 }, "browser-9", emit);
-    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", value: {} } });
+    reply(await waitForQuery(events, 0), {
+      ok: true,
+      data: { view_id: "browser-9", registered: true },
+    });
     reply(await waitForQuery(events, 1), { ok: true, data: envelope(false) });
     await first;
 

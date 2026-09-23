@@ -5,8 +5,13 @@
  *
  * 本批最值钱的场景是「页面打开就是空白，其实是后端返回了 `No enum constant …`」——那是
  * **页面加载期**自己的 XHR。等工具被调用才注入探针，恰好漏掉它，等于把最想要的场景做没了。
- * 所以注入走 CDP `Page.addScriptToEvaluateOnNewDocument`（注册一次，之后**每份新文档**在
- * 页面脚本之前被装上），当前文档用一次普通求值补上。
+ * 所以注入走宿主 API `init_script` 那条 op（Rust 侧落到 WebView2
+ * `AddScriptToExecuteOnDocumentCreated`：注册一次，之后**每份新文档**在页面脚本之前被装上），
+ * 当前文档用一次普通求值补上。
+ *
+ * ⚠️ **不要**退回 CDP 的 `Page.addScriptToEvaluateOnNewDocument`：本机 WebView2（Evergreen）
+ * 收下这个方法**却不执行**注册的脚本——新文档里探针不存在，回包也没有任何错误。失败是**静默**的，
+ * 所以"先用 CDP、出错再退宿主 API"这种链永远退不了（2026-09-23 真机三向取证，见 Task 13）。
  *
  * # 为什么读取走求值而不是新通道
  *
@@ -36,7 +41,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
-import { asRecord, cdpMethodError, formatBridgeFailure } from "./format.js";
+import { asRecord, formatBridgeFailure } from "./format.js";
 import { runEval } from "./runEval.js";
 
 /** 环形缓冲的条目上限。 */
@@ -259,11 +264,16 @@ const registeredViews = new Set<string>();
 let cachedResolvedId: string | undefined;
 
 /**
- * 给**未来的文档**装上（CDP `Page.addScriptToEvaluateOnNewDocument`，走既有的 `call_cdp`
- * 透传，Rust 一行不动）。注册挂在视图上，故同一视图只发一次；失败**如实带出**，不吞。
+ * 给**未来的文档**装上（`init_script` op：Rust 侧落到 WebView2 宿主 API
+ * `AddScriptToExecuteOnDocumentCreated`）。注册挂在视图上，故同一视图只发一次；
+ * 失败**如实带出**，不吞。
  *
- * 这一处是**唯一的注入接缝**：若真机上 CDP 路不通，只需把这里的 `call_cdp` 换成走宿主
- * `AddScriptToExecuteOnDocumentCreated` 的那个 op（见实现计划 Task 13），其余代码一行不动。
+ * 这一处是**唯一的注入接缝**。⚠️ 别用 CDP 的 `Page.addScriptToEvaluateOnNewDocument` 换掉它：
+ * 那条路在本机 WebView2 上被接受却**不交货**（静默失败，`ok:true` 也说明不了脚本真跑过），
+ * 拿它当"先试这个、出错再退"的头一环是无效的——它不会出错。
+ *
+ * 失败只有 `ok:false` 一种来源：宿主 API 的 HRESULT 走 completed handler 回来，Rust 折成
+ * 错误文本（见 `native.rs` 的 `add_init_script`），这里**不用**再看方法级错误字段。
  *
  * `registeredNow` = 这一次**真的发了**注册（false = 命中记账、复用了先前的注册）。调用方
  * 靠它决定"这份文档没装上"该记在谁头上：**复用**了记账却照样没装上，才说明记账失效了。
@@ -280,27 +290,11 @@ async function ensureRegistered(
   }
 
   const resp = await queryBrowser(
-    {
-      op: "call_cdp",
-      view_id: viewId,
-      method: "Page.addScriptToEvaluateOnNewDocument",
-      params: { source: RECORDER_SOURCE },
-    },
+    { op: "init_script", view_id: viewId, script: RECORDER_SOURCE },
     emit,
   );
   if (!resp.ok) return { ok: false, error: formatBridgeFailure(resp) };
 
-  // 方法级拒绝是一个合法 JSON 响应体，桥只看 JSON 解析 → 它会带着 ok:true 回来。
-  const rejected = cdpMethodError(resp.data);
-  if (rejected) {
-    return {
-      ok: false,
-      error:
-        `the recorder could not be registered for future page loads: ` +
-        `Page.addScriptToEvaluateOnNewDocument was rejected by the runtime (${rejected}). ` +
-        `This is a WebView2 runtime capability, not a page problem.`,
-    };
-  }
   // 记账用 Rust 解析回来的**真实 id**（调用方可能省略 view_id）——省了它下次还会重发一遍。
   // 显式的进永久记账（确切）；缺省的只进缓存（可能是陈旧的落点，故可丢）。
   const id = asRecord(resp.data)?.["view_id"];

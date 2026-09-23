@@ -50,6 +50,13 @@ impl BrowserEngine for UnsupportedEngine {
     ) -> Result<serde_json::Value, EngineError> {
         Err(EngineError::PlatformUnsupported)
     }
+    fn add_init_script(
+        &self,
+        _id: &BrowserViewId,
+        _script: &str,
+    ) -> Result<serde_json::Value, EngineError> {
+        Err(EngineError::PlatformUnsupported)
+    }
     fn capture(&self, _id: &BrowserViewId) -> Result<Vec<u8>, EngineError> {
         Err(EngineError::PlatformUnsupported)
     }
