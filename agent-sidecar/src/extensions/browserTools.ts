@@ -326,7 +326,11 @@ async function resolveShotTarget(
       error: `Resolved the element but got no usable box to crop (${JSON.stringify(rect)}) — it may be zero-size.`,
     };
   }
-  return { ok: true, clip, hit: String(asRecord(v["hit"])?.["text"] ?? "the element") };
+  // 空标签要折成 "the element"：图标按钮（无文本、无 aria-label）正是这个功能最常指向的目标，
+  // 而 labelOf 给的就是空串——空串不是 nullish，`??` 兜不住它，caption 会退成
+  // "Screenshot visible viewport …"（把一次**裁剪**说成视口截图，说的还是错的那种）。
+  const label = String(asRecord(v["hit"])?.["text"] ?? "").trim();
+  return { ok: true, clip, hit: label || "the element" };
 }
 
 /**

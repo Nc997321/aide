@@ -339,6 +339,10 @@ export function buildResolveScript(target: ActTarget, opts: { scroll?: boolean }
     // 本文件是注入脚本的源码：注释里不许出现反引号（会撕开外层模板字面量，见 preamble 的约定）。
     var sx = window.pageXOffset || document.documentElement.scrollLeft || 0;
     var sy = window.pageYOffset || document.documentElement.scrollTop || 0;
+    // 未实测的假设：position:fixed 的元素没有文档位置，它在 captureBeyondViewport 展开出的
+    // 虚拟视口里被画在哪里（顶部？原点？）我们**没有量过**，本式一律按"文档坐标 = 视口坐标 +
+    // 滚动偏移"算。别照两种猜测里的任一种去改它（它们互相排斥，改错会把今天对的那半弄坏）；
+    // 真机夹具（滚动页面上的固定对话框）归 Task 12 的验收清单。
     return {
       ok: true,
       hit: describe(el),

@@ -682,6 +682,22 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
     expect(r.content[0].text).toContain("of 保存");
   });
 
+  /**
+   * 图标按钮（没有可见文本、也没有 aria-label）恰是"只截这个按钮"最常指向的目标，而它的
+   * `labelOf` 返回的正是**空串**——`?? "the element"` 兜不住空串（空串不是 nullish），
+   * caption 会变成 "Screenshot of  in the embedded browser as JPEG."。
+   */
+  it("元素没有可见标签 → caption 不留空洞，改说 the element", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: ".icon-btn" }, {});
+    reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "" }, rect: { x: 5, y: 6, w: 24, h: 24 } }));
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: { data: "QUJD" } } });
+
+    const r = await p;
+    expect(r.content[0].text).toContain("Screenshot of the element in the embedded browser");
+    expect(r.content[0].text).not.toContain("of  in"); // 空标签留下的那个空洞
+  });
+
   it("元素找不到 → **如实失败，不退化成整页截图**", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "没有这个" }, {});
