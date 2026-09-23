@@ -381,6 +381,11 @@ git commit -m "docs(browser): 步骤 0 实测结果（注入路 / 生命周期 /
 
 ### Task 3: recorder（源码 + 注册 + 读）
 
+> ⚠️ **本节及以下各节的代码清单是"计划原文"**（写在动手之前，用于对齐形状）。落地后的**最终形态
+> 以代码为准**——经任务评审与终审修法波后至少多了这些：`bodyNote`（跳过类说明不再塞进 `err`，见
+> finding D）、事件流按 `content-type` 跳过、`clampLimit`（`limit` 夹紧）、`cachedResolvedId` 自愈、
+> 注入从 CDP 换成宿主 API `init_script`。别照抄下面的清单去改代码。
+
 **Files:**
 - Create: `agent-sidecar/src/extensions/browser/recorder.ts`
 - Create: `agent-sidecar/src/extensions/browser/recorder.test.ts`

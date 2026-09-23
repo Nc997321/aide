@@ -160,6 +160,8 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 **S6（判据 4）** `browser_eval {view_id:V1, script:'__probe("big")'}` → 再 `browser_network {view_id:V1, filter:"/api/big"}`。
 期望该行状态 `200`、**没有 300KB 正文**，代之以 `body skipped (307220 bytes)`（夹具现在显式发
 `content-length: 307220`，闸门读的就是它——数字是定值，不必再猜尾数）。
+⚠️ **且不许出现 `⚠ … failed` 摘要行**：这条是 200，"没读正文"是事实不是失败——首轮正是这里抓到
+finding D（闸门把哨兵塞进 `err` ⇒ 失败计数把它当失败），已改为独立字段 `bodyNote`。
 
 **S7（判据 5）** 控制台：
 
@@ -316,12 +318,13 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 | # | 判据 | 调用（简） | 期望（逐字/形态） | 实测片段 | 结论 |
 |---|---|---|---|---|---|
-| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `Browser call failed:` 那句；新文档能看到两行加载期请求 | 首轮（CDP 路）：首调无失败句（⇒ 桥上 ok）；导航后再读**仍是空表 + "armed by this call"**；`browser_eval` 复核 `{hasRec:false, href:"…?gate=2"}` | **FAIL**（被接受但没交货）→ 改宿主 API `0d140fad`，**待重跑** |
-| 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | 空表（见判据 0） | 未验（门禁连坐） |
-| 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | 未跑（连坐） | 未验（门禁连坐） |
-| 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | 未跑（连坐） | 未验（门禁连坐） |
-| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (307220 bytes)`，无正文 | 未跑（连坐）；**夹具侧前提已验**：`content-length: 307220` 在 | 未验（门禁连坐） |
-| 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console`；再补 `console.error` | `[uncaught] …` 与 `[error] …` **分行** | 未跑（连坐） | 未验（门禁连坐） |
+| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `Browser call failed:` 那句；新文档能看到两行加载期请求 | **首轮（CDP 路）FAIL**：首调无失败句（⇒ 桥上 ok）；导航后再读**仍是空表 + "armed by this call"**；`browser_eval` 复核 `{hasRec:false, href:"…?gate=2"}`。**重跑（宿主 API `0d140fad`，2026-09-23）PASS**：首调 `Network requests (last 0 of 0, newest last):` + `No requests recorded yet.` + `armed in this document by this call` NOTE，**无** `Browser call failed:`；`navigate ?gate=1` 回**落点一致**分支；等 1s 再读 → `Network requests (last 2 of 2, newest last):` / `#1 GET  /api/ok  → 200  18ms  {"ok":true,"rows":[1,2,3]}` / `#2 GET  /api/ok  → 200  20ms  {"ok":true,"rows":[1,2,3]}`。顺带：`window.__aideRec.reqs.map(r=>r.kind)` = `["fetch","xhr"]`；`location.href` = `"http://127.0.0.1:8780/?gate=1"`（新 URL ⇒ 落点一致分支为真，NAV_SETTLE_MS 仍够用） | **PASS**（宿主 API 交货） |
+| 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | 重跑（V1=`browser-2`，`navigate ?load=1` 报落点一致）：`Network requests (last 2 of 2, newest last):` + `#1 GET  /api/ok  → 200  18ms  {"ok":true,"rows":[1,2,3]}` + `#2 GET  /api/ok  → 200  20ms  {"ok":true,"rows":[1,2,3]}`，各带响应片段；**无** "armed by this call" 的 NOTE。两条通道的分辨见判据 0 的 `["fetch","xhr"]` | **PASS** |
+| 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | `Network requests matching "/api/fail" (last 1 of 1 matches, 3 total, newest last):` / `⚠ 1 of 1 matches failed — first failure #1` / `#1 GET  /api/fail  → 500  4ms  {"error":"No enum constant com.demo.EQUIPMENT_MAINTENANCE_TASK_AUDIT"}` | **PASS** |
+| 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | `Network requests matching "/api/hang" (last 1 of 1 matches, 4 total, newest last):` / `#1 GET  /api/hang  → (pending, 1674ms so far)`；约 4s 后再读同一条 → `(pending, 5919ms so far)`（N 随读变大，非 200、非 `(no status code)`） | **PASS** |
+| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (307220 bytes)`，无正文 | `Network requests matching "/api/big" (last 1 of 1 matches, 5 total, newest last):` / `⚠ 1 of 1 matches failed — first failure #1` / `#1 GET  /api/big  → 200  6ms  body skipped (307220 bytes)`——**靶子形态逐字达标**（200 + 定值 + 无正文）。⚠️ **但多出一行 `⚠ … failed`：一条 200 被算成失败**（原始条目 `{"bodyCut":false,"bodyLen":0,"done":true,"err":"body skipped (307220 bytes)","status":200}`）⇒ 见 finding D | **PASS（靶子）**；附 finding D（**已修 `fb7e8df9`**：跳过类说明改走独立字段 `bodyNote`，200 不再计入失败摘要；`recorder.test.ts` 的端到端缝用例钉住了同一症状） |
+| 4′ | 体积闸门（finding D 复验，**可选**） | 同上，但**必须在修好后重新加载过的页面上跑** | 同上但**没有** `⚠ … failed` 行 | 未跑（单测端到端缝已钉；真机复验要装新构建 + 让页面重新加载——recorder 幂等，**旧文档里跑的还是旧源码**，不重载就仍会看到那行） | 待定 |
+| 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console`；再补 `console.error` | `[uncaught] …` 与 `[error] …` **分行** | 点击回 `Clicked <button> "抛未捕获异常" #btn-throw with a real mouse event via CDP at (308, 410).`；`browser_console` → `Console (last 1 of 1):` / `[uncaught] Uncaught ReferenceError: nope is not defined`；补 `console.error('boom-marker')` 后 → `Console (last 2 of 2):` / `[uncaught] Uncaught ReferenceError: nope is not defined` / `[error]    boom-marker`（两行、两个标签） | **PASS** |
 | 6 | 未装的如实说明 | V1 首次 `browser_network`；V2 首次 `browser_console` | `NOTE: the recorder was armed in this document by this call …` | 两次都逐字出现；console 侧另有 `Console (last 0 of 0):` + `Nothing recorded yet.` | **PASS**（形态；成因注记） |
 | 7 | navigate 落点 | `navigate #/two`；普通 `navigate ?plain=1/2` | 7a 报实际 `#/one`（不报假成功）；7b 两次都一致 | 7a：`Requested …#/two … but the document reports …#/one instead.` + 两条成因；`location.hash` 复核 `"#/one"`。7b：`?plain=1`/`?plain=2` 两次都 `the document confirms it is at …` | **PASS** |
 | 8 | 同文档导航提示 | `pushState` → `browser_wait until:"load"` | 文案含 `SAME-DOCUMENT` | `Nothing was loading when this call started — the view was already ready at …?plain=2. … If you just made a SAME-DOCUMENT navigation (a hash change or history.pushState), …` | **PASS** |
@@ -334,9 +337,17 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 | 15 | 裁剪坐标两处 | 造滚动页 + fixed 元素，各截一张 | 15a 含 `STATICMARK`；15b 记实际形态 | 场景：`scrollY=1500`；静态块视口内 `top=1567`（页面坐标 3067）、fixed `top=670`。15a = **绿色 STATICMARK**；15b = **红色 FIXEDMARK** | **PASS（两格都对）** |
 | 16 | wait 文档身份 | `performance.timeOrigin` 前后对比；自触发 reload 的等待 | 16a 前后**不等**；16b 带 `the page was replaced N time(s)` | 16a：`1790139016642.8` → `1790139027110.6`；16b：`Condition met after 2 poll(s) (504ms, polling every 500ms)` + `NOTE: the page was replaced 1 time(s) during this wait (last at poll #2) …` | **PASS** |
 
-**验收结论（2026-09-23）：11/17 PASS，1 FAIL（判据 0 门禁），5 条被门禁连坐未验（1–5）。**
+**验收结论（2026-09-23）：17/17 PASS。**
 
-**门禁 FAIL 的完整证据链**（原文，不转述）：
+- 首轮：11/17 PASS，1 FAIL（判据 0 门禁，CDP 路被接受但不交货），5 条被门禁连坐未验（1–5）。
+- 重跑（宿主 API `0d140fad` 落地后，同日）：**判据 0 门禁 PASS**（新文档里两行加载期请求确实在），连坐的判据 1–5 **全部补跑并 PASS**。
+  其余 11 条首轮 PASS 项本次**未重跑**（按验收指令只跑门禁 + 判据 1–5），其结论仍以首轮为准。
+- 重跑新增 **1 条 finding（D）**：200 + body 被体积闸门跳过，会被失败摘要行算成「失败」。判据 4 的靶子形态（行内 `→ 200` + `body skipped (307220 bytes)`）本身达标，故判据 4 判 PASS、缺陷另记。
+
+**门禁 FAIL 的完整证据链**（首轮 CDP 路，原文，不转述）：
+
+> 下面这段里的 `browser-1` 是**首轮**的视图 id，与重跑那段的 `browser-1` 只是 id 复用（视图关掉后重开又拿到同一个），
+> 两段不是同一次运行。
 
 1. 第一步 recorder 调用（`browser_network {view_id:"browser-1"}`）回的 NOTE 只有 `armed in this document by this call`，
    **没有** `could not be registered … rejected by the runtime` ⇒ 桥上 `ok:true` 且无方法级 error ⇒ WebView2 **收下了**该 CDP 方法。
@@ -348,16 +359,45 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 **判定**：注册**被接受但没交货** ⇒ 注入路改走 Rust 宿主 API（计划 Task 13），落地后**重跑本清单**。
 
-**三条 finding**（都不是用户操作问题）：
+**重跑结果（2026-09-23，宿主 API 落地后）**——门禁原文：
 
-- **A（门禁 FAIL，已定位）**：CDP `Page.addScriptToEvaluateOnNewDocument` 在本机 WebView2 上被接受但不生效。
-  在 Task 13 落地前，判据 1–5 不作数。
+1. `browser_tab {action:"open", url:"http://127.0.0.1:8780/", label:"gate"}` →
+   `Opened view browser-1 "gate" http://127.0.0.1:8780/.` + `It is PARKED: …`（**VG = `browser-1`**；用词是 `PARKED` ⇒ 新构建）。
+2. 第一次 `browser_network {view_id:"browser-1"}` →
+   `Network requests (last 0 of 0, newest last):` / `No requests recorded yet.` /
+   `NOTE: the recorder was armed in this document by this call, …`——**无** `Browser call failed:` 那句。
+3. `browser_tab {action:"navigate", …url:"http://127.0.0.1:8780/?gate=1"}` →
+   `Navigated view browser-1 "gate" http://127.0.0.1:8780/?gate=1 — the document confirms it is at http://127.0.0.1:8780/?gate=1.`
+4. 等 1 秒后 `browser_network {view_id:"browser-1"}` →
+   ```
+   Network requests (last 2 of 2, newest last):
+   #1 GET  /api/ok  → 200  18ms  {"ok":true,"rows":[1,2,3]}
+   #2 GET  /api/ok  → 200  20ms  {"ok":true,"rows":[1,2,3]}
+   ```
+   ⇒ **新文档里两行加载期请求都在**：宿主 API 交货。顺带项结论：`?gate=1` 报**落点一致**，且
+   `browser_eval {script:"location.href"}` = `"http://127.0.0.1:8780/?gate=1"`（新 URL）⇒ 落点读取与报告一致。
+
+**四条 finding**（都不是用户操作问题）：
+
+- **A（首轮门禁 FAIL，已消解）**：CDP `Page.addScriptToEvaluateOnNewDocument` 在本机 WebView2 上被接受但不生效。
+  改走 WebView2 宿主 API（`AddScriptToExecuteOnDocumentCreated`）后**重跑 PASS**，该路已弃用（源码 `recorder.ts` 的
+  `ensureRegistered` 处已留警示注释）。
 - **B（顺带结论，非缺陷）**：**`NAV_SETTLE_MS = 250` 够用** —— 普通跨文档导航（`?plain=1/2`、`?gate=N`、`?t=1`）
-  每次都报"落点一致"，没有一次误报不符。清单判据 0 的顺带项结论：**不需要调大**。
+  每次都报"落点一致"，没有一次误报不符；重跑再添三例（`?gate=1`、`?load=1`）同样一致。清单判据 0 的顺带项结论：**不需要调大**。
 - **C（文案类，与判据 13 同批报）**：元素截图的 caption 用的是元素**标签**（`Screenshot of 确 定`），
   而清单期望的是可辨识的描述（`<button> "确 定" #cjk-ok`）。不撒谎（图确实只有那个元素），
   但两个同标签元素（如夹具的两个"保存"）只能靠图本身分辨；`(N elements matched; used index i)` 脚注
   在这种情况下会补上，所以最坏情形有兜底。
+- **D（重跑新增，2026-09-23 —— 判据 4 顺带发现）**：**成功请求被算成失败**。
+  `/api/big` 那条是 `→ 200`，却被前置了 `⚠ 1 of 1 matches failed — first failure #1`。
+  机制：体积闸门把「没读正文」这个**非错误事实**写进了 `err` 字段
+  （`recorder.ts:90/95/127`：`rec.err = 'body skipped (' + n + ' bytes)'`），而失败计数把
+  「`err` 非空」一律当失败（`recorder.ts:232`：`done === true && (status >= 400 || !!e.err)`）。
+  原始条目可佐证：`{"bodyCut":false,"bodyLen":0,"done":true,"err":"body skipped (307220 bytes)","status":200}`。
+  spec 自身也自相矛盾：§8.1 把「`err` 非空」定义为失败，§7.3 又规定闸门往 `err` 里写跳过标记。
+  后果：§8.1 的原话是「agent 十次里有九次是冲着失败来的」，却会在一条**完全成功**的请求上被这条摘要误导——
+  正是本批要消灭的那类误读。行内本身不撒谎（`→ 200` + `body skipped` 都在），坏的只有摘要行。
+  **未修**（验收指令：不改代码）。修法建议：跳过标记换成独立字段（如 `skip`），或在计数处排除它。
 
 **回写清单**（跑完当天做完，别拖）：
 

@@ -1,12 +1,13 @@
 # 内置浏览器 agent 工具 v3：可观测层（网络 / 控制台）+ 四条实测 gap
 
 日期：2026-09-22
-状态：**已实现；真机验收 11/17**（2026-09-23）——**判据 0 门禁未过**：CDP
-`Page.addScriptToEvaluateOnNewDocument` 在本机 WebView2 上**被接受但不交货**（新文档里没有探针，
-而桥上 `ok:true`、无方法级 error）⇒ 注入路改走 Rust 宿主 API（实现计划 Task 13），落地后重跑清单。
-判据 1–5（recorder 那五条）因此**连坐未验**；其余 11 条 PASS，台账见 `docs/browser-observability-test-checklist.md`。
+状态：**已实现并真机验收通过 17/17**（2026-09-23，台账见 `docs/browser-observability-test-checklist.md`）。
+注入路走了两轮：CDP `Page.addScriptToEvaluateOnNewDocument` 在本机 WebView2 上**被接受但不交货**
+（新文档里没有探针，而桥上 `ok:true`、无方法级 error——**失败是静默的**，"出错再回退"那种链根本不会触发），
+⇒ 改走 WebView2 宿主 API `AddScriptToExecuteOnDocumentCreated`（`0d140fad`）后**交货**，门禁与判据 1–5 复跑全过。
 （顺带实测结论：`NAV_SETTLE_MS = 250` **够用**，普通跨文档导航无一次误报；CDP `clip` **确为文档坐标**，
-滚动页上的 `position: fixed` 元素也裁对了。）
+滚动页上的 `position: fixed` 元素也裁对了——这条**证伪**了"检测 fixed 就不加滚动偏移"的修法，别照做。
+验收另发现并已修一条：体积闸门把"没读正文"塞进 `err`，导致 200 被计入失败摘要。）
 上一版：`2026-09-20-browser-agent-tools-v2-design.md`（求值语义 / `browser_wait` / 可见性如实上报）
 ——**动手前先读它**，尤其是它末尾的「返工记录」两节
 
@@ -355,9 +356,14 @@ sidecar
 
 ```js
 var len = Number(res.headers && res.headers.get && res.headers.get('content-length'))
-if (len > 262144) { rec.err = 'body skipped (' + len + ' bytes)'; rec.done = true }
+if (len > 262144) { rec.bodyNote = 'body skipped (' + len + ' bytes)'; rec.done = true }
 else { /* 上面那段 clone().text() 的读体逻辑 */ }
 ```
+
+⚠️ **哨兵不许写进 `err`**（真机验收抓到的 finding D）：`err` 的语义是"这条请求失败了"，
+而"我没读体"**不是失败**。首版把两者塞进同一个字段，于是 200 被计入失败摘要——正好污染了
+§8.1 那条"agent 十次里有九次是冲着失败来的"的路径。所以跳过类的说明走独立的 `bodyNote`
+（事件流那条同理），`err` 只留真错误（`body unreadable` / 抛错 / 被拒）。
 
 （`content-length` 缺失时按"读"处理——如实标 `body truncated` 已经是既有行为。
 这条阈值**要在夹具里用两条 KB 级 + 一条超阈值接口各验一次**，第 12 节的表单测里加三条。）
@@ -403,6 +409,8 @@ Requests (last 3 of 12, newest last):
   永不返回的请求上，而这**恰恰是最难自己发现的一条**。
 - **失败优先**：`status >= 400` 或 `err` 非空的条目在文本里**前置一行摘要**
   （`2 of 12 failed — first failure: #10`）。agent 十次里有九次是冲着失败来的。
+  ⚠️ 这条判据只在 `err` **只装真错误**时成立——跳过类的说明（体积闸门 / 事件流）走 `bodyNote`，
+  不许混进 `err`（见 §7.3 的 finding D）。
 - 状态码为 `0` / `null` 且无 err → 如实说"没有状态码"（CORS/中止/未结束），别当成 200。
 - 请求体**不做**（P1 不做，`reqs[]` 里也没存）——记在未决问题。
 
