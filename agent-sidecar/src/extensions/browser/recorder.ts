@@ -164,6 +164,21 @@ function asRecord(v: unknown): Record<string, unknown> | null {
 }
 
 /**
+ * `limit` 是模型给的自由数字，**必须先夹**：`JSON.stringify(Infinity)` 是 `null`，页面侧
+ * `matched.slice(Math.max(0, matched.length - null))` 会退化成 `slice(len)` ⇒ 回 `items: []`
+ * 而 `matched` 仍报 N——正是本批最恨的「空 ≠ 没有」，而且发生在最要紧的那一处。
+ *
+ * 夹进 `[0, RECORDER_CAP]`：缓冲本身最多就 cap 条，所以"要全部"就是 cap，代价有界。
+ * `±Infinity` 由 min/max 自然收进区间；`NaN` 得单独定——`Math.min/max` 会把它一路透传成
+ * `NaN`，而**非有限值在这条线上都是 `null`**（`JSON.stringify(NaN)` 同样是 `null`），
+ * 不处理就回到上面那个空表。一个解释不了的数按"要全部"算。
+ */
+function clampLimit(limit: number): number {
+  if (Number.isNaN(limit)) return RECORDER_CAP;
+  return Math.min(RECORDER_CAP, Math.max(0, Math.floor(limit)));
+}
+
+/**
  * 读脚本：先确保本文档装上（幂等），再按筛选与条数上限取回。
  *
  * `armedBefore` 是这次调用的关键信息：false = 探针是**这次**才装上的，这之前的请求看不到。
@@ -179,7 +194,7 @@ export function buildRecorderReadScript(opts: RecorderReadOptions): string {
   var R = window.__aideRec;
   if (!R) return { ok: false, error: 'the recorder could not be armed in this document: ' + ARMED };
   var KIND = ${JSON.stringify(opts.kind)};
-  var LIMIT = ${JSON.stringify(opts.limit)};
+  var LIMIT = ${JSON.stringify(clampLimit(opts.limit))};
   var MATCH = ${JSON.stringify(opts.match ?? null)};
   var nowMs = Math.round(performance.now());
   var all = KIND === 'reqs' ? R.reqs : R.logs;
@@ -217,9 +232,20 @@ export function buildRecorderReadScript(opts: RecorderReadOptions): string {
 })()`;
 }
 
-/** 已经注册过「新文档自动装」的视图 id —— **每个视图只注册一次**（注册是累积的，重发 N 次
- *  就让每份新文档跑 N 遍 no-op IIFE）。`view_id` 缺省时用 Rust 解析回来的真实 id 记账。 */
+/** 显式 `view_id` 的注册记账 —— **每个视图只注册一次**（注册是累积的，重发 N 次就让每份新文档
+ *  跑 N 遍 no-op IIFE）。显式 id 是**确切的**，没有陈旧的可能，所以进了就永久留着。 */
 const registeredViews = new Set<string>();
+
+/**
+ * 缺省 `view_id` 时 Rust 解析回来的真实 id —— **刻意不进 `registeredViews`**。
+ *
+ * 它只是"上次解析落在哪个视图"的缓存，视图被**换掉**（关掉再开、仍只有一个）之后就陈旧，
+ * 而那时 guard 会误判成"已注册"：新视图的**加载期请求**——本批的旗舰场景——就一条都收不到。
+ * 所以它必须**可丢**，丢弃的信号在 `readRecorder` 里（`armedBefore === false`：刚读的这份
+ * 文档压根没在创建时装上 ⇒ 缓存没在兑现）。丢掉后下一次调用真的重注册，再往后新文档就都
+ * 装上了——自愈，且 happy path 上不多一次往返。
+ */
+let cachedResolvedId: string | undefined;
 
 /**
  * 给**未来的文档**装上（CDP `Page.addScriptToEvaluateOnNewDocument`，走既有的 `call_cdp`
@@ -227,12 +253,20 @@ const registeredViews = new Set<string>();
  *
  * 这一处是**唯一的注入接缝**：若真机上 CDP 路不通，只需把这里的 `call_cdp` 换成走宿主
  * `AddScriptToExecuteOnDocumentCreated` 的那个 op（见实现计划 Task 13），其余代码一行不动。
+ *
+ * `registeredNow` = 这一次**真的发了**注册（false = 命中记账、复用了先前的注册）。调用方
+ * 靠它决定"这份文档没装上"该记在谁头上：**复用**了记账却照样没装上，才说明记账失效了。
  */
 async function ensureRegistered(
   viewId: string | undefined,
   emit: (e: ChatEvent) => void,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  if (viewId && registeredViews.has(viewId)) return { ok: true };
+): Promise<{ ok: true; registeredNow: boolean } | { ok: false; error: string }> {
+  const key = viewId ?? cachedResolvedId;
+  // `key === cachedResolvedId`：缺省 view_id 时，缓存**本身就是**"已注册过"的凭据
+  // （它不在 `registeredViews` 里——它可能陈旧，见上）。
+  if (key && (key === cachedResolvedId || registeredViews.has(key))) {
+    return { ok: true, registeredNow: false };
+  }
 
   const resp = await queryBrowser(
     {
@@ -257,10 +291,13 @@ async function ensureRegistered(
     };
   }
   // 记账用 Rust 解析回来的**真实 id**（调用方可能省略 view_id）——省了它下次还会重发一遍。
+  // 显式的进永久记账（确切）；缺省的只进缓存（可能是陈旧的落点，故可丢）。
   const id = asRecord(resp.data)?.["view_id"];
-  if (typeof id === "string") registeredViews.add(id);
-  else if (viewId) registeredViews.add(viewId);
-  return { ok: true };
+  if (typeof id === "string") {
+    if (viewId) registeredViews.add(id);
+    else cachedResolvedId = id;
+  } else if (viewId) registeredViews.add(viewId);
+  return { ok: true, registeredNow: true };
 }
 
 /**
@@ -282,6 +319,11 @@ export async function readRecorder(
       ok: false,
       error: String(value?.["error"] ?? "the recorder read script returned no usable value"),
     };
+  }
+  // 缓存自愈：**复用**了记账（这次没重发注册）却读到一份没在创建时装上的文档 ⇒ 缓存指向的
+  // 视图已经不是当前这个了。丢掉它，下一次调用真的重注册；本次不重发——读已经做完了。
+  if (reg.ok && !reg.registeredNow && viewId === undefined && value["armedBefore"] === false) {
+    cachedResolvedId = undefined;
   }
   return reg.ok
     ? { ok: true, value, registered: true }

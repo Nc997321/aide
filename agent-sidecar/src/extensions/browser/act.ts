@@ -17,7 +17,7 @@
  * （`{error:{code,message}}`）是一个合法 JSON 响应体，`drill`（`native.rs:71-78`）只做 JSON
  * 解析，于是它带着 `ok:true` 一路回到这里。不看这个字段，运行时拒绝一次点击时我们会回
  * "Clicked … with a real mouse event via CDP"——**而它根本没点**。
- * （`screenshot.ts:88-98` 早就这么判了，这条路径当初漏了；2026-09-20 走查发现。）
+ * （`screenshot.ts:100-101` 早就这么判了，这条路径当初漏了；2026-09-20 走查发现。）
  *
  * 设值（`fill`）不走 CDP：置 value + 派发 `input`/`change` 是纯脚本操作，没有可信事件的问题。
  */

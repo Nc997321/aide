@@ -5,8 +5,20 @@
 // 真实页面上的行为由真机夹具（docs/testing/browser-recorder-fixture.html）验。
 //
 // ⚠️ 桩 console 必须传进去：源码里是裸 `console[lvl] = …`，不 shadow 就会改到 vitest 自己的 console。
-import { describe, it, expect } from "vitest";
-import { RECORDER_SOURCE, RECORDER_CAP, RECORDER_TEXT_CAP } from "./recorder.js";
+import { describe, it, expect, afterEach } from "vitest";
+import type { ChatEvent } from "../../engine/types.js";
+import { cancelAllBrowserQueries, resolveBrowserResult } from "../browserClient.js";
+import {
+  RECORDER_SOURCE,
+  RECORDER_CAP,
+  RECORDER_TEXT_CAP,
+  buildRecorderReadScript,
+  readRecorder,
+} from "./recorder.js";
+
+// ⚠️ 下半场（`readRecorder`）走**真桥客户端**：Rust 那一侧用 `resolveBrowserResult` 顶掉，
+// 于是"发了几次注册、几时发的"这些节奏断言是端到端的，不是对着桩猜的。
+afterEach(() => cancelAllBrowserQueries("test cleanup"));
 
 type Handlers = Record<string, Function[]>;
 
@@ -186,5 +198,221 @@ describe("recorder：没接住的错误", () => {
 
     expect(win.__aideRec.logs.map((l: any) => l.lvl)).toEqual(["uncaught", "unhandled"]);
     expect(win.__aideRec.logs[0].text).toContain("nope is not defined");
+  });
+});
+
+// ---- 读脚本：筛选 / 计数 / 条数（决定模型**真正看到**什么的那一半在页面侧） ----
+
+/** 一个「已经装上」的 window：缓冲预填好，注入源码自己会 `return 'already armed'` 走开。 */
+function armedWindow(rec: { reqs?: unknown[]; logs?: unknown[] }) {
+  const { win } = makeWindow({
+    __aideRec: { reqs: rec.reqs ?? [], logs: rec.logs ?? [], cap: RECORDER_CAP },
+  });
+  return win;
+}
+
+/** 跑读脚本、取回信封。`performance.now` 固定 1000，好让未结束条目的 `ms` 可算。 */
+function readEnvelope(opts: { kind: "reqs" | "logs"; limit: number; match?: string }, win: any) {
+  return run(buildRecorderReadScript(opts), win, { log: () => {} }, { now: () => 1000 }) as any;
+}
+
+/** 一条网络记录（只写用例关心的字段，其余给默认值）。 */
+function req(over: Record<string, unknown> = {}) {
+  return {
+    kind: "fetch",
+    method: "GET",
+    url: "https://a/x",
+    status: 200,
+    done: true,
+    ms: 3,
+    t: 1,
+    body: null,
+    bodyCut: false,
+    bodyLen: 0,
+    err: null,
+    ...over,
+  };
+}
+
+/** 一条 console 记录。 */
+function line(over: Record<string, unknown> = {}) {
+  return { lvl: "log", t: 1, text: "x", cut: false, len: 1, ...over };
+}
+
+describe("recorder 读脚本：筛选 / 计数 / 条数", () => {
+  it("URL 子串筛选：只有匹配的进 items，matched 是筛后的条数", () => {
+    const win = armedWindow({
+      reqs: [
+        req({ url: "https://a/api/1" }),
+        req({ url: "https://a/static/x.js" }),
+        req({ url: "https://a/api/2" }),
+      ],
+    });
+
+    const v = readEnvelope({ kind: "reqs", limit: 10, match: "api" }, win);
+
+    expect(v.total).toBe(3);
+    expect(v.matched).toBe(2);
+    expect(v.items.map((i: any) => i.url)).toEqual(["https://a/api/1", "https://a/api/2"]);
+  });
+
+  it("console 的 error 档含 uncaught / unhandled；all 与省略都不过滤", () => {
+    const win = armedWindow({
+      logs: [
+        line({ lvl: "log" }),
+        line({ lvl: "error" }),
+        line({ lvl: "uncaught" }),
+        line({ lvl: "unhandled" }),
+        line({ lvl: "warn" }),
+      ],
+    });
+
+    const errors = readEnvelope({ kind: "logs", limit: 10, match: "error" }, win);
+    expect(errors.items.map((i: any) => i.lvl)).toEqual(["error", "uncaught", "unhandled"]);
+
+    expect(readEnvelope({ kind: "logs", limit: 10, match: "all" }, win).matched).toBe(5);
+    expect(readEnvelope({ kind: "logs", limit: 10 }, win).matched).toBe(5);
+    expect(readEnvelope({ kind: "logs", limit: 10, match: "warn" }, win).matched).toBe(1);
+  });
+
+  it("limit 取**最新**的 N 条（从尾部切）", () => {
+    const win = armedWindow({ reqs: [1, 2, 3, 4, 5].map((n) => req({ url: `https://a/${n}` })) });
+
+    const v = readEnvelope({ kind: "reqs", limit: 2 }, win);
+
+    expect(v.items.map((i: any) => i.url)).toEqual(["https://a/4", "https://a/5"]);
+    // 窗口之外还有 3 条：模型靠 matched/total 知道"这不是全部"
+    expect(v.matched).toBe(5);
+    expect(v.total).toBe(5);
+  });
+
+  it("failed 只数**已结束**的失败；first 是 matched 里的序号（1 起）", () => {
+    const win = armedWindow({
+      reqs: [
+        req({ url: "https://a/ok" }),
+        req({ url: "https://a/500", status: 500 }),
+        req({ url: "https://a/pending", status: 500, done: false, ms: null }),
+        req({ url: "https://a/neterr", status: null, err: "boom" }),
+      ],
+    });
+
+    const v = readEnvelope({ kind: "reqs", limit: 10 }, win);
+
+    // 未结束那条**不算**失败（状态码还没定），但照样列出来：done:false + 已经过了多少毫秒
+    expect(v.failed).toEqual({ n: 2, first: 2 });
+    const pending = v.items.find((i: any) => i.url.endsWith("pending"));
+    expect(pending.done).toBe(false);
+    expect(pending.ms).toBe(999); // nowMs(1000) - t(1)
+  });
+
+  it("非有限的 limit 不再静默回空表（Infinity/NaN 按「要全部」夹，负数夹到 0）", () => {
+    const win = armedWindow({ reqs: [1, 2, 3].map((n) => req({ url: `https://a/${n}` })) });
+
+    // `JSON.stringify(Infinity)` 是 `null`：不夹的话 `slice(len - null)` 会回 `items: []`
+    // 而 matched 仍报 3 —— 本批最恨的「空 ≠ 没有」，且发生在最要紧的一处。
+    for (const limit of [Infinity, NaN]) {
+      expect(readEnvelope({ kind: "reqs", limit }, win).items, String(limit)).toHaveLength(3);
+    }
+
+    const negative = readEnvelope({ kind: "reqs", limit: -1 }, win);
+    expect(negative.items).toHaveLength(0);
+    expect(negative.matched).toBe(3); // 空是**请求**空，不是"没有"
+  });
+
+  it("armedBefore：早就装上 = true；这次才装上 = false（且探针确实装上了）", () => {
+    expect(readEnvelope({ kind: "reqs", limit: 5 }, armedWindow({})).armedBefore).toBe(true);
+
+    const { win } = makeWindow();
+    const v = readEnvelope({ kind: "reqs", limit: 5 }, win);
+
+    expect(v.ok).toBe(true);
+    expect(v.armedBefore).toBe(false); // 这份文档是**这次**才装上的：之前的请求看不到
+    expect(win.__aideRec).toBeTruthy();
+  });
+});
+
+// ---- 注册编排：每个视图只注册一次（缺省 view_id 也不重发） ----
+
+/** 等到第 n 条桥请求出现——调用是串行的，结算完上一条才会发下一条。 */
+async function waitForQuery(events: ChatEvent[], n: number): Promise<any> {
+  for (let i = 0; i < 200 && events.length <= n; i++) await new Promise((r) => setTimeout(r, 0));
+  const q = events[n];
+  if (!q) throw new Error(`bridge query #${n} never arrived (got ${events.length})`);
+  return q as any;
+}
+
+function emitCollector() {
+  const events: ChatEvent[] = [];
+  return { events, emit: (e: ChatEvent) => events.push(e) };
+}
+
+function reply(q: any, body: { ok: boolean; data?: unknown; error?: string }): void {
+  resolveBrowserResult({ request_id: q.request_id, ...body });
+}
+
+/** 一份成功的求值回包（CDP 形状），信封里只有 `armedBefore` 是用例关心的。 */
+function envelope(armedBefore: boolean) {
+  return {
+    view_id: "browser-1",
+    value: {
+      result: {
+        type: "object",
+        value: {
+          ok: true,
+          armedBefore,
+          cap: RECORDER_CAP,
+          total: 0,
+          matched: 0,
+          failed: { n: 0, first: null },
+          items: [],
+        },
+      },
+    },
+  };
+}
+
+describe("recorder：注册按视图只发一次", () => {
+  it("第一次发注册；第二次复用记账不发；读到没装上的文档后，第三次真的重注册", async () => {
+    const { events, emit } = emitCollector();
+
+    // 1) 缺省 view_id（文档化的正常调用方式）：先注册，再求值
+    const first = readRecorder({ kind: "reqs", limit: 5 }, undefined, emit);
+    const reg1 = await waitForQuery(events, 0);
+    expect(reg1.method).toBe("Page.addScriptToEvaluateOnNewDocument");
+    expect(reg1.view_id).toBeUndefined();
+    reply(reg1, { ok: true, data: { view_id: "browser-1", value: {} } });
+    reply(await waitForQuery(events, 1), { ok: true, data: envelope(false) });
+    await first;
+
+    // 2) 第二次：命中记账 ⇒ **第 2 条请求直接是求值**（中间没有注册）。
+    //    但这份文档没在创建时装上（视图被换掉了）⇒ 缓存作废，只是本次不重发。
+    const second = readRecorder({ kind: "reqs", limit: 5 }, undefined, emit);
+    const eval2 = await waitForQuery(events, 2);
+    expect(eval2.method).toBe("Runtime.evaluate");
+    reply(eval2, { ok: true, data: envelope(false) });
+    await second;
+
+    // 3) 第三次：缓存已丢 ⇒ 真的重注册（这次 Rust 解析回来的是新视图）
+    const third = readRecorder({ kind: "reqs", limit: 5 }, undefined, emit);
+    const reg3 = await waitForQuery(events, 3);
+    expect(reg3.method).toBe("Page.addScriptToEvaluateOnNewDocument");
+    reply(reg3, { ok: true, data: { view_id: "browser-2", value: {} } });
+    reply(await waitForQuery(events, 4), { ok: true, data: envelope(false) });
+    await third;
+  });
+
+  it("显式 view_id 也只注册一次（永久记账，不受缓存自愈影响）", async () => {
+    const { events, emit } = emitCollector();
+
+    const first = readRecorder({ kind: "reqs", limit: 5 }, "browser-9", emit);
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", value: {} } });
+    reply(await waitForQuery(events, 1), { ok: true, data: envelope(false) });
+    await first;
+
+    const second = readRecorder({ kind: "reqs", limit: 5 }, "browser-9", emit);
+    const eval2 = await waitForQuery(events, 2);
+    expect(eval2.method).toBe("Runtime.evaluate");
+    reply(eval2, { ok: true, data: envelope(false) });
+    await second;
   });
 });
