@@ -781,6 +781,23 @@ agent-sidecar 内实测：schema 近似 3,245 字符 vs 真实 JSON Schema 5,031
    待反馈再定。
 4. **`browser_style` / 视觉快照 diff / `browser_open`**：v2 未决问题 3 里剩下的候选，
    本批仍未做，等这一批在真实项目上跑过一轮再按痛感定序。
-5. **`Page.addScriptToEvaluateOnNewDocument` 的会话生命周期**：注册是挂在 WebView2 的
-   DevTools 会话状态上的。视图关闭/重建后是否失效、需不需要在视图创建时重装，
-   步骤 0 一并观察（若失效，就在 `browser_tab open` 的路径上补装）。
+5. ~~**`Page.addScriptToEvaluateOnNewDocument` 的会话生命周期**~~ —— **已作废**：那条路真机实测
+   "被接受但不交货"，注入已改走宿主 API `AddScriptToExecuteOnDocumentCreated`（`0d140fad`），
+   注册随视图（每个视图注册一次，见 `recorder.ts` 的记账）。
+
+## 17. 落地后仍留着的小项（评审逐条评估过、**故意不修**，都带代价）
+
+这批活收尾时把任务评审与终审留下的 Minor 逐条裁决过。下面这些是判定"**留着比改了划算**"的，
+记在这儿免得下次有人当成新发现重新挖一遍：
+
+| 位置 | 小项 | 为什么留着 |
+|---|---|---|
+| `browser/format.ts` | `formatRead` 88 行（规则是 ≤40） | 落地前就 78 行；完整拆分要重排渲染器顶层，本批只把自己加的 +10 收掉了 |
+| 多个模块 | 还有 6 处本地 `asRecord` 副本（`act.ts`/`frames.ts`/`wait.ts`/`runEval.ts`/`tab.ts`/`screenshot.ts`） | `format.ts` 的"只该有一份"目前是**理想**；本批清了 `recorder.ts` 那一处，其余留给顺手动 |
+| `browser/network.ts` | 带 filter 时单条失败印 `1 of 1 matches failed`（复数硬编码） | 纯文案；改它与清单 §4 的注记要同 commit |
+| `browser/recorder.ts` | `clampLimit` 不认非数字输入；`registeredViews` 不淘汰；XHR 同步抛会留假 pending | 三者在声明接口上都到不了（`limit: number` 必填、视图 id 进程内不复用、真页面极少那样调） |
+| `browser/recorder.ts` | 200 但**读体失败**（`body unreadable`）仍算失败 | 那是真错误，与 finding D 的"没读体"不同类 |
+| `browserTools.ts` | `browser_act` 的零尺寸失败文案自相矛盾（"Could not find… / matched element has zero size"） | 改前缀会同时改 `browser_act` 的 model-facing 文案，是选择不是疏漏 |
+| `scripts/diag/measure-builtin-mcp.ts` | `catch` 静默退回旧的低估算式 | 量尺退化时不可见，但当前 zod 路径是唯一真实形状 |
+| `browser/tab.ts` | mismatch 分支用 `String(view_id)` 而另两支用 `where`；回退分支会拼两段"下一步" | 同一动作三种描述口径不一致，属打磨 |
+| 测试 | 若干墙钟余量与模块级状态依赖（50ms 间隔；两条注册用例共享记账） | 实现者已披露，vitest 重试/shuffle 都关着 |
