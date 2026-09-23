@@ -255,8 +255,8 @@ sidecar
 
 | 路径 | 成本 | 状态 |
 |---|---|---|
-| **首选**：CDP `Page.addScriptToEvaluateOnNewDocument` | 走**已有的 `call_cdp` 透传**（`browserClient.ts:23` 无白名单）→ **零 Rust** | **未验**（见步骤 0） |
-| 兜底：Rust `AddScriptToExecuteOnDocumentCreated` | 已验证存在于 `native.rs:27` 已 import 的 `ICoreWebView2` 上；照 `native.rs:55-70` 的 `with_core` 范式 ≈15 行 | API 存在已确认，调用未写 |
+| **首选**：CDP `Page.addScriptToEvaluateOnNewDocument` | 走**已有的 `call_cdp` 透传**（`browserClient.ts:23` 无白名单）→ **零 Rust** | **实测不通**（2026-09-23 真机）：WebView2 **收下**该方法却从不执行它 —— 新文档里 `window.__aideRec` 不存在（`browser_eval` 复核 `{hasRec:false}`）。**失败是静默的**（无方法级 error），所以"CDP 优先、出错回退"这条链根本不会触发 |
+| **兜底**：WebView2 宿主 API `AddScriptToExecuteOnDocumentCreated` | `native.rs` 加一个 `drill()` 形状的函数 + 逐层一个 op（port → 两个 adapter → facade → bridge → 执行体 → sidecar 客户端） | **已落地**（`0d140fad`），注入改走这条；**交货与否待真机重跑判据 0** |
 
 两条路的差别只有"谁去调"：CDP 那条是 sidecar 直接发一条已有的透传命令；兜底那条要在
 `native.rs`（全仓库**唯一**允许 `use webview2_com` 的文件）里加一个 op，再由 sidecar 触发。

@@ -78,15 +78,19 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 ## 1. 判据 0：注册路（**门禁**——不通过就别往下跑）
 
 整套 recorder 的地基是"**在文档创建那一刻**把探针装上"（加载期请求、新文档自动带上都靠它）。
-实现走的是 CDP `Page.addScriptToEvaluateOnNewDocument`（零 Rust），**这条路在真机 WebView2 上从未验过**。
+实现走的是 WebView2 **宿主 API**（`ICoreWebView2::AddScriptToExecuteOnDocumentCreated`，经 `init_script` op）。
 
-**它不需要额外工具**：注册成没成由实现自己报出来（注册被拒 ⇒ 输出里会出现一句
-`the recorder could not be registered for future page loads: … was rejected by the runtime (…)`），
+> 首轮验收（2026-09-23）验过的是**另一条路**：CDP `Page.addScriptToEvaluateOnNewDocument` —— WebView2 **收下了**
+> 这个方法却**从不执行**它（新文档里 `window.__aideRec` 不存在，见台账与 finding A）。所以现在走宿主 API。
+> 两个含义：① 那条 CDP 路**已被放弃**，不再有任何"被拒"文案（旧清单让观察 `was rejected by the runtime`
+> 的那一句已作废）；② 宿主 API 到底交不交货，**同样只有新文档里加载期请求在不在能回答**。
+
+**它不需要额外工具**：注册失败会在输出里留一句 `Browser call failed: …`（桥的失败文本，原文照抄），
 而"注册到底交没交货"由**加载期请求在不在**直接回答。所以门禁就是下面这一小段，走完再进第 2 节。
 
 1. `browser_tab {action:"open", url:"http://127.0.0.1:8780/", label:"gate"}` → 记下 **VG**。
 2. `browser_network {view_id:VG}`（本视图的第一次 recorder 调用）→ 期望两句：`armed in this document by this call`
-   的 NOTE + `No requests recorded yet.`；**不应**出现 `could not be registered` 那句。
+   的 NOTE + `No requests recorded yet.`；**不应**出现 `Browser call failed:` 那句。
 3. `browser_tab {action:"navigate", view_id:VG, url:"http://127.0.0.1:8780/?gate=1"}`（**要一份新文档**）。
 4. 等 1 秒（读响应体是异步的）→ `browser_network {view_id:VG}` → 期望**两行**加载期请求：
    `GET http://127.0.0.1:8780/api/ok → 200`，fetch 与 XHR 各一条（夹具在文档创建时同时发这两条）。
@@ -95,9 +99,9 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 | 第 4 步看到什么 | 含义 | 下一步 |
 |---|---|---|
-| 两行加载期请求 | 注册生效 ✓ | 门禁过，进第 2 节 |
-| 空表，且第 2 步有 `could not be registered … rejected by the runtime` | CDP 那条路在真机不可用 | **停**，原文交控制者：计划里的条件任务（Rust 宿主 API `AddScriptToExecuteOnDocumentCreated`）必须先做、重建、重启 |
-| 空表，且第 2 步**没有**那句 | 注册被接受但**没交货** | 同上：停，原文交控制者 |
+| 两行加载期请求 | **宿主 API 交货了** ✓（本批到此为止第一次） | 门禁过，进第 2 节 |
+| 空表，且第 2 步有 `Browser call failed:` | 注册调用本身失败（桥/宿主 API 拒绝） | **停**，原文交控制者 |
+| 空表，且第 2 步**没有**那句 | 宿主 API 被接受但**没交货** | 同上：停，原文交控制者（这时两条注入路都不通，要找第三种：例如把探针装到页面自己的脚本之前别无他法时，只剩「文档创建后立刻装 + 如实告诉模型"加载期看不见"」这条路——交控制者定） |
 
 **不要在没装上的构建上验判据 1–16**——那验的是"懒装"，而懒装恰好漏掉本批最想要的加载期请求，全绿也是假的。
 
@@ -312,7 +316,7 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 | # | 判据 | 调用（简） | 期望（逐字/形态） | 实测片段 | 结论 |
 |---|---|---|---|---|---|
-| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `could not be registered` 那句；新文档能看到两行加载期请求 | 首调无那句（⇒ 桥上 ok）；导航后再读**仍是空表 + "armed by this call"**；`browser_eval` 复核 `{hasRec:false, href:"…?gate=2"}` | **FAIL**（被接受但没交货） |
+| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `Browser call failed:` 那句；新文档能看到两行加载期请求 | 首轮（CDP 路）：首调无失败句（⇒ 桥上 ok）；导航后再读**仍是空表 + "armed by this call"**；`browser_eval` 复核 `{hasRec:false, href:"…?gate=2"}` | **FAIL**（被接受但没交货）→ 改宿主 API `0d140fad`，**待重跑** |
 | 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | 空表（见判据 0） | 未验（门禁连坐） |
 | 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | 未跑（连坐） | 未验（门禁连坐） |
 | 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | 未跑（连坐） | 未验（门禁连坐） |
