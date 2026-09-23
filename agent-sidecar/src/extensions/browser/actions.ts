@@ -110,12 +110,74 @@ ${CLICKABLE_JS}
   }
 
   /**
+   * 「去掉所有空白」的形态 —— **只给比较用**。
+   *
+   * 为什么：EP 把双字按钮渲染成「确　定」（中间是空白/全角空格），而模型给的是「确定」——
+   * 归一化之后既不 === 也不 indexOf。JS 正则的空白类覆盖 U+3000（全角空格）与换行，所以这一
+   * 句就够了。
+   *
+   * （本文件是**注入脚本的源码**：注释里也不能出现反引号，那会撕开外层模板字面量——
+   * 同款约定见 clickable.ts。）
+   *
+   * ⚠️ **不许拿它去做 labelOf 的归一化**：labelOf 的单空格折叠是渲染给模型看的形态，
+   * 改它会波及 browser_read 的索引输出。
+   */
+  function tight(s) { return String(s == null ? '' : s).replace(/\\s+/g, ''); }
+
+  /**
+   * 文本命中分两池：**精确**（相等，或**去空白后相等**）与**包含**（含去空白后包含）。
+   *
+   * 去空白那一层是给 CJK 框架渲染留的容错（见 tight）：常规页面这一层恒等于上一层，
+   * 不多不少；只有「确　定」这类渲染才会把真按钮救回候选池。
+   * wantTight 为空串时整层跳过——否则 indexOf('') 恒为 0，页面上**每个**元素都会变成包含。
+   */
+  function textPools(found, want, wantTight) {
+    var exact = [], partial = [];
+    for (var i = 0; i < found.length; i++) {
+      var el = found[i];
+      if (!visible(el)) continue;
+      var t = labelOf(el);
+      if (!t) continue;
+      var tt = tight(t);
+      if (t === want || (wantTight && tt === wantTight)) exact.push(el);
+      else if (t.indexOf(want) >= 0 || (wantTight && tt.indexOf(wantTight) >= 0)) partial.push(el);
+    }
+    return { exact: exact, partial: partial };
+  }
+
+  /**
+   * 池子滤成「点下去会落在可点元素里」的那堆，再按**最具体的优先**排序。
+   *
+   * 为什么必须滤：池子是"文本载体"的宽集合（裸 div/span/td 都在里面，见 TEXT_CANDIDATE_SELECTOR
+   * 的注释），**能承载文本 ≠ 能点**。滤空了由调用方交给 notFound（选择器建议），不猜着点；
+   * 少了这一步，宽池子会让**任何**装在 div 里的文字都"点得到"，「文本在、但不像可点击」那条
+   * 分支就成了真页面上够不着的死代码（2026-09-22 夹具实测）。
+   *
+   * 排序口径：文本最短的那个通常就是目标，而不是包含它的整个容器；文本等长时取**子元素更少**
+   * 的那个（<div class="aclick"><span>查看</span></div> 里该点 span —— 点内层文字一定落在
+   * handler 作用域内，点外层只在外层真的挂了 handler 时才生效）。
+   */
+  function landableFirst(pool) {
+    var live = [];
+    for (var i = 0; i < pool.length; i++) {
+      if (landable(pool[i])) live.push(pool[i]);
+    }
+    live.sort(function (a, b) {
+      var d = labelOf(a).length - labelOf(b).length;
+      if (d !== 0) return d;
+      return (a.children ? a.children.length : 0) - (b.children ? b.children.length : 0);
+    });
+    return live;
+  }
+
+  /**
    * 页面上**真的**带着这段文本的元素：按文本节点找，**不看可点性、不看可见性**
    * （正因为要区分这两种情况，才必须绕开候选池）。
    * 只在"候选池为空"的失败路径上跑——成功路径零成本。
    */
   function textHits(want, cap) {
     var hits = [];
+    var wantTight = tight(want);
     try {
       var root = document.body || document.documentElement;
       if (!root) return hits;
@@ -124,7 +186,7 @@ ${CLICKABLE_JS}
       var n;
       while ((n = walker.nextNode())) {
         if (++seen > 4000) break;
-        if (!n.data || n.data.indexOf(want) < 0) continue;
+        if (!n.data || (n.data.indexOf(want) < 0 && (!wantTight || tight(n.data).indexOf(wantTight) < 0))) continue;
         var el = n.parentElement;
         if (!el) continue;
         if (hits.indexOf(el) < 0) hits.push(el);
@@ -189,7 +251,8 @@ ${CLICKABLE_JS}
     for (var i = 0; i < found.length; i++) { if (visible(found[i])) vis.push(found[i]); }
     var pool = vis.length ? vis : Array.prototype.slice.call(found);
     if (!pool.length) return { error: 'selector matched nothing: ' + TARGET.selector };
-    return { el: pool[Math.min(TARGET.index || 0, pool.length - 1)], count: pool.length };
+    var used = Math.min(TARGET.index || 0, pool.length - 1);
+    return { el: pool[used], count: pool.length, used: used };
   }
 
   function byText() {
@@ -197,37 +260,15 @@ ${CLICKABLE_JS}
     var found;
     try { found = document.querySelectorAll(sel); } catch (e) { return { error: 'invalid tag: ' + TARGET.tag }; }
     var want = String(TARGET.text);
-    var exact = [], partial = [];
-    for (var i = 0; i < found.length; i++) {
-      var el = found[i];
-      if (!visible(el)) continue;
-      var t = labelOf(el);
-      if (!t) continue;
-      if (t === want) exact.push(el);
-      else if (t.indexOf(want) >= 0) partial.push(el);
-    }
-    var pool = exact.length ? exact : partial;
+    var pools = textPools(found, want, tight(want));
+    var pool = pools.exact.length ? pools.exact : pools.partial;
     if (!pool.length) return notFound(want);
-    // **能承载文本 ≠ 能点**：池子是"文本载体"的宽集合（裸 div/span/td 都在里面，见
-    // TEXT_CANDIDATE_SELECTOR 的注释），所以挑目标前先滤成"点下去会落在可点元素里"的那堆。
-    // 一个都没留下 → 交给 notFound：它给的是「文本在、但它的元素不像可点击」+ 选择器建议
-    // （不猜着点）。少了这一步，宽池子会让**任何**装在 div 里的文字都"点得到"，
-    // 那条分支就成了真页面上够不着的死代码（2026-09-22 夹具实测）。
-    var live = [];
-    for (var m = 0; m < pool.length; m++) {
-      if (landable(pool[m])) live.push(pool[m]);
-    }
+    var live = landableFirst(pool);
     if (!live.length) return notFound(want);
-    pool = live;
-    // 最具体的优先：文本最短的那个通常就是目标，而不是包含它的整个容器；文本等长时取
-    // **子元素更少**的那个（<div class="aclick"><span>查看</span></div> 里该点 span ——
-    // 点内层文字一定落在 handler 作用域内，点外层只在外层真的挂了 handler 时才生效）。
-    pool.sort(function (a, b) {
-      var d = labelOf(a).length - labelOf(b).length;
-      if (d !== 0) return d;
-      return (a.children ? a.children.length : 0) - (b.children ? b.children.length : 0);
-    });
-    return { el: pool[Math.min(TARGET.index || 0, pool.length - 1)], count: pool.length };
+    // used 是**钳制之后**的序号：index 越界时 Math.min 会换成别的元素，必须一起交代
+    // （调用方据此报数，见 act.ts 的 matchNote），否则模型以为自己点的是自己说的那个。
+    var used = Math.min(TARGET.index || 0, live.length - 1);
+    return { el: live[used], count: live.length, used: used };
   }
 
   function resolve() {
@@ -269,6 +310,10 @@ ${CLICKABLE_JS}
  * 坐标口径：先 `scrollIntoView({behavior:'instant'})`（**必须 instant**——smooth 是动画，
  * 同一次脚本执行里读到的 rect 会是滚动前的旧值），再读 `getBoundingClientRect()`。
  * rect 是视口相对坐标，正是 CDP `Input.dispatchMouseEvent` 要的口径。
+ *
+ * `matched` / `usedIndex` = 命中数与**钳制后**用的是第几个（`index` 越界会被 `Math.min` 换掉）。
+ * 三个脚本（本函数 / `buildFillScript` / `buildClickFallbackScript`）**都带**这一对：调用方按它
+ * 报数（act.ts 的 matchNote），少一处那条路的注脚就永远不出现。
  */
 export function buildResolveScript(target: ActTarget): string {
   return `(() => {${preamble(target)}
@@ -286,6 +331,7 @@ export function buildResolveScript(target: ActTarget): string {
       ok: true,
       hit: describe(el),
       matched: r.count,
+      usedIndex: r.used,
       x: Math.round(rect.left + rect.width / 2),
       y: Math.round(rect.top + rect.height / 2)
     };
@@ -333,7 +379,7 @@ export function buildFillScript(target: ActTarget, value: string): string {
     var evOpts = { bubbles: true, cancelable: true };
     try { el.dispatchEvent(new Event('input', evOpts)); } catch (e) { /* 老环境忽略 */ }
     try { el.dispatchEvent(new Event('change', evOpts)); } catch (e) { /* 老环境忽略 */ }
-    return { ok: true, hit: describe(el), value: el.value };
+    return { ok: true, hit: describe(el), value: el.value, matched: r.count, usedIndex: r.used };
   } catch (e) {
     return { ok: false, error: 'fill failed: ' + String((e && e.message) || e) };
   }
@@ -372,7 +418,7 @@ export function buildClickFallbackScript(target: ActTarget): string {
     }
     el.dispatchEvent(new MouseEvent('click', base));
     if (typeof el.focus === 'function') { try { el.focus(); } catch (e) { /* 非必需 */ } }
-    return { ok: true, hit: describe(el) };
+    return { ok: true, hit: describe(el), matched: r.count, usedIndex: r.used };
   } catch (e) {
     return { ok: false, error: 'click fallback failed: ' + String((e && e.message) || e) };
   }

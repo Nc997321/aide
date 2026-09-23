@@ -468,6 +468,59 @@ describe("browser_act — 点击的两条路", () => {
   });
 });
 
+describe("browser_act — 命中歧义报数", () => {
+  /** 用户明确要求：命中歧义**只报一个数字**，不列候选（browser_read 已经能列元素）。 */
+  it("命中多个 → 结果里带上 (N elements matched; used index i)", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "click", text: "保存", index: 1 },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({ ok: true, hit: { tag: "button", text: "保存" }, x: 10, y: 20, matched: 3, usedIndex: 1 }),
+    );
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } }); // mousePressed
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } }); // mouseReleased
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("via CDP");
+    expect(text).toContain("(3 elements matched; used index 1)");
+  });
+
+  it("只命中一个 → 不报数（不制造噪音）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler({ action: "click", text: "刷新" }, {});
+    // 与上面那组的 RESOLVED 同形：**没有 matched 字段**（旧载荷/单命中就是这个形状）。
+    reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 }));
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+
+    const text = (await p).content[0].text;
+    expect(text).not.toContain("elements matched");
+  });
+
+  /**
+   * 填值走的是**另一个脚本**（`buildFillScript`），解析结果里没有 `matched` 的话注脚在这条路上
+   * 永不出现——三种动作说的是同一件事，报数就得三种都报。
+   */
+  it("fill 命中多个 → 同样带注脚", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "fill", text: "设备名称", value: "泵-01", index: 1 },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({ ok: true, hit: { tag: "input", text: "设备名称" }, value: "泵-01", matched: 2, usedIndex: 1 }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Set <input>");
+    expect(text).toContain("(2 elements matched; used index 1)");
+  });
+});
+
 describe("browser_act — 入参守门（不浪费一次往返）", () => {
   it("既没 text 也没 selector → 直接回文本，不发桥", async () => {
     const { events, emit } = emitCollector();

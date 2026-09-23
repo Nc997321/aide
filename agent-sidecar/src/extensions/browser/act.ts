@@ -76,6 +76,19 @@ function describeHit(v: Record<string, unknown>): string {
   return bits.join(" ");
 }
 
+/**
+ * 命中多个时的一句脚注。**只报数字**（用户明确要求"一定要简单"）——`browser_read` 已经能列元素。
+ *
+ * `index` 越界会被解析脚本钳制（`Math.min`），钳制**要说**：`used index 1` 就是那个交代。
+ * 单命中与旧载荷（没有 `matched`）都不出这句——常见路径上不制造噪音。
+ */
+function matchNote(v: Record<string, unknown>): string {
+  const n = Number(v["matched"]);
+  if (!Number.isFinite(n) || n <= 1) return "";
+  const used = Number(v["usedIndex"]);
+  return ` (${n} elements matched; used index ${Number.isFinite(used) ? used : 0})`;
+}
+
 /** 跑一段求值脚本、把结果规整成 `{ok, value}`；失败走 `text`。 */
 async function evalScript(
   viewId: string | undefined,
@@ -158,7 +171,7 @@ export async function performClick(
 
   const viaCdp = await cdpClick(viewId, x, y, emit);
   if (viaCdp.ok) {
-    return (`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y}).`);
+    return (`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y})${matchNote(v)}.`);
   }
 
   // 兜底：CDP 不可用（WebView2 版本差异）。**必须说清这不是等价路径。**
@@ -170,8 +183,9 @@ export async function performClick(
   if (fv["ok"] !== true) {
     return `Click failed. CDP path: ${viaCdp.reason}. Script fallback: ${String(fv["error"] ?? "unknown")}`;
   }
+  // 注脚紧贴**命中的那个元素**（这条回报的主语），而不是垫在最后那句可靠性警告之后。
   return (
-    `Clicked ${describeHit(fv)} using a SYNTHETIC event (script fallback) — ` +
+    `Clicked ${describeHit(fv)} using a SYNTHETIC event (script fallback)${matchNote(fv)} — ` +
       `CDP real input was unavailable (${viaCdp.reason}). ` +
       `The click is not a trusted event, so widgets that only react to real input (some dropdowns, ` +
       `file pickers, drag targets) may not respond. Verify the page actually changed.`
@@ -199,7 +213,7 @@ export async function performFill(
     if (candidates.length) lines.push("", `${candidates.length} other clickable element(s) on the page — retry with a selector.`);
     return (lines.join("\n"));
   }
-  return (`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}.`);
+  return (`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}${matchNote(v)}.`);
 }
 
 /**
@@ -225,5 +239,5 @@ export async function performHover(
       `Real hover needs CDP, which is unavailable in this WebView2 runtime.`
     );
   }
-  return (`Hovered ${describeHit(v)} at (${x}, ${y}).`);
+  return (`Hovered ${describeHit(v)} at (${x}, ${y})${matchNote(v)}.`);
 }

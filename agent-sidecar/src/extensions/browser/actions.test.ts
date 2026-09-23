@@ -188,3 +188,68 @@ describe("browser_act：「找不到」的三种分支", () => {
     expect(first?.["cls"]).toBe("plain");
   });
 });
+
+/**
+ * EP 把双字按钮渲染成「确　定」（中间是空白）——归一化把空白折成单空格后，`确定` 既不等于
+ * 也不包含它。反馈第 3 条逐字一致：真按钮**从没进过候选池**，命中的是包含"确定"的文案。
+ */
+describe("browser_act：CJK 空白容错", () => {
+  const cases: [string, string][] = [
+    ["半角空格", "确 定"],
+    ["全角空格 U+3000", "确　定"],
+    ["换行", "确\n定"],
+  ];
+
+  for (const [name, label] of cases) {
+    // 测试名里的换行会把报告撕成两行（`换行` 那条就是）——只折给**名字**看，喂脚本的仍是原字符。
+    it(`${name}：{text:"确定"} 命中 <button>"${label.replace(/\n/g, "\\n")}"</button>`, () => {
+      const btn = el("button", { text: label, markup: true });
+      const copy = el("p", { text: "确定通过审核？" });
+      const out = runResolve({ text: "确定" }, stubDom({ candidates: [btn, copy] }));
+
+      expect(out["ok"]).toBe(true);
+      expect((out["hit"] as Record<string, unknown>)["tag"]).toBe("button");
+    });
+  }
+
+  it("调用方带空白（{text:\"确 定\"}）也命中同一个按钮", () => {
+    const btn = el("button", { text: "确　定", markup: true });
+    const out = runResolve({ text: "确 定" }, stubDom({ candidates: [btn] }));
+
+    expect(out["ok"]).toBe(true);
+    expect((out["hit"] as Record<string, unknown>)["tag"]).toBe("button");
+  });
+
+  /** 「找不到」分支的候选清单也要容错，否则失败信息与匹配规则自相矛盾。 */
+  it("textHits 也容错（按钮不可点时报出的候选里有它）", () => {
+    const plain = el("div", { text: "确　定", cls: "plain" });
+    const out = runResolve(
+      { text: "确定" },
+      stubDom({ candidates: [plain], textNodes: [{ data: "确　定", parentElement: plain }] }),
+    );
+
+    expect(out["candidatesKind"]).toBe("text-hits");
+    expect(JSON.stringify(out["candidates"])).toContain("确");
+    // 上面那句只钉"清单里出现这个字"——钉住**是不是那个元素**（换个容器也含「确」就测不出回归）。
+    const first = (out["candidates"] as Array<Record<string, unknown>>)[0];
+    expect(first?.["cls"]).toBe("plain");
+    expect(String(first?.["text"])).toBe("确 定");
+  });
+});
+
+/**
+ * 命中数早就在解析结果里（`matched`），只是没人读；`index` 越界被 `Math.min` 悄悄改成别的元素
+ * 也从不说——模型以为自己点的是自己说的那个。报数**必须带"实际用了哪个"**，否则 `matched` 那
+ * 个数字反而在帮着撒谎。
+ */
+describe("browser_act：命中歧义报数", () => {
+  it("解析结果带出 usedIndex，且是 Math.min 钳制之后的值", () => {
+    const a = el("div", { text: "保存", cursor: "pointer" });
+    const b = el("div", { text: "保存", cursor: "pointer" });
+    const out = runResolve({ text: "保存", index: 9 }, stubDom({ candidates: [a, b] }));
+
+    expect(out["ok"]).toBe(true);
+    expect(out["matched"]).toBe(2);
+    expect(out["usedIndex"]).toBe(1); // 请求 index 9 → 钳到最后一个，**且要说出来**
+  });
+});
