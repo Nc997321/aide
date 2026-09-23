@@ -28,8 +28,10 @@
  *
  * # 这一层不认识"页面语义"
  *
- * 它只搬运 `reqs[]` / `logs[]` 两个数组，不判断哪条失败、哪条该前置——那是 `network.ts` /
- * `console.ts` 的事。这样换一个渲染口径不需要碰注入源码。
+ * 它只搬运 `reqs[]` / `logs[]` 两个数组。读脚本确实会数出 `failed {n, first}`——但那是**计数**：
+ * 在**匹配序列**上数已结束且 `status >= 400` 或 `err` 非空的条目（见 `buildRecorderReadScript`），
+ * 分母/措辞/前置与否一概不管，那是 `network.ts` / `console.ts` 的事（分母同口径这条纪律就落在
+ * 渲染器那边）。这样换一个渲染口径不需要碰注入源码。
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";

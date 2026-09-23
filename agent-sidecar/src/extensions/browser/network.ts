@@ -56,16 +56,30 @@ function header(value: Record<string, unknown>, filter: string | undefined): str
   return `Network requests matching ${JSON.stringify(filter)} (last ${shown} of ${matched} matches, ${total} total, newest last):`;
 }
 
+/**
+ * 匹配了多少条。`matched` 缺失时按"窗口就是全部"算——与 `windowStart` 同一套兜底，
+ * 否则两个调用点会各写各的 fallback，`matched` 一缺就悄悄走岔（`from` 变负、行号从 1 起）。
+ */
+function matchedCount(value: Record<string, unknown>): number {
+  return Number(value["matched"]) || asArray(value["items"]).length;
+}
+
+/** 窗口起点在**匹配序列**里的位次（1 基）。行号与失败摘要的"在不在下面这段里"都用它。 */
+function windowStart(value: Record<string, unknown>): number {
+  return matchedCount(value) - asArray(value["items"]).length + 1;
+}
+
 /** 失败摘要行：只统计**已结束**的请求（pending 不是失败）。 */
-function failureLine(value: Record<string, unknown>): string | null {
+function failureLine(value: Record<string, unknown>, filter: string | undefined): string | null {
   const failed = asRecord(value["failed"]);
   const n = Number(failed?.["n"]) || 0;
   if (n <= 0) return null;
-  const total = Number(value["total"]) || 0;
   const first = Number(failed?.["first"]);
-  const from = (Number(value["matched"]) || 0) - asArray(value["items"]).length + 1;
-  const where = first < from ? ` #${first} (not in the window below)` : ` #${first}`;
-  return `⚠ ${n} of ${total} failed — first failure${where}`;
+  // 分母必须与分子同口径：`failed.n` 是在**匹配序列**上数出来的（recorder 读脚本），
+  // 带 filter 时报 "of total" 会把几十条从没看过的请求写进结论里——正是本特性要防的那种误读。
+  const scope = filter ? `${matchedCount(value)} matches` : `${Number(value["total"]) || 0}`;
+  const where = first < windowStart(value) ? ` #${first} (not in the window below)` : ` #${first}`;
+  return `⚠ ${n} of ${scope} failed — first failure${where}`;
 }
 
 /** 旁注：这次才装上 / 注册失败（都不许静默）。 */
@@ -90,16 +104,16 @@ export function renderNetwork(value: unknown, notes: NetworkNotes): string {
   if (!items.length) {
     return [head, emptyText(v, notes), ...notesText(v, notes)].filter(Boolean).join("\n");
   }
-  const from = (Number(v["matched"]) || items.length) - items.length + 1;
+  const from = windowStart(v);
   const lines = items.map((item, i) => renderRow(item, from + i));
-  return [head, failureLine(v), ...lines, ...notesText(v, notes)].filter((l): l is string => !!l).join("\n");
+  return [head, failureLine(v, notes.filter), ...lines, ...notesText(v, notes)].filter((l): l is string => !!l).join("\n");
 }
 
 /** 两种空必须可辨：这次才装（附注里说了）/ 装了但没请求 / 有请求但全被 filter 滤掉。 */
 function emptyText(value: Record<string, unknown>, notes: NetworkNotes): string {
   if (value["armedBefore"] !== true) return "No requests recorded yet.";
   if ((Number(value["total"]) || 0) > 0) {
-    return `No request matched ${JSON.stringify(notes.filter ?? "")} — ${Number(value["total"])} were recorded in total.`;
+    return `No requests matched ${JSON.stringify(notes.filter ?? "")} — ${Number(value["total"])} were recorded in total.`;
   }
   return (
     "No requests recorded: this document has made no fetch/XHR call since the recorder was armed. " +

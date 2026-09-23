@@ -36,14 +36,18 @@ describe("renderNetwork", () => {
   });
 
   it("失败前置一行摘要（first 在窗口内）", () => {
+    // first 必须**真在窗口里**——取 #10 会走成"窗口之前"那一支，而那一支的文案包含这一支的前缀，
+    // 断言照样绿（两支各自钉死才算覆盖）。取窗口的**第一行** #11 顺带钉住边界：判定是
+    // `first < from`，写成 `<=` 就会把"正好是窗口第一行的失败"误报成"不在下面这段里"。
     const s = renderNetwork(
       envelope({
-        total: 12, matched: 12, failed: { n: 2, first: 10 },
+        total: 12, matched: 12, failed: { n: 2, first: 11 },
         items: [req({ status: 500, body: '{"error":"No enum constant"}' }), req({ url: "http://x/api/approve" })],
       }),
       notes(),
     );
-    expect(s).toContain("2 of 12 failed — first failure #10");
+    expect(s).toContain("⚠ 2 of 12 failed — first failure #11");
+    expect(s).not.toContain("not in the window below");
   });
 
   it("first failure 在窗口之前 → 摘要里说明它不在下面这段里", () => {
@@ -76,6 +80,22 @@ describe("renderNetwork", () => {
     expect(s).toContain("last 1 of 7 matches, 40 total");
   });
 
+  /**
+   * filter 与失败同时出现：分子（`failed.n`）是在**匹配序列**上数的，分母必须同口径。
+   * 写成 `of 40` 等于替 33 条从没看过的请求下结论——比不报更坏。
+   */
+  it("filter 生效且有失败 → 比例说的是「匹配里几条失败」", () => {
+    const s = renderNetwork(
+      envelope({
+        total: 40, matched: 7, failed: { n: 2, first: 6 },
+        items: [req({ url: "http://x/api/a" }), req({ url: "http://x/api/b" })],
+      }),
+      notes({ filter: "/api/" }),
+    );
+    expect(s).toContain("⚠ 2 of 7 matches failed — first failure #6");
+    expect(s).not.toContain("of 40 failed");
+  });
+
   /** 空 ≠ 没有：这次才装上的那次调用，必须明说之前的看不到。 */
   it("armedBefore=false → 明说探针是这次才装上的", () => {
     const s = renderNetwork(envelope({ armedBefore: false, total: 0, matched: 0, items: [] }), notes());
@@ -87,6 +107,12 @@ describe("renderNetwork", () => {
     const s = renderNetwork(envelope({ total: 0, matched: 0, items: [] }), notes());
     expect(s).toContain("No requests recorded");
     expect(s).not.toContain("by this call");
+  });
+
+  /** 第三种空：**有请求，但全被 filter 滤掉**——报出总数，不能让模型读成"页面没发请求"。 */
+  it("有请求但全被 filter 滤掉 → 报出总数，且不说成「没有请求」", () => {
+    const s = renderNetwork(envelope({ total: 12, matched: 0, items: [] }), notes({ filter: "/api/" }));
+    expect(s).toContain('No requests matched "/api/" — 12 were recorded in total.');
   });
 
   it("注册未来文档失败 → 如实带出原因（不静默）", () => {
