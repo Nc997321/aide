@@ -146,6 +146,41 @@ describe("browser_read", () => {
   });
 
   /**
+   * Raw text 的过滤在**页面侧**做（`innerText`），sidecar 只从脚本标的 `textFiltered` 知道成没成。
+   * 这条把工具路径的两端接起来：注入的脚本确实是那段（不是游离 clone 的退化写法），
+   * 而脚本标 `false` 时工具输出里必须有一句承认——不许静默降级。
+   */
+  it("Raw text 没过滤成 → 输出里明说（与脚本的 filtered:false 是同一个契约）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+      { view_id: "browser-2" },
+      {},
+    );
+
+    const q = events[0] as any;
+    expect(q.params.expression).toContain("doc.body.innerText");
+
+    reply(
+      q,
+      evalOk({
+        ok: true,
+        title: "T",
+        tables: [],
+        fields: [],
+        clickables: [],
+        headings: [],
+        frames: [],
+        text: "x",
+        textFiltered: false,
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("## Raw text");
+    expect(text).toContain("only text that is actually rendered");
+  });
+
+  /**
    * **权限旁路守卫**：browser_read 是自动放行的读工具，若它接受并透传调用方的 `script`，
    * 就等于绕过了"读工具"的语义，变成任意脚本执行。这条用"塞一个恶意 script 参数"来钉死。
    */

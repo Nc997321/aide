@@ -240,6 +240,42 @@ describe("formatRead", () => {
   });
 });
 
+/**
+ * Raw text 的过滤是**页面侧**做的（`innerText`），sidecar 只能从 `textFiltered` 这一个位
+ * 知道这份文本过滤成没成——旁注就是那个位的发声口。只在**没过滤成**时说话：默认路径本来就没有
+ * 隐藏内容，说一句是噪音。
+ */
+describe("Raw text 的旁注", () => {
+  it("textFiltered:false → 明说这一份没过滤（不静默降级）", () => {
+    const s = formatRead({ viewId: "browser-1", value: { ok: true, title: "T", text: "x", textFiltered: false }, probe: { pending: false } });
+    expect(s).toContain("only text that is actually rendered");
+  });
+
+  it("过滤生效时不出现旁注（默认路径无噪音）", () => {
+    const s = formatRead({ viewId: "browser-1", value: { ok: true, title: "T", text: "x", textFiltered: true }, probe: { pending: false } });
+    expect(s).not.toContain("only text that is actually rendered");
+  });
+
+  /** 旁注是**说给下面那段文本听的**：没有正文时它悬空，等于凭空造一个"这里有隐藏内容"的暗示。 */
+  it("没有正文时不出现旁注（不悬空）", () => {
+    const s = formatRead({ viewId: "browser-1", value: { ok: true, title: "T", text: "", textFiltered: false }, probe: { pending: false } });
+    expect(s).not.toContain("only text that is actually rendered");
+  });
+
+  /**
+   * 帧走**同一份**投影脚本，所以帧的信封也带 `textFiltered`——主文档与帧两处都要调；
+   * 漏了帧那半边，跨域原型（内容全在帧里）的 Raw text 就是静默降级的。
+   */
+  it("帧的文本同样带旁注（两处都调，少一处那半边静默）", () => {
+    const s = formatRead(
+      { viewId: "browser-1", value: { ok: true, frames: [{ src: "https://x/f", sameOrigin: false, content: null }] }, probe: { pending: false } },
+      { frames: [{ url: "https://x/f", value: { ok: true, title: "F", text: "y", textFiltered: false } }] },
+    );
+    expect(s).toContain("#### Text");
+    expect(s).toContain("only text that is actually rendered");
+  });
+});
+
 describe("formatEval", () => {
   const VISIBLE = { pending: false };
 

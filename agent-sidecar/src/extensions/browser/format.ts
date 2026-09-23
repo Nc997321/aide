@@ -261,6 +261,27 @@ function hiddenSkippedNote(value: Record<string, unknown>): string | null {
   );
 }
 
+/**
+ * `include_hidden` 与 Raw text 的关系说明。
+ *
+ * **只在"没过滤成"时出现**：默认路径走 `innerText`（浏览器自己的可见性感知 API），隐藏内容本来就
+ * 不在里面，说一句只是噪音；只有拿不到 `innerText` 而退回 `textContent` 的那份结果才需要承认
+ * "这一份没过滤"（不静默降级，同 `hiddenSkippedNote` 的纪律）。
+ *
+ * `include_hidden` 时不出现：那一份文本**与开关一致**（骨架也列了隐藏项），不是降级。
+ *
+ * 调用点跟着正文走（没正文就不出）——旁注是在为**下面那段文本**作注解，悬空的旁注等于凭空
+ * 暗示"这里有隐藏内容"。
+ */
+function textFilterNote(value: Record<string, unknown>): string | null {
+  if (value["textFiltered"] !== false) return null;
+  return (
+    "NOTE: the raw text below is the document's full text content, not only text that is actually " +
+    "rendered — hidden (display:none) content may be included. This runtime could not produce " +
+    "rendered text."
+  );
+}
+
 /** 结构面（表格 / 表单字段 / 可点元素）是否全空。 */
 function hasNoStructure(value: Record<string, unknown>): boolean {
   return (
@@ -403,11 +424,21 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
     // div 画布正是如此）就只剩一行 title，与空帧无法区分。主文档一直有 `## Raw text`，
     // 帧这边当初漏了——2026-09-16 agent 实测踩到。
     const frameText = str(fr.value["text"]);
-    if (frameText) out.push("", "#### Text", frameText);
+    if (frameText) {
+      // 同一份脚本跑的，过滤成没成也在帧的信封里——主文档有的旁注，帧这半边同样要有
+      // （跨域原型的内容全在帧里，漏了它就是静默降级）。
+      const frameFilter = textFilterNote(fr.value);
+      if (frameFilter) out.push(frameFilter);
+      out.push("", "#### Text", frameText);
+    }
   });
 
   const text = str(value["text"]);
-  if (text) out.push("", "## Raw text", text);
+  if (text) {
+    const filterNote = textFilterNote(value);
+    if (filterNote) out.push(filterNote);
+    out.push("", "## Raw text", text);
+  }
 
   // 旁注放最后：它是**关于上面这一整份结果**的免责说明，不是页面内容的一部分。
   const notes = evalNotes(v["probe"]);

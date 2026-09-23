@@ -45,6 +45,30 @@ describe("投影脚本：装配不变量", () => {
     expect(buildProjectionScript({ includeHidden: true })).toContain("var INCLUDE_HIDDEN = true;");
   });
 
+  it("Raw text 走 innerText（在原文档上取，不是游离 clone）", () => {
+    const s = buildProjectionScript();
+    expect(s).toContain("doc.body.innerText");
+    // ⚠️ 游离节点上的 innerText 会退化成 textContent 语义——写成 clone.innerText 就是"看着改了、
+    // 实际没过滤"的假修复（spec §9.3 的已知陷阱）。这条把那条岔路钉死。
+    expect(s).not.toContain("clone.innerText");
+  });
+
+  it("includeHidden 打开时走老路（textContent），过滤标志随开关走", () => {
+    expect(buildProjectionScript({ includeHidden: true })).toContain("var INCLUDE_HIDDEN = true;");
+    // 装配不变量：取正文那段真的把结果接到了信封上（少这一行，format.ts 的旁注永远不出现）
+    expect(SCRIPT).toContain("out.textFiltered = body.filtered;");
+    expect(SCRIPT).toContain("function projectText(doc)");
+  });
+
+  /**
+   * 拿不到 `innerText`（老运行时 / 无 body）时**不许**把 `textContent` 冒充成过滤过的结果——
+   * 那条退路得自己承认"这份没过滤"（`filtered: false`），format.ts 的旁注就是靠这一位翻出来的；
+   * 两端各钉一条，少一条链子就断一半。
+   */
+  it("过滤不成的退路如实标 filtered:false（不假装过滤过了）", () => {
+    expect(SCRIPT).toContain("filtered: false");
+  });
+
   it("隐藏项计数四类都在（不静默丢：拒列什么就报什么）", () => {
     expect(SCRIPT).toContain("var skipped = { tables: 0, fields: 0, clickables: 0, headings: 0 };");
     expect(SCRIPT).toContain("out.hiddenSkipped = skipped;");

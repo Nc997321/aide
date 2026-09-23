@@ -166,6 +166,45 @@ ${CLICKABLE_JS}
     return f;
   }
 
+  /**
+   * 老路：textContent（**含**隐藏内容），剥掉 script/style/noscript/template。
+   * 只有两处用得上：include_hidden 打开时、以及拿不到 innerText 时的退路。
+   */
+  function plainText(doc) {
+    try {
+      var clone = doc.body ? doc.body.cloneNode(true) : null;
+      if (!clone) return '';
+      var junk = clone.querySelectorAll('script,style,noscript,template');
+      for (var n = 0; n < junk.length; n++) {
+        if (junk[n].parentNode) junk[n].parentNode.removeChild(junk[n]);
+      }
+      return String(clone.textContent || '');
+    } catch (e) { return ''; }
+  }
+
+  /**
+   * 正文文本。**默认只取渲染中的内容**（innerText 是浏览器自己的可见性感知 API——
+   * 什么算可见交给浏览器自己判，就不可能与我们判得不一样）。
+   *
+   * ⚠️ 三条不许踩：
+   * 1. 必须对**原文档**的 doc.body 取（innerText 依赖元素在文档中且有布局）；
+   *    游离的 cloneNode(true) 上取会**退化**成 textContent 语义 —— 那是个"看着改了、
+   *    实际没过滤"的假修复。
+   * 2. include_hidden 打开时走老路（textContent，含隐藏内容）——开关与 skeleton 同义。
+   * 3. 拿不到 innerText（老运行时 / 无 body）时**如实标** textFiltered = false 再退回老路，
+   *    不假装过滤过了。
+   */
+  function projectText(doc) {
+    var full = plainText(doc);
+    if (INCLUDE_HIDDEN) return { text: cut(full, 20000), filtered: true };
+    try {
+      if (doc.body && typeof doc.body.innerText === 'string') {
+        return { text: cut(doc.body.innerText, 20000), filtered: true };
+      }
+    } catch (e) { /* 落到底下如实标未过滤 */ }
+    return { text: cut(full, 20000), filtered: false };
+  }
+
   function project(doc) {
     var out = {};
     // 隐藏项计数**每份投影各算各的**（同源帧会递归投影，共用一份会串味）。
@@ -261,21 +300,10 @@ ${CLICKABLE_JS}
     }
     if (probes <= 0) truncated = true;
 
-    // 正文文本（剥掉 script/style/noscript）
-    try {
-      var clone = doc.body ? doc.body.cloneNode(true) : null;
-      if (clone) {
-        var junk = clone.querySelectorAll('script,style,noscript,template');
-        for (var n = 0; n < junk.length; n++) {
-          if (junk[n].parentNode) junk[n].parentNode.removeChild(junk[n]);
-        }
-        out.text = cut(clone.textContent, 20000);
-      } else {
-        out.text = '';
-      }
-    } catch (e) {
-      out.text = '';
-    }
+    // 正文文本（默认只取渲染中的内容——判据见 projectText 的注释）
+    var body = projectText(doc);
+    out.text = body.text;
+    out.textFiltered = body.filtered;
 
     // iframe 清单：同源递归抽取，跨域**只报 src**（如实，不假装读到了）
     out.frames = [];
