@@ -4,7 +4,7 @@
 |---|---|
 | 适用协议版本 | `PROTOCOL_VERSION = 2` |
 | 适用引擎版本 | `agent-sidecar` @ `05c024a` 及以后（含 F3/F4 修复轮） |
-| 文档版本 | 1.4（2026-09-17） |
+| 文档版本 | 1.5（2026-09-23） |
 | 读者 | 把 Aide headless 引擎当编排大脑的宿主网关实现方 |
 | 真相源 | `agent-sidecar/src/headless-schema.ts`（命令字段）· `engine/types.ts`（事件字段）· `headless-server.ts`（HTTP/SSE 层）· `src/index.ts`（启动面） |
 | 验收底稿 | `docs/headless-test-checklist.md`（本文件每条实测断言都可回溯到该清单的 A/B/C/D 组用例与 F1–F11 发现） |
@@ -20,10 +20,11 @@
 | 2026-09-15 | 1.2 | `permission_response` 增**标签形态**（§4.2，官方推荐）：`response:{kind}` 四变体 `approve` / `answer` / `deny` / `unanswered`，与扁平形态**互斥**（恰好一个在场）。新增 `unanswered` 语义 = 无人应答（确认超时等），模型侧走官方「无人工审批可用」外框（自带"不要重试"）；`deny` 仍走人工外框。新增类别校验与 `fatal:false` 报错臂。**`PROTOCOL_VERSION` 保持 2**——纯增量（新形态是可选字段，扁平形态语义零变化，旧客户端不受影响）。 |
 | 2026-09-15 | 1.3 | `send.images` 增**本地路径形态** `{path}`（§4.1）：引擎自己读文件，绕开 1MB body 上限——手机原图经 base64 后 2.7~5.3MB，此前根本进不来。两种形态互斥；路径形态**不需要 mediaType**（引擎按魔数嗅探），并带读入上限 20MB/张与非图片拒收两道守卫。既有内嵌形态零改动。**`PROTOCOL_VERSION` 保持 2**（纯增量）。另记 §9.3 第 11 条：图片失败的可见性缺口（`terminal_reason`/`image_error` 未接），待真模型实测后落地。 |
 | 2026-09-17 | 1.4 | 补记 `send.additional_dirs` / `send.attach_rejected`（§4.1）：单会话跨目录（@目录即授权）落地后 `headless-schema` 一直收这两个字段，本文此前未写。**边界声明**：引擎对它们只做透明透传，**不做任何授权判定**——"只能 @ 已注册工作区"是桌面 Rust 层的保证，headless 下授权归网关。`display` 的 mention 块增 `isDir?`（§4.11）。**`PROTOCOL_VERSION` 保持 2**（纯增量，且字段早已在 schema 内）。 |
+| 2026-09-23 | 1.5 | 新增**规程 12：权限模式 / 策略的重带时机 = 引擎侧 query 重建时，不是"网关首次 send"**。来源是网关侧实锤（空闲收编后写操作静默 fail-open）+ 引擎源码核对：`send.permission_mode` 的闸门是 `!currentQuery`（`session-worker.ts:681`），error 终态会同步置空它（`:911`）、respawn 读的是 worker 持有的 `permModes.current`（`:841`），而 `send.permission_policy` 无闸门、按 revision 幂等（`:643`）。同步修正 §4.1 字段表「首条生效」的措辞、§4.8 同句、§6.2 增 `auto` 的 fail-open 警告、§3.4 / §8.6 / §9.3 补条目。**`PROTOCOL_VERSION` 保持 2**（纯文档澄清，零协议改动）。 |
 
 ---
 
-## 0. 先读：对接规程（11 条）
+## 0. 先读：对接规程（12 条）
 
 网关实现方在写第一行代码前读完本节。这些是实测钉死的语义，每一条踩中都是静默故障。
 
@@ -48,6 +49,13 @@
 10. **body 上限 1MB，且超限响应形态对 fetch 客户端不友好。** 超限时服务端先回 400，再因请求体未读尽 RST 连接；用 `fetch` 会抛 `ECONNRESET` 而拿不到状态码（裸 `http.request` 可以）。网关侧先自我限界，或按「以首响应为准」处理。**大图不要走 body**——`send.images` 的路径形态（§4.1）让引擎自己去读本地文件，路径字符串几十字节，绕开这道闸。另：`env` / `metadata` / `mcp_headers` 的值是凭据，引擎保证不落日志、不进 Bash 子进程 env，网关侧同样不要记。〔清单 F5 / C7 / C8〕
 
 11. **桌面字段不接。** `automation` 是桌面/调度器语义，网关不要发——它会让引擎按无人值守白名单执行，行为与网关预期不符。〔清单 F8〕此前放行的 `btw` / `lightweight` / `fork_from` / `tools` 已在 1.1 版从 schema 剥除：现在发它们会得到 `400 invalid invoke body`（不再是「收下但按桌面语义执行」）。侧问走专用命令 `btw_ask`（§4.12）。〔清单 B14 结案〕
+
+12. **权限模式 / 策略的重带时机 = 引擎侧 query 重建时，不是"网关首次 send"。** `send.permission_mode` 的闸门是「该会话此刻没有 query 在跑」——worker 刚建时如此，**error 终态之后也如此**（worker 存活、query 已回收）。`send.permission_policy` 没有这道闸门：每条 send 带都收，靠 `revision` 单调做幂等（旧 / 同 revision 静默忽略）。三条推论：
+    - **网关侧维护「本会话是否已发过首条」的开关是错的。** 空闲收编（`session_stop`）后再 `send` = 全新会话，权限模式回落 `auto`——而 `auto` 正是编辑类工具**不逐条确认**的那个模式（§6.2）。靠 `manual` 做写确认的网关会在这里**静默 fail-open**。
+    - **「按 init id 变化判断要不要重带」会在唯一必须重带的那条 send 上慢一拍**：引擎进程重启（规程 6）没有任何事件通知，等你看见新 init id 时，那条 send 已经发出去了。
+    - **推荐做法**：`permission_mode` / `permission_policy` **每条 send 都带**——模式带**你方镜像的当前值**（`permission_modes_available` 的 `current`），不是创建时的初值（存活 query 会忽略它；重放初值会把中途 `set_permission_mode` 切过的值**打回去**）；策略靠 `revision` 幂等。`resume_session_id` 仍要保留「本网关化身是否已成功下发」的纪律——它发错会接到**别的会话**，代价与另两个字段不是一回事。
+
+    〔来源：2026-09-23 网关侧实测 + 引擎源码核对；本条的引擎行为可由 `agent-sidecar/src/engine/session-worker.ts` 的 `handleSend` / error 终态分支直接复核，尚未进验收清单〕
 
 ---
 
@@ -229,6 +237,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 - `session_stop` 之后，同一 sid 再 `send` = **全新会话**，上下文不接续。〔清单 B6〕
 - 要接续上一轮，用 `resume_session_id` 带上前一会话的**真 id**。〔清单 B11〕
 - 引擎重启 / 崩溃后，旧会话一律不恢复；旧 sid 重发 = 全新会话。`resume_session_id` 是唯一通道。〔清单 D5〕
+- 前三条对**权限状态**同样成立：权限模式与策略归 worker 所有，worker 没了它们就没了——重开的会话回落 `auto`。所以「停过 / 崩过 / 换了 sid」之后的**首条 `send` 必须把 `permission_mode` 与 `permission_policy` 一起带上**（规程 12）。
 
 ### 3.5 同会话并发
 
@@ -258,8 +267,8 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `display` | array | — | 渲染描述块，见 §4.11 |
 | `images` | array | — | 图片附件，两形态**二选一**（见下方「图片附件」） |
 | `cwd` | string | — | 会话工作目录 |
-| `permission_mode` | string | — | **首条生效**，存活期切换走 `set_permission_mode`（§4.8） |
-| `permission_policy` | object | — | 策略快照，见 §6.1 |
+| `permission_mode` | string | — | **该会话没有 query 在跑时生效**（worker 新建、以及 error 终态之后）——**不是"网关首条 send"**，重带时机见规程 12；存活期切换走 `set_permission_mode`（§4.8） |
+| `permission_policy` | object | — | 策略快照，见 §6.1；**每条 send 都收**（旧 / 同 revision 静默忽略，可放心重带） |
 | `resume_session_id` | string | — | 要接续的前一会话真 id |
 | `env` | object | — | provider 凭据通道（字符串→字符串），见 §7.3 |
 | `metadata` | object | — | 不透明租户上下文，见 §7.2 |
@@ -430,7 +439,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 ### 4.8 set_permission_mode
 
-存活期切换权限模式。**这是存活会话切模式的唯一通道**——`send.permission_mode` 只在首条生效。
+存活期切换权限模式。**这是存活会话切模式的唯一通道**——存活 query 上的 `send.permission_mode` 不回放（只在没有 query 在跑时生效，见规程 12）。
 
 | 字段 | 类型 | 必填 |
 |---|---|---|
@@ -753,7 +762,7 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 
 ### 6.2 第二层：权限模式
 
-`send.permission_mode` 首条生效（续发不回放；存活期切换走 `set_permission_mode`）。
+`send.permission_mode` 在**该会话没有 query 在跑时**生效（worker 新建、以及 error 终态之后）；存活 query 续轮不回放，`set_permission_mode` 是存活期切模式的唯一通道（§4.8）。**重带时机见规程 12**——`session_stop` 后再起，模式回落 `auto`。
 
 | 模式 | 行为 |
 |---|---|
@@ -761,6 +770,8 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `bypassPermissions` | 工具直接放行（策略 hook 仍然生效） |
 | `auto` / `default` | 由 CLI 内置分类器判断命令安全性——见 6.3 的选型警告 |
 | `plan` | 计划模式 |
+
+> ⚠️ **`auto` 不等于"仍然会问"。** 编辑类工具（Edit / Write / MultiEdit / NotebookEdit）在 `auto` 下由 CLI 分类器放行、**不逐条确认**——aide 桌面端刻意不提供 `acceptEdits`，编辑的"不再逐条问"就归 `auto` 承担。所以一个以为自己在 `manual` 的网关，一旦漏了重带，**写操作会不弹确认直接执行**（fail-open），而且没有任何报错。这是规程 12 存在的理由。
 
 ### 6.3 第三层：CLI 内置 auto 分类器 + 选型建议
 
@@ -912,7 +923,7 @@ curl -s -X POST http://127.0.0.1:18090/invoke \
   -d '{"cmd":"send","session_id":"1f3a-…-真id","prompt":"再查 L-10"}'
 ```
 
-同一 sid 续发即接上下文（会话活着）。会话已经 `session_stop` 过则要带 `resume_session_id`。
+同一 sid 续发即接上下文（会话活着）。会话已经 `session_stop` 过则要带 `resume_session_id`——**并且把 `permission_mode` 与 `permission_policy` 一起带上**，否则重开的是一个 `auto` 模式的新会话（规程 12）。
 
 ### 8.7 最小 SSE 客户端（node）
 
@@ -998,6 +1009,7 @@ function handleEvent(sessionId, ev) {
 | 9 | 命令发给不存在会话静默丢弃 | 网关自己维护会话状态（规程 2） |
 | 10 | `unanswered` 的外框（官方「无人工审批可用」模板）未登记进桌面/PWA 的拒绝态识别前缀——本产品 UI 认不出它会当普通工具报错 | 无实际影响：headless 会话的转录不由本产品 UI 渲染（网关自己的界面消费）。将来若把桌面 automation 的两处裸文案收编到这条外框，必须同步 `packages/aide-sdk/src/utils/toolDenial.ts` 的前缀 |
 | 11 | **图片失败可能不可见**：引擎不读 result 消息的 `terminal_reason`（SDK 正式字段，取值含 `"image_error"`，见 `docs/TypescriptSDk.MD:1489`）。图片过大或损坏导致本轮异常收尾时，若落在 `subtype:"success"` + `is_error:false` 上，引擎会当**正常结束**处理（`mapper.ts` 的 success 早退），网关看到的是一个「没产出就结束」的轮次 | 网关侧：发过 `images` 且本轮无产出地结束 → 优先怀疑图片（缩小后重发）。引擎侧已排期接住 `terminal_reason`，但 `image_error` 实际落在哪个 subtype 需真模型实测校准，故未随 v1.3 落地 |
+| 12 | **权限模式 / 策略归 worker 所有**——`session_stop`、引擎重启之后重新 `send` 得到的是新模式 `auto`，网关漏了重带就是写操作静默 fail-open（§6.2 的警告） | 每条 `send` 都重带：模式带你方镜像的当前值、策略靠 revision 幂等（规程 12） |
 
 ### 9.4 复跑验收
 
