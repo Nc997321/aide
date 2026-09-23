@@ -241,7 +241,9 @@ async function waitForLoad(
       return (
         `Nothing was loading when this call started — the view was already ready at ${where}. ` +
         `If you expected a navigation to be in flight, it had not started yet: call again, or wait ` +
-        `for the page to change with a \`condition\` instead.`
+        `for the page to change with a \`condition\` instead. If you just made a SAME-DOCUMENT ` +
+        `navigation (a hash change or history.pushState), it does not trigger a load and will never ` +
+        `show up here — use \`until:"condition"\` on the content you expect, or read \`location.href\`.`
       );
     }
     await sleep(input.intervalMs);

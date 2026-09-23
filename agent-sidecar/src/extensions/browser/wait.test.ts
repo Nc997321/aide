@@ -218,6 +218,9 @@ describe("browser_wait — load 模式", () => {
     expect(text).toContain("already ready");
     expect(text).toContain("https://a/old");
     expect(text).not.toContain("Page finished loading");
+    // 同文档导航（hash 改动 / pushState）**不触发 load**，这条通道永远看不到它。
+    // 不说这句，模型会把"等不到"读成"页面没动"，然后去怀疑导航本身。
+    expect(text).toContain("SAME-DOCUMENT");
   });
 
   it("导航失败 → **立即**结束并报失败，不拖到超时", async () => {
