@@ -18,13 +18,23 @@
  * （输入区模型/思考程度 chip 域：系统默认选项集 + 存活会话运行时切换 +
  * 会话记忆读写；记忆写入统一走 set_session_meta 三态 patch；会话供应商/
  * 存活判定决定模型下拉口径，见 docs/session-identity-alignment.md；
- * session_identity_drift 为发送前身份漂移判定，规则下沉 Rust 两端共用）。
+ * session_identity_drift 为发送前身份漂移判定，规则下沉 Rust 两端共用）；
+ * 自动化任务域 11 命令（list_automations / get_automation / create_automation
+ * / update_automation / delete_automation / set_automation_enabled
+ * / list_automation_runs / automation_run_stats / run_automation_now
+ * / get_automation_playbook / redistill_automation）——
+ * ⚠️ 此域命令【未进远程 REGISTRY】（rpc.rs 0 收录）：桌面开口子前所有
+ * invoke 必败，调用方按「错误态一等公民」处理（lastError / toast，不崩不白屏）。
  * 参数序列化差异：上游 TS 的 undefined 字段经 JSON.stringify 自动丢弃；ArkTS
  * Record 值域不含 null，故 None 参数以「缺键」表达（Rust 侧 Option 字段缺键即
  * None，serde 语义等价）。
  */
 import { getTransport } from './transport';
-import { Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft, ProviderConfigView, ModelOption, IdentityDrift, SendImage, SendDisplayBlock } from './types';
+import {
+  Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft,
+  ProviderConfigView, ModelOption, IdentityDrift, SendImage, SendDisplayBlock,
+  Schedule, AutomationTask, AutomationTaskInput, RunRecord, RunStats
+} from './types';
 
 /**
  * 会话元数据字段的三态写入语义（镜像 Rust `MetaField`，serde tag = `op`）。
@@ -335,6 +345,66 @@ export class AideApi {
    *  此前底层读 agent-sidecar/default-models.json 兜底文件——已删，catalog 单一真源。 */
   getDefaultModels(): Promise<ModelOption[]> {
     return getTransport().invoke<ModelOption[]>('get_default_models');
+  }
+
+  // ── 自动化任务（⚠️ 未进远程 REGISTRY：桌面开口子前 invoke 必败，见文件头）──
+
+  listAutomations(): Promise<AutomationTask[]> {
+    return getTransport().invoke<AutomationTask[]>('list_automations');
+  }
+
+  getAutomation(id: string): Promise<AutomationTask> {
+    return getTransport().invoke<AutomationTask>('get_automation', { 'id': id });
+  }
+
+  createAutomation(input: AutomationTaskInput): Promise<AutomationTask> {
+    return getTransport().invoke<AutomationTask>('create_automation', { 'input': input });
+  }
+
+  updateAutomation(id: string, input: AutomationTaskInput): Promise<AutomationTask> {
+    return getTransport().invoke<AutomationTask>('update_automation', { 'id': id, 'input': input });
+  }
+
+  /** 删除任务：运行历史与手册一并删除（服务端语义，UI 确认文案同）。 */
+  deleteAutomation(id: string): Promise<void> {
+    return getTransport().invoke<void>('delete_automation', { 'id': id });
+  }
+
+  /** 启停开关；返回更新后的任务。 */
+  setAutomationEnabled(id: string, enabled: boolean): Promise<AutomationTask> {
+    return getTransport().invoke<AutomationTask>('set_automation_enabled', { 'id': id, 'enabled': enabled });
+  }
+
+  /**
+   * 立即运行：不推进调度格点；busy 时 Err 文本 `「{name}」正在运行中`（调用方
+   * 直显 toast）。返回本次运行记录（status 起始为 running）。
+   */
+  runAutomationNow(id: string): Promise<RunRecord> {
+    return getTransport().invoke<RunRecord>('run_automation_now', { 'id': id });
+  }
+
+  /** 运行记录（新→旧）；limit null = 服务端默认。 */
+  listAutomationRuns(id: string, limit: number | null): Promise<RunRecord[]> {
+    const params: Record<string, Object> = { 'id': id };
+    if (limit !== null) {
+      params['limit'] = limit;
+    }
+    return getTransport().invoke<RunRecord[]>('list_automation_runs', params);
+  }
+
+  /** 近 30 天统计（成功率/总成本/平均耗时/缓存命中）。 */
+  automationRunStats(id: string): Promise<RunStats> {
+    return getTransport().invoke<RunStats>('automation_run_stats', { 'id': id });
+  }
+
+  /** 执行手册内容；null = 尚未生成（playbookState none / 蒸馏未跑成）。 */
+  getAutomationPlaybook(id: string): Promise<string | null> {
+    return getTransport().invoke<string | null>('get_automation_playbook', { 'id': id });
+  }
+
+  /** 重新提炼手册：playbookState → stale（下次运行重走 explore + 蒸馏）。 */
+  redistillAutomation(id: string): Promise<AutomationTask> {
+    return getTransport().invoke<AutomationTask>('redistill_automation', { 'id': id });
   }
 }
 

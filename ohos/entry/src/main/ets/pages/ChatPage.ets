@@ -66,6 +66,11 @@ import { readerModel } from '../session/chat/ReaderModel';
 import { ttsModel } from '../session/chat/TtsModel';
 import { ChatDrawer, drawerState, toastModel, ToastModel, wsAccentColor } from '../session/ChatDrawer';
 import { WorkspaceModel, workspaceModel } from '../session/WorkspaceModel';
+import { automationModel } from '../session/AutomationModel';
+import { AutomationDetail } from '../session/AutomationDetail';
+import { AutomationEditor } from '../session/AutomationEditor';
+import { AutomationRun } from '../session/AutomationRun';
+import { AutomationPlaybook } from '../session/AutomationPlaybook';
 
 /** 相邻消息间隔超过 10 分钟插时间分隔线（对照 MessageList GAP_MS）。 */
 const TIME_GAP_MS: number = 10 * 60 * 1000;
@@ -195,6 +200,12 @@ export struct ChatPage {
     readerModel.pickToast = (msg: string, kind: string): void => {
       toastModel.show(msg, kind);
     };
+    // 自动化域：live 事件挂载（run_ 会话别名 + 终态对账）+ toast 通道注入
+    // （AutomationModel 不 import ChatDrawer 防环：ChatDrawer → AutomationModel 已成链）
+    automationModel.ensureListener();
+    automationModel.pickToast = (msg: string, kind: string): void => {
+      toastModel.show(msg, kind);
+    };
     // 模型/effort 域首同步（供应商未加载时 syncModelEffort 自行补拉）
     void this.model.syncModelEffort();
   }
@@ -202,6 +213,7 @@ export struct ChatPage {
   aboutToDisappear(): void {
     this.store.offMessagesStructureChanged(this.syncSource);
     drawerState.close(); // 浮层随卸载复位：单例不随组件销毁，防落回连接页后残置
+    automationModel.resetViews(); // 自动化四浮层同款约定：转录/手册/表单/详情全收
     ttsModel.stop(); // 离屏即停：落回连接页不念了（对照原型离开聊天屏）
     readerModel.stop(); // 听书同理：离屏收面板，落回连接页不再朗读
   }
@@ -362,10 +374,12 @@ export struct ChatPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .constraintSize({ maxWidth: '82%' })
         Row({ space: 5 }) {
-          Circle()
+          // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
+          Column()
             .width(6)
             .height(6)
-            .fill(wsAccentColor(this.ws.displayKey()))
+            .borderRadius(3)
+            .backgroundColor(wsAccentColor(this.ws.displayKey()))
           Text(this.ws.selectedDisplayName())
             .fontSize(10.5)
             .fontWeight(FontWeight.Medium)
@@ -381,17 +395,20 @@ export struct ChatPage {
       // ⏹ 停止会话（常驻：闲态置灰，回复中转红）
       Row() {
         Stack() {
-          Circle()
+          // 容器环/方块替代 Circle+Rect 的 fill/stroke（drawing 组件 API 26 告警）
+          Column()
             .width(20)
             .height(20)
-            .fill(Color.Transparent)
-            .stroke(this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg'))
-            .strokeWidth(1.6)
-          Rect()
+            .borderRadius(10)
+            .border({
+              width: 1.6,
+              color: this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg')
+            })
+          Column()
             .width(7)
             .height(7)
-            .radius(1.6)
-            .fill(this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg'))
+            .borderRadius(1.6)
+            .backgroundColor(this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg'))
         }
       }
       .width(34)
@@ -431,10 +448,12 @@ export struct ChatPage {
   @Builder
   toastView() {
     Row({ space: 7 }) {
-      Circle()
+      // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
+      Column()
         .width(6)
         .height(6)
-        .fill(this.toastKindColor())
+        .borderRadius(3)
+        .backgroundColor(this.toastKindColor())
       Text(this.toast.message)
         .fontSize(12)
         .fontWeight(FontWeight.Medium)
@@ -1978,6 +1997,13 @@ export struct ChatPage {
 
       // 抽屉（自遮罩 + 左滑面板 + 供应商/工作区半模态；关闭时零渲染）
       ChatDrawer()
+
+      // 自动化四浮层（全屏页式：详情 / 表单 / 运行转录 / 执行手册；抽屉之上、
+      // 灯箱之下——各屏自判 model 态，关闭时零渲染）
+      AutomationDetail()
+      AutomationEditor()
+      AutomationRun()
+      AutomationPlaybook()
 
       // 图片灯箱（最顶层：全屏遮罩 + 大图 + 关闭；点任意处关闭）
       if (this.lbUri !== '') {

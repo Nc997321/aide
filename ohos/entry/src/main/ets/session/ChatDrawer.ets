@@ -1,7 +1,8 @@
 /**
  * 抽屉组件（v3：聊天升主屏，会话列表收进左侧抽屉）——对照 design/remote/
  * app.html 的 .dr-panel 结构：设备卡（logo + 连接状态点 + 供应商徽标 + ⏻
- * 断开）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 + 切换）/ 历史会话
+ * 断开）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 + 切换）/ 自动化区
+ * 段（呼吸点 + 折叠 + ＋ 新建；任务行两行制 + 行内启停小开关）/ 历史会话
  *（＋ 新会话 + ↻ 刷新 + 三态状态点列表）/ 底部搜索框，外加供应商、工作区
  * 两个半模态弹层。
  *
@@ -10,6 +11,12 @@
  *    返回经 Index.onBackPress → drawerState.handleBack 逐层收起，@Trace 深度观察
  *  - 三态状态点：待确认（橙，呼吸）> 回复中（绿，呼吸）> 已启动（蓝，静态），
  *    列表只留点不带文字；颜色语义的文字说明只在工作区卡计数处（原型同）
+ *  - 自动化区段（原型 design/automation/app.html .aut-sec，位置紧跟工作区
+ *    卡）：列表四态——首拉加载中 / 拉取失败（11 命令未进远程 REGISTRY 时的
+ *    常态，错误条 + 重试入口）/ 空态引导新建 / 任务行（有旧行时刷新失败照
+ *    显旧行）；行点击开详情浮层不收抽屉（浮层全屏盖住，返回时抽屉仍在——
+ *    原型 backFs 同款）；小开关 hitTestBehavior(Block) 阻冒泡（ArkUI 默认
+ *    父子点击同时触发）
  *  - 会话点击 = chatModel.open 切会话（同会话幂等收敛，只收抽屉）；待确认
  *    会话切换后 toast 提示「有请求等待确认」；preview 文本为协议缺口，不展示
  *  - 设备卡 ⏻ 断开（原型 dr-quit 同位）：先收抽屉再 disconnectAll——Index
@@ -28,7 +35,9 @@ import { SessionsModel, sessionsModel } from './SessionsModel';
 import { WorkspaceModel, workspaceModel, WsMeta, baseName } from './WorkspaceModel';
 import { ProviderModel, providerModel } from './ProviderModel';
 import { ProviderMark } from './ProviderLogos';
-import { Session, WorkspaceInfo, ProviderConfigView } from '../sdk/types';
+import { Session, WorkspaceInfo, ProviderConfigView, AutomationTask } from '../sdk/types';
+import { automationModel, AutomationModel } from './AutomationModel';
+import { scheduleText, shortTime } from './AutomationFormat';
 
 /** 遮罩色（原型 rgba(29,33,41,.4)）。 */
 const MASK_COLOR: ResourceColor = '#661D2129';
@@ -192,10 +201,12 @@ struct PulseDot {
   @Local pulseOpacity: number = 1;
 
   build() {
-    Circle()
+    // 容器圆替代 Circle().fill()：drawing 组件 fill 在本 SDK 是 API 26 兼容告警
+    Column()
       .width(this.dotSize)
       .height(this.dotSize)
-      .fill(this.color)
+      .borderRadius(this.dotSize / 2)
+      .backgroundColor(this.color)
       .opacity(this.pulseOpacity)
       .onAppear(() => {
         this.getUIContext().animateTo(
@@ -218,6 +229,9 @@ export struct ChatDrawer {
   @Local store: ChatStore = chatModel.store;
   @Local dr: DrawerState = drawerState;
   @Local query: string = '';
+  @Local am: AutomationModel = automationModel;
+  /** 自动化区段折叠（纯 UI 态，不进模型；默认展开）。 */
+  @Local autCollapsed: boolean = false;
 
   aboutToAppear(): void {
     // 挂载即武装三态监听（抽屉未开也要推导——徽标数据全程有效）并补首拉
@@ -244,6 +258,8 @@ export struct ChatDrawer {
     if (!this.pv.loaded) {
       void this.pv.refresh();
     }
+    // 自动化区段首拉（已加载不重拉，重开不闪；REGISTRY 未开口子时错误条接管）
+    this.am.ensureLoaded();
   }
 
   // ── 交互 ──
@@ -399,7 +415,8 @@ export struct ChatDrawer {
             .maxLines(1)
           Row({ space: 5 }) {
             if (this.conn.state === 'authed') {
-              Circle().width(6).height(6).fill($r('app.color.status_ok'))
+              // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
+              Column().width(6).height(6).borderRadius(3).backgroundColor($r('app.color.status_ok'))
             } else {
               PulseDot({ color: $r('app.color.status_warn'), dotSize: 6 })
             }
@@ -559,6 +576,276 @@ export struct ChatDrawer {
     })
   }
 
+  // ── 自动化区段（对照原型 .aut-sec；详情/表单浮层本体在 ChatPage 根栈挂载）──
+
+  /** 启停小开关（36×22 药丸 + 18 圆点；Block 阻冒泡——点开关不触发行点击）。
+   *  圆点用 Column 药丸而非 Circle().fill()：drawing 组件 fill 在本 SDK 是
+   *  API 26 兼容告警，容器圆无此问题（AutomationDetail/Editor 同款）。 */
+  @Builder
+  autSwitch(t: AutomationTask) {
+    Stack() {
+      Column()
+        .width(18)
+        .height(18)
+        .borderRadius(9)
+        .backgroundColor('#FFFFFF')
+        .translate({ x: t.enabled ? 7 : -7 })
+    }
+    .width(36)
+    .height(22)
+    .borderRadius(11)
+    .backgroundColor(t.enabled ? $r('app.color.accent') : $r('app.color.btn_disabled_bg'))
+    .onClick(() => {
+      // 等回执再落列表：失败 toast，开关不跳变（模型层语义）
+      void this.am.toggleEnabled(t.id, !t.enabled);
+    })
+    .hitTestBehavior(HitTestMode.Block)
+  }
+
+  /** 上次结果短语（行第二行右段）：运行中（呼吸点）/ 上次成功/失败/跳过（时间）/ 尚未运行。 */
+  @Builder
+  autLastRun(t: AutomationTask) {
+    if (t.lastRunStatus === 'running') {
+      PulseDot({ color: $r('app.color.accent'), dotSize: 6 })
+      Text('运行中')
+        .fontSize(11.5)
+        .fontColor($r('app.color.accent'))
+    } else if (t.lastRunStatus === 'succeeded') {
+      Text(`上次成功（${shortTime(t.lastRunAt)}）`)
+        .fontSize(11.5)
+        .fontColor($r('app.color.status_ok'))
+    } else if (t.lastRunStatus === 'failed') {
+      Text(`上次失败（${shortTime(t.lastRunAt)}）`)
+        .fontSize(11.5)
+        .fontColor($r('app.color.status_danger'))
+    } else if (t.lastRunStatus === 'skipped') {
+      Text(`上次跳过（${shortTime(t.lastRunAt)}）`)
+        .fontSize(11.5)
+        .fontColor($r('app.color.text_secondary'))
+    } else {
+      Text('尚未运行')
+        .fontSize(11.5)
+        .fontColor($r('app.color.text_secondary'))
+    }
+  }
+
+  /** 任务行（两行制：名称 + 小开关 / 调度 · 上次结果）。 */
+  @Builder
+  autRow(t: AutomationTask) {
+    Column() {
+      Row({ space: 8 }) {
+        Text(t.name)
+          .fontSize(13.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(t.enabled ? $r('app.color.text_primary') : $r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        this.autSwitch(t)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+
+      Row({ space: 5 }) {
+        Text(scheduleText(t.schedule))
+          .fontSize(11.5)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .flexShrink(1)
+        Text('·')
+          .fontSize(11.5)
+          .fontColor($r('app.color.text_secondary'))
+        this.autLastRun(t)
+      }
+      .width('100%')
+      .alignItems(VerticalAlign.Center)
+      .margin({ top: 3 })
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(13)
+    .backgroundColor($r('app.color.card_bg'))
+    .alignItems(HorizontalAlign.Start)
+    .onClick(() => {
+      // 开详情浮层不收抽屉：浮层全屏盖住，返回时抽屉仍在（原型 backFs 同款）
+      this.am.selectTask(t.id);
+    })
+  }
+
+  /** 区段头：呼吸点（有任务在跑）+ 标题 + ＋ 新建 + 折叠 chevron。 */
+  @Builder
+  autHeader() {
+    Row({ space: 7 }) {
+      if (this.am.hasRunning()) {
+        PulseDot({ color: $r('app.color.status_ok'), dotSize: 7 })
+      }
+      Text('自动化')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .letterSpacing(1)
+      Blank()
+      Row() {
+        SymbolGlyph($r('sys.symbol.plus'))
+          .fontSize(15)
+          .fontColor([$r('app.color.text_secondary')])
+      }
+      .width(26)
+      .height(26)
+      .borderRadius(8)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.am.openEditor('');
+      })
+      Row() {
+        SymbolGlyph($r('sys.symbol.chevron_down'))
+          .fontSize(14)
+          .fontColor([$r('app.color.text_secondary')])
+          .rotate({ angle: this.autCollapsed ? -90 : 0 })
+          .animation({ duration: 180, curve: Curve.EaseOut })
+      }
+      .width(26)
+      .height(26)
+      .borderRadius(8)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .onClick(() => {
+        this.autCollapsed = !this.autCollapsed;
+      })
+    }
+    .width('100%')
+    .padding({ left: 15, right: 15, top: 12, bottom: 6 })
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 拉取失败卡（11 命令未进 REGISTRY 时的常态）：如实呈现错误文本 + 重试。 */
+  @Builder
+  autErrorCard() {
+    Column() {
+      Text('自动化任务拉取失败')
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.status_danger'))
+      Text(this.am.lastError)
+        .fontSize(11.5)
+        .lineHeight(19)
+        .fontColor($r('app.color.status_danger'))
+        .textAlign(TextAlign.Center)
+        .maxLines(3)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .margin({ top: 2 })
+      Row() {
+        Text('重试')
+          .fontSize(12)
+          .fontColor($r('app.color.status_danger'))
+      }
+      .padding({ left: 18, right: 18, top: 6, bottom: 6 })
+      .borderRadius(99)
+      .border({ width: 1, color: $r('app.color.status_danger') })
+      .margin({ top: 8 })
+      .onClick(() => {
+        void this.am.refreshTasks();
+      })
+    }
+    .width('100%')
+    .padding(14)
+    .borderRadius(13)
+    .backgroundColor($r('app.color.status_danger_weak'))
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  /** 首拉加载中（后续刷新不闪——有行照显旧行）。 */
+  @Builder
+  autLoadingCard() {
+    Column() {
+      LoadingProgress().width(22).height(22).color($r('app.color.text_secondary'))
+    }
+    .width('100%')
+    .padding(18)
+    .borderRadius(13)
+    .backgroundColor($r('app.color.card_bg'))
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  /** 空态引导（大图标 + 文案 + 主色胶囊按钮）。 */
+  @Builder
+  autEmptyCard() {
+    Column() {
+      Row() {
+        SymbolGlyph($r('sys.symbol.clock'))
+          .fontSize(18)
+          .fontColor([$r('app.color.accent')])
+      }
+      .width(38)
+      .height(38)
+      .borderRadius(12)
+      .backgroundColor($r('app.color.accent_weak'))
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
+      .margin({ bottom: 8 })
+      Text('还没有自动化任务')
+        .fontSize(13)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.text_primary'))
+      Text('定时汇总提交、巡检依赖、生成周报……')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .margin({ top: 2 })
+      Text('都从下面这个 + 开始')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+      Row() {
+        Text('＋ 新建任务')
+          .fontSize(12.5)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(Color.White)
+      }
+      .padding({ left: 16, right: 16, top: 7, bottom: 7 })
+      .borderRadius(99)
+      .backgroundColor($r('app.color.accent'))
+      .margin({ top: 10 })
+      .onClick(() => {
+        this.am.openEditor('');
+      })
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 18, bottom: 18 })
+    .borderRadius(13)
+    .backgroundColor($r('app.color.card_bg'))
+    .alignItems(HorizontalAlign.Center)
+  }
+
+  /** 区段本体：头 + 列表（四态 + 行；折叠时只藏列表）。 */
+  @Builder
+  autSection() {
+    Column() {
+      this.autHeader()
+      if (!this.autCollapsed) {
+        Column({ space: 8 }) {
+          if (!this.am.loaded && this.am.refreshing) {
+            this.autLoadingCard()
+          } else if (this.am.tasks.length === 0 && this.am.lastError !== '') {
+            this.autErrorCard()
+          } else if (this.am.loaded && this.am.tasks.length === 0) {
+            this.autEmptyCard()
+          } else {
+            ForEach(this.am.tasks, (t: AutomationTask) => {
+              this.autRow(t)
+            }, (t: AutomationTask): string => {
+              return t.id + '|' + t.name + '|' + (t.enabled ? 'on' : 'off') + '|' +
+                scheduleText(t.schedule) + '|' + (t.lastRunStatus ?? '-') + '|' + (t.lastRunAt ?? '-');
+            })
+          }
+        }
+        .width('100%')
+        .padding({ left: 12, right: 12, top: 2, bottom: 6 })
+        .alignItems(HorizontalAlign.Start)
+      }
+    }
+    .width('100%')
+  }
+
   // ── 历史会话区段 ──
 
   @Builder
@@ -613,7 +900,8 @@ export struct ChatDrawer {
     } else if (status === 'live') {
       PulseDot({ color: $r('app.color.status_ok'), dotSize: 7 })
     } else if (status === 'started') {
-      Circle().width(7).height(7).fill($r('app.color.accent'))
+      // 容器圆替代 Circle().fill()（drawing 组件 fill 在本 SDK 是 API 26 兼容告警）
+      Column().width(7).height(7).borderRadius(3.5).backgroundColor($r('app.color.accent'))
     }
   }
 
@@ -1007,6 +1295,8 @@ export struct ChatDrawer {
             }
             .width('100%')
             .padding({ left: 12, right: 12, bottom: 8 })
+
+            this.autSection()
 
             this.historyHeader()
             this.sessionList()

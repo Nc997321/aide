@@ -37,6 +37,10 @@
       "value": "#00B42A"
     },
     {
+      "name": "status_ok_weak",
+      "value": "#1400B42A"
+    },
+    {
       "name": "status_warn",
       "value": "#FF7D00"
     },

@@ -9,16 +9,21 @@ import { ConnectPage } from './ConnectPage';
 import { ChatPage } from './ChatPage';
 import { drawerState } from '../session/ChatDrawer';
 import { chatModel } from '../session/ChatModel';
+import { automationModel } from '../session/AutomationModel';
 
 @Entry
 @ComponentV2
 struct Index {
   @Local conn: ConnModel = connModel;
 
-  /** 系统返回：浮层逐层收起（半模态 > 抽屉 > chip 浮层，见 DrawerState.handleBack
-   * 与 ChatStore.handlePopups），消费则不退出；无浮层返回 false 走默认。页面级
-   * 返回只落在本页（唯一 @Entry）。 */
+  /** 系统返回：浮层逐层收起（自动化浮层 > 半模态 > 抽屉 > chip 浮层，见
+   * AutomationModel.handleBack、DrawerState.handleBack 与 ChatStore.handlePopups），
+   * 消费则不退出；无浮层返回 false 走默认。页面级返回只落在本页（唯一 @Entry）。 */
   onBackPress(): boolean {
+    // 自动化域最前：转录 > 手册 > 表单 > 详情（全屏页式浮层盖住抽屉）
+    if (automationModel.handleBack()) {
+      return true;
+    }
     if (drawerState.handleBack()) {
       return true;
     }

@@ -1,0 +1,1227 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 自动化 · 鸿蒙端原型（应用本体）</title>
+<style>
+  /* ===== token：镜像 entry/src/main/resources/base/element/color.json（浅色） ===== */
+  :root {
+    --page-bg: #F1F3F5;
+    --card: #FFFFFF;
+    --input-bg: #F5F6FA;
+    --text: #1D2129;
+    --text-2: #86909C;
+    --accent: #0A59F7;
+    --accent-weak: rgba(10,89,247,.08);
+    --ok: #00B42A;
+    --ok-weak: rgba(0,180,42,.1);
+    --warn: #FF7D00;
+    --warn-weak: rgba(255,125,0,.1);
+    --danger: #F53F3F;
+    --danger-weak: rgba(245,63,63,.1);
+    --line: #E5E6EB;
+    --disabled: #C9CDD4;
+    --radius: 12px;
+    --shadow: 0 2px 10px rgba(29,33,41,.05);
+    --mono: Consolas, "Cascadia Code", monospace;
+    --ease: .18s cubic-bezier(.2,.8,.2,1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page-bg); color: var(--text); overflow: hidden;
+    font: 14px/1.6 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  input, textarea { font-family: inherit; }
+  #app { height: 100vh; max-width: 420px; margin: 0 auto; display: flex; flex-direction: column; position: relative; background: var(--page-bg); }
+  #stage { flex: 1; position: relative; overflow: hidden; }
+
+  /* ===== 状态栏 ===== */
+  .statusbar {
+    height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px; font-size: 12.5px; font-weight: 600;
+  }
+  .sb-icons { display: flex; align-items: center; gap: 6px; }
+
+  /* ===== 通用小组件 ===== */
+  .spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); display: inline-block; }
+  .dot.warn { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.info { background: var(--accent); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .logo {
+    width: 56px; height: 56px; border-radius: 16px; flex: none;
+    background: linear-gradient(135deg, #4C8DFF, #0A59F7); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 800; box-shadow: 0 6px 18px rgba(10,89,247,.28);
+  }
+  .icon-btn {
+    width: 30px; height: 30px; border-radius: 9px; border: none; flex: none;
+    background: transparent; color: var(--text-2);
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .icon-btn:active { background: var(--accent-weak); color: var(--accent); }
+  .spacer { flex: 1; }
+
+  /* 开关（span 模拟，非嵌套 button） */
+  .sw { position: relative; width: 40px; height: 24px; flex: none; border-radius: 99px; background: var(--disabled); border: none; transition: background var(--ease); display: inline-block; }
+  .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: left var(--ease); box-shadow: 0 1px 4px rgba(0,0,0,.2); }
+  .sw.on { background: var(--accent); }
+  .sw.on::after { left: 18px; }
+  .sw.sm { width: 36px; height: 22px; }
+  .sw.sm::after { width: 18px; height: 18px; }
+  .sw.sm.on::after { left: 16px; }
+
+  /* ===== 聊天背景层（简化布景，完整能力见 design/remote） ===== */
+  .chat { position: absolute; inset: 0; display: flex; flex-direction: column; }
+  .ch-top { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+  .ch-title { flex: 1; min-width: 0; }
+  .ch-title b { font-size: 15px; display: block; }
+  .ch-title small { font-size: 11px; color: var(--text-2); }
+  .ch-msgs { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 10px; }
+  .ch-msgs::-webkit-scrollbar { width: 0; }
+  .bubble { max-width: 86%; padding: 9px 12px; border-radius: 14px; font-size: 13.5px; line-height: 1.65; }
+  .bubble.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .bubble.ai { align-self: flex-start; background: var(--card); border: 1px solid var(--line); border-bottom-left-radius: 4px; box-shadow: var(--shadow); }
+  .ch-input { flex: none; padding: 10px 14px 16px; }
+  .fake-input { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 11px 14px; font-size: 13px; color: var(--text-2); box-shadow: var(--shadow); }
+
+  /* ===== 抽屉（结构对照 design/remote · ChatDrawer） ===== */
+  .dr-mask { position: absolute; inset: 0; background: rgba(0,0,0,.38); opacity: 0; pointer-events: none; transition: opacity var(--ease); z-index: 10; }
+  .dr-mask.show { opacity: 1; pointer-events: auto; }
+  .dr-panel {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 84%; max-width: 330px;
+    background: var(--page-bg); transform: translateX(-100%);
+    transition: transform .22s cubic-bezier(.2,.8,.2,1);
+    display: flex; flex-direction: column; box-shadow: 8px 0 30px rgba(0,0,0,.12);
+  }
+  .dr-mask.show .dr-panel { transform: none; }
+  .dr-head { padding: 14px 16px 10px; display: flex; align-items: center; justify-content: space-between; }
+  .dr-id { display: flex; align-items: center; gap: 10px; }
+  .dr-id .logo { width: 42px; height: 42px; border-radius: 12px; font-size: 22px; }
+  .dr-id-name b { font-size: 14px; display: block; }
+  .dr-id-name small { font-size: 11px; color: var(--text-2); display: flex; align-items: center; gap: 5px; }
+  .dr-sec { padding: 12px 16px 6px; display: flex; align-items: center; gap: 6px; }
+  .dr-sec b { font-size: 12px; color: var(--text-2); font-weight: 600; letter-spacing: .5px; }
+  .dr-sec .icon-btn { width: 26px; height: 26px; }
+
+  .ws-card { width: 100%; text-align: left; border: none; background: var(--card); border-radius: 14px; padding: 12px 14px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 11px; }
+  .ws-avatar { width: 34px; height: 34px; border-radius: 10px; background: rgba(10,89,247,.1); color: var(--accent); font-weight: 800; font-size: 16px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .ws-info { flex: 1; min-width: 0; }
+  .ws-name { font-size: 13.5px; font-weight: 700; }
+  .ws-path { font-size: 10.5px; color: var(--text-2); font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ws-meta { font-size: 10.5px; color: var(--text-2); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
+  .ws-go { flex: none; font-size: 11px; color: var(--accent); display: flex; align-items: center; gap: 2px; }
+
+  /* 历史会话（布景） */
+  .dr-list { flex: 1; overflow-y: auto; padding: 2px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .dr-list::-webkit-scrollbar { width: 0; }
+  .ses-row { background: var(--card); border-radius: 13px; padding: 10px 12px; box-shadow: var(--shadow); border: none; width: 100%; text-align: left; }
+  .ses-name { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
+  .ses-prev { font-size: 11.5px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 2px; }
+  .ses-time { font-size: 10.5px; color: var(--text-2); margin-top: 3px; display: flex; align-items: center; gap: 5px; }
+  .dr-search { padding: 10px 16px 14px; }
+  .dr-search-box { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 12px; padding: 9px 12px; }
+  .dr-search-box input { border: none; outline: none; background: transparent; flex: 1; font-size: 13px; color: var(--text); }
+
+  /* ===== 自动化区段（本页新增 · 未来 ChatDrawer 内嵌组件） ===== */
+  .aut-h { padding: 12px 16px 6px; display: flex; align-items: center; gap: 7px; }
+  .aut-h b { font-size: 12px; color: var(--text-2); font-weight: 600; letter-spacing: .5px; }
+  .aut-h .icon-btn { width: 26px; height: 26px; }
+  .breath { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); animation: breath 1.6s ease-in-out infinite; flex: none; display: inline-block; }
+  .breath.hide { display: none; }
+  @keyframes breath { 50% { opacity: .35; transform: scale(.78); } }
+  .aut-sec .chev-btn svg { transition: transform var(--ease); }
+  .aut-sec.collapsed .chev-btn svg { transform: rotate(-90deg); }
+  .aut-sec.collapsed .aut-list { display: none; }
+  .aut-list { display: flex; flex-direction: column; gap: 8px; padding: 2px 12px 6px; }
+  .aut-row { background: var(--card); border-radius: 13px; padding: 10px 12px; box-shadow: var(--shadow); border: none; width: 100%; text-align: left; display: block; }
+  .aut-row-top { display: flex; align-items: center; gap: 8px; }
+  .aut-name { font-size: 13.5px; font-weight: 600; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .aut-name.off { color: var(--text-2); }
+  .aut-meta { font-size: 11.5px; color: var(--text-2); margin-top: 3px; display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+  .aut-st { display: inline-flex; align-items: center; gap: 4px; }
+  .st-ok { color: var(--ok); } .st-fail { color: var(--danger); } .st-run { color: var(--accent); }
+
+  .aut-empty { background: var(--card); border-radius: 13px; padding: 18px 14px; text-align: center; color: var(--text-2); font-size: 12px; box-shadow: var(--shadow); }
+  .big-ic { margin: 0 auto 8px; width: 38px; height: 38px; border-radius: 12px; background: var(--accent-weak); color: var(--accent); display: flex; align-items: center; justify-content: center; }
+  .aut-empty b { display: block; color: var(--text); font-size: 13px; margin-bottom: 2px; }
+  .link-btn { margin-top: 10px; padding: 7px 16px; font-size: 12.5px; border-radius: 99px; background: var(--accent); color: #fff; border: none; font-weight: 600; }
+  .aut-err { background: var(--danger-weak); border-radius: 13px; padding: 14px; text-align: center; color: var(--danger); font-size: 11.5px; line-height: 1.7; }
+  .aut-err b { display: block; font-size: 13px; margin-bottom: 2px; }
+  .retry { margin-top: 8px; padding: 6px 18px; border-radius: 99px; border: 1px solid var(--danger); background: transparent; color: var(--danger); font-size: 12px; }
+
+  /* ===== 全屏浮层（detail / editor / run / playbook，对照 ArkTS 浮层组件） ===== */
+  .fs { position: absolute; inset: 0; background: var(--page-bg); z-index: 20; display: flex; flex-direction: column; transform: translateY(100%); transition: transform .24s cubic-bezier(.2,.8,.2,1); }
+  .fs.show { transform: none; }
+  .fs-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 10px 12px 8px; }
+  .fs-title { flex: 1; min-width: 0; }
+  .fs-title b { font-size: 16px; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .fs-title small { font-size: 11.5px; color: var(--text-2); display: flex; align-items: center; gap: 5px; margin-top: 1px; }
+  .fs-body { flex: 1; overflow-y: auto; padding: 4px 14px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .fs-body::-webkit-scrollbar { width: 0; }
+  .fs-foot { flex: none; padding: 10px 14px 14px; display: flex; gap: 10px; border-top: 1px solid var(--line); background: var(--page-bg); }
+
+  /* 按钮 */
+  .btn { padding: 11px 18px; border-radius: 12px; font-size: 14px; font-weight: 600; border: none; flex: 1; }
+  .btn.pri { background: var(--accent); color: #fff; }
+  .btn.ghost { background: var(--card); color: var(--text); border: 1px solid var(--line); flex: none; }
+  .btn.danger { background: var(--danger-weak); color: var(--danger); }
+  .btn.sm { padding: 8px 12px; font-size: 12.5px; border-radius: 10px; }
+
+  /* 卡片 */
+  .card { background: var(--card); border-radius: 14px; box-shadow: var(--shadow); padding: 13px 14px; }
+  .card-h { display: flex; align-items: center; gap: 7px; font-size: 13px; font-weight: 700; margin-bottom: 8px; }
+  .card-h .ic { color: var(--accent); display: inline-flex; }
+  .card-h .more { margin-left: auto; width: 26px; height: 26px; border-radius: 8px; border: none; background: transparent; color: var(--text-2); display: inline-flex; align-items: center; justify-content: center; }
+  .card-h small { margin-left: auto; font-weight: 400; color: var(--text-2); font-size: 11px; }
+
+  .chips-row { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { display: inline-flex; align-items: center; gap: 5px; padding: 4px 10px; border-radius: 99px; font-size: 11px; background: var(--input-bg); color: var(--text-2); }
+  .chip.acc { background: var(--accent-weak); color: var(--accent); }
+
+  /* 状态徽标 */
+  .bd { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 99px; font-size: 10.5px; font-weight: 600; flex: none; }
+  .bd.ok { background: var(--ok-weak); color: var(--ok); }
+  .bd.run { background: var(--accent-weak); color: var(--accent); }
+  .bd.fail { background: var(--danger-weak); color: var(--danger); }
+  .bd.skip { background: var(--input-bg); color: var(--text-2); }
+
+  /* ===== 详情屏 ===== */
+  .dt-name-row { display: flex; align-items: center; gap: 10px; }
+  .dt-name { font-size: 17px; font-weight: 700; flex: 1; min-width: 0; }
+  .dt-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .dt-actions .btn.sm { flex: 1; }
+  .prompt-txt { font-size: 12.5px; color: #4E5969; line-height: 1.7; white-space: pre-wrap; }
+  .clamp2 { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .link-mini { border: none; background: none; color: var(--accent); font-size: 11.5px; padding: 4px 0 0; align-self: flex-start; }
+  .pb-line { display: flex; align-items: center; gap: 8px; width: 100%; border: none; background: none; text-align: left; padding: 0; }
+  .pb-line .t { flex: 1; min-width: 0; }
+  .pb-line b { font-size: 12.5px; display: block; }
+  .pb-line small { display: block; color: var(--text-2); font-size: 11px; margin-top: 1px; line-height: 1.5; }
+  .pb-none { color: var(--text-2); font-size: 12.5px; display: flex; gap: 8px; align-items: flex-start; line-height: 1.6; }
+  .stat-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .stat { text-align: center; }
+  .stat b { font-size: 15px; display: block; }
+  .stat small { font-size: 10px; color: var(--text-2); }
+  .sec-line { padding: 6px 2px 0; display: flex; align-items: center; }
+  .sec-line b { font-size: 12px; color: var(--text-2); font-weight: 600; letter-spacing: .5px; }
+  .sec-line small { margin-left: auto; font-size: 10.5px; color: var(--text-2); }
+  .run-list { display: flex; flex-direction: column; gap: 8px; }
+  .run-row { width: 100%; text-align: left; border: none; background: var(--card); border-radius: 13px; padding: 11px 12px; box-shadow: var(--shadow); display: block; }
+  .run-row.dis { opacity: .55; }
+  .run-top { display: flex; align-items: center; gap: 7px; }
+  .run-time { font-size: 12.5px; font-weight: 600; flex: 1; min-width: 0; }
+  .run-trg { margin-left: auto; font-size: 10.5px; color: var(--text-2); flex: none; }
+  .run-sum { font-size: 11.5px; color: var(--text-2); margin-top: 4px; line-height: 1.55; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+  .run-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; font-size: 10.5px; color: var(--text-2); }
+  .run-note { margin-top: 6px; font-size: 11px; color: var(--warn); background: var(--warn-weak); border-radius: 8px; padding: 4px 8px; display: inline-block; }
+
+  /* ===== 编辑器 ===== */
+  .f-row { margin-bottom: 13px; }
+  .f-row:last-child { margin-bottom: 0; }
+  .f-label { font-size: 12.5px; font-weight: 600; margin-bottom: 6px; display: flex; align-items: center; gap: 5px; }
+  .f-label small { margin-left: auto; font-weight: 400; color: var(--text-2); font-size: 10.5px; }
+  .f-input, textarea.f-input {
+    width: 100%; padding: 11px 12px; font-size: 13.5px; color: var(--text);
+    background: var(--input-bg); border: 1px solid transparent; border-radius: 11px;
+    outline: none; transition: all var(--ease);
+  }
+  .f-input:focus { background: var(--card); border-color: var(--accent); }
+  textarea.f-input { resize: none; line-height: 1.6; }
+  .f-row.err .f-input { border-color: var(--danger); background: var(--card); }
+  .f-err-txt { font-size: 11px; color: var(--danger); margin-top: 4px; display: none; }
+  .f-row.err .f-err-txt { display: block; }
+  .seg { display: flex; background: var(--input-bg); border-radius: 11px; padding: 3px; gap: 2px; }
+  .seg button { flex: 1; padding: 7px 0; border: none; background: transparent; border-radius: 9px; font-size: 12px; color: var(--text-2); font-weight: 600; }
+  .seg button.on { background: var(--card); color: var(--text); box-shadow: var(--shadow); }
+  .wd-chips { display: flex; gap: 6px; }
+  .wd { width: 34px; height: 34px; border-radius: 50%; border: 1.5px solid var(--line); background: var(--card); color: var(--text-2); font-size: 12px; flex: none; }
+  .wd.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .duo { display: flex; gap: 8px; }
+  .duo > * { flex: 1; min-width: 0; }
+  .preset-card { width: 100%; text-align: left; border: 1.5px solid var(--line); background: var(--card); border-radius: 12px; padding: 10px 12px; }
+  .preset-card.on { border-color: var(--accent); background: var(--accent-weak); }
+  .preset-card b { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .preset-card small { font-size: 11px; color: var(--text-2); display: block; margin-top: 2px; line-height: 1.5; }
+  .preset-list { display: flex; flex-direction: column; gap: 8px; }
+  .ro-row { display: flex; align-items: center; gap: 8px; font-size: 12px; background: var(--input-bg); border-radius: 11px; padding: 10px 12px; color: var(--text-2); font-family: var(--mono); }
+  .ro-row .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .hint { font-size: 10.5px; color: var(--text-2); margin-top: 5px; line-height: 1.6; }
+  .sw-row { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+  .sw-row .t { flex: 1; font-size: 12.5px; font-weight: 600; }
+  .sw-row .t small { display: block; color: var(--text-2); font-size: 10.5px; font-weight: 400; margin-top: 1px; }
+
+  /* ===== 运行转录屏 ===== */
+  .live-bar { display: flex; align-items: center; gap: 8px; background: var(--accent-weak); color: var(--accent); border-radius: 12px; padding: 9px 12px; font-size: 12.5px; font-weight: 600; }
+  .live-bar .spinner { border-color: rgba(10,89,247,.2); border-top-color: var(--accent); width: 13px; height: 13px; }
+  .live-bar .ref { margin-left: auto; border: none; background: transparent; color: var(--accent); font-size: 12px; font-weight: 600; }
+  .err-bar { display: flex; align-items: center; gap: 7px; background: var(--danger-weak); color: var(--danger); border-radius: 12px; padding: 9px 12px; font-size: 12px; line-height: 1.55; }
+  .load-earlier { align-self: center; border: none; background: transparent; color: var(--accent); font-size: 12px; padding: 4px 10px; flex: none; }
+  .tr-user { align-self: flex-end; max-width: 88%; background: var(--accent); color: #fff; border-radius: 14px; border-bottom-right-radius: 4px; padding: 10px 12px; font-size: 13px; line-height: 1.65; white-space: pre-wrap; }
+  .tr-inject { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; background: rgba(255,255,255,.18); border-radius: 99px; padding: 2px 8px; margin-bottom: 6px; }
+  .think { background: var(--card); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+  .think-h { display: flex; align-items: center; gap: 7px; padding: 9px 12px; font-size: 12px; color: var(--text-2); cursor: pointer; }
+  .think-h .chev { margin-left: auto; transition: transform var(--ease); display: inline-flex; }
+  .think.open .think-h .chev { transform: rotate(180deg); }
+  .think-b { display: none; padding: 0 12px 10px; font-size: 12px; color: var(--text-2); line-height: 1.7; white-space: pre-wrap; }
+  .think.open .think-b { display: block; }
+  .tool-row { display: flex; align-items: center; gap: 8px; background: var(--card); border-radius: 11px; padding: 8px 11px; font-size: 12px; box-shadow: var(--shadow); }
+  .tool-row .tn { font-weight: 600; flex: none; }
+  .tool-row .ta { color: var(--text-2); font-family: var(--mono); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
+  .tool-row .ok-ic { color: var(--ok); margin-left: auto; flex: none; display: inline-flex; }
+  .tr-ai { background: var(--card); border-radius: 14px; border-bottom-left-radius: 4px; padding: 11px 13px; font-size: 13px; line-height: 1.75; box-shadow: var(--shadow); }
+  .tr-ai h5 { font-size: 13px; margin: 2px 0 5px; }
+  .tr-ai p { margin-bottom: 6px; }
+  .tr-ai ul { padding-left: 18px; margin-bottom: 6px; }
+  .tr-ai li { margin-bottom: 2px; }
+  .tr-ai code { font-family: var(--mono); font-size: 11.5px; background: var(--input-bg); border-radius: 4px; padding: 1px 5px; }
+  .tr-usage { text-align: center; font-size: 10.5px; color: var(--text-2); padding: 2px 0 4px; }
+  .run-meta-bar { flex: none; display: flex; flex-wrap: wrap; gap: 4px 12px; padding: 9px 16px 13px; border-top: 1px solid var(--line); font-size: 11px; color: var(--text-2); background: var(--page-bg); }
+
+  /* ===== 手册屏 ===== */
+  .pb-banner { display: flex; gap: 8px; align-items: flex-start; background: var(--warn-weak); color: var(--warn); border-radius: 12px; padding: 10px 12px; font-size: 12px; line-height: 1.6; }
+  .md { background: var(--card); border-radius: 14px; box-shadow: var(--shadow); padding: 15px 16px; font-size: 13px; line-height: 1.8; }
+  .md h4 { font-size: 14px; margin: 10px 0 4px; }
+  .md h4:first-child { margin-top: 0; }
+  .md ol { padding-left: 20px; margin: 4px 0 8px; }
+  .md li { margin-bottom: 2px; }
+  .md code { font-family: var(--mono); font-size: 11.5px; background: var(--input-bg); border-radius: 4px; padding: 1px 5px; }
+  .md .sep { border-top: 1px dashed var(--line); margin: 10px 0; }
+  .md .ft { font-size: 11px; color: var(--text-2); line-height: 1.6; }
+  .empty-page { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--text-2); font-size: 12.5px; text-align: center; padding: 0 30px; }
+  .empty-page b { color: var(--text); font-size: 14px; }
+  .empty-page p { line-height: 1.7; font-size: 12px; }
+
+  /* ===== 半模态 / toast ===== */
+  .sheet-mask { position: absolute; inset: 0; background: rgba(0,0,0,.38); opacity: 0; pointer-events: none; transition: opacity var(--ease); z-index: 30; display: flex; align-items: flex-end; }
+  .sheet-mask.show { opacity: 1; pointer-events: auto; }
+  .sheet { width: 100%; background: var(--card); border-radius: 20px 20px 0 0; padding: 10px 18px 20px; transform: translateY(100%); transition: transform .22s cubic-bezier(.2,.8,.2,1); }
+  .sheet-mask.show .sheet { transform: none; }
+  .sheet-grip { width: 36px; height: 4px; border-radius: 2px; background: var(--line); margin: 4px auto 12px; }
+  .sheet-title { font-size: 15px; font-weight: 700; text-align: center; }
+  .sheet-txt { font-size: 12.5px; color: var(--text-2); text-align: center; margin: 7px 0 16px; line-height: 1.7; }
+  .sheet-btns { display: flex; gap: 10px; }
+  .toast {
+    position: absolute; top: 48px; left: 50%; transform: translate(-50%, -8px);
+    background: rgba(29,33,41,.92); color: #fff; font-size: 12px; border-radius: 99px;
+    padding: 8px 16px; opacity: 0; pointer-events: none; transition: all .25s; z-index: 40;
+    max-width: 86%; text-align: center; line-height: 1.5;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+  .toast.err { background: rgba(245,63,63,.95); }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="statusbar">
+    <span>21:47</span>
+    <span class="sb-icons">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+      <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+      <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+    </span>
+  </div>
+  <div id="stage">
+
+    <!-- ===== 聊天背景层（简化布景 · 完整能力见 design/remote） ===== -->
+    <div class="chat">
+      <div class="ch-top">
+        <button class="icon-btn" id="btnMenu" title="打开抽屉">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="ch-title"><b>鸿蒙端原型</b><small>工作区 · aide</small></div>
+        <span style="width:30px"></span>
+      </div>
+      <div class="ch-msgs">
+        <div class="bubble user">帮我把日报任务的触发时间挪到 18:30</div>
+        <div class="bubble ai">好的，「每日提交汇总」的调度时间已从 18:00 改为每天 18:30，下一个触发点今晚生效。也可以在抽屉 → 自动化 里查看和调整。</div>
+      </div>
+      <div class="ch-input"><div class="fake-input">发消息给桌面 aide…</div></div>
+    </div>
+
+    <!-- ===== 抽屉（对照 ChatDrawer · 自动化区段为本页新增） ===== -->
+    <div class="dr-mask" id="drMask">
+      <aside class="dr-panel">
+        <div class="dr-head">
+          <div class="dr-id">
+            <div class="logo">a</div>
+            <div class="dr-id-name"><b>HEAVEN-PC</b><small><span class="dot"></span>已连接 · 桌面 aide</small></div>
+          </div>
+        </div>
+
+        <div class="dr-sec"><b>工作区</b></div>
+        <div style="padding: 2px 12px;">
+          <button class="ws-card">
+            <span class="ws-avatar">a</span>
+            <span class="ws-info">
+              <span class="ws-name">aide</span>
+              <span class="ws-path">C:\Users\<user>\IdeaProjects\aide</span>
+              <span class="ws-meta">5 个会话 · <span class="dot info" style="width:6px;height:6px"></span>1 回复中</span>
+            </span>
+            <span class="ws-go">切换 ›</span>
+          </button>
+        </div>
+
+        <!-- 自动化区段（位置定稿：紧跟工作区卡） -->
+        <div class="aut-sec" id="autSec">
+          <div class="aut-h">
+            <span class="breath" id="breath"></span>
+            <b>自动化</b>
+            <span class="spacer"></span>
+            <button class="icon-btn" id="autNew" title="新建任务">
+              <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </button>
+            <button class="icon-btn chev-btn" id="autCollapse" title="展开 / 收起">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>
+            </button>
+          </div>
+          <div class="aut-list" id="autList"></div>
+        </div>
+
+        <div class="dr-sec">
+          <b>历史会话</b>
+          <span class="spacer"></span>
+          <button class="icon-btn" title="新会话">
+            <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          </button>
+          <button class="icon-btn" title="刷新">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.6 8a5.6 5.6 0 1 1-1.65-3.95" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M13.8 1.6v3h-3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+        <div class="dr-list" id="sesList"></div>
+
+        <div class="dr-search">
+          <div class="dr-search-box">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+            <input type="text" placeholder="搜索会话">
+          </div>
+        </div>
+      </aside>
+    </div>
+
+    <!-- ===== 任务详情浮层（对照未来 TaskDetail 组件） ===== -->
+    <div class="fs" id="fsDetail">
+      <div class="fs-head">
+        <button class="icon-btn" data-back>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="fs-title"><b id="dtName">每日提交汇总</b><small id="dtSub">每天 18:30 · aide</small></div>
+        <span class="sw sm on" id="dtSwitch" title="启用 / 停用"></span>
+      </div>
+      <div class="fs-body">
+        <div class="card">
+          <div class="chips-row" id="dtChips"></div>
+          <div class="dt-actions">
+            <button class="btn pri sm" id="dtRunNow">▶ 立即运行</button>
+            <button class="btn ghost sm" data-nav="editor">编辑</button>
+            <button class="btn ghost sm" id="dtDelete" style="color:var(--danger)">删除</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h">
+            <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
+            任务指令
+            <small id="dtPromptMeta"></small>
+          </div>
+          <div class="prompt-txt clamp2" id="dtPrompt"></div>
+          <button class="link-mini" id="dtPromptMore">展开 ▾</button>
+        </div>
+        <div class="card">
+          <div class="card-h">
+            <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></span>
+            执行手册
+            <small>首跑后由模型沉淀</small>
+          </div>
+          <div id="dtPbBody"></div>
+        </div>
+        <div class="card">
+          <div class="card-h">
+            <span class="ic"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-6 4 3 5-8"/></svg></span>
+            运行统计
+          </div>
+          <div class="stat-strip" id="dtStats"></div>
+        </div>
+        <div class="sec-line"><b>运行记录</b><small>近 6 条 · 点击查看转录</small></div>
+        <div class="run-list" id="dtRuns"></div>
+      </div>
+    </div>
+
+    <!-- ===== 任务编辑器浮层（对照未来 TaskEditor 组件） ===== -->
+    <div class="fs" id="fsEditor">
+      <div class="fs-head">
+        <button class="icon-btn" data-back>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="fs-title"><b id="edTitle">编辑任务</b><small>调度由桌面端触发 · 保存后立即生效</small></div>
+      </div>
+      <div class="fs-body">
+        <div class="card">
+          <div class="f-row" id="edNameRow">
+            <div class="f-label">任务名称</div>
+            <input class="f-input" id="edName" placeholder="例：每日提交汇总" maxlength="40">
+            <div class="f-err-txt">请填写任务名称</div>
+          </div>
+          <div class="f-row" id="edPromptRow">
+            <div class="f-label">任务指令 <small>目标 / 步骤 / 期望产出</small></div>
+            <textarea class="f-input" id="edPrompt" rows="4" placeholder="描述这个任务要做什么、做到什么程度…"></textarea>
+            <div class="f-err-txt">请填写任务指令</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="f-row">
+            <div class="f-label">工作区</div>
+            <div class="ro-row"><span class="txt">C:\Users\<user>\IdeaProjects\aide</span></div>
+            <div class="hint">任务在桌面端当前选中的工作区内执行，手机端不单独指定</div>
+          </div>
+          <div class="f-row">
+            <div class="f-label">模型 <small>留空跟随桌面设置</small></div>
+            <div class="seg" id="edModel">
+              <button data-v="">跟随桌面</button>
+              <button data-v="sonnet">Sonnet</button>
+              <button data-v="opus">Opus</button>
+              <button data-v="haiku">Haiku</button>
+            </div>
+            <div class="hint">选项取自当前供应商的本地模型列表（与聊天模型 chip 同源），不调用远程 getDefaultModel</div>
+          </div>
+          <div class="f-row">
+            <div class="f-label">思考程度</div>
+            <div class="seg" id="edEffort">
+              <button data-v="low">快速</button>
+              <button data-v="high">均衡</button>
+              <button data-v="max">极致</button>
+            </div>
+          </div>
+          <div class="f-row">
+            <div class="f-label">连接器 <small>v1 只读</small></div>
+            <div class="chips-row" id="edConn"></div>
+            <div class="hint" id="edConnHint"></div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="f-row">
+            <div class="f-label">权限预设 <small>离线时按只读处理</small></div>
+            <div class="preset-list" id="edPerm">
+              <button class="preset-card" data-perm="auto"><b>● 自动（推荐）</b><small>安全操作自动放行；写盘与命令执行需桌面确认</small></button>
+              <button class="preset-card" data-perm="readonly"><b>◐ 只读</b><small>仅允许读文件与查询类命令，任何写盘一律拒绝</small></button>
+              <button class="preset-card" data-perm="full"><b>○ 全自动</b><small>所有操作自动放行，仅建议在受信任工作区使用</small></button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="f-row">
+            <div class="f-label">调度方式 <small>与协议 kind 一一对应</small></div>
+            <div class="seg" id="edKind">
+              <button data-v="daily">每天</button>
+              <button data-v="weekly">每周</button>
+              <button data-v="monthly">每月</button>
+              <button data-v="interval">间隔</button>
+              <button data-v="once">单次</button>
+            </div>
+          </div>
+          <div id="edSchedBody"></div>
+          <div class="f-row">
+            <div class="f-label">错过处理 <small>桌面离线错过排程时</small></div>
+            <div class="seg" id="edMissed">
+              <button data-v="catchup">补跑一次</button>
+              <button data-v="skip">跳过并记录</button>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="sw-row">
+            <span class="t">成功通知<small>运行成功时发系统通知</small></span>
+            <span class="sw sm on" id="edNotifyOk"></span>
+          </div>
+          <div class="sw-row">
+            <span class="t">失败通知<small>运行失败时发系统通知</small></span>
+            <span class="sw sm on" id="edNotifyFail"></span>
+          </div>
+          <div class="hint">通知由桌面端发出（手机在后台也能从运行记录看到结果）</div>
+        </div>
+      </div>
+      <div class="fs-foot">
+        <button class="btn ghost" id="edCancel">取消</button>
+        <button class="btn pri" id="edSave">保存</button>
+        <button class="btn pri" id="edSaveRun" style="flex:none" title="保存并立即运行">▶ 运行</button>
+      </div>
+    </div>
+
+    <!-- ===== 运行转录浮层（对照未来 RunTranscript 组件 · 只读） ===== -->
+    <div class="fs" id="fsRun">
+      <div class="fs-head">
+        <button class="icon-btn" data-back>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="fs-title"><b id="rnName">每日提交汇总</b><small><span id="rnTime">昨天 18:30 · 触发：调度 · 模式：手册</span></small></div>
+        <span class="bd ok" id="rnBadge">成功</span>
+      </div>
+      <div class="fs-body" id="rnBody">
+        <div class="err-bar" id="rnErrBar" style="display:none">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><circle cx="12" cy="12" r="9"/><path d="M12 8v4.5"/><circle cx="12" cy="16.2" r=".4" fill="currentColor"/></svg>
+          <span id="rnErrTxt"></span>
+        </div>
+        <div class="live-bar" id="rnLive" style="display:none">
+          <span class="spinner"></span>正在运行 · 第 4 轮
+          <button class="ref" id="rnRefresh">↻ 刷新</button>
+        </div>
+        <button class="load-earlier" id="rnEarlier">加载更早的消息 ↑</button>
+        <div id="rnMsgs" style="display:flex;flex-direction:column;gap:9px;"></div>
+      </div>
+      <div class="run-meta-bar" id="rnMeta"></div>
+    </div>
+
+    <!-- ===== 执行手册浮层（对照未来 PlaybookSheet 组件 · 只读） ===== -->
+    <div class="fs" id="fsPb">
+      <div class="fs-head">
+        <button class="icon-btn" data-back>
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M12.5 4.5L7 10l5.5 5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <div class="fs-title"><b>执行手册</b><small id="pbSub">每日提交汇总 · 生成于 9/12 18:31</small></div>
+      </div>
+      <div class="fs-body" id="pbBody"></div>
+    </div>
+
+    <!-- ===== 删除确认（半模态） ===== -->
+    <div class="sheet-mask" id="delMask">
+      <div class="sheet">
+        <div class="sheet-grip"></div>
+        <div class="sheet-title" id="delTitle">删除「每日提交汇总」？</div>
+        <div class="sheet-txt">运行记录与执行手册将一并删除，不可恢复。</div>
+        <div class="sheet-btns">
+          <button class="btn ghost" id="delCancel">取消</button>
+          <button class="btn danger" id="delOk">删除</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+  </div>
+</div>
+<script>
+"use strict";
+/* ============ URL 参数：展台 iframe 用它决定初始形态 ============
+   ?screen=drawer          屏 1 · 抽屉（自动化区段紧跟工作区卡，位置已定稿）
+   ?screen=detail          屏 2 · 任务详情
+   ?screen=editor          屏 3 · 任务编辑器（&mode=new 为新建空表单）
+   ?screen=run             屏 4 · 运行转录
+   ?screen=playbook        屏 5 · 执行手册
+   &id=sN                  实例标识（跨屏同步时辨别来源）                 */
+const params = new URLSearchParams(location.search);
+const MY_ID = params.get('id') || 'solo';
+const SCREEN = (params.get('screen') || 'drawer').replace(/[^a-z-]/g, '');
+
+const $ = s => document.querySelector(s);
+const esc = s => { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; };
+
+/* ================= 假数据 =================
+   形状对齐 packages/aide-sdk/src/api/automation.ts（serde camelCase）：
+   AutomationTask / RunRecord / RunStats；schedule 为 kind 判别联合，
+   鸿蒙端落地时展开为单 interface + kind 字段 + 可选臂（HistoryBlock 先例）。 */
+const TASKS = [
+  { id: 'aut_daily', name: '每日提交汇总', enabled: true,
+    prompt: '汇总过去 24 小时本仓库的 git 提交：按模块归组，列出关键变更与风险点，最后产出一段可直接发群的日报文案（不超过 300 字）。',
+    schedule: { kind: 'daily', time: '18:30' },
+    model: '', effort: 'high', permissionPreset: 'auto', connectors: ['aide-codegraph'],
+    missedPolicy: 'catchup', playbookEnabled: true,
+    lastRun: { status: 'succeeded', at: '昨天 18:30' } },
+  { id: 'aut_weekly', name: '周报生成', enabled: true,
+    prompt: '基于本周的提交记录与自动化运行记录，生成项目周报：进展、阻塞、下周计划。',
+    schedule: { kind: 'weekly', time: '09:00', weekdays: [1, 3, 5] },
+    model: '', effort: 'high', permissionPreset: 'auto', connectors: [],
+    missedPolicy: 'skip', playbookEnabled: false,
+    lastRun: { status: 'succeeded', at: '周三 09:00' } },
+  { id: 'aut_patrol', name: '依赖巡检', enabled: false,
+    prompt: '检查 package.json 与 Cargo.toml 里的过时依赖，报告可安全升级项与需要人工评估的破坏性升级项。',
+    schedule: { kind: 'interval', every: 6, unit: 'hours' },
+    model: '', effort: 'low', permissionPreset: 'readonly', connectors: [],
+    missedPolicy: 'skip', playbookEnabled: true,
+    lastRun: { status: 'failed', at: '周四 06:00' } },
+  { id: 'aut_migrate', name: '一次性数据迁移', enabled: false,
+    prompt: '把旧版 session 存储迁移到新 schema，跑通后输出迁移报告。',
+    schedule: { kind: 'once', at: '2026-08-30 02:00' },
+    model: 'opus', effort: 'max', permissionPreset: 'full', connectors: [],
+    missedPolicy: 'skip', playbookEnabled: false, lastRun: null },
+];
+
+/* RunRecord 九要素：status / trigger / mode / startedAt / duration / rounds / costUsd / summary / note */
+const RUNS = {
+  aut_daily: [
+    { id: 'run_41', status: 'succeeded', trigger: 'schedule', mode: 'playbook', at: '昨天 18:30', dur: '12 秒', rounds: 4, cost: 0.043,
+      summary: '昨日 23 个提交，涉及 6 个模块；无破坏性变更，协议层 REGISTRY 扩容建议 0.9.4 前回归' },
+    { id: 'run_40', status: 'running', trigger: 'manual', mode: 'playbook', at: '2 分钟前', dur: '—', rounds: 3, cost: 0.031, summary: '' },
+    { id: 'run_39', status: 'failed', trigger: 'schedule', mode: 'playbook', at: '周四 18:30', dur: '3 分 40 秒', rounds: 50, cost: 0.52, summary: '',
+      error: '达到最大轮次（50 轮）仍未完成，已自动中止' },
+    { id: 'run_38', status: 'skipped', note: 'overlap', trigger: 'schedule', at: '周三 18:30', sessionId: '' },
+    { id: 'run_37', status: 'succeeded', trigger: 'catchup', mode: 'playbook', at: '9/12 18:32', dur: '15 秒', rounds: 5, cost: 0.05,
+      note: '桌面离线错过 18:30，恢复后补跑', summary: '9/11–9/12 两天共 31 个提交，集中在远程协议层' },
+    { id: 'run_36', status: 'succeeded', trigger: 'manual', mode: 'prompt', at: '9/10 15:02', dur: '9 秒', rounds: 3, cost: 0.04,
+      summary: '手册生成前的一次手动运行，走原始指令' },
+  ],
+};
+const STATS = { aut_daily: { runs: 42, rate: '92.9%', cost: '$1.86', avg: '41 秒' } };
+
+/* 手册正文（markdown 渲染后的静态 HTML） */
+const PLAYBOOK_MD = `
+<h4>每日提交汇总 · 执行手册</h4>
+<div class="sep"></div>
+<h4>1. 收集</h4>
+<ol>
+<li>取提交清单：<code>git log --since="24 hours ago" --no-merges</code></li>
+<li>按目录前缀归组：<code>src-tauri/</code> · <code>src/</code> · <code>ohos/</code> · <code>relay-server/</code> · <code>docs/</code></li>
+<li>对每组浏览关键 diff，标记破坏性变更</li>
+</ol>
+<h4>2. 分析</h4>
+<ol>
+<li>每个模块提炼 1–2 条关键变更，避免逐条罗列</li>
+<li>风险点单列：协议兼容 / API 破坏 / 大规模重构</li>
+</ol>
+<h4>3. 产出</h4>
+<ol>
+<li>三段式：概览 → 模块明细 → 风险提示</li>
+<li>全文 ≤ 300 字，末尾给出可直接发群的成稿</li>
+</ol>
+<div class="sep"></div>
+<p class="ft">生成于 9/12 18:31 · 首次运行后由模型自动沉淀 · 指令变更后手册标记过期，运行回退原始指令</p>`;
+
+/* 运行转录（只读时间线：user / think / tool / ai / usage） */
+const RUN_MSGS = [
+  { t: 'user', inject: true,
+    text: '汇总过去 24 小时本仓库的 git 提交：按模块归组，列出关键变更与风险点，最后产出一段可直接发群的日报文案（不超过 300 字）。' },
+  { t: 'think', label: '思考 · 4 秒',
+    body: '先看提交范围与作者分布，再按目录归组；风险点重点看 remote.rs 的 REGISTRY 扩容是否涉及协议兼容。产出控制在 300 字内，结尾给成稿。' },
+  { t: 'tool', n: 'Bash', a: 'git log --since="24 hours ago" --no-merges --pretty=%h' },
+  { t: 'tool', n: 'Read', a: 'src-tauri/src/remote/rpc.rs' },
+  { t: 'tool', n: 'Bash', a: 'git diff --stat HEAD~23..HEAD' },
+  { t: 'ai', html: `
+<h5>9/19 日报 · 每日提交汇总</h5>
+<p>昨日共 <b>23</b> 个提交，涉及 6 个模块，无破坏性变更。</p>
+<ul>
+<li><b>协议层</b>（9）：remote.rs 增加 automation 命令注册位；ws 心跳参数化</li>
+<li><b>桌面 UI</b>（7）：AutomationPanel 运行行九要素定稿；蒸馏进度条</li>
+<li><b>鸿蒙端</b>（5）：ChatDrawer 抽屉性能优化；transcript 映射补全 type 枚举</li>
+<li><b>其他</b>（2）：CI 缓存提速；README 更新</li>
+</ul>
+<p><b>风险</b>：REGISTRY 扩容涉及协议兼容，建议 0.9.4 合入前过一轮回归。</p>` },
+];
+const RUN_MSGS_OLD = [
+  { t: 'user', text: '（前一天 18:30 的同一任务）汇总过去 24 小时本仓库的 git 提交…' },
+  { t: 'ai', html: '<p>9/18 日报：共 19 个提交……（更早一轮的产出，演示「加载更早」）</p>' },
+];
+
+/* 抽屉历史会话（布景，对照 design/remote） */
+const SESS = [
+  { name: '鸿蒙端 v3 原型', prev: '三屏原型已出，抽屉导航跑通，等你确认工作区切换…', time: '刚刚', dot: 'ok', pulse: true },
+  { name: '重构 session 状态机', prev: '请求运行 pnpm test protocol · 权限等待应答中', time: '5 分钟前', dot: 'warn' },
+  { name: 'relay-server 部署到 VPS', prev: 'Caddy 反代配置写好了，wss 已通', time: '昨天 23:12', dot: 'info' },
+  { name: 'Windows 弹窗排查', prev: 'CREATE_NO_WINDOW 标志补齐，release 不再弹黑窗', time: '周二' },
+];
+
+/* ================= 文案 helper（对齐桌面 useAutomation / AutomationPanel） ================= */
+const WD_TXT = ['一', '二', '三', '四', '五', '六', '日'];
+const KIND_TXT = {
+  daily: s => `每天 ${s.time}`,
+  weekly: s => `每周${(s.weekdays || []).map(w => WD_TXT[w - 1]).join('')} ${s.time}`,
+  monthly: s => `每月 ${s.day} 日 ${s.time}`,
+  interval: s => `每 ${s.every} ${s.unit === 'hours' ? '小时' : '天'}`,
+  once: s => `单次 ${s.at}`,
+};
+const ST_TXT = { succeeded: '成功', failed: '失败', running: '运行中', skipped: '跳过' };
+const TRG_TXT = { schedule: '调度', manual: '手动', catchup: '补跑' };
+const MODE_TXT = { playbook: '手册', prompt: '指令' };
+const NOTE_TXT = {
+  overlap: '上一次运行尚未结束，本次跳过',
+  'missed-skip': '桌面离线错过排程，按「跳过并记录」处理',
+  'missed-ask': '桌面离线错过排程',
+};
+const EFFORT_TXT = { low: '快速', high: '均衡', max: '极致' };
+const PERM_TXT = { auto: '自动', readonly: '只读', full: '全自动' };
+const taskById = id => TASKS.find(t => t.id === id) || TASKS[0];
+
+/* ================= 状态 ================= */
+const S = {
+  collapsed: false,                              // 区段折叠
+  list: 'normal',                                // normal | empty | error
+  running: true,                                 // 有任务在跑（呼吸点）
+  taskId: 'aut_daily',                           // 详情/编辑/运行/手册所选任务
+  pb: 'ready',                                   // 手册状态：ready | none | stale
+  statsEmpty: false,                             // 空统计演示
+  runStatus: 'succeeded',                        // 运行屏状态：succeeded | running | failed
+  runErrors: false,                              // 编辑器校验错误演示
+  edMode: params.get('mode') === 'new' ? 'new' : 'edit',
+  deleted: [],                                   // 已删除任务（演示）
+};
+
+/* 浮层导航栈：chat ← detail ← editor / run / playbook */
+const stack = [];
+function showFs(name, remember) {
+  document.querySelectorAll('.fs').forEach(f => f.classList.remove('show'));
+  if (name) {
+    $('#fs' + name[0].toUpperCase() + name.slice(1)).classList.add('show');
+    if (remember !== false) stack.push(name);
+  }
+}
+function backFs() {
+  stack.pop();
+  const prev = stack[stack.length - 1];
+  if (prev) showFs(prev, false);
+  else { showFs(null); openDrawer(true); }
+}
+
+/* ================= 抽屉 ================= */
+function openDrawer(open) { $('#drMask').classList.toggle('show', open); }
+function renderSess() {
+  $('#sesList').innerHTML = SESS.map(s => `
+    <button class="ses-row">
+      <span class="ses-name"><span class="dot ${s.dot}${s.pulse ? '' : ''}" style="${s.pulse ? 'animation:pulse 1.4s ease-in-out infinite' : ''}"></span>${esc(s.name)}</span>
+      <span class="ses-prev">${esc(s.prev)}</span>
+      <span class="ses-time">${esc(s.time)}</span>
+    </button>`).join('');
+}
+function autRowHtml(t) {
+  const running = t.id === 'aut_weekly' && S.running;
+  const last = running ? '<span class="aut-st st-run"><span class="dot info" style="animation:pulse 1.4s ease-in-out infinite"></span>运行中</span>'
+    : t.lastRun ? `<span class="aut-st ${t.lastRun.status === 'succeeded' ? 'st-ok' : 'st-fail'}">${t.lastRun.status === 'succeeded' ? '上次成功' : '上次失败'}（${esc(t.lastRun.at)}）</span>`
+    : '<span>尚未运行</span>';
+  return `
+    <button class="aut-row" data-task="${t.id}">
+      <span class="aut-row-top">
+        <span class="aut-name${t.enabled ? '' : ' off'}">${esc(t.name)}</span>
+        <span class="sw sm${t.enabled ? ' on' : ''}" data-sw="${t.id}"></span>
+      </span>
+      <span class="aut-meta">${esc(KIND_TXT[t.schedule.kind](t.schedule))} · ${last}</span>
+    </button>`;
+}
+function renderAutList() {
+  const sec = $('#autSec');
+  sec.classList.toggle('collapsed', S.collapsed);
+  $('#breath').classList.toggle('hide', !S.running);
+  const box = $('#autList');
+  const tasks = TASKS.filter(t => !S.deleted.includes(t.id));
+  if (S.list === 'error') {
+    box.innerHTML = `
+      <div class="aut-err">
+        <b>自动化任务拉取失败</b>
+        桌面端未开放 automation 命令<br>（协议缺口 ①：remote/rpc.rs REGISTRY 需注册 11 个命令）
+        <br><button class="retry" data-retry>重试</button>
+      </div>`;
+    return;
+  }
+  if (S.list === 'empty' || tasks.length === 0) {
+    box.innerHTML = `
+      <div class="aut-empty">
+        <div class="big-ic">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v4l3 2"/><circle cx="12" cy="12" r="9"/></svg>
+        </div>
+        <b>还没有自动化任务</b>
+        定时汇总提交、巡检依赖、生成周报……<br>都从下面这个 + 开始
+        <br><button class="link-btn" data-newtask>＋ 新建任务</button>
+      </div>`;
+    return;
+  }
+  box.innerHTML = tasks.map(autRowHtml).join('');
+}
+
+/* ================= 详情 ================= */
+function runRowHtml(r) {
+  const bd = { succeeded: 'ok', failed: 'fail', running: 'run', skipped: 'skip' }[r.status];
+  if (r.status === 'skipped') {
+    return `
+      <div class="run-row dis">
+        <span class="run-top"><span class="bd skip">跳过</span><span class="run-time">${esc(r.at)}</span><span class="run-trg">${esc(TRG_TXT[r.trigger])}</span></span>
+        <span class="run-note">${esc(NOTE_TXT[r.note] || '')}</span>
+      </div>`;
+  }
+  return `
+    <button class="run-row" data-run="${r.id}">
+      <span class="run-top">
+        <span class="bd ${bd}">${r.status === 'running' ? '<span class="spinner" style="width:10px;height:10px;border-width:1.5px"></span>' : ''}${ST_TXT[r.status]}</span>
+        <span class="run-time">${esc(r.at)}</span>
+        <span class="run-trg">${esc(TRG_TXT[r.trigger])} · ${esc(MODE_TXT[r.mode])}</span>
+      </span>
+      ${r.summary ? `<span class="run-sum">${esc(r.summary)}</span>` : ''}
+      <span class="run-meta">${r.status === 'running' ? '<span>正在运行 · 点击查看</span>' : `<span>${esc(r.dur)}</span><span>${r.rounds} 轮</span><span>$${r.cost.toFixed(3)}</span>`}</span>
+      ${r.note ? `<span class="run-note">${esc(r.note)}</span>` : ''}
+      ${r.error ? `<span class="run-note" style="color:var(--danger);background:var(--danger-weak)">${esc(r.error)}</span>` : ''}
+    </button>`;
+}
+function renderDetail() {
+  const t = taskById(S.taskId);
+  $('#dtName').textContent = t.name;
+  $('#dtSub').textContent = KIND_TXT[t.schedule.kind](t.schedule) + ' · aide';
+  $('#dtSwitch').classList.toggle('on', t.enabled);
+  $('#dtChips').innerHTML = `
+    <span class="chip acc">${esc(KIND_TXT[t.schedule.kind](t.schedule))}</span>
+    <span class="chip">思考 · ${esc(EFFORT_TXT[t.effort])}</span>
+    <span class="chip">权限 · ${esc(PERM_TXT[t.permissionPreset])}</span>
+    <span class="chip">错过 · ${t.missedPolicy === 'catchup' ? '补跑' : '跳过'}</span>
+    ${t.connectors.length ? t.connectors.map(c => `<span class="chip">${esc(c)}</span>`).join('') : ''}`;
+  const p = $('#dtPrompt');
+  p.textContent = t.prompt;
+  $('#dtPromptMeta').textContent = `${t.prompt.length} 字`;
+  p.classList.add('clamp2');
+  $('#dtPromptMore').textContent = '展开 ▾';
+  /* 手册卡三态 */
+  const pbBody = $('#dtPbBody');
+  if (S.pb === 'none' || !t.playbookEnabled) {
+    pbBody.innerHTML = `
+      <div class="pb-none">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:2px"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+        <span>${t.playbookEnabled ? '尚未生成——任务首次运行后由模型自动沉淀' : '未启用：每次运行直接按任务指令执行'}</span>
+      </div>`;
+  } else if (S.pb === 'stale') {
+    pbBody.innerHTML = `
+      <button class="pb-line" data-nav="playbook">
+        <span class="t"><b style="color:var(--warn)">已过期</b><small>指令 9/12 修改后未重新生成 · 最近运行回退原始指令 · 点开看旧版</small></span>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>`;
+  } else {
+    pbBody.innerHTML = `
+      <button class="pb-line" data-nav="playbook">
+        <span class="t"><b>已生成 · 9/12 18:31</b><small>每次运行自动注入，保证行为稳定 · 点开查看</small></span>
+        <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>`;
+  }
+  /* 统计 */
+  const st = STATS.aut_daily;
+  $('#dtStats').innerHTML = S.statsEmpty
+    ? '<span class="stat"><b>0</b><small>运行</small></span><span class="stat"><b>—</b><small>成功率</small></span><span class="stat"><b>$0</b><small>累计成本</small></span><span class="stat"><b>—</b><small>平均时长</small></span>'
+    : `<span class="stat"><b>${st.runs}</b><small>运行</small></span><span class="stat"><b>${st.rate}</b><small>成功率</small></span><span class="stat"><b>${st.cost}</b><small>累计成本</small></span><span class="stat"><b>${st.avg}</b><small>平均时长</small></span>`;
+  /* 运行记录 */
+  const runs = (RUNS[t.id] || []).filter(r => !(r.status === 'running' && t.id === 'aut_weekly' && !S.running));
+  $('#dtRuns').innerHTML = runs.length
+    ? runs.map(runRowHtml).join('')
+    : '<div class="aut-empty"><b>还没有运行记录</b>到点自动触发，或点上方「立即运行」试一次</div>';
+}
+
+/* ================= 编辑器 ================= */
+let ed = { kind: 'daily', weekdays: [1, 3, 5], day: 1, time: '18:30', every: 6, unit: 'hours', onceDate: '2026-09-30', onceTime: '09:00' };
+let EF = { model: '', effort: 'high', perm: 'auto', missed: 'catchup' };
+
+function paintSeg(sel, v) {
+  document.querySelectorAll(sel + ' button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
+}
+function renderSched() {
+  const b = $('#edSchedBody');
+  const timeRow = `<div class="f-row"><div class="f-label">触发时间</div><input class="f-input" type="time" id="edTime" value="${ed.time}"></div>`;
+  if (ed.kind === 'daily') b.innerHTML = timeRow;
+  else if (ed.kind === 'weekly') b.innerHTML = `
+    <div class="f-row"><div class="f-label">每周重复</div>
+      <div class="wd-chips">${[1, 2, 3, 4, 5, 6, 7].map(w => `<button class="wd${ed.weekdays.includes(w) ? ' on' : ''}" data-wd="${w}">${WD_TXT[w - 1]}</button>`).join('')}</div>
+    </div>` + timeRow;
+  else if (ed.kind === 'monthly') b.innerHTML = `
+    <div class="f-row"><div class="f-label">每月 <small>1–31</small></div><input class="f-input" type="number" id="edDay" min="1" max="31" value="${ed.day}"></div>` + timeRow;
+  else if (ed.kind === 'interval') b.innerHTML = `
+    <div class="f-row"><div class="f-label">间隔频率</div>
+      <div class="duo">
+        <input class="f-input" type="number" id="edEvery" min="1" value="${ed.every}">
+        <select class="f-input" id="edUnit">
+          <option value="hours"${ed.unit === 'hours' ? ' selected' : ''}>小时</option>
+          <option value="days"${ed.unit === 'days' ? ' selected' : ''}>天</option>
+        </select>
+      </div>
+    </div>`;
+  else b.innerHTML = `
+    <div class="f-row"><div class="f-label">日期</div><input class="f-input" type="date" id="edOnceDate" value="${ed.onceDate}"></div>
+    <div class="f-row"><div class="f-label">时间</div><input class="f-input" type="time" id="edOnceTime" value="${ed.onceTime}"></div>`;
+}
+function readSchedInputs() {
+  const g = id => { const n = document.getElementById(id); return n ? n.value : null; };
+  const m = { edTime: 'time', edDay: 'day', edEvery: 'every', edUnit: 'unit', edOnceDate: 'onceDate', edOnceTime: 'onceTime' };
+  Object.keys(m).forEach(id => { const v = g(id); if (v !== null && v !== '') ed[m[id]] = v; });
+}
+function renderEditor() {
+  const t = S.edMode === 'new' ? null : taskById(S.taskId);
+  $('#edTitle').textContent = S.edMode === 'new' ? '新建任务' : '编辑任务';
+  $('#edName').value = S.runErrors ? '' : (t ? t.name : '');
+  $('#edPrompt').value = S.runErrors ? '' : (t ? t.prompt : '');
+  $('#edNameRow').classList.toggle('err', S.runErrors);
+  $('#edPromptRow').classList.toggle('err', S.runErrors);
+  if (t) {
+    EF.model = t.model; EF.effort = t.effort; EF.perm = t.permissionPreset;
+    EF.missed = t.missedPolicy === 'skip' ? 'skip' : 'catchup';
+    const s = t.schedule;
+    ed.kind = s.kind;
+    ed.time = s.time || '09:00';
+    ed.weekdays = s.weekdays ? s.weekdays.slice() : [1, 3, 5];
+    ed.day = s.day || 1;
+    ed.every = s.every || 6;
+    ed.unit = s.unit || 'hours';
+    if (s.at) { ed.onceDate = s.at.slice(0, 10); ed.onceTime = s.at.slice(11, 16); }
+  } else {
+    EF = { model: '', effort: 'high', perm: 'auto', missed: 'catchup' };
+    ed = { kind: 'daily', weekdays: [1, 3, 5], day: 1, time: '09:00', every: 6, unit: 'hours', onceDate: '2026-09-30', onceTime: '09:00' };
+  }
+  paintSeg('#edModel', EF.model); paintSeg('#edEffort', EF.effort);
+  paintSeg('#edKind', ed.kind); paintSeg('#edMissed', EF.missed);
+  document.querySelectorAll('.preset-card').forEach(p => p.classList.toggle('on', p.dataset.perm === EF.perm));
+  const conn = t ? t.connectors : [];
+  $('#edConn').innerHTML = conn.length
+    ? conn.map(c => `<span class="chip acc">${esc(c)}</span>`).join('')
+    : '<span class="chip">无连接器</span>';
+  $('#edConnHint').textContent = S.edMode === 'new'
+    ? '新建任务暂不带连接器 · 增删请回桌面 aide（v1 只读）'
+    : '连接器随任务保存 · 增删请回桌面 aide（v1 只读）';
+  renderSched();
+}
+function trySave(andRun) {
+  const name = $('#edName').value.trim();
+  const prompt = $('#edPrompt').value.trim();
+  $('#edNameRow').classList.toggle('err', !name);
+  $('#edPromptRow').classList.toggle('err', !prompt);
+  if (!name || !prompt) { toast('请填写任务名称与任务指令', true); return; }
+  toast(andRun ? '已保存，运行已触发' : '已保存 · 下个调度点生效');
+  backFs();
+  broadcast();
+}
+
+/* ================= 运行转录（只读时间线） ================= */
+const ICONS = {
+  spark: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/></svg>',
+  chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>',
+  check: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M3.5 8.5l3 3 6-6.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+};
+function msgHtml(m) {
+  if (m.t === 'user') return `<div class="tr-user">${m.inject ? '<span class="tr-inject">✦ 已注入执行手册</span><br>' : ''}${esc(m.text)}</div>`;
+  if (m.t === 'think') return `<div class="think"><div class="think-h">${ICONS.spark}<span>${esc(m.label)}</span><span class="chev">${ICONS.chev}</span></div><div class="think-b">${esc(m.body)}</div></div>`;
+  if (m.t === 'tool') return `<div class="tool-row"><span class="tn">${esc(m.n)}</span><span class="ta">${esc(m.a)}</span><span class="ok-ic">${ICONS.check}</span></div>`;
+  return `<div class="tr-ai">${m.html}</div>`;
+}
+let earlierCount = 0;
+function renderRun() {
+  const t = taskById(S.taskId);
+  $('#rnName').textContent = t.name;
+  const map = { succeeded: ['ok', '成功'], running: ['run', '运行中'], failed: ['fail', '失败'] };
+  const badge = $('#rnBadge');
+  badge.className = 'bd ' + map[S.runStatus][0];
+  badge.textContent = map[S.runStatus][1];
+  $('#rnTime').textContent = '昨天 18:30 · 触发：调度 · 模式：手册';
+  $('#rnErrBar').style.display = S.runStatus === 'failed' ? '' : 'none';
+  $('#rnErrTxt').textContent = '达到最大轮次（50 轮）仍未完成，已自动中止';
+  $('#rnLive').style.display = S.runStatus === 'running' ? '' : 'none';
+  $('#rnMsgs').innerHTML = RUN_MSGS.map(msgHtml).join('') + '<div class="tr-usage">4 轮 · $0.043 · 用时 12 秒 · 缓存命中 91%</div>';
+  $('#rnMeta').innerHTML = `<span>${
+    S.runStatus === 'succeeded' ? '4 轮 · $0.043 · 用时 12 秒 · 缓存命中 91%'
+    : S.runStatus === 'running' ? '3 轮 · $0.031 · 已运行 2 分钟'
+    : '50 轮 · $0.520 · 用时 3 分 40 秒 · stop_reason=max_turns'}</span>`;
+  earlierCount = 0;
+  $('#rnEarlier').style.display = '';
+}
+function doEarlier() {
+  if (earlierCount >= 2) return;
+  $('#rnMsgs').insertAdjacentHTML('afterbegin', RUN_MSGS_OLD.map(msgHtml).join(''));
+  earlierCount++;
+  if (earlierCount >= 2) $('#rnEarlier').style.display = 'none';
+}
+
+/* ================= 手册 ================= */
+function renderPlaybook() {
+  const t = taskById(S.taskId);
+  $('#pbSub').textContent = t.name + ' · 生成于 9/12 18:31';
+  const b = $('#pbBody');
+  if (S.pb === 'none' || !t.playbookEnabled) {
+    b.innerHTML = `<div class="empty-page">
+      <div class="big-ic"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg></div>
+      <b>尚无执行手册</b>
+      <p>${t.playbookEnabled ? '首次运行后由模型自动沉淀，保证每次运行行为稳定' : '该任务未启用手册 · 每次运行直接按任务指令执行'}<br>生成与更新目前请回桌面 aide 操作</p>
+    </div>`;
+  } else if (S.pb === 'stale') {
+    b.innerHTML = `<div class="pb-banner">⚠ 手册已过期：任务指令 9/12 修改后未重新生成，最近运行已回退原始指令。以下为旧版内容。</div><div class="md">${PLAYBOOK_MD}</div>`;
+  } else {
+    b.innerHTML = `<div class="md">${PLAYBOOK_MD}</div>`;
+  }
+}
+
+/* ================= toast / 删除弹层 ================= */
+let toastTimer = null;
+function toast(msg, err) {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
+}
+function openDel() {
+  const t = taskById(S.taskId);
+  $('#delTitle').textContent = `删除「${t.name}」？`;
+  $('#delMask').classList.add('show');
+}
+
+/* ================= 事件（委托） ================= */
+document.addEventListener('click', e => {
+  const q = s => e.target.closest(s);
+  if (e.target.classList && e.target.classList.contains('dr-mask')) { openDrawer(false); return; }
+  if (e.target.classList && e.target.classList.contains('sheet-mask')) { e.target.classList.remove('show'); return; }
+  if (q('#btnMenu')) { openDrawer(true); return; }
+  if (q('#autCollapse')) { S.collapsed = !S.collapsed; renderAutList(); broadcast(); return; }
+  if (q('#autNew') || q('[data-newtask]')) {
+    S.edMode = 'new'; renderEditor(); showFs('editor'); broadcast(); return;
+  }
+  const swEl = q('[data-sw]');
+  if (swEl) {
+    const t = taskById(swEl.dataset.sw);
+    t.enabled = !t.enabled;
+    swEl.classList.toggle('on', t.enabled);
+    if (S.taskId === t.id) renderDetail();
+    toast(t.enabled ? `「${t.name}」已启用` : `「${t.name}」已停用`);
+    return;
+  }
+  if (q('[data-retry]')) { toast('已重试：桌面端命令仍未开放（演示）', true); return; }
+  const autRow = q('.aut-row[data-task]');
+  if (autRow) {
+    S.taskId = autRow.dataset.task;
+    renderDetail(); showFs('detail'); openDrawer(false);
+    return;
+  }
+  if (q('[data-back]')) { backFs(); return; }
+  const nv = q('[data-nav]');
+  if (nv) {
+    if (nv.dataset.nav === 'editor') { renderEditor(); showFs('editor'); }
+    else { renderPlaybook(); showFs('playbook'); }
+    broadcast(); return;
+  }
+  if (q('#dtRunNow')) {
+    const t = taskById(S.taskId);
+    if (t.id === 'aut_weekly' && S.running) toast(`「${t.name}」正在运行中`, true);
+    else toast('已触发运行 · 手动运行不改变下次调度时间');
+    return;
+  }
+  if (q('#dtDelete')) { openDel(); return; }
+  if (q('#delCancel')) { $('#delMask').classList.remove('show'); return; }
+  if (q('#delOk')) {
+    $('#delMask').classList.remove('show');
+    const t = taskById(S.taskId);
+    S.deleted.push(t.id);
+    const rest = TASKS.filter(x => !S.deleted.includes(x.id));
+    if (rest.length) S.taskId = rest[0].id;
+    toast(`「${t.name}」已删除`);
+    stack.length = 0; showFs(null); openDrawer(true);
+    renderAutList(); renderDetail();
+    broadcast(); return;
+  }
+  if (q('#dtSwitch')) {
+    const t = taskById(S.taskId);
+    t.enabled = !t.enabled;
+    $('#dtSwitch').classList.toggle('on', t.enabled);
+    renderAutList();
+    toast(t.enabled ? '已启用 · 下个调度点生效' : '已停用 · 不再按调度触发');
+    return;
+  }
+  if (q('#dtPromptMore')) {
+    const clamped = $('#dtPrompt').classList.toggle('clamp2');
+    $('#dtPromptMore').textContent = clamped ? '展开 ▾' : '收起 ▴';
+    return;
+  }
+  const runRow = q('.run-row[data-run]');
+  if (runRow) { renderRun(); showFs('run'); return; }
+  if (q('#rnRefresh')) { toast('仍在运行 · 本页为只读转录，暂不做实时流'); return; }
+  if (q('#rnEarlier')) { doEarlier(); return; }
+  const th = q('.think-h');
+  if (th) { th.parentElement.classList.toggle('open'); return; }
+  const segBtn = q('.seg button');
+  if (segBtn) {
+    const seg = segBtn.parentElement;
+    const v = segBtn.dataset.v;
+    if (seg.id === 'edModel') EF.model = v;
+    else if (seg.id === 'edEffort') EF.effort = v;
+    else if (seg.id === 'edMissed') EF.missed = v;
+    else if (seg.id === 'edKind') { readSchedInputs(); ed.kind = v; renderSched(); }
+    paintSeg('#' + seg.id, v);
+    return;
+  }
+  const pc = q('.preset-card');
+  if (pc) { EF.perm = pc.dataset.perm; document.querySelectorAll('.preset-card').forEach(x => x.classList.toggle('on', x === pc)); return; }
+  const wdEl = q('.wd');
+  if (wdEl) {
+    const w = +wdEl.dataset.wd;
+    ed.weekdays = ed.weekdays.includes(w) ? ed.weekdays.filter(x => x !== w) : ed.weekdays.concat(w);
+    wdEl.classList.toggle('on');
+    return;
+  }
+  if (q('#edNotifyOk')) { $('#edNotifyOk').classList.toggle('on'); return; }
+  if (q('#edNotifyFail')) { $('#edNotifyFail').classList.toggle('on'); return; }
+  if (q('#edCancel')) { backFs(); return; }
+  if (q('#edSave')) { trySave(false); return; }
+  if (q('#edSaveRun')) { trySave(true); return; }
+});
+$('#edSchedBody').addEventListener('input', e => {
+  const m = { edTime: 'time', edDay: 'day', edEvery: 'every', edUnit: 'unit', edOnceDate: 'onceDate', edOnceTime: 'onceTime' };
+  if (m[e.target.id] && e.target.value !== '') ed[m[e.target.id]] = e.target.value;
+});
+
+/* ================= 跨屏同步：改动广播给展台，由展台转发其余屏 ================= */
+function broadcast() {
+  if (window.parent === window) return;
+  window.parent.postMessage({
+    event: 'sync', from: MY_ID,
+    collapsed: S.collapsed, list: S.list, running: S.running,
+    taskId: S.taskId, pb: S.pb, statsEmpty: S.statsEmpty, runStatus: S.runStatus,
+    runErrors: S.runErrors, edMode: S.edMode, deleted: S.deleted.join(','),
+  }, '*');
+}
+function applySync(d) {
+  if (typeof d.collapsed === 'boolean') S.collapsed = d.collapsed;
+  if (['normal', 'empty', 'error'].includes(d.list)) S.list = d.list;
+  if (typeof d.running === 'boolean') S.running = d.running;
+  if (typeof d.taskId === 'string' && TASKS.some(t => t.id === d.taskId)) S.taskId = d.taskId;
+  if (['ready', 'none', 'stale'].includes(d.pb)) S.pb = d.pb;
+  if (typeof d.statsEmpty === 'boolean') S.statsEmpty = d.statsEmpty;
+  if (['succeeded', 'running', 'failed'].includes(d.runStatus)) S.runStatus = d.runStatus;
+  if (typeof d.runErrors === 'boolean') S.runErrors = d.runErrors;
+  if (d.edMode === 'new' || d.edMode === 'edit') S.edMode = d.edMode;
+  if (typeof d.deleted === 'string') S.deleted = d.deleted ? d.deleted.split(',') : [];
+  renderAutList(); renderDetail(); renderEditor(); renderRun(); renderPlaybook();
+}
+
+/* ================= 展台遥控（postMessage） ================= */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (!d || typeof d !== 'object') return;
+  if (d.event === 'sync' && d.from !== MY_ID) { applySync(d); return; }
+  switch (d.cmd) {
+    case 'list': S.list = d.mode; renderAutList(); broadcast(); break;
+    case 'running': S.running = !!d.on; renderAutList(); renderDetail(); broadcast(); break;
+    case 'task':
+      if (TASKS.some(t => t.id === d.id)) { S.taskId = d.id; renderDetail(); renderRun(); renderPlaybook(); broadcast(); }
+      break;
+    case 'pb': S.pb = d.state; renderDetail(); renderPlaybook(); broadcast(); break;
+    case 'statsEmpty': S.statsEmpty = !!d.on; renderDetail(); broadcast(); break;
+    case 'runStatus': S.runStatus = d.s; renderRun(); broadcast(); break;
+    case 'edMode': S.edMode = d.m; renderEditor(); broadcast(); break;
+    case 'errors': S.runErrors = !!d.on; renderEditor(); broadcast(); break;
+    case 'sheet': d.open ? openDel() : $('#delMask').classList.remove('show'); break;
+    case 'earlier': doEarlier(); break;
+    case 'drawer': openDrawer(!!d.open); break;
+    case 'reset':
+      S.collapsed = false; S.list = 'normal'; S.running = true; S.taskId = 'aut_daily';
+      S.pb = 'ready'; S.statsEmpty = false; S.runStatus = 'succeeded'; S.runErrors = false;
+      S.edMode = 'edit'; S.deleted = [];
+      $('#delMask').classList.remove('show');
+      renderAutList(); renderDetail(); renderEditor(); renderRun(); renderPlaybook();
+      broadcast();
+      break;
+  }
+});
+
+/* ================= 启动 ================= */
+renderSess();
+renderAutList();
+renderDetail();
+renderEditor();
+renderRun();
+renderPlaybook();
+if (SCREEN === 'drawer') openDrawer(true);
+else if (SCREEN === 'detail') showFs('detail');
+else if (SCREEN === 'editor') showFs('editor');
+else if (SCREEN === 'run') showFs('run');
+else if (SCREEN === 'playbook') showFs('playbook');
+</script>
+</body>
+</html>

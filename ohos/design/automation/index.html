@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端 · 自动化任务原型</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 30px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1560px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* 手机框（纯布景，中性深色边框） */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  /* ===== 说明卡 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端 · 自动化任务<small>v1 原型 · 完整 CRUD · 对照桌面 AutomationPanel</small></h1>
+  <p>把桌面 aide 的<b>自动化任务</b>（每天 / 每周 / 每月 / 间隔 / 单次调度 + 手册化执行 + 运行记录）接入鸿蒙端：抽屉新增<b>自动化区段</b>（位置已定稿：紧跟工作区卡），任务详情 / 编辑器 / 运行转录 / 执行手册四个全屏浮层。五个手机框是同一个 <b>app.html</b> 的 iframe 实例——URL 参数决定初始形态，展台经 postMessage 遥控，任务选择 / 手册状态 / 运行状态等跨屏同步；屏内可直接点按。UI 沿用鸿蒙端浅色 token（镜像 entry color.json），线形图标对照桌面重绘。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 1 · 抽屉 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 1 · 抽屉<span>自动化区段 · 屏内可直接点按</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s1" src="app.html?screen=drawer&amp;id=s1" title="抽屉"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制（屏内可直接点按）</span>
+      <button class="chip" data-target="s1" data-send='{"cmd":"running","on":false}'>呼吸点 关</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"running","on":true}'>呼吸点 开</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"list","mode":"empty"}'>空态</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"list","mode":"error"}'>拉取失败（缺口①）</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"reset"}'>恢复默认</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 2 · 任务详情 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 2 · 任务详情<span>运行记录点击进屏 4</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s2" src="app.html?screen=detail&amp;id=s2" title="任务详情"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制（屏内可直接点按）</span>
+      <button class="chip" data-target="s2" data-send='{"cmd":"task","id":"aut_daily"}'>任务：每日汇总</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"task","id":"aut_weekly"}'>任务：周报（busy 态）</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"task","id":"aut_patrol"}'>任务：依赖巡检</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pb","state":"ready"}'>手册：已生成</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pb","state":"stale"}'>手册：已过期</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"pb","state":"none"}'>手册：未生成</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"statsEmpty","on":true}'>空统计</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"sheet","open":true}'>删除弹层</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"reset"}'>恢复默认</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 任务编辑器 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 任务编辑器<span>五区段 · 模型取本地供应商</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s3" src="app.html?screen=editor&amp;id=s3" title="任务编辑器"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制（屏内可直接点按）</span>
+      <button class="chip" data-target="s3" data-send='{"cmd":"edMode","m":"edit"}'>编辑模式（回填）</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"edMode","m":"new"}'>新建模式</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"errors","on":true}'>校验错误态</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"errors","on":false}'>清除错误</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"task","id":"aut_patrol"}'>回填：依赖巡检</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"reset"}'>恢复默认</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 4 · 运行转录 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 4 · 运行转录<span>只读 · 历史可读</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s4" src="app.html?screen=run&amp;id=s4" title="运行转录"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">状态预览</span>
+      <button class="chip" data-target="s4" data-send='{"cmd":"runStatus","s":"succeeded"}'>状态：成功</button>
+      <button class="chip" data-target="s4" data-send='{"cmd":"runStatus","s":"running"}'>状态：运行中</button>
+      <button class="chip" data-target="s4" data-send='{"cmd":"runStatus","s":"failed"}'>状态：失败</button>
+      <button class="chip" data-target="s4" data-send='{"cmd":"earlier"}'>加载更早 ↑</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 5 · 执行手册 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 5 · 执行手册<span>只读 · 生成回桌面</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s5" src="app.html?screen=playbook&amp;id=s5" title="执行手册"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">状态预览</span>
+      <button class="chip" data-target="s5" data-send='{"cmd":"pb","state":"ready"}'>已生成</button>
+      <button class="chip" data-target="s5" data-send='{"cmd":"pb","state":"stale"}'>已过期（旧版）</button>
+      <button class="chip" data-target="s5" data-send='{"cmd":"pb","state":"none"}'>未生成空态</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · 每屏要点 · 协议缺口 · 实施清单</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · iframe 拆分（与 design/remote 同构）</h4>
+      <ul>
+        <li><em>app.html = 应用本体</em>：五屏共用一份 DOM 与状态，URL 参数决定初始形态（?screen=drawer / detail / editor[&amp;mode=new] / run / playbook）。与未来 ArkTS 结构一一对应：ChatDrawer 内嵌自动化区段（位置已定稿：紧跟工作区卡；曾备选「会话列表之后」，已撤）+ TaskDetail / TaskEditor / RunTranscript / PlaybookSheet 四个浮层组件，全部不注册路由（main_pages 仍只有 pages/Index）</li>
+        <li><em>index.html = 展台</em>：手机框 + iframe + 演示胶囊，postMessage 遥控 + 状态中继，纯布景</li>
+        <li>聊天主屏 / 抽屉其余部分沿用 <em><a href="../remote/index.html">design/remote</a></em>，本页聊天仅作布景</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>每屏要点</h4>
+      <ul>
+        <li><em>抽屉区段</em>（位置定稿：紧跟工作区卡）：标题呼吸点 = 有任务在跑；行 = 名称 + 调度摘要 + 上次结果 + 启用开关；可折叠；空态 / 拉取失败态内置</li>
+        <li><em>详情</em>：chips 概览 + 立即运行 / 编辑 / 删除 + 指令卡（折叠展开）+ 手册卡三态 + 统计条 + 运行记录九要素行（状态 / 触发 / 模式 / 时间 / 时长 / 轮次 / 成本 / 摘要 / 跳过原因），skipped 行置灰不可点</li>
+        <li><em>编辑器</em>：基本 / 执行配置 / 权限与安全 / 调度 / 通知五区段；模型选项取自当前供应商的本地模型列表（与聊天模型 chip 同源，不调用远程 getDefaultModel）；调度 kind 与协议判别联合 1:1（每天 / 每周 / 每月 / 间隔 / 单次）；connectors 只读</li>
+        <li><em>运行转录</em>：只读时间线（手册注入标记 / 思考卡可折 / 工具行 / usage 尾注），加载更早；不做实时流</li>
+        <li><em>手册</em>：只读 + 过期横幅；生成 / 更新回桌面</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>协议缺口（桌面端 · 本页只标注不改码）</h4>
+      <ul>
+        <li><em>① REGISTRY 未开放 11 个 automation 命令</em>——真机拉取必败，屏 1「拉取失败」态即此场景；需在 remote/rpc.rs 注册 + handlers 薄包装</li>
+        <li><em>② automation_run_finished / automation_missed 未进 chat_events_tx</em>——live 状态改由 run 原始事件流推导：session_init 的 run_ 前缀建别名 + 终态事件（message_stop / error / session_dead）触发列表刷新对账</li>
+        <li><em>③ 自动化转录在 scoped 目录（~/.aide/scopes/automation/…），load_messages 读不到</em>——运行转录先出空态，桌面补齐后点亮</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li>sdk：22 个类型 + 11 个命令封装过筛进 ohos（automation.ts 为唯一上游事实源）</li>
+        <li>AutomationModel：@ObservedV2 单例，list / detail / stats / runs 四组缓存 + 第三路 chat-event 监听（run 流推导）</li>
+        <li>组件：ChatDrawer 内嵌 AutomationSection + TaskDetail / TaskEditor / RunTranscript / PlaybookSheet 四浮层</li>
+        <li>接线：ChatPage 弹层管理 + Index 返回键；storage 增「自动化任务页」缓存；effort 三档文案 快速 / 均衡 / 极致</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳（v1 明确不做）</h4>
+      <ul>
+        <li>连接器增删：协议可配但 UI 复杂，v1 只读展示，编辑保留原值</li>
+        <li>实时流式转录：打开历史 run 只读，运行中刷新按钮回查</li>
+        <li>本地通知：通知由桌面系统发出，鸿蒙端只看结果</li>
+        <li>手册重新生成（redistill）：回桌面操作</li>
+        <li>运行上限（最大轮次 / 成本上限）：v1 表单不暴露，编辑时保留桌面端原值</li>
+        <li>生效窗口 valid_from / valid_to：桌面设置，表单不暴露</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：把演示胶囊的点击转成 postMessage 发给对应 iframe，
+   并充当五屏间状态同步的中继。 */
+const send = (id, msg) => document.getElementById(id).contentWindow.postMessage(msg, '*');
+
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  send(b.dataset.target, JSON.parse(b.dataset.send));
+}));
+
+/* sync 中继：广播到除来源外的其余屏 */
+const FRAMES = ['s1', 's2', 's3', 's4', 's5'];
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    FRAMES.forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>

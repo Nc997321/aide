@@ -7,7 +7,9 @@
  * HistoryBlock / ChatMessageItem / LoadMessagesResult（会话页历史域）；
  * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）；
  * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）；
- * SendImage / SendDisplayBlock（发送域：图片附件 + 用户气泡 display 回灌块）。
+ * SendImage / SendDisplayBlock（发送域：图片附件 + 用户气泡 display 回灌块）；
+ * Schedule / AutomationTask / AutomationTaskInput / RunUsage / RunRecord /
+ * RunStats（自动化任务域；⚠️ 此域命令未进远程 REGISTRY，见 api.ets 头注）。
  */
 
 export interface Session {
@@ -200,4 +202,134 @@ export interface SendDisplayBlock {
   poster?: string;
   durationMs?: number;
   name?: string;
+}
+
+// ── 自动化任务域（镜像 packages/aide-sdk/src/api/automation.ts；serde camelCase）──
+
+/**
+ * 调度定义（Rust Schedule 镜像，serde tag="kind" 判别联合）。
+ * ArkTS 无判别联合 → 单 interface + kind 字符串 + 全可选臂字段（各臂只填
+ * 自己的字段，undefined 经 JSON.stringify 丢弃，与 PWA 同形）。
+ * time 一律 "HH:MM" 本地墙钟；once 的 at 是本地 ISO（分或秒可选）。
+ */
+export interface Schedule {
+  /** 'daily' | 'weekly' | 'monthly' | 'interval' | 'once'。 */
+  kind: string;
+  /** daily/weekly/monthly 臂："HH:MM"。 */
+  time?: string;
+  /** weekly 臂：1=周一..7=周日（ISO）。 */
+  weekdays?: number[];
+  /** monthly 臂：1..=31（超过当月天数由服务端钳到月末）。 */
+  day?: number;
+  /** interval 臂：>0。 */
+  every?: number;
+  /** interval 臂：'minutes' | 'hours' | 'days'。 */
+  unit?: string;
+  /** once 臂：本地 ISO；触发后服务端自动 enabled=false。 */
+  at?: string;
+}
+
+/**
+ * 自动化任务（Rust AutomationTask 镜像）。id / createdAt / lastRun 系 /
+ * playbookState 由服务端管理；sessionDir 上游 TS 未过筛（不暴露），同。
+ */
+export interface AutomationTask {
+  id: string;
+  name: string;
+  prompt: string;
+  /** 会话归属工作区根路径；null = 以任务目录（~/.aide/automations/<id>/）为工作目录。 */
+  workspacePath: string | null;
+  /** 显式按任务指定，不继承主会话；空串 = 跟随桌面默认（不下发 ANTHROPIC_MODEL）。 */
+  model: string;
+  /** low|medium|high|xhigh|max（服务端透传 env，不做枚举约束）。 */
+  effort: string;
+  /** 'auto' | 'full'（v1 两档定案；readonly 是旧档 serde 别名，归并进 auto）。 */
+  permissionPreset: string;
+  /** 预授权 MCP server key 白名单（如 "aide-codegraph"）。 */
+  connectors: string[];
+  schedule: Schedule;
+  /** 生效区间（"YYYY-MM-DD"）；null = 不限。 */
+  validFrom: string | null;
+  validTo: string | null;
+  /** 'catchup' | 'skip' | 'ask'（错过补跑策略）。 */
+  missedPolicy: string;
+  playbookEnabled: boolean;
+  /** 'none' | 'ready' | 'stale'（服务端管理，前端只读）。 */
+  playbookState: string;
+  notifySuccess: boolean;
+  notifyFailure: boolean;
+  enabled: boolean;
+  /** 本地 ISO；也是 interval 调度的固定网格锚点（不随 lastRunAt 漂移）。 */
+  createdAt: string;
+  lastRunAt: string | null;
+  /** 'running' | 'succeeded' | 'failed' | 'skipped'；null = 从未运行。 */
+  lastRunStatus: string | null;
+}
+
+/** create/update 入参：无 id / createdAt / lastRun 系 / playbookState（服务端管理）。 */
+export interface AutomationTaskInput {
+  name: string;
+  prompt: string;
+  workspacePath: string | null;
+  model: string;
+  effort: string;
+  permissionPreset: string;
+  connectors: string[];
+  schedule: Schedule;
+  validFrom: string | null;
+  validTo: string | null;
+  missedPolicy: string;
+  playbookEnabled: boolean;
+  notifySuccess: boolean;
+  notifyFailure: boolean;
+  enabled: boolean;
+}
+
+/** 单次运行的 token 用量（Rust RunUsage 镜像）。 */
+export interface RunUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
+/**
+ * 运行记录（runs.jsonl 行；Rust RunRecord 镜像）。
+ * summary = 转录尾行 ≤80 字；note = 'overlap' / 'missed-skip' / 'missed-ask'
+ * 有固定摘要文案；skipped 记录 sessionId 为空串（转录行置灰不可点）。
+ */
+export interface RunRecord {
+  runId: string;
+  sessionId: string;
+  /** 'schedule' | 'manual' | 'catchup'。 */
+  trigger: string;
+  /** 'explore' | 'playbook'。 */
+  mode: string;
+  /** 本地 ISO。 */
+  startedAt: string;
+  finishedAt: string | null;
+  /** 'running' | 'succeeded' | 'failed' | 'skipped'。 */
+  status: string;
+  stopReason: string | null;
+  usage: RunUsage | null;
+  rounds: number | null;
+  costUsd: number | null;
+  /** 结论摘要（转录尾行，≤80 字）；skipped/运行中为 null。 */
+  summary: string | null;
+  distillCostUsd: number | null;
+  error: string | null;
+  note: string | null;
+}
+
+/** 近 30 天统计（automation_run_stats 返回；Rust RunStats 镜像）。 */
+export interface RunStats {
+  runs: number;
+  succeeded: number;
+  failed: number;
+  /** 0..1。 */
+  successRate: number;
+  totalCostUsd: number;
+  avgDurationMs: number | null;
+  /** 0..1；null = 无用量样本。 */
+  cacheReadRatio: number | null;
 }
