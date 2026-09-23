@@ -26,17 +26,22 @@ const evalOk = (value: unknown, type = "object") => ({
 });
 
 /**
- * 答一发求值请求。
+ * 答一发求值请求，伪造页面那一发包装器的回包形状。
  *
- * `runEval` 在**超时那一次**会顺带取可见性，那一发的表达式是 `document.visibilityState`——
- * 用它区分，省得调用方自己数下标。
+ * `to` 是包装器顺带带回的 `performance.timeOrigin`——**每份文档一个值**。给了它就等于
+ * 声称"这一发读的是那份文档"；不给（`undefined`）与包装器拿到 `0`/缺字段折叠出的 `null`
+ * 是同一条路（"这条通道没有文档身份"）——**要考"文档被替换"就必须给**，否则两次观察都
+ * 没有身份，基准建不起来，替换也就无从谈起。
  */
-const tick = (q: any, body: { met?: boolean; value?: unknown; threw?: string }, visibility = "visible") => {
-  if (q.params?.expression === "document.visibilityState") {
-    reply(q, evalOk(visibility, "string"));
-    return;
-  }
-  reply(q, evalOk(body.threw !== undefined ? { met: false, threw: body.threw } : { met: !!body.met, value: body.value }));
+const tick = (q: any, body: { met?: boolean; value?: unknown; threw?: string; to?: number }) => {
+  reply(
+    q,
+    evalOk(
+      body.threw !== undefined
+        ? { met: false, threw: body.threw, to: body.to }
+        : { met: !!body.met, value: body.value, to: body.to },
+    ),
+  );
 };
 
 /** 快节奏的入参：用例只关心语义，不关心真的等 5 秒。 */
@@ -182,6 +187,81 @@ describe("browser_wait — condition 模式", () => {
 
     expect(await p).toContain("open one in the browser panel first");
     expect(events).toHaveLength(1);
+  });
+
+  /**
+   * ① 那个毫秒数必须是**测出来的**，不是 `attempts × intervalMs` 算出来的。
+   * 2026-09-22 实测：agent 正是照抄了那个合成值（"第一次轮询 200ms 就成立"），据此建立了因果推理。
+   * 构造：intervalMs 50、第一次就满足 → 合成值恒为 50ms，实测值必然远小于它。
+   *
+   * 正则跟着**实际发给模型的**那句走：耗时后面紧接着报的是 interval（那是两个不同的量，
+   * 混起来正是这条用例要防的误读），所以捕获的是括号里第一个 `Nms`。
+   */
+  it("成功文案里的耗时是实测值（< intervalMs 的合成值）", async () => {
+    const { events, emit } = emitCollector();
+    const p = waitForBrowser(fast({ intervalMs: 50, timeoutMs: 1000 }), emit);
+    reply(await waitForQuery(events, 0), evalOk(0));
+    tick(await waitForQuery(events, 1), { met: true, value: true, to: 111 });
+    const m = /Condition met after 1 poll\(s\) \(([0-9]+)ms, polling every 50ms\)/.exec(await p);
+    expect(m).not.toBeNull();
+    expect(Number(m![1])).toBeLessThan(50);
+  });
+
+  it("条件求值里带出 performance.timeOrigin（免费的文档指纹）", async () => {
+    const { events, emit } = emitCollector();
+    const p = waitForBrowser(fast({}), emit);
+    reply(await waitForQuery(events, 0), evalOk(0));
+    const q1 = await waitForQuery(events, 1);
+    expect(q1.params.expression).toContain("timeOrigin");
+    tick(q1, { met: true, value: true, to: 1 });
+    await p;
+  });
+
+  it("等待途中文档被替换 → 不是继续假装、也不是失败，而是如实报告并重置基准", async () => {
+    const { events, emit } = emitCollector();
+    const p = waitForBrowser(fast({ timeoutMs: 400, intervalMs: 5 }), emit);
+    reply(await waitForQuery(events, 0), evalOk(0));
+    tick(await waitForQuery(events, 1), { met: false, value: "a", to: 111 }); // 旧文档
+    tick(await waitForQuery(events, 2), { met: true, value: "b", to: 222 }); // 新文档命中
+    const text = await p;
+    expect(text).toContain("Condition met after 2 poll");
+    expect(text).toContain("the page was replaced");
+    expect(text).toContain("poll #2");
+  });
+
+  /**
+   * ② 上面那条的**差分对**：唯一差别是第二跳的 `to` 与第一跳相同。
+   *
+   * 两条合起来才有判据——只有③（替换）会漏掉"恒报替换"的实现，只有④（同文档）会漏掉
+   * "从不追踪"的实现。④单独跑是**空过**的（不报替换本来就不含这个词），所以两跳都必须
+   * 带上 `to`：没有 `to` 就没有文档身份，也就没在考这件事。
+   */
+  it("同一文档内满足 → 不出现替换说明（不制造噪音）", async () => {
+    const { events, emit } = emitCollector();
+    const p = waitForBrowser(fast({}), emit);
+    reply(await waitForQuery(events, 0), evalOk(0));
+    tick(await waitForQuery(events, 1), { met: false, value: "a", to: 111 });
+    tick(await waitForQuery(events, 2), { met: true, value: "b", to: 111 });
+    const text = await p;
+    expect(text).toContain("Condition met after 2 poll");
+    expect(text).not.toContain("was replaced");
+  });
+
+  /**
+   * ⑤ 超时**也是**一次终局报文：文档被换过却只字不提，等于把"我等的到底是哪个文档"重新
+   * 变成不可观测——那正是本任务存在的理由。每一跳报另一个 `timeOrigin` 构造"整场都在换"。
+   */
+  it("超时也要如实说文档被替换过（不许只在成功时才说）", async () => {
+    const { events, emit } = emitCollector();
+    const p = waitForBrowser(fast({ timeoutMs: 120, intervalMs: 10 }), emit);
+    let n = 0;
+    const text = await answerUntilSettled(p, events, (q) => {
+      n += 1;
+      tick(q, { met: false, value: n, to: 1000 + n });
+    });
+
+    expect(text).toContain("Timed out");
+    expect(text).toContain("was replaced");
   });
 });
 

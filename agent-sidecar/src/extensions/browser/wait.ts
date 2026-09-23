@@ -62,18 +62,19 @@ export interface WaitInput {
 }
 
 /**
- * 条件的求值器。
- *
- * **抛异常不算失败**：`document.querySelector('.x').textContent` 在元素尚未出现时必然抛——
- * 那是"尚未满足"，不是错误。所以包一层 try/catch，把 throw 当成一次"没到"并记下原因。
+ * 条件求值器。**在条件外面套一层拿两个免费信号**：
+ * - `met` / `value`：条件本身（抛异常 = 尚未满足，不是错误）；
+ * - `to`：`performance.timeOrigin` —— **每份文档一个值**，不需要我们注入任何东西，
+ *   却能回答"我这一跳读的是哪个文档"。全浏览器模块此前**没有任何文档身份概念**，
+ *   于是"旧文档先满足"这类现象（反馈第 2 条）无从分辨。
  *
  * 断言里没有 await：降级通道 await 不了 Promise，而两条通道**行为必须一致**——否则同一句
  * 条件在有的机器上成立、有的永远不成立，正是本批要消灭的那类病。
  */
 function conditionScript(condition: string): string {
   return `(function () {
-  try { var __v = (${condition}); return { met: !!__v, value: __v }; }
-  catch (e) { return { met: false, threw: String((e && e.message) || e) }; }
+  try { var __v = (${condition}); return { met: !!__v, value: __v, to: (window.performance && performance.timeOrigin) || 0 }; }
+  catch (e) { return { met: false, threw: String((e && e.message) || e), to: (window.performance && performance.timeOrigin) || 0 }; }
 })()`;
 }
 
@@ -82,6 +83,11 @@ interface ConditionTick {
   met: boolean;
   /** 面向模型的"看到了什么"。 */
   detail: string;
+  /**
+   * 这一跳读的是**哪一份文档**（`performance.timeOrigin`，每份文档一个值）。
+   * 拿不到（引擎没有 / 字段缺失 / 折叠成 `0`）为 `null`——**空 ≠ 没有**，不假装知道。
+   */
+  timeOrigin: number | null;
 }
 
 /**
@@ -101,8 +107,8 @@ async function resolveView(
 }
 
 /**
- * 条件模式的一跳。桥层失败**直接放弃**——理由见 `waitForCondition`。
- *
+ * 条件模式的一跳。桥层失败**直接放弃**——理由见函数内那句注释（能走到这一层就说明
+ * 问题不在条件成不成立上）。
  */
 async function conditionTick(
   viewId: string | undefined,
@@ -115,6 +121,7 @@ async function conditionTick(
   if (!r.ok) return { ok: false, text: `The condition could not be evaluated at all: ${r.error}` };
 
   const v = asRecord(r.value);
+  const to = v?.["to"];
   return {
     ok: true,
     tick: {
@@ -123,15 +130,87 @@ async function conditionTick(
         typeof v?.["threw"] === "string"
           ? `the condition threw: ${v["threw"]}`
           : `the condition evaluated to ${jsonBrief(v?.["value"])}`,
+      timeOrigin: typeof to === "number" && to > 0 ? to : null,
     },
   };
 }
 
-/** 超时说明——**诊断，不是错误**。 */
-function timeoutReport(head: string, last: string, attempts: number, input: WaitInput): string {
+/**
+ * 等待期间的文档身份追踪。
+ *
+ * 语义（**不是**"继续等"也**不是**"失败"）：文档被替换时**如实记下来**，把观测基准重置到
+ * 新文档继续等。理由——"点一下 → 页面跳走 → 等新内容"是最常见的等待形态，为它失败是错的；
+ * 而静默继续则让"我等的到底是哪个文档"永远不可观测。
+ */
+function trackDocument() {
+  let baseline: number | null = null;
+  let replaced = 0;
+  let lastChangePoll = 0;
+
+  return {
+    observe(timeOrigin: number | null, poll: number): void {
+      if (timeOrigin === null) return;
+      if (baseline === null) baseline = timeOrigin;
+      else if (timeOrigin !== baseline) {
+        baseline = timeOrigin;
+        replaced += 1;
+        lastChangePoll = poll;
+      }
+    },
+    note(): string | null {
+      return replaced === 0
+        ? null
+        : `NOTE: the page was replaced ${replaced} time(s) during this wait (last at poll #${lastChangePoll}) — ` +
+            `observations before that were reading a different document.`;
+    },
+  };
+}
+
+/** 一次等待的量化事实。 */
+interface PollStats {
+  attempts: number;
+  /** **实测**耗时（`Date.now()` 差值），不是 `attempts × intervalMs` 的合成值。 */
+  elapsedMs: number;
+  intervalMs: number;
+  budgetMs: number;
+}
+
+/**
+ * 到**此刻**为止的量化事实。耗时只在这一个地方产生——每个出口各自算一次，
+ * 早晚会有人顺手写成 `attempts × intervalMs`，而这个数字是会骗人的那一个。
+ */
+function pollStats(attempts: number, startedAt: number, input: WaitInput): PollStats {
+  return {
+    attempts,
+    elapsedMs: Date.now() - startedAt,
+    intervalMs: input.intervalMs,
+    budgetMs: input.timeoutMs,
+  };
+}
+
+/**
+ * 把"文档被替换过"的说明挂到报文末尾——**两条终局出口共用**（满足、超时）。
+ *
+ * 只在一条出口上说的话，另一条就把"我等的到底是哪个文档"重新变回不可观测，而超时恰恰是
+ * 最需要它的地方："它一直不满足"有两种成因，其中一种是**我其实在数另一份文档**。
+ */
+function withNote(text: string, note: string | null): string {
+  return note ? `${text}\n${note}` : text;
+}
+
+/** 满足：报**实测**耗时 + 条件看到了什么 +（若有）文档被替换的说明。 */
+function metReport(detail: string, stats: PollStats, docNote: string | null): string {
+  return withNote(
+    `Condition met after ${stats.attempts} poll(s) (${stats.elapsedMs}ms, polling every ${stats.intervalMs}ms): ${detail}`,
+    docNote,
+  );
+}
+
+/** 超时说明——**诊断，不是错误**。数字一律是实测值，预算单独标出。 */
+function timeoutReport(head: string, last: string, stats: PollStats): string {
   const lines = [
     head,
-    `Polled ${attempts} time(s) over ${input.timeoutMs}ms at ${input.intervalMs}ms intervals.`,
+    `Polled ${stats.attempts} time(s) over ${stats.elapsedMs}ms (budget ${stats.budgetMs}ms, interval ${stats.intervalMs}ms).`,
     `Last observation: ${last}`,
   ];
   return lines.join("\n");
@@ -143,26 +222,26 @@ async function waitForCondition(
   input: WaitInput,
   emit: (e: ChatEvent) => void,
 ): Promise<string> {
-  const deadline = Date.now() + input.timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + input.timeoutMs;
+  const doc = trackDocument();
   let attempts = 0;
-  let last: ConditionTick = { met: false, detail: "(never evaluated)" };
+  let last: ConditionTick = { met: false, detail: "(never evaluated)", timeOrigin: null };
 
   while (Date.now() < deadline) {
     attempts += 1;
     const r = await conditionTick(viewId, input.condition ?? "", emit);
     if (!r.ok) return r.text;
     last = r.tick;
-    if (last.met) {
-      return `Condition met after ${attempts} poll(s) (${attempts * input.intervalMs}ms): ${last.detail}`;
-    }
+    doc.observe(last.timeOrigin, attempts);
+
+    if (last.met) return metReport(last.detail, pollStats(attempts, startedAt, input), doc.note());
     await sleep(input.intervalMs);
   }
 
-  return timeoutReport(
-    "Timed out — the condition never became true.",
-    last.detail,
-    attempts,
-    input,
+  return withNote(
+    timeoutReport("Timed out — the condition never became true.", last.detail, pollStats(attempts, startedAt, input)),
+    doc.note(),
   );
 }
 
@@ -201,7 +280,7 @@ async function navTick(
 }
 
 /**
- * 加载模式：等这个视图不再处于加载中。
+ * 一跳导航快照 → **终局报文**；`null` = 还没到终局，继续轮询。
  *
  * ⚠️ **`nav.state` 没有历史**：刚点完链接、导航还没起跳时，它会说 `ready`——那是**旧页面**。
  * 直接信它就制造了一个静默假阳性（等待立即返回，agent 以为新页面到位了）。所以：
@@ -211,12 +290,35 @@ async function navTick(
  * `failed` 与 `idle` **立即结束**：把一个明确的失败或"压根没导航过"拖到超时，是把两种不同的
  * 情况伪装成同一个"慢"。
  */
+function loadVerdict(nav: NavSnapshot, sawLoading: boolean): string | null {
+  const where = `${nav.url}${nav.title ? ` — ${nav.title}` : ""}`;
+
+  if (nav.state === "failed") return `Navigation failed at ${where}. (Reason is not carried by this build.)`;
+  if (nav.state === "idle") {
+    return (
+      `The view has not navigated anywhere yet, so there is nothing to wait for. ` +
+      `Use browser_tabs to confirm you are targeting the right view, or browser_act to get it there first.`
+    );
+  }
+  if (nav.state !== "ready") return null;
+  if (sawLoading) return `Page finished loading: ${where}`;
+  return (
+    `Nothing was loading when this call started — the view was already ready at ${where}. ` +
+    `If you expected a navigation to be in flight, it had not started yet: call again, or wait ` +
+    `for the page to change with a \`condition\` instead. If you just made a SAME-DOCUMENT ` +
+    `navigation (a hash change or history.pushState), it does not trigger a load and will never ` +
+    `show up here — use \`until:"condition"\` on the content you expect, or read \`location.href\`.`
+  );
+}
+
+/** 加载模式：轮询宿主侧的 `nav.state`，直到 `loadVerdict` 给出终局。 */
 async function waitForLoad(
   viewId: string | undefined,
   input: WaitInput,
   emit: (e: ChatEvent) => void,
 ): Promise<string> {
-  const deadline = Date.now() + input.timeoutMs;
+  const startedAt = Date.now();
+  const deadline = startedAt + input.timeoutMs;
   let attempts = 0;
   let sawLoading = false;
   let last: NavSnapshot = { state: "(never polled)", url: "", title: "" };
@@ -226,34 +328,20 @@ async function waitForLoad(
     const r = await navTick(viewId, emit);
     if (!r.ok) return r.text;
     last = r.nav;
-    const where = `${last.url}${last.title ? ` — ${last.title}` : ""}`;
-
-    if (last.state === "failed") return `Navigation failed at ${where}. (Reason is not carried by this build.)`;
-    if (last.state === "idle") {
-      return (
-        `The view has not navigated anywhere yet, so there is nothing to wait for. ` +
-        `Use browser_tabs to confirm you are targeting the right view, or browser_act to get it there first.`
-      );
-    }
     if (last.state === "loading") sawLoading = true;
-    if (last.state === "ready") {
-      if (sawLoading) return `Page finished loading: ${where}`;
-      return (
-        `Nothing was loading when this call started — the view was already ready at ${where}. ` +
-        `If you expected a navigation to be in flight, it had not started yet: call again, or wait ` +
-        `for the page to change with a \`condition\` instead. If you just made a SAME-DOCUMENT ` +
-        `navigation (a hash change or history.pushState), it does not trigger a load and will never ` +
-        `show up here — use \`until:"condition"\` on the content you expect, or read \`location.href\`.`
-      );
-    }
+
+    const verdict = loadVerdict(last, sawLoading);
+    if (verdict) return verdict;
     await sleep(input.intervalMs);
   }
 
+  // 这里没有 `withNote`，**是如实，不是漏了**：`load` 模式一个条件都没求值，拿不到
+  // `performance.timeOrigin`，这份等待的"文档身份"由宿主侧的 `nav.state` 承担。
+  // 别为了对称去发明一个指纹。
   return timeoutReport(
     "Timed out — the view never finished loading.",
     `nav.state = ${last.state} at ${last.url || "(no url)"}`,
-    attempts,
-    input,
+    pollStats(attempts, startedAt, input),
   );
 }
 
