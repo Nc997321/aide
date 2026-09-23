@@ -491,8 +491,13 @@ describe("browser_act — 命中歧义报数", () => {
   it("只命中一个 → 不报数（不制造噪音）", async () => {
     const { events, emit } = emitCollector();
     const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler({ action: "click", text: "刷新" }, {});
-    // 与上面那组的 RESOLVED 同形：**没有 matched 字段**（旧载荷/单命中就是这个形状）。
-    reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 }));
+    // **必须是真单命中载荷**（`matched: 1, usedIndex: 0` —— 解析脚本对单命中恒回这个形状）。
+    // 省掉这两个字段就变成在测 `Number(undefined) === NaN`：`n <= 1` 被改成 `n < 1` 也照样绿，
+    // 而每个普通 `browser_act` 都会开始印 `(1 elements matched; used index 0)`。
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20, matched: 1, usedIndex: 0 }),
+    );
     reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
     reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
 

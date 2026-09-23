@@ -11,7 +11,12 @@
 // `[role=button]`/`[onclick]` 这些线索在真实 DOM 里由 CSS 选择器判定，桩只表达"这个元素带线索"。
 // 所以代表真控件的桩必须写 `markup: true` —— 漏写会静默变成"不可点"，用例会红在那条上。
 import { describe, it, expect } from "vitest";
-import { buildResolveScript, type ActTarget } from "./actions.js";
+import {
+  buildClickFallbackScript,
+  buildFillScript,
+  buildResolveScript,
+  type ActTarget,
+} from "./actions.js";
 import { CLICKABLE_MARKUP_SELECTOR } from "./clickable.js";
 
 interface Rect {
@@ -251,5 +256,24 @@ describe("browser_act：命中歧义报数", () => {
     expect(out["ok"]).toBe(true);
     expect(out["matched"]).toBe(2);
     expect(out["usedIndex"]).toBe(1); // 请求 index 9 → 钳到最后一个，**且要说出来**
+  });
+});
+
+/**
+ * 转义纪律（注入脚本的硬约束；同款一组见 `clickable.test.ts`）。
+ *
+ * 解析脚本每个用例都在跑（`runResolve` 就是 `new Function`），另**两个**脚本此前没有任何测试
+ * 把它们当 JS 解析——转义写错只会在真页面里 SyntaxError。这类错本批就栽过两次（注入注释里的
+ * 反引号撕开外层模板字面量，`actions.ts` 整个文件解析不过）。
+ */
+describe("browser_act：注入脚本的转义纪律", () => {
+  const target: ActTarget = { text: "刷新" };
+
+  it("设值脚本是合法 JS", () => {
+    expect(() => new Function(buildFillScript(target, "x"))).not.toThrow();
+  });
+
+  it("兜底点击脚本是合法 JS", () => {
+    expect(() => new Function(buildClickFallbackScript(target))).not.toThrow();
   });
 });
