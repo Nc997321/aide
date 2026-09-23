@@ -31,6 +31,17 @@
 
 另外两条 spec 未列、但执行时会硬红的编辑点（已并入 Task 4）：`browserTools.test.ts` 的**工具名精确数组**断言（文件尾部）、headless 短路用例的工具清单。
 
+### 执行顺序修正（2026-09-23，用户决定）
+
+**Task 2 的探针挪到 Task 12 的验收会话里一起做**（一次重启 + 一次上下文重放，而不是两次）。理由与代价摊开：
+
+- **要重启的是哪一侧**：`runtime/mod.rs:688` 两条路——dev 跑 `agent-sidecar/dist/runtime.js`（构建即生效），安装版跑 `resource_dir/agent-runtime/aide-agent.exe`（要 `pnpm tauri build` + 重装，分钟级）。当前对话跑在**安装版**里，所以要验就得起 dev 实例。
+- **探针四问，三个的答案不改代码形状**：① 注入路——两条路都是**同一个函数**（`ensureRegistered`），CDP 不通只是加一个 Task 13；② `innerText`——Task 8 的代码本来就把"拿不到就退回 `textContent` 并如实标 `textFiltered:false`"写在里面；③ `NAV_SETTLE_MS`——纯调参常量；④ 注册生命周期——最坏退化成"每次读时懒装"，而那时输出里**照样**会打「探针是这次调用才装上的」。
+- **CDP 注入路的把握**：不是零证据的猜测——`xintaofei/codeg` 的 Windows 实现就是 WebView2 `CallDevToolsProtocolMethod` 调 `Page.addScriptToEvaluateOnNewDocument`（<https://github.com/xintaofei/codeg/pull/723>）；且本仓已有 `Page.captureScreenshot` / `Page.getFrameTree` / `Page.createIsolatedWorld` 在同一条透传上跑通（v2 验收 14/14）。
+- **代价**：万一探针回"CDP 不通"，就在验收会话里当场做 Task 13（Rust 兜底）再重启一次；这是**加法**，不是返工。
+
+**因此开发阶段（Task 3–11）按"CDP 优先 + 兜底可加"实施**，验收会话里一次跑完：Task 2 的四个探针 → 判据 1–14。
+
 ---
 
 ## Global Constraints
@@ -1485,6 +1496,17 @@ cd agent-sidecar && npx tsx ../scripts/diag/measure-builtin-mcp.ts
 - 超了 → 把两个合成一个 `browser_observe{what:"network"|"console", ...}`（用户的备选方案，写进 spec 未决问题）。
 - 没超 → 把新的基线数字记进本文件（**旧基线是按低估 1.55× 的尺量的，别与新数字并列比较**）。
 
+**实测（2026-09-23，Task 5 落地后，新尺）**：
+
+| server | tools | toolPayload | instructions | 合计 |
+|---|---|---|---|---|
+| **aide-browser** | 9 | ≈3319 tok | ≈1750 tok | **≈5069 tok** |
+| 内建四 server 总计 | — | — | — | **≈9565 tok** |
+
+两条新工具（description + 真 JSON Schema）分别 **299** 与 **295** tok，合计 **594 ≤ 600** ⇒ **不做 `browser_observe` 合并**。
+⚠️ 只剩 6 token 余量：**再加第三个工具之前必须重测，且任何对这两条描述的润色都可能顶破红线**。
+（量尺本身仍偏保守：ASCII 按 3.6 字/tok 折算，`$schema` 用的是 2020-12 而 SDK 实发 draft-7。）
+
 - [ ] **Step 7: 全量回归 + 提交**
 
 ```bash
@@ -2542,7 +2564,7 @@ curl -s http://127.0.0.1:8780/ | grep -c HIDDENMAGIC    # 期望 1（0 = 端口�
 | 1 | 加载期请求可见 | `browser_network`（装探针）→ `browser_tab navigate` 到夹具 → `browser_network` | 能看到**加载期**那两条（`/api/ok` 各一条 fetch + XHR） |
 | 2 | 失败可诊断 | 先 `browser_eval {script:'__probe("fail")'}` → `browser_network {filter:"/api/fail"}` | 报 500 + `No enum constant …` 片段 |
 | 3 | 未结束可辨 | `browser_eval {script:'__probe("hang"); "fired"'}`（**别只写 `__probe("hang")`**——eval 会 await 它到 15s 超时）→ `browser_network` | `(pending, …ms so far)` |
-| 4 | 体积闸门 | `browser_eval {script:'__probe("big")'}` → `browser_network {filter:"/api/big"}` | `body skipped (3xxxxx bytes)`，不是 300KB 正文 |
+| 4 | 体积闸门 | `browser_eval {script:'__probe("big")'}` → `browser_network {filter:"/api/big"}` | `body skipped (307220 bytes)`，不是 300KB 正文（夹具现在显式发 `content-length`，数字是定值） |
 | 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console` | `[uncaught]` 一条，且与 `[error]` 分行 |
 | 6 | 未装的如实说明 | **新开视图**后第一次 `browser_console` | 明说"探针是这次调用才装上的" |
 | 7 | navigate 落点 | `browser_tab navigate` 到 `#/two`（守卫会弹回） | **不报假成功**：报出文档实际在 `#/one` |
