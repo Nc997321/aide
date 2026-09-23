@@ -37,19 +37,31 @@ export function formatBridgeFailure(resp: {
 }
 
 // ---- 形状守门（data 是 unknown，逐字段判型；缺字段不抛、不猜） ----
+//
+// 三个助手**导出**：`network.ts` / `console.ts` 的渲染器吃的是页面侧信封（同样是 `unknown`），
+// 逐字段判型的写法只该有一份——复制过去的那种，改了一处忘另一处就会漂。
 
-function asRecord(v: unknown): Record<string, unknown> | null {
+export function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
     ? (v as Record<string, unknown>)
     : null;
 }
 
-function asArray(v: unknown): unknown[] {
+export function asArray(v: unknown): unknown[] {
   return Array.isArray(v) ? v : [];
 }
 
-function str(v: unknown): string {
+export function str(v: unknown): string {
   return typeof v === "string" ? v : "";
+}
+
+/**
+ * 定宽左对齐——行首那一列的宽度靠它统一（network 的方法、console 的级别标签），
+ * 这样 URL / 正文才对齐成一列，扫列比扫行快。
+ * `padEnd` 不截断超长串：宁可错一格，也不许悄悄吃掉内容。
+ */
+export function pad(s: string, n: number): string {
+  return s.padEnd(n);
 }
 
 /**

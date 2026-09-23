@@ -27,6 +27,8 @@ import {
   WAIT_TIMEOUT_MAX_MS,
 } from "./browser/wait.js";
 import type { ActTarget } from "./browser/actions.js";
+import { readRecorder } from "./browser/recorder.js";
+import { renderNetwork } from "./browser/network.js";
 import {
   NO_BROWSER_HOST_TEXT,
   formatBridgeFailure,
@@ -488,6 +490,59 @@ export function buildBrowserTabTool(
   );
 }
 
+/** 网络缓冲一次读回多少条（缺省）与其上限。上限 = recorder 的环形缓冲 cap，要全部就是它。 */
+const NETWORK_LIMIT_DEFAULT = 20;
+const NETWORK_LIMIT_MAX = 100;
+
+/**
+ * `browser_network`：**页面自己发过什么**（XHR/fetch 的方法/URL/状态/耗时/响应片段）。
+ *
+ * 与 `browser_read` 的分工：那是"页面上有什么"，这是"页面做了什么"——空白页、点了没反应、
+ * 被前端吞掉的 500，答案都在请求里而不在 DOM 里。
+ *
+ * 读数**不新增通道**：一次 `Runtime.evaluate` 读 recorder 的环形缓冲（见 `browser/recorder.ts`）。
+ * 缓冲活在**当前文档**上，导航即清零——所以"这次才装上"必须如实说（`armedBefore`）。
+ */
+export function buildBrowserNetworkTool(
+  env: NodeJS.ProcessEnv,
+  emit: (e: ChatEvent) => void,
+) {
+  return tool(
+    "browser_network",
+    "List the XHR/fetch requests the page has made — method, URL, status, duration and a clipped response body, " +
+      "newest last. This is how you answer \"what did that request actually return?\": a blank page, an action that " +
+      "never advanced, a 500 behind a swallowed error. Unfinished requests show as pending. The recorder is installed " +
+      "on demand and lives in the CURRENT document only (it is cleared by any navigation); if this call installs it, " +
+      "a note says so — navigate or reload to capture a fresh load from its first request. " +
+      "Use browser_console for console messages and uncaught errors.",
+    {
+      view_id: viewIdArg,
+      filter: z.string().optional().describe("Only requests whose URL contains this substring. Omit for all."),
+      limit: z.number().int().min(1).max(NETWORK_LIMIT_MAX).optional()
+        .describe(`How many of the most recent requests to show (default ${NETWORK_LIMIT_DEFAULT}, max ${NETWORK_LIMIT_MAX}).`),
+    },
+    async (args) => {
+      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+      try {
+        const r = await readRecorder(
+          { kind: "reqs", limit: args.limit ?? NETWORK_LIMIT_DEFAULT, match: args.filter },
+          args.view_id,
+          emit,
+        );
+        if (!r.ok) return textResult(r.error);
+        return textResult(renderNetwork(r.value, {
+          filter: args.filter,
+          registered: r.registered,
+          registerError: r.registerError,
+        }));
+      } catch (e) {
+        const detail = e instanceof Error ? e.message : String(e);
+        return textResult(`Browser tool failed unexpectedly: ${detail}`);
+      }
+    },
+  );
+}
+
 /** 工具总装：上层只需读这张表。新增工具 = 这里加一项（并同步 browserMcp 的规则与前端镜像）。 */
 export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void) {
   return [
@@ -498,5 +553,6 @@ export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) =
     buildBrowserEvalTool(env, emit),
     buildBrowserScreenshotTool(env, emit),
     buildBrowserTabTool(env, emit),
+    buildBrowserNetworkTool(env, emit),
   ];
 }

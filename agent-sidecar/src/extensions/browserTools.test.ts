@@ -40,7 +40,9 @@ describe("headless 短路（结构性没有内嵌浏览器）", () => {
     expect(r.content[0].text).toBe(NO_BROWSER_HOST_TEXT);
   });
 
-  it("六个工具都短路（漏一个就会有一个挂 15s）", async () => {
+  // 清单与工具表一一对应（`browser_console` 来了之后是九条——它还没出生，先不列，
+  // 列了 `toolByName` 会当场抛 "tool browser_console not built"）。
+  it("八个工具都短路（漏一个就会有一个挂 15s）", async () => {
     const env = { AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv;
     for (const name of [
       "browser_tabs",
@@ -49,6 +51,8 @@ describe("headless 短路（结构性没有内嵌浏览器）", () => {
       "browser_wait",
       "browser_eval",
       "browser_screenshot",
+      "browser_tab",
+      "browser_network",
     ]) {
       const { events, emit } = emitCollector();
       const r = await toolByName(env, emit, name).handler({ script: "1", action: "click", text: "x" }, {});
@@ -553,6 +557,64 @@ describe("browser_screenshot — 视觉兜底", () => {
   });
 });
 
+describe("browser_network", () => {
+  it("先注册新文档（call_cdp）再读（求值），并把缓冲渲染出来", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({ view_id: "browser-2" }, {});
+
+    const reg = await waitForQuery(events, 0);
+    expect(reg.op).toBe("call_cdp");
+    expect(reg.method).toBe("Page.addScriptToEvaluateOnNewDocument");
+    reply(reg, { ok: true, data: { view_id: "browser-2", value: { identifier: "1" } } });
+
+    // 读在**注册结算之后**才发（handler 串行）——先答注册这一发，读那一发才会出现。
+    const read = await waitForQuery(events, 1);
+    expect(read.op).toBe("call_cdp");
+    expect(read.method).toBe("Runtime.evaluate");
+    expect(read.params.expression).toContain("__aideRec");
+
+    reply(read, { ok: true, data: { view_id: "browser-2", value: { result: { type: "object", value: {
+      ok: true, armedBefore: true, cap: 100, total: 1, matched: 1, failed: { n: 1, first: 1 },
+      items: [{ kind: "fetch", method: "GET", url: "http://x/api/fail", status: 500, done: true, ms: 12,
+                body: '{"error":"No enum constant"}', bodyCut: false, bodyLen: 28, err: null }],
+    } } } } });
+
+    const r = await p;
+    expect(r.content[0].text).toContain("Network requests");
+    expect(r.content[0].text).toContain("500");
+    expect(r.content[0].text).toContain("No enum constant");
+  });
+
+  /** 注册是**每个视图一次**：第二次读不该再发注册（重发 = 每份新文档跑 N 遍 no-op）。 */
+  it("同一视图第二次调用不再重发注册", async () => {
+    const { events, emit } = emitCollector();
+    const tool = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network");
+    // 第一次：注册 + 读
+    const p1 = tool.handler({ view_id: "browser-9" }, {});
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", value: { identifier: "1" } } });
+    reply(await waitForQuery(events, 1), evalOk({ ok: true, armedBefore: false, total: 0, matched: 0, items: [], failed: { n: 0, first: null } }));
+    await p1;
+
+    // 第二次：只有读
+    const before = events.length;
+    const p2 = tool.handler({ view_id: "browser-9" }, {});
+    const q = await waitForQuery(events, before);
+    expect(q.method).toBe("Runtime.evaluate");
+    reply(q, evalOk({ ok: true, armedBefore: true, total: 0, matched: 0, items: [], failed: { n: 0, first: null } }));
+    const r = await p2;
+    expect(r.content[0].text).toContain("No requests recorded");
+  });
+
+  it("注册被运行时拒绝 → **照样能读**，但如实说未来文档没覆盖", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({}, {});
+    reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-1", value: { error: { code: -32601, message: "'Page.addScriptToEvaluateOnNewDocument' wasn't found" } } } });
+    reply(await waitForQuery(events, 1), evalOk({ ok: true, armedBefore: false, total: 0, matched: 0, items: [], failed: { n: 0, first: null } }));
+    const r = await p;
+    expect(r.content[0].text).toContain("rejected by the runtime");
+  });
+});
+
 describe("工具面里不许出现站点名词（换站点 MCP server 一行不动）", () => {
   it("工具名 + 描述 + 投影脚本全无站点痕迹", () => {
     const { emit } = emitCollector();
@@ -565,6 +627,7 @@ describe("工具面里不许出现站点名词（换站点 MCP server 一行不�
       "browser_eval",
       "browser_screenshot",
       "browser_tab",
+      "browser_network",
     ]);
   });
 });
