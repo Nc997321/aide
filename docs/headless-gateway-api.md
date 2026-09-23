@@ -4,7 +4,7 @@
 |---|---|
 | 适用协议版本 | `PROTOCOL_VERSION = 2` |
 | 适用引擎版本 | `agent-sidecar` @ `05c024a` 及以后（含 F3/F4 修复轮） |
-| 文档版本 | 1.5（2026-09-23） |
+| 文档版本 | 1.6（2026-09-23） |
 | 读者 | 把 Aide headless 引擎当编排大脑的宿主网关实现方 |
 | 真相源 | `agent-sidecar/src/headless-schema.ts`（命令字段）· `engine/types.ts`（事件字段）· `headless-server.ts`（HTTP/SSE 层）· `src/index.ts`（启动面） |
 | 验收底稿 | `docs/headless-test-checklist.md`（本文件每条实测断言都可回溯到该清单的 A/B/C/D 组用例与 F1–F11 发现） |
@@ -21,6 +21,7 @@
 | 2026-09-15 | 1.3 | `send.images` 增**本地路径形态** `{path}`（§4.1）：引擎自己读文件，绕开 1MB body 上限——手机原图经 base64 后 2.7~5.3MB，此前根本进不来。两种形态互斥；路径形态**不需要 mediaType**（引擎按魔数嗅探），并带读入上限 20MB/张与非图片拒收两道守卫。既有内嵌形态零改动。**`PROTOCOL_VERSION` 保持 2**（纯增量）。另记 §9.3 第 11 条：图片失败的可见性缺口（`terminal_reason`/`image_error` 未接），待真模型实测后落地。 |
 | 2026-09-17 | 1.4 | 补记 `send.additional_dirs` / `send.attach_rejected`（§4.1）：单会话跨目录（@目录即授权）落地后 `headless-schema` 一直收这两个字段，本文此前未写。**边界声明**：引擎对它们只做透明透传，**不做任何授权判定**——"只能 @ 已注册工作区"是桌面 Rust 层的保证，headless 下授权归网关。`display` 的 mention 块增 `isDir?`（§4.11）。**`PROTOCOL_VERSION` 保持 2**（纯增量，且字段早已在 schema 内）。 |
 | 2026-09-23 | 1.5 | 新增**规程 12：权限模式 / 策略的重带时机 = 引擎侧 query 重建时，不是"网关首次 send"**。来源是网关侧实锤（空闲收编后写操作静默 fail-open）+ 引擎源码核对：`send.permission_mode` 的闸门是 `!currentQuery`（`session-worker.ts:681`），error 终态会同步置空它（`:911`）、respawn 读的是 worker 持有的 `permModes.current`（`:841`），而 `send.permission_policy` 无闸门、按 revision 幂等（`:643`）。同步修正 §4.1 字段表「首条生效」的措辞、§4.8 同句、§6.2 增 `auto` 的 fail-open 警告、§3.4 / §8.6 / §9.3 补条目。**`PROTOCOL_VERSION` 保持 2**（纯文档澄清，零协议改动）。 |
+| 2026-09-23 | 1.6 | **`interrupt` 增收尾保证**（§4.3）：打断不保证被 CLI 兑现——没有 query 可打断时（会话刚起来 / 上一轮 error 终态之后）整句是空操作，CLI 卡在端点上时投出去也没人应答，两种都让轮次永远收不了尾（对接方现场：轮次超时 → interrupt → 「未收尾」→ 下一轮只能重建）。引擎现在自己补 `message_stop(interrupted)`：无 query 可打断即补；有 query 则给 **10 秒**宽限期，超时才补并拆掉不再响应的 query。规程 7 同步。**网关须把 `message_stop` 当幂等事件**——兜底之后 CLI 才吐真实终态时，同一轮会出现第二条（带真实 usage）。`PROTOCOL_VERSION` 保持 2（纯行为保证，schema 与事件形状零改动）。 |
 
 ---
 
@@ -40,7 +41,7 @@
 
 6. **引擎无持久化。** 会话是内存态。runtime 崩溃或重启 = 所有会话全丢，`resume_session_id` 是唯一续接通道（CLI 侧转录还在就能接上）。〔清单 D5 / B11〕
 
-7. **故障可见性很慢。** 模型端点不可达时，`error` 帧最长约 **189 秒**才到（CLI 内部重试梯度）。90 秒窗口里必然一条都没有。网关必须自备轮次超时，超时后用 `interrupt` 驱动终态。〔清单 F2〕
+7. **故障可见性很慢。** 模型端点不可达时，`error` 帧最长约 **189 秒**才到（CLI 内部重试梯度）。90 秒窗口里必然一条都没有。网关必须自备轮次超时，超时后用 `interrupt` 驱动终态——**引擎保证这一手管用**：最迟 10 秒内必给你一条 `message_stop`（见 §4.3）。〔清单 F2〕
 
 8. **Windows 上没有优雅关停。** `kill` 在 Windows 等价于强制终止：`SIGTERM` 处理器不执行、退出码非 0、SSE 收到的是 RST 而非干净的 done。Windows 上部署网关必须自带孤儿 `claude.exe` 清理（按父 PID 差集算）。〔清单 F1〕
 
@@ -389,6 +390,15 @@ data: {"sessionId":"<你的 client sid>","event":{"type":"session_init","session
 | `session_id` | string | ✅ |
 
 **触发的事件**：`message_stop`，`stop_reason` 为 `interrupted`。〔清单 B5〕
+
+**保证收尾（1.6 起）**：打断本身只是转发给 CLI，兑现与否取决于它——**没有 query 可打断时**（会话刚 `send` 还没起来、或上一轮 `error` 终态之后）那句话是空操作，**CLI 卡在端点上时**投出去也没人应答。两种形态下引擎自己补终态：
+
+- 没有可打断的 query → **立即**补一条；
+- 有 query 但**宽限期（10 秒）**内没等到本轮终态 → 补一条，并把那个不再响应打断的 query 拆掉，下一轮 `send` 原地 resume 重建。
+
+所以「轮次超时 → `interrupt`」之后，最迟 10 秒内必收到 `message_stop(interrupted)`。
+
+> ⚠️ **网关要把 `message_stop` 当幂等事件处理。** 如果 CLI 是在兜底之后才把真实终态吐出来，同一轮会出现**第二条**（带真实的 `usage` / `total_cost_usd`）。按「收到就收尾」处理即可，不要拿它计数。
 
 ### 4.4 stop_bg_task
 
