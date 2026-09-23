@@ -2656,15 +2656,46 @@ git add -A && git commit -m "feat(browser): 注入走宿主 API（CDP 路在真�
 
 ---
 
-## 步骤 0 实测结果
+## 步骤 0 实测结果（2026-09-23，dev 实例真机）
 
-> Task 2 执行后逐条填（**没跑就留空，别编**）。
+**探针 1（注入路）：CDP `Page.addScriptToEvaluateOnNewDocument` —— 被接受，但不交货。** ⇒ **走兜底（Task 13，Rust 宿主 API）**。
 
-- **探针 1（注入路）**：
-- **探针 2（生命周期）**：
-- **探针 3（innerText 三值）**：
-- **探针 4（往返代价 → `NAV_SETTLE_MS`）**：
-- **结论**：P2-3 走 (a) `innerText` / (b) 剪枝：
+证据链（全部是工具返回原文，不是转述）：
+
+1. `browser_tab {action:"open", url:"…:8780/", label:"gate"}` → `browser-1`
+2. `browser_network {view_id:"browser-1"}`（该视图第一次 recorder 调用）→
+   `Network requests (last 0 of 0, newest last):` + `No requests recorded yet.` +
+   `NOTE: the recorder was armed in this document by this call, …` —— **没有** `could not be registered` 那句
+   ⇒ 注册这一步在桥上是 **ok**（`resp.ok:true` 且无方法级 error），即 WebView2 **收下了**这个方法。
+3. `browser_tab {action:"navigate", view_id:"browser-1", url:"…:8780/?gate=1"}` →
+   `Navigated view browser-1 "gate" http://127.0.0.1:8780/?gate=1 — the document confirms it is at http://127.0.0.1:8780/?gate=1.`
+   （顺带：**落点一致分支** ⇒ 普通跨文档导航对得上，`NAV_SETTLE_MS = 250` **够用**。）
+4. 等 1 秒后 `browser_network {view_id:"browser-1"}` → **又是空表 + 又是那句 "armed … by this call"**。
+5. 决定性的一发（`browser_eval` **不会**顺手补装探针）：再 `navigate` 到 `?gate=2`，然后
+   `browser_eval {script:"({ hasRec: !!window.__aideRec, href: location.href, to: performance.timeOrigin })"}` →
+   `{ "hasRec": false, "href": "http://127.0.0.1:8780/?gate=2", "to": 1790138965492.8 }`
+
+⇒ 新文档里**没有** `window.__aideRec` ⇒ 注册的脚本从未在新文档执行。判定：**注册被接受但没交货**（门禁表第三行）。
+
+**探针 3（`innerText` 三值）：PASS，走 (a) 是正确的。** `browser_eval {script:"window.__expect()"}` 在真机 parked 视图上回
+`{ hiddenMagicVisible: false, hiddenMagicInText: true, hiddenMagicInClone: true }` —— 页面自己的 `innerText`
+**确实**把隐藏的 `HIDDENMAGIC` 滤掉了，而 DOM 里确实有这个字符串（否则这条判据是空的），
+游离 clone 上的 `innerText` **确实**退化成 `textContent` 语义（陷阱坐实）。配套的 `browser_read` 也验了：
+`## Raw text` 里没有 `HIDDENMAGIC`，隐藏区那句"隐藏的日历 1308 208 407"同样不在，NOTE 逐字符合，`#same-c` 没进可点清单。
+⇒ 不需要退回剪枝路（b）。
+
+**探针 4（往返代价 → `NAV_SETTLE_MS`）：250ms 够用。** 普通跨文档导航（`?plain=1`、`?plain=2`、`?gate=1`、`?t=1`）
+**每一次**都走"落点一致"分支，没有一次误报不符 ⇒ 不需要调大。
+
+**顺带实证的两条（原属"按构造未验"，现已量到）**：
+
+- **CDP `Page.captureScreenshot` 的 `clip` 确为文档坐标**：造一个 `scrollY=1500` 的长页，把元素放在视口外
+  （视口内 `top=1567` ⇒ 页面坐标 3067），裁出来**正是那个元素**（绿色 `STATICMARK`）。
+- **滚动页上的 `position: fixed` 元素也裁对了**（红色 `FIXEDMARK`）——这**证伪**了终审给的修法
+  （"检测 fixed 就不加滚动偏移"）：真按它改，这一格反而会坏。当时拒绝在未验证的运行时模型上改已上线逻辑是对的。
+
+**结论**：注入路改走 Rust 宿主 API `AddScriptToExecuteOnDocumentCreated`（计划 Task 13），落地后**必须重跑**验收清单。
+在此之前，判据 1–16 都不作数——那验的是"懒装"，而懒装恰好漏掉本批最想要的加载期请求。
 
 ---
 

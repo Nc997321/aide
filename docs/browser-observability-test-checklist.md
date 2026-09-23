@@ -57,6 +57,12 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 - **第一个 `grep` 回 0**：夹具没上，或端口上蹲着**别的**静态服务；第二个 `grep` 回 1 或回 0（而不是 5）= **旧夹具页**
   （元素清单对不上，判据 10/11/12 全会误判）——两种都要腾端口重起 / 换页面再跑。
 - **`/api/hang` 立刻回包**：那不是夹具服务（它是**永不回包**的），同样要腾端口重起。
+- ⚠️ **最阴的一坑（2026-09-23 实际踩到）**：端口上蹲着的是**上一场会话遗留的、同一个脚本的旧版本**——
+  自检全过（页面/端点都对），只有**新加的行为**是旧的，表现成"判据 4 莫名失败"。
+  指纹：`curl -sI http://127.0.0.1:8780/api/big | grep -i content-length` **没有输出**（旧脚本不发这个头），
+  以及自己起的那个 node 进程**启动即 EADDRINUSE 退出**（去看它的输出文件确认）。
+  处置：`netstat -ano | grep ":8780"` 拿到 PID → 确认是 `node …serve-browser-fixture.mjs` → `taskkill /PID <PID> /F` → 重起。
+  **夹具进程不会随会话结束而消失**，每场开跑前都按这条查一遍。
 
 **⑤ 开新对话**，把下面这段原样粘给 dev 实例里的 agent：
 
@@ -306,25 +312,48 @@ netstat -ano | grep LISTENING | grep ":8780"                             # 只�
 
 | # | 判据 | 调用（简） | 期望（逐字/形态） | 实测片段 | 结论 |
 |---|---|---|---|---|---|
-| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `could not be registered` 那句；新文档能看到两行加载期请求 | | |
-| 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | | |
-| 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | | |
-| 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | | |
-| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (307220 bytes)`，无正文 | | |
-| 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console`；再补 `console.error` | `[uncaught] …` 与 `[error] …` **分行** | | |
-| 6 | 未装的如实说明 | V1 首次 `browser_network`；V2 首次 `browser_console` | `NOTE: the recorder was armed in this document by this call …` | | |
-| 7 | navigate 落点 | `navigate #/two`；普通 `navigate ?plain=1/2` | 7a 报实际 `#/one`（不报假成功）；7b 两次都一致 | | |
-| 8 | 同文档导航提示 | `pushState` → `browser_wait until:"load"` | 文案含 `SAME-DOCUMENT` | | |
-| 9 | wait 实测耗时 | `browser_wait` 立刻成立的条件（`interval_ms:200`） | `(Mms …)`，M 是实测，**≠ N×200** | | |
-| 10 | Raw text 过滤 | `window.__expect()` + `browser_read` | 三布尔 `false/true/true`；Raw text 无 `HIDDENMAGIC` | | |
-| 11 | CJK 空白 | `browser_act {text:"确定"}` | 命中 `<button> "确 定" #cjk-ok` | | |
-| 12 | 歧义报数 | `browser_act {selector:".same"}` | `(2 elements matched; used index 0)`，点到 `#same-a` | | |
-| 13 | 元素截图 | `browser_screenshot {selector:"#cjk-ok"}` | 只含那个按钮的小图 + 说明行 | | |
-| 14 | 截图失败不退化 | `browser_screenshot {text:"不存在的按钮"}` | `Could not find the target:`，**无图像块** | | |
-| 15 | 裁剪坐标两处 | 造滚动页 + fixed 元素，各截一张 | 15a 含 `STATICMARK`；15b 记实际形态 | | |
-| 16 | wait 文档身份 | `performance.timeOrigin` 前后对比；自触发 reload 的等待 | 16a 前后**不等**；16b 带 `the page was replaced N time(s)` | | |
+| 0 | 注册路（门禁） | `browser_network` → navigate → `browser_network` | 无 `could not be registered` 那句；新文档能看到两行加载期请求 | 首调无那句（⇒ 桥上 ok）；导航后再读**仍是空表 + "armed by this call"**；`browser_eval` 复核 `{hasRec:false, href:"…?gate=2"}` | **FAIL**（被接受但没交货） |
+| 1 | 加载期请求可见 | `browser_network` → navigate → `browser_network` | 两行 `GET /api/ok → 200`（fetch + XHR） | 空表（见判据 0） | 未验（门禁连坐） |
+| 2 | 失败可诊断 | `__probe("fail")` → `browser_network {filter:"/api/fail"}` | `→ 500` + `No enum constant …` + 失败摘要行 | 未跑（连坐） | 未验（门禁连坐） |
+| 3 | 未结束可辨 | `__probe("hang"); "fired"` → `filter:"/api/hang"` | `(pending, Nms so far)` | 未跑（连坐） | 未验（门禁连坐） |
+| 4 | 体积闸门 | `__probe("big")` → `filter:"/api/big"` | `body skipped (307220 bytes)`，无正文 | 未跑（连坐）；**夹具侧前提已验**：`content-length: 307220` 在 | 未验（门禁连坐） |
+| 5 | 控制台吞错可查 | 点 `#btn-throw` → `browser_console`；再补 `console.error` | `[uncaught] …` 与 `[error] …` **分行** | 未跑（连坐） | 未验（门禁连坐） |
+| 6 | 未装的如实说明 | V1 首次 `browser_network`；V2 首次 `browser_console` | `NOTE: the recorder was armed in this document by this call …` | 两次都逐字出现；console 侧另有 `Console (last 0 of 0):` + `Nothing recorded yet.` | **PASS**（形态；成因注记） |
+| 7 | navigate 落点 | `navigate #/two`；普通 `navigate ?plain=1/2` | 7a 报实际 `#/one`（不报假成功）；7b 两次都一致 | 7a：`Requested …#/two … but the document reports …#/one instead.` + 两条成因；`location.hash` 复核 `"#/one"`。7b：`?plain=1`/`?plain=2` 两次都 `the document confirms it is at …` | **PASS** |
+| 8 | 同文档导航提示 | `pushState` → `browser_wait until:"load"` | 文案含 `SAME-DOCUMENT` | `Nothing was loading when this call started — the view was already ready at …?plain=2. … If you just made a SAME-DOCUMENT navigation (a hash change or history.pushState), …` | **PASS** |
+| 9 | wait 实测耗时 | `browser_wait` 立刻成立的条件（`interval_ms:200`） | `(Mms …)`，M 是实测，**≠ N×200** | `Condition met after 1 poll(s) (2ms, polling every 200ms)` | **PASS** |
+| 10 | Raw text 过滤 | `window.__expect()` + `browser_read` | 三布尔 `false/true/true`；Raw text 无 `HIDDENMAGIC` | `{hiddenMagicVisible:false, hiddenMagicInText:true, hiddenMagicInClone:true}`；`## Raw text` 无 `HIDDENMAGIC` 也无隐藏区那句；NOTE 逐字：`NOTE: 1 clickables hidden …`；可点清单里没有 `#same-c` | **PASS** |
+| 11 | CJK 空白 | `browser_act {text:"确定"}` | 命中 `<button> "确 定" #cjk-ok` | `Clicked <button> "确 定" #cjk-ok with a real mouse event via CDP at (52, 205).`（单命中 ⇒ 无脚注，符合"不许有噪音"） | **PASS** |
+| 12 | 歧义报数 | `browser_act {selector:".same"}` | `(2 elements matched; used index 0)`，点到 `#same-a` | `Clicked <button> "保存" #same-a with a real mouse event via CDP at (45, 323) (2 elements matched; used index 0).` | **PASS** |
+| 13 | 元素截图 | `browser_screenshot {selector:"#cjk-ok"}` | 只含那个按钮的小图 + 说明行 | 图 = `确 定` 按钮本身；说明行 `Screenshot of 确 定 in the embedded browser as JPEG.` | **PASS**（caption 只给标签，见 finding C） |
+| 14 | 截图失败不退化 | `browser_screenshot {text:"不存在的按钮"}` | `Could not find the target:`，**无图像块** | `Could not find the target: no element on the page contains that text "不存在的按钮"` + 候选清单，**纯文本** | **PASS** |
+| 15 | 裁剪坐标两处 | 造滚动页 + fixed 元素，各截一张 | 15a 含 `STATICMARK`；15b 记实际形态 | 场景：`scrollY=1500`；静态块视口内 `top=1567`（页面坐标 3067）、fixed `top=670`。15a = **绿色 STATICMARK**；15b = **红色 FIXEDMARK** | **PASS（两格都对）** |
+| 16 | wait 文档身份 | `performance.timeOrigin` 前后对比；自触发 reload 的等待 | 16a 前后**不等**；16b 带 `the page was replaced N time(s)` | 16a：`1790139016642.8` → `1790139027110.6`；16b：`Condition met after 2 poll(s) (504ms, polling every 500ms)` + `NOTE: the page was replaced 1 time(s) during this wait (last at poll #2) …` | **PASS** |
 
-**验收结论（YYYY-MM-DD）：N/17（判据 0–16）。** 失败项与 finding 逐条附在下面（原文，不转述）。
+**验收结论（2026-09-23）：11/17 PASS，1 FAIL（判据 0 门禁），5 条被门禁连坐未验（1–5）。**
+
+**门禁 FAIL 的完整证据链**（原文，不转述）：
+
+1. 第一步 recorder 调用（`browser_network {view_id:"browser-1"}`）回的 NOTE 只有 `armed in this document by this call`，
+   **没有** `could not be registered … rejected by the runtime` ⇒ 桥上 `ok:true` 且无方法级 error ⇒ WebView2 **收下了**该 CDP 方法。
+2. `navigate` 到 `?gate=1`（确认落点一致）→ 等 1 秒 → 再读：**又一次空表 + 又一次 "armed … by this call"**。
+3. 决定性一发（`browser_eval` 不会顺手补装探针）：`navigate ?gate=2` 后
+   `browser_eval {script:"({ hasRec: !!window.__aideRec, href: location.href, to: performance.timeOrigin })"}`
+   → `{ "hasRec": false, "href": "http://127.0.0.1:8780/?gate=2", "to": 1790138965492.8 }`
+   ⇒ 新文档里**没有**探针 ⇒ 注册的脚本从未在新文档执行。
+
+**判定**：注册**被接受但没交货** ⇒ 注入路改走 Rust 宿主 API（计划 Task 13），落地后**重跑本清单**。
+
+**三条 finding**（都不是用户操作问题）：
+
+- **A（门禁 FAIL，已定位）**：CDP `Page.addScriptToEvaluateOnNewDocument` 在本机 WebView2 上被接受但不生效。
+  在 Task 13 落地前，判据 1–5 不作数。
+- **B（顺带结论，非缺陷）**：**`NAV_SETTLE_MS = 250` 够用** —— 普通跨文档导航（`?plain=1/2`、`?gate=N`、`?t=1`）
+  每次都报"落点一致"，没有一次误报不符。清单判据 0 的顺带项结论：**不需要调大**。
+- **C（文案类，与判据 13 同批报）**：元素截图的 caption 用的是元素**标签**（`Screenshot of 确 定`），
+  而清单期望的是可辨识的描述（`<button> "确 定" #cjk-ok`）。不撒谎（图确实只有那个元素），
+  但两个同标签元素（如夹具的两个"保存"）只能靠图本身分辨；`(N elements matched; used index i)` 脚注
+  在这种情况下会补上，所以最坏情形有兜底。
 
 **回写清单**（跑完当天做完，别拖）：
 
