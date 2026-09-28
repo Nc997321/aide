@@ -133,6 +133,9 @@ pub enum DiffMode {
 }
 pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: DiffMode, cwd: Option<String>) -> Result<DiffPair, String>
 ```
+
+**`Since` 分支必须先校验 rev**：`git show <坏 rev>:<path>` 与「该 rev 下没有这个文件」在 git 层**都只是非零退出**（`show_blob` 一律 `None`）——不校验就会把整份文件误判成**新增**（old 缺失、new 存在），内容错。故先 `git rev-parse --verify <rev>^{commit}`（既有先例 `compare.rs:202`）：不通过 → **不比**，直接给 HEAD 视图并置 `DiffPair.base_missing = true`，由 TS 侧如实标注降级（§4.5）。
+
 2. **新增取基线命令**：`git_head_rev(cwd: Option<String>) -> Result<Option<String>, String>`（`git rev-parse HEAD`；非 git 仓库返回 `None` 而不是错误）。`async` + `spawn_blocking`、复用 `git_run`（**已带 `CREATE_NO_WINDOW`**，见 `commands/git/runtime.rs`）。
 3. **不做**：`git_diff_pair` 的既有三种模式语义一字不改（收口只是形状）。
 4. **协议**：`git_diff_pair` / `session_changes` / `git_revert` 均**不在远程 REGISTRY**（已核 `src-tauri/src/remote/rpc.rs` 无匹配）⇒ 本笔不动协议、不动 REGISTRY。
@@ -141,7 +144,9 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 
 `oldLabel → newLabel` 由 Rust 侧给：`Since(rev)` → `<短号> → 工作区`（今天 `HEAD → 工作区` 的形制）。
 
-`oldLabel → newLabel` 由 Rust 侧给：`Since(rev)` → `<短号> → 工作区`（今天 `HEAD → 工作区` 的形制）。**短号只在 Rust 侧截一次**（沿用 `commit_hash` 模式里 `&h[..7]` 的做法）；TS 侧的 note 直接引用 `pair.oldLabel` 里的短号，不另做一次截断。
+**短号在哪截**：非降级 note 的短号取自 **`pair.oldLabel`**（Rust 侧截一次，沿用 `commit_hash` 模式里 `&h[..7]` 的做法）；**降级 note** 的短号由适配器**从 `req.baseRev` 截取**——那个 rev 已不在仓库里，Rust 给不出来（降级时 Rust 给的 `oldLabel` 是 `HEAD`）。
+
+`DiffPair` 新增 `baseMissing: boolean`（与既有 `eolOnly` / `tooBig` / `isBinary` 同形的机制标记；常态为 `false`）。
 
 `WindowDiff.note` 五种落点，**如实说明来源**：
 
