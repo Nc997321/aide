@@ -255,8 +255,8 @@ mod tests {
     #[test]
     fn changes_serializes_base_rev_under_the_camel_case_key() {
         // 跨 IPC 的**字段名**契约：Tauri 只转换命令的**参数名**（camelCase → snake_case），
-        // 嵌套 struct 的字段名走 serde 原样。TS 侧 `ChangeRound.baseRev` 是本字段的唯一消费者，
-        // 故线上名必须逐字是 `baseRev`——写歪了字段会**静默消失**（既有 `rewind_to` 就是这么丢的）。
+        // 嵌套 struct 的字段名走 serde 原样 —— `rename_all = "camelCase"` 是这条契约的实现。
+        // 写歪一个字母字段就**静默消失**（`rewind_to` 当年就是这么丢的，见隔壁两条用例）。
         let mut r = change_round(1);
         r.base_rev = Some("b".repeat(40));
         let json = serde_json::to_string(&r).unwrap();
@@ -265,6 +265,37 @@ mod tests {
             "wire key 必须是 baseRev：{}",
             json
         );
+    }
+
+    #[test]
+    fn changes_serializes_rewind_to_under_the_camel_case_key() {
+        // 与 TS 侧 `ChangeRound.rewindTo` 逐字一致。原先本 struct 没有 rename_all → 序列化出的是
+        // `rewind_to`：写盘被 TS 的 `rewindTo` 忽略（存 null）、读回时 TS 读不到（恒 undefined）。
+        let json = serde_json::to_string(&change_round(1)).unwrap();
+        assert!(
+            json.contains("\"rewindTo\":101"),
+            "wire key 必须是 rewindTo：{}",
+            json
+        );
+    }
+
+    #[test]
+    fn changes_load_accepts_legacy_snake_case_rewind_to() {
+        // 2026-09-28 之前落盘写的是 `rewind_to`（snake）——线上名改 camelCase 后靠 alias 照读，
+        // 否则老会话的回退锚点全丢（历史轮不再能「撤回到此处」）。
+        let id = format!("test-changes-legacy-rewind-{}", std::process::id());
+        let path = changes_path(&id);
+        let _ = std::fs::remove_file(&path);
+        fs::create_dir_all(our_sessions_dir()).unwrap();
+        fs::write(
+            &path,
+            "{\"index\":1,\"time\":\"12:01\",\"files\":[],\"rewind_to\":101}\n",
+        )
+        .unwrap();
+
+        let rounds = load_session_changes_blocking(id.clone()).unwrap();
+        assert_eq!(rounds[0].rewind_to, Some(101));
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

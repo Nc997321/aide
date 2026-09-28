@@ -154,23 +154,28 @@ fn default_status() -> String {
     "M".to_string()
 }
 
+/// 一轮变更在 `<id>-changes.json` 里的一行。
+///
+/// **线上名一律 camelCase**（`rename_all`）：TS 侧 `ChangeRound` 是唯一消费者，而 Tauri
+/// 只转换**命令的参数名**、嵌套 struct 的字段名走 serde 原样。这里曾经没有 `rename_all`——
+/// `rewind_to` 与 TS 的 `rewindTo` 对不上，两个方向都**静默**失效（写盘被当未知键丢掉 →
+/// 恒 null；读回 TS 恒 undefined），历史轮的「撤回到此处」因此从不出现（2026-09-28 修）。
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct ChangeRoundData {
     pub index: u32,
     pub time: String,
     pub files: Vec<ChangeFileData>,
-    #[serde(default)]
+    /// 本轮回退锚点（.jsonl 字节位置）。`alias` 读改名之前落盘的 snake_case 键——
+    /// 老会话的回退锚点不能因为一次改名而丢。
+    #[serde(default, alias = "rewind_to")]
     pub rewind_to: Option<u64>,
     /// 本轮对应的用户提问（变更面板轮次标题用）；旧数据无此字段，默认空。
     #[serde(default)]
     pub prompt: Option<String>,
     /// 「改前」引用：**该轮开轮时刻**会话工作区仓库的 HEAD 提交。
     /// 旧数据 / 非 git 仓库 / 取失败都没有它 —— 消费端据此退回 HEAD 累计，不追溯。
-    ///
-    /// 线上名显式钉成 `baseRev`：Tauri 只转换**命令参数名**，嵌套 struct 的字段名走
-    /// serde 原样，而本字段的唯一消费者是 TS 侧 `ChangeRound.baseRev`（本 struct 没有
-    /// `rename_all`，`rewind_to` 是那之前的遗留键；写歪一个字母字段就**静默消失**）。
-    #[serde(default, rename = "baseRev")]
+    #[serde(default)]
     pub base_rev: Option<String>,
 }
 
