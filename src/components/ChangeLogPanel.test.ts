@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   revertRound: vi.fn(),
   revertSingleFile: vi.fn(),
   revertFileGlobally: vi.fn(),
+  locateSessionMessage: vi.fn(async (_sid: string, _prompt: string, _roundIndex: number) => "scrolled"),
 }));
 
 vi.mock("../composables/useFileResolver", () => ({
@@ -35,6 +36,12 @@ vi.mock("../composables/useFileViewer", () => ({
 
 vi.mock("../api", () => ({
   api: { getProjectInfo: mocks.getProjectInfo, gitDiffPair: mocks.gitDiffPair },
+}));
+
+// 定位能力住在 useChatScroll（sid 注册表）——本文件只验证「点了标题 → 递出去的
+// 载荷对不对、失败有没有出声」，真正的滚动逻辑在 useChatScroll 那边测。
+vi.mock("../composables/useChatScroll", () => ({
+  locateSessionMessage: mocks.locateSessionMessage,
 }));
 
 function seedRounds() {
@@ -479,5 +486,72 @@ describe("ChangeLogPanel — 分区", () => {
 
     expect(scroller.find(".cft-file").exists()).toBe(true);
     expect(scroller.find(".changelog-round").exists()).toBe(false);
+  });
+});
+
+describe("ChangeLogPanel — 轮次定位到聊天区", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    seedRounds();
+    mocks.workspaceOf.mockReturnValue(null);
+    mocks.locateSessionMessage.mockResolvedValue("scrolled");
+  });
+
+  function locateBtn(wrapper: Panel, roundIndex = 1) {
+    return wrapper.get(`.changelog-round[data-round="${roundIndex}"] .changelog-round-locate`);
+  }
+
+  it("点提问标题：按会话 id、提问文本、轮号递给定位入口", async () => {
+    const wrapper = mountPanel();
+    await locateBtn(wrapper).trigger("click");
+    await flushPromises();
+
+    expect(mocks.locateSessionMessage).toHaveBeenCalledWith("s1", "改点东西", 1);
+  });
+
+  it("标题不是展开按钮的嵌套后代（嵌套交互元素键盘到不了），点它不展开", async () => {
+    const wrapper = mountPanel();
+    const btn = locateBtn(wrapper);
+    // 结构判据：定位按钮与展开按钮是兄弟，不在同一个 button 内
+    expect(btn.element.closest("button.changelog-round-toggle")).toBeNull();
+
+    await btn.trigger("click");
+    await flushPromises();
+    expect(wrapper.findAll(`.changelog-round[data-round="1"] .cfl-row`)).toHaveLength(0);
+  });
+
+  it("无 prompt 的轮次置灰且点了不触发（远程端发的消息没有可对上的文本）", async () => {
+    mocks.rounds = [{ index: 1, time: "12:00:00", files: [] }];
+    const wrapper = mountPanel();
+    const btn = locateBtn(wrapper);
+
+    expect(btn.attributes("disabled")).toBeDefined();
+    await btn.trigger("click");
+    await flushPromises();
+    expect(mocks.locateSessionMessage).not.toHaveBeenCalled();
+  });
+
+  it("失败出声：找不到 / 没面板 文案分开（静默失败会被当成点了没反应）", async () => {
+    mocks.locateSessionMessage.mockResolvedValue("not-found");
+    const wrapper = mountPanel();
+    await locateBtn(wrapper).trigger("click");
+    await flushPromises();
+    expect(wrapper.get(".a-toast-text").text()).toContain("不在已加载的历史里");
+
+    mocks.locateSessionMessage.mockResolvedValue("unavailable");
+    const w2 = mountPanel();
+    await locateBtn(w2).trigger("click");
+    await flushPromises();
+    expect(w2.get(".a-toast-text").text()).toContain("没有这个会话的面板");
+  });
+
+  it("成功只留「正在定位…」，不落失败文案（补历史可能要等几百毫秒，先给回执）", async () => {
+    const wrapper = mountPanel();
+    await locateBtn(wrapper).trigger("click");
+    await flushPromises();
+
+    const text = wrapper.get(".a-toast-text").text();
+    expect(text).toContain("正在定位");
+    expect(text).not.toContain("历史");
   });
 });

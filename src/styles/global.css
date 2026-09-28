@@ -166,6 +166,27 @@ html, body, #app {
   .aide-wave-chunk { animation: none; }
 }
 
+/* ── 定位高亮脉冲（变更面板点轮次 → 跳到该轮提问气泡时打一眼） ──
+   class 由 useChatScroll.flashMessage 命令式摘挂，不是模板绑定（跨四层
+   组件透传一个「刚跳过来的那条」prop 不划算）。时长与那里 LOCATE_FLASH_MS
+   对齐——两处都改才算改对。 */
+.msg-flash {
+  animation: aide-msg-flash 1.6s var(--aide-ease) both;
+  border-radius: var(--aide-radius-sm);
+}
+@keyframes aide-msg-flash {
+  0% { background: var(--aide-accent-subtle); box-shadow: var(--aide-accent-ring); }
+  100% { background: transparent; box-shadow: none; }
+}
+/* 减弱动效时不播放动画，改静态高亮（仍由 JS 定时摘掉，反馈不丢） */
+@media (prefers-reduced-motion: reduce) {
+  .msg-flash {
+    animation: none;
+    background: var(--aide-accent-subtle);
+    box-shadow: var(--aide-accent-ring);
+  }
+}
+
 /* ── Markdown 正文（.msg-text：聊天消息 / btw 抽屉共用） ──
    与 utils/markdown.ts 的 marked 渲染输出配套。原定义在 ChatMessage.vue 的
    scoped 块里，btw 抽屉复用时提到全局——选择器语义不变，仅去掉 scoped 限定。 */

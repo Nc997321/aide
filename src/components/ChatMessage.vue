@@ -108,7 +108,12 @@ function handleTextClick(e: MouseEvent) {
 </script>
 
 <template>
-  <div :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']">
+  <!-- data-msg-id：变更面板「定位」按它找气泡（useChatScroll 的 findMessageEl，
+       量位置与加高亮脉冲都走它）。测高只认 data-row-id，加这个不会多付测量成本。 -->
+  <div
+    :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']"
+    :data-msg-id="message.id"
+  >
     <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
       <template v-for="seg in segments" :key="seg.index">
         <!-- 工具组段：组内逐条平铺，不套折叠壳（见组件头部注释）。流式期同样平铺——

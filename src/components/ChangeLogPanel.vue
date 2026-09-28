@@ -7,6 +7,7 @@ import { useDiffWindow, type DiffOpenOptions } from "../composables/useDiffWindo
 import { sessionBaseRev } from "../composables/diffSource";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { useToast } from "../composables/useToast";
+import { locateSessionMessage } from "../composables/useChatScroll";
 import { errorText } from "../utils/errors";
 import ChangeFileTree from "./ChangeFileTree.vue";
 import ChangeRoundItem from "./ChangeRoundItem.vue";
@@ -101,6 +102,25 @@ async function revertWithToast(action: () => Promise<void>) {
   } catch (e) {
     showToast(`撤回失败：${errorText(e)}`, "danger");
   }
+}
+
+/**
+ * 定位到该轮在聊天区的提问气泡。
+ *
+ * 目标面板不在本组件里（聊天区在 PaneSplit 递归深处），故走 sid 注册表
+ * （useChatScroll 的 locateSessionMessage，同 setGaugeProvider 范式）。
+ * **失败一律出声**：定位可能为了补历史花上几百毫秒，静默结束用户只会以为
+ * 「点了没反应」；而「找不到」与「没面板」是两种不同的下一步，文案要分开说。
+ */
+async function locateRound(round: ChangeRound) {
+  showToast("正在定位…", "info");
+  const outcome = await locateSessionMessage(props.sessionId, round.prompt ?? "", round.index);
+  if (outcome === "scrolled") return;
+  if (outcome === "unavailable") {
+    showToast("当前聊天区没有这个会话的面板，无法定位", "info");
+    return;
+  }
+  showToast("该轮提问不在已加载的历史里——在聊天区上滚加载更多后重试", "info");
 }
 
 /** 顶部统一树的输入：全会话累计（D2）。跨轮同路径合并，行数累加、状态取最新。 */
@@ -206,6 +226,7 @@ const renderItems = computed<RenderItem[]>(() => {
             :expanded="expandedRounds.has(item.round.index)"
             :workspace-root="wsRoot"
             @toggle="toggleRound(item.round.index)"
+            @locate="locateRound(item.round)"
             @open-file="openFile"
             @open-diff="(row: TouchedFile) => openDiffForRound(item.round, row)"
             @revert-round="revertWithToast(() => revertRound(item.round))"

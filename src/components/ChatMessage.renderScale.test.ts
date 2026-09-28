@@ -132,3 +132,39 @@ describe("ChatMessage 渲染规模守卫", () => {
     }
   });
 });
+
+/**
+ * data-msg-id 契约：useChatScroll 的「定位到某轮提问」（变更面板入口）靠它找气泡
+ * ——量位置（messageTop）与加高亮脉冲（flashMessage）都按这个属性遍历 DOM。
+ * 属性要是没渲染出来，定位会**静默**降级成「找不到」（用户只看到一句提示，不会
+ * 知道是根元素少了属性），所以钉在这里。
+ */
+describe("ChatMessage — 定位锚点属性", () => {
+  /** 注意：本文件这套 mount 下 `w.element` 是 VTU 的挂载容器（data-v-app），
+   *  不是组件根元素——要按选择器取根。 */
+  function rootOf(message: ChatMessageType) {
+    const w = mount(ChatMessage, { props: { message } });
+    const root = w.find("[data-msg-id]");
+    return { w, root };
+  }
+
+  it("根元素带 data-msg-id，等于消息 id", () => {
+    const message = makeMessage([text(1)], true);
+    const { w, root } = rootOf(message);
+
+    expect(root.exists()).toBe(true);
+    expect(root.attributes("data-msg-id")).toBe(message.id);
+    expect(root.classes()).toContain("msg-row");
+    w.unmount();
+  });
+
+  it("user 与 assistant 两边都有（定位目标是用户气泡，但契约不按角色分叉）", () => {
+    for (const role of ["user", "assistant"] as const) {
+      const message: ChatMessageType = { ...makeMessage([text(1)], true), role };
+      const { w, root } = rootOf(message);
+
+      expect(root.attributes("data-msg-id"), `role=${role}`).toBe(message.id);
+      w.unmount();
+    }
+  });
+});

@@ -27,6 +27,7 @@ import {
   type LiveWindowState,
   type Row,
 } from "./useChatSession/recycle";
+import { locateUserMessage, type UserMessageHit } from "@aide/sdk/composables/useChatSession/locateMessage";
 
 /**
  * 聊天滚动区主控（行模型 + 页级回收，2026-08-28 重构）：
@@ -85,12 +86,59 @@ export interface ChatScrollPagination {
   loadOlder: (limit: number) => Promise<number>;
 }
 
+/** `scrollToMessage` 的结果：调用方据此如实反馈，不猜。 */
+export type LocateOutcome = "scrolled" | "not-found" | "unavailable";
+
+// ── 定位能力注册表（模块级，按 sid 挂）────────────────────────────────────────
+// 变更面板在 App.vue 的右栏，而聊天面板在 PaneSplit 的递归深处（PaneLayout →
+// PaneSplit → PaneGroup → ChatPanel 四层）。为一次「跳过去」把 handler 逐层透传
+// 下来不划算，多分屏下还要自己判断该交给哪个组；改按 sid 注册即可——会话在任意
+// tab 内全局唯一（usePaneLayout 的不变量），所以 sid → 唯一面板。
+// 同 setGaugeProvider 的范式（它就在本文件里，同一个理由）。
+type LocateHandler = (prompt: string, roundIndex: number) => Promise<LocateOutcome>;
+
+const locateHandlers = new Map<string, LocateHandler>();
+
+function setLocateHandler(sid: string, fn: LocateHandler): void {
+  locateHandlers.set(sid, fn); // 同 sid 重复注册即覆盖（切会话/换面板实例）
+}
+
+function clearLocateHandler(sid: string): void {
+  locateHandlers.delete(sid);
+}
+
+/** 定位入口（变更面板调）：把某轮次的用户气泡跳到视口。
+ *  `sid` 没挂面板 / 面板未注册 → "unavailable"（如实反馈，不猜）。 */
+export function locateSessionMessage(
+  sid: string,
+  prompt: string,
+  roundIndex: number,
+): Promise<LocateOutcome> {
+  const handler = sid ? locateHandlers.get(sid) : undefined;
+  if (!handler) return Promise.resolve("unavailable");
+  return handler(prompt, roundIndex);
+}
+
 const DEFAULT_PAGE_BYTES = 256 * 1024;
 /** 滚动停驻判定：距最后一次 scroll 事件这么久才结算回收/取回（滚动途中不动结构，
  *  避免快速翻页时页在脚下被抽走）。 */
 const SCROLL_SETTLE_MS = 200;
 /** 骨架取回预取边距：骨架进入视口 ±1.5 屏就取回（不必等它滚进视口才加载）。 */
 const SKELETON_PREFETCH_MARGIN = 1.5;
+/** 定位高亮脉冲时长：够看清落在哪条，又不至于一直亮着。 */
+const LOCATE_FLASH_MS = 1600;
+/** 定位时「补历史」的最大步数（一步 = 一页或一次骨架取回）。
+ *
+ *  刻意**不**一路取到会话起点：目标在极早历史时，为一次跳转把整场会话拖进内存
+ *  （几十次 IPC + 逐页渲染）比跳不过去更糟——2MB ≈ RECYCLE_BYTES_BUDGET，也就是
+ *  回收机制认定的「常驻窗口」量级。这个预算内取不到就如实报「找不到」，由用户
+ *  自己上滚加载后重点（也顺带盖住动作胶囊/纯图片这类本来就无处可跳的轮次，
+ *  它们的 prompt 是标签/占位文本，取多久都匹配不上）。 */
+const LOCATE_MAX_GROW_STEPS = 8;
+/** 等结构性操作让路的轮询间隔与上限：loadOlder/骨架取回都按 tailOffset/骨架下标
+ *  mutate 行模型，**不可并行**（并行会重复 prepend）。 */
+const STRUCTURAL_IDLE_POLL_MS = 25;
+const STRUCTURAL_IDLE_MAX_POLLS = 40;
 
 /** rAF 不可用时（如极简运行时）退到 setTimeout，保证不崩。 */
 function defaultScheduleFrame(cb: () => void): () => void {
@@ -200,7 +248,10 @@ export function useChatScroll(
    */
   type LandPin =
     | { kind: "bottom" }
-    | { kind: "anchor"; distBottom: number; anchor?: ScrollMemory["anchor"] };
+    | { kind: "anchor"; distBottom: number; anchor?: ScrollMemory["anchor"] }
+    /** 定位到具体某条消息（变更面板轮次「定位」用）：比行级锚更细——
+     *  一行（页）可含多条消息，行级落点会停在该页页首而不是那条气泡上。 */
+    | { kind: "message"; messageId: string };
 
   /** 锚行元素当前文档位置（相对滚动内容顶，含行上方已挂内容）；null = 锚行
    *  未挂载（尾部窗口之外）或无几何可读（jsdom/未布局）。遍历 children 比对
@@ -238,6 +289,45 @@ export function useChatScroll(
     return clamp(el.scrollHeight - pin.distBottom);
   }
 
+  /** 按 data-msg-id 找消息元素。遍历行 → 消息，不依赖 id 的 CSS 选择器安全性
+   *  （同 anchorRowTop 的取舍）。null = 未挂载（所在页被释放成骨架等）。 */
+  function findMessageEl(root: HTMLElement, messageId: string): HTMLElement | null {
+    for (let i = 0; i < root.children.length; i++) {
+      const rowEl = root.children[i] as HTMLElement;
+      for (let j = 0; j < rowEl.children.length; j++) {
+        const child = rowEl.children[j] as HTMLElement;
+        if (child.dataset?.msgId === messageId) return child;
+      }
+    }
+    return null;
+  }
+
+  /** 消息元素在滚动内容里的文档位置（相对内容顶）；null = 未挂载或无几何可读（未布局）。 */
+  function messageTop(el: HTMLDivElement, messageId: string): number | null {
+    const root = contentEl.value;
+    if (!root) return null;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.height <= 0) return null;
+    const target = findMessageEl(root, messageId);
+    if (!target) return null;
+    const rect = target.getBoundingClientRect();
+    if (rect.height <= 0) return null;
+    return el.scrollTop + (rect.top - elRect.top);
+  }
+
+  /** 落点计算统一入口：按 pin 种类分派，返回值一律已 clamp 可直接写入。 */
+  function landTarget(el: HTMLDivElement, pin: LandPin): number {
+    if (pin.kind === "bottom") return el.scrollHeight;
+    const max = Math.max(0, el.scrollHeight - el.clientHeight);
+    const clamp = (v: number) => (v < 0 ? 0 : v > max ? max : v);
+    if (pin.kind === "message") {
+      const top = messageTop(el, pin.messageId);
+      // 未挂载（所在页被释放/骨架替换中）：钳底，挂入后再由第二帧校准
+      return top === null ? max : clamp(top);
+    }
+    return landAnchored(el, pin);
+  }
+
   /** 切入落位（一次性挂载后唯一的写入通道）：双帧校准——第一帧落一次（DOM 刚
    *  patch），第二帧复量复落（图片/字体/高亮会在下一帧再把行高推一次，原
    *  finishRamp 的双帧语义原样保留）；落点近底才恢复跟随，防残留 scroll 回波把
@@ -246,7 +336,7 @@ export function useChatScroll(
    *  被调用，那一刻 DOM 还是**上一个会话**的——在旧 DOM 上读 scrollHeight 会把
    *  落点与判定基线一起锚错（2026-09-01 实测：首帧写 0 → patch 后 scrollTop
    *  被置到新 DOM 的 max → 位置钉死在误判点）。 */
-  function landScrollAfterMount(pin: Extract<LandPin, { kind: "anchor" }>): void {
+  function landScrollAfterMount(pin: LandPin): void {
     landCancel();
     landing.value = true;
     landRaf = scheduleFrame(() => {
@@ -256,7 +346,7 @@ export function useChatScroll(
         landCancel();
         return;
       }
-      el.scrollTop = landAnchored(el, pin);
+      el.scrollTop = landTarget(el, pin);
       landRaf = scheduleFrame(() => {
         if (!landing.value) return;
         const el2 = scrollEl.value;
@@ -264,7 +354,7 @@ export function useChatScroll(
           landCancel();
           return;
         }
-        el2.scrollTop = landAnchored(el2, pin);
+        el2.scrollTop = landTarget(el2, pin);
         if (el2.scrollHeight - el2.scrollTop - el2.clientHeight < 48) autoScroll.value = true;
         landing.value = false;
         landRaf = null;
@@ -604,6 +694,110 @@ export function useChatScroll(
     }
   }
 
+  // ── 定位：变更面板轮次 → 聊天区用户气泡 ────────────────────────────────────
+  // 入口供变更面板用（点轮次标题跳过去）。判据在 locateMessage.ts（纯函数：文本
+  // 为主、序号仅消歧），这里只管 DOM 三件事——补历史、落点、高亮。
+
+  let flashTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /** 给定位到的气泡加一次性高亮脉冲。视口里一堆气泡，不加分不清跳到哪条。 */
+  function flashMessage(messageId: string): void {
+    const root = contentEl.value;
+    const target = root ? findMessageEl(root, messageId) : null;
+    if (!target) return;
+    // 连续定位同一条时动画要能重放：摘掉 → 强制回流 → 加回
+    target.classList.remove("msg-flash");
+    void target.offsetWidth;
+    target.classList.add("msg-flash");
+    if (flashTimer) clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      flashTimer = null;
+      target.classList.remove("msg-flash");
+    }, LOCATE_FLASH_MS);
+  }
+
+  /** 等结构性操作让路（见常量注释）。false = 久等不让，本次放弃。 */
+  async function waitStructuralIdle(): Promise<boolean> {
+    for (let i = 0; i < STRUCTURAL_IDLE_MAX_POLLS; i++) {
+      if (!loadingOlder.value && !restoring.value) return true;
+      await new Promise((r) => setTimeout(r, STRUCTURAL_IDLE_POLL_MS));
+    }
+    return false;
+  }
+
+  /** 取回一个已释放页（骨架 → 真实内容），返回是否取得进展。 */
+  async function restoreOneSkeleton(sid: string): Promise<boolean> {
+    const skeleton = rows.value.find((r) => r.kind === "skeleton");
+    if (!skeleton) return false;
+    restoring.value = true;
+    try {
+      // 刻意不走 restoreAnchored：那套带视口补偿，而我们马上要跳到别处，补偿白做
+      return (await restorePage(sid, skeleton.pageIndex)) > 0;
+    } finally {
+      restoring.value = false;
+    }
+  }
+
+  /** 让行模型多覆盖一段历史（一次一步）。两种缺口都补：更早的页还没取 =
+   *  loadOlder；已在窗口内但被折成骨架 = 取回。true = 取得进展。 */
+  async function growWindowOnce(sid: string): Promise<boolean> {
+    if (!(await waitStructuralIdle())) return false;
+    if (pagination?.hasMore()) {
+      loadingOlder.value = true;
+      try {
+        return (await pagination.loadOlder(pageBytes)) > 0;
+      } finally {
+        loadingOlder.value = false;
+      }
+    }
+    return restoreOneSkeleton(sid);
+  }
+
+  /** 定位；未命中就先补历史再试（用户选的「自动取回再跳」）。 */
+  async function locateWithFetch(prompt: string, roundIndex: number): Promise<UserMessageHit | null> {
+    const sid = sessionId();
+    if (!sid) return null;
+    for (let step = 0; step <= LOCATE_MAX_GROW_STEPS; step++) {
+      const hit = locateUserMessage(rows.value, {
+        prompt,
+        roundIndex,
+        fromStart: !(pagination?.hasMore() ?? false),
+      });
+      if (hit) return hit;
+      if (step === LOCATE_MAX_GROW_STEPS) break; // 步数用尽：如实报找不到，不猜
+      if (!(await growWindowOnce(sid))) break; // 无可再补：到顶
+    }
+    return null;
+  }
+
+  /** 命中落点 → 消息 id（live 行恒 0，页行取行内下标）。 */
+  function messageIdOfHit(list: readonly Row[], hit: UserMessageHit): string | null {
+    const row = list.find((r) => r.id === hit.rowId);
+    if (row?.kind === "live") return row.message.id;
+    if (row?.kind === "page") return row.messages[hit.messageIndex]?.id ?? null;
+    return null;
+  }
+
+  /**
+   * 定位到某轮次的用户气泡：补历史 → 落点 → 高亮。
+   * "scrolled" = 已跳；"not-found" = 找遍可取历史都没有（如实反馈）；"unavailable"
+   * = 当前没有可定位的会话或标题（空 prompt / 无会话）。
+   */
+  async function scrollToMessage(prompt: string, roundIndex: number): Promise<LocateOutcome> {
+    if (!sessionId() || !prompt) return "unavailable";
+    const hit = await locateWithFetch(prompt, roundIndex);
+    if (!hit) return "not-found";
+    const messageId = messageIdOfHit(rows.value, hit);
+    if (!messageId) return "not-found";
+    // 主动跳看历史 = 脱离跟随，否则置底会把刚落好的视口拉走
+    autoScroll.value = false;
+    newWhileAway.value = false;
+    landScrollAfterMount({ kind: "message", messageId });
+    // 高亮排到落位首帧之后：那一刻 scrollTop 已写好，动画才在视口里看得见
+    scheduleFrame(() => flashMessage(messageId));
+    return "scrolled";
+  }
+
   // ── 滚轮接管 ──────────────────────────────────────────────────────────────
   // 根因（见 [[nested-scroller-wheel-trap]]；采集现场的那套 scrollTrail 已随案子结案退役）：
   // 合成器滚轮路径把 maxScrollOffset 焊死在内容首次溢出视口那一刻的值，之后内容
@@ -794,6 +988,19 @@ export function useChatScroll(
     gaugeSid = sid;
   }
 
+  /** 按当前会话（重）注册定位能力：与读数同一条生命周期（切会话换 key）。 */
+  let locateSid: string | null = null;
+  function syncLocateHandler() {
+    if (!mounted) return;
+    const sid = sessionId() ?? "";
+    if (sid === locateSid) return;
+    if (locateSid) clearLocateHandler(locateSid);
+    locateSid = null;
+    if (!sid) return;
+    setLocateHandler(sid, scrollToMessage);
+    locateSid = sid;
+  }
+
   // ── 置底的统一触发器：数据层 watcher 只能枚举「新消息 / 文本增量」，但让滚动条
   //    搁浅的来源远不止这些——内容增高（变更卡 DiffViewer 到达、图片异步加载、历史
   //    扩窗……）与视口变化（权限对话框出现/消失、Pane 拖拽、窗口缩放）。枚举数据必然
@@ -807,6 +1014,7 @@ export function useChatScroll(
     onMounted(() => {
       mounted = true;
       syncGaugeProvider(); // 挂载即交出现场（此后切会话由 watch(sessionId) 重新登记）
+      syncLocateHandler(); // 定位能力同一时刻交出去（变更面板的「跳过去」靠它）
       // 滚轮接管（见 onWheel）：独立于 RO——RO 在无 ResizeObserver 环境（jsdom）会
       // 提前 return，但 wheel 监听不依赖 RO，必须无条件挂。
       scrollEl.value?.addEventListener("wheel", onWheel, { passive: false });
@@ -821,6 +1029,8 @@ export function useChatScroll(
       mounted = false;
       if (gaugeSid) clearGaugeProvider(gaugeSid);
       gaugeSid = null;
+      if (locateSid) clearLocateHandler(locateSid);
+      locateSid = null;
       contentObserver?.disconnect();
       contentObserver = null;
       scrollEl.value?.removeEventListener("wheel", onWheel);
@@ -832,6 +1042,7 @@ export function useChatScroll(
     sessionId,
     (newId, oldId) => {
       syncGaugeProvider(); // 现场读数跟着换会话（未挂载时是 no-op）
+      syncLocateHandler(); // 定位能力同样换到新会话的 key
       // 离开的会话：记录位置 + 离底距离（watch 在渲染前执行，scrollEl 还是旧 DOM，
       // 读数准确）+ 内容锚点（视口顶所在行，见 ScrollMemory.anchor——后台 evict 收缩
       // 下 distBottom 会系统性偏上，锚点是修复）。切回时锚定恢复——否则每次切回都被
@@ -925,6 +1136,10 @@ export function useChatScroll(
       clearTimeout(settleTimer);
       settleTimer = null;
     }
+    if (flashTimer) {
+      clearTimeout(flashTimer);
+      flashTimer = null;
+    }
     contentObserver?.disconnect();
     contentObserver = null;
   }
@@ -943,5 +1158,7 @@ export function useChatScroll(
     expandOlderAnchored,
     restoreAnchored,
     expandLiveAnchored,
+    /** 定位到某轮次的用户气泡（变更面板「定位」入口，见其实现注释）。 */
+    scrollToMessage,
   };
 }

@@ -22,6 +22,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   toggle: [];
+  /** 点击提问标题：把聊天区视口定位到该轮的用户气泡（见 ChangeLogPanel 的接线） */
+  locate: [];
   "open-file": [f: ChangeFile];
   "open-diff": [row: TouchedFile];
   "revert-round": [];
@@ -55,6 +57,9 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
     :data-round="round.index"
   >
     <div class="changelog-round-header">
+      <!-- 展开/收起：chevron + 轮号。提问另占一个可点区域（见下），
+           故按钮区与标题区拆开——标题若留在按钮内就是嵌套交互元素，
+           键盘与读屏都到不了它。 -->
       <button
         class="changelog-round-toggle"
         :aria-expanded="expanded ? 'true' : 'false'"
@@ -68,11 +73,17 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
           <path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
         <span class="changelog-round-label">轮 {{ round.index }}</span>
-        <span
-          class="changelog-round-title"
-          :class="{ 'changelog-round-title--empty': !round.prompt }"
-          v-tooltip="round.prompt || undefined"
-        >{{ round.prompt || '（无提问记录）' }}</span>
+      </button>
+      <!-- 提问 = 定位入口：点它把聊天区视口跳到该轮的用户气泡。
+           无 prompt 的轮次（远程端发的消息不经过本地 prepareSend，取不到提问）
+           置灰——没有文本就没有可对上的气泡，不让用户白点。 -->
+      <button
+        class="changelog-round-locate"
+        :disabled="!round.prompt"
+        v-tooltip="round.prompt ? '点击定位到该轮提问' : '（无提问记录，不可定位）'"
+        @click="emit('locate')"
+      >{{ round.prompt || '（无提问记录）' }}</button>
+      <span class="changelog-round-rest">
         <span
           v-if="round.pending"
           class="changelog-round-live"
@@ -87,7 +98,7 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
           <span v-else class="changelog-round-meta--empty">{{ emptyLabel }}</span>
         </span>
         <span class="changelog-round-time">{{ round.time }}</span>
-      </button>
+      </span>
       <button
         v-if="typeof round.rewindTo === 'number'"
         class="changelog-round-revert"
@@ -127,8 +138,7 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
 }
 
 .changelog-round-toggle {
-  flex: 1;
-  min-width: 0;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -175,19 +185,49 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
   color: var(--aide-accent);
 }
 
-.changelog-round-title {
+/* 提问＝定位入口：吃掉剩余宽度（原 flex:1 的标题位），点它跳聊天区 */
+.changelog-round-locate {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  padding: 4px 2px;
+  border: none;
+  background: none;
+  font-family: inherit;
   font-size: 12px;
   color: var(--aide-text-secondary);
+  text-align: left;
+  cursor: pointer;
+  border-radius: var(--aide-radius-sm);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 
-.changelog-round-title--empty {
+.changelog-round-locate:hover:not(:disabled) {
+  background: var(--aide-accent-subtle);
+  color: var(--aide-text-primary);
+}
+
+.changelog-round-locate:focus-visible {
+  outline: 1px solid var(--aide-accent);
+  outline-offset: -1px;
+}
+
+/* 无提问记录（远程端发的消息取不到文本）：置灰——没有文本就没有能对上的气泡 */
+.changelog-round-locate:disabled {
   color: var(--aide-text-muted);
   font-style: italic;
+  cursor: default;
+}
+
+/* 进行中徽章 + 规模 + 时间：右侧一组，非交互元素（展开由左侧按钮负责） */
+.changelog-round-rest {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-right: 4px;
 }
 
 /* ── 进行中轮次 ── */
