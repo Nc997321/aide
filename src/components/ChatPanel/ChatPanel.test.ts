@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
-import { nextTick } from "vue";
+import { nextTick, ref } from "vue";
 import type { ProviderConfig, ProviderModelMappings } from "@/types";
 
 // ── Tauri（useChatSession 模块级 import 需要）──
@@ -69,7 +69,18 @@ vi.mock("../../composables/useFileClipboard", () => ({ peekFileClipboard: () => 
 // AppLogo 导入 /icon.png（vite 公共资源）在 jsdom 下会崩，stub 掉。
 vi.mock("../AppLogo.vue", () => ({ default: { name: "AppLogo", template: "<div class='app-logo-stub' />" } }));
 
+// 结算卡在本文件里换成薄壳：接线要验的是"注入了 feed 才渲染、且喂进去的是这份 feed"，
+// 卡片内部的形态归 TurnChangeCard.test.ts。壳也顺带挡住卡片那串 composable 依赖。
+vi.mock("./TurnChangeCard.vue", () => ({
+  default: {
+    name: "TurnChangeCard",
+    props: { feed: { type: Object, required: true }, sessionId: { type: String, required: false, default: null } },
+    template: "<div class='tf-stub' :data-sid='sessionId' />",
+  },
+}));
+
 import ChatPanel from "./ChatPanel.vue";
+import { TURN_CHANGES_KEY } from "./turnChanges";
 import { useSessionProviders } from "../../composables/useSessionProviders";
 import { useProviders } from "../../composables/useProviders";
 
@@ -399,5 +410,26 @@ describe("ChatPanel — 档位跟随模式（日常 / 工程）", () => {
     expect(effortValueOf(wrapper)).toBe("max");
 
     wrapper.unmount();
+  });
+});
+
+describe("ChatPanel — 回合结算卡的接线", () => {
+  const feed = { sid: "s1", rounds: [], revertSingleFile: async () => {} };
+
+  it("没有 feed（非桌面宿主 / 测试）→ 整块不渲染", () => {
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "s1" }) });
+    expect(w.find(".tf-stub").exists()).toBe(false);
+  });
+
+  it("注入了 feed → 渲染在消息流行末，并把 feed 与本面板会话一起交给卡片", () => {
+    const w = mount(ChatPanel, {
+      props: baseProps({ sessionId: "s1" }),
+      global: { provide: { [TURN_CHANGES_KEY]: ref(feed) } },
+    });
+    const stub = w.get(".tf-stub");
+    expect(stub.attributes("data-sid")).toBe("s1");
+    expect(w.findComponent({ name: "TurnChangeCard" }).props("feed")).toEqual(feed);
+    // 位置：消息流行末（v-for 之后、内容盒之内）
+    expect(w.get(".chat-messages-body").element.lastElementChild?.classList.contains("tf-stub")).toBe(true);
   });
 });

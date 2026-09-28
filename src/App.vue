@@ -39,12 +39,13 @@ import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
 import { useResizable, staticWidthSource } from "./composables/useResizable";
 import { useConversationChanges } from "./composables/useConversationChanges";
+import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/turnChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
-import { ref, onMounted, onUnmounted, nextTick, watch, computed } from "vue";
+import { ref, onMounted, onUnmounted, nextTick, watch, computed, provide } from "vue";
 import { useSettings } from "./composables/useSettings";
 import { useOnboarding } from "./composables/useOnboarding";
 import { useWindowFocus } from "./composables/useWindowFocus";
@@ -320,6 +321,17 @@ const { notice, choice } = useModal();
 // ── Conversation changes（P2-4 合一：唯一实例，badge + 变更面板共用，
 //    ChangeLogPanel 不再自建 useConversationChanges，走 props 透传）──
 const { rounds, revertRound, revertSingleFile, revertFileGlobally } = useConversationChanges(() => activeSessionId.value);
+
+// 回合变更结算卡的数据源：与右栏变更面板**同一份 rounds**（唯一实例），只多带一个
+// sid——卡片据此判断这份数据是不是自己那个会话的（分屏里另一组显示的是别的会话）。
+// 走 provide 而不是逐层透传：PaneLayout → PaneSplit（递归）→ PaneGroup → ChatPanel
+// 要为这一个叶子加四个文件的转发（先例见 panelayout/keys.ts 的 WORKSPACE_PATH_KEY）。
+provide(TURN_CHANGES_KEY, computed<TurnChangesFeed>(() => ({
+  sid: activeSessionId.value,
+  rounds: rounds.value,
+  revertSingleFile,
+})));
+
 const changeCount = computed(() => {
   let n = 0;
   for (const r of rounds.value) n += r.files.length;

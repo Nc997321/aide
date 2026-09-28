@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onMounted, onUnmounted } from "vue";
+import { ref, watch, nextTick, computed, onMounted, onUnmounted, inject } from "vue";
 import ChatRow from "./ChatRow.vue";
+import TurnChangeCard from "./TurnChangeCard.vue";
+import { TURN_CHANGES_KEY } from "./turnChanges";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import ContextCompactionStatus from "../ContextCompactionStatus.vue";
@@ -105,6 +107,10 @@ const emit = defineEmits<{
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
 }>();
+
+/** 回合变更结算卡的数据（App 唯一实例的投影，见 turnChanges.ts）。没有它的宿主
+ *  （单测 / 非桌面宿主）整块不渲染——不是渲染一张空卡。 */
+const turnChanges = inject(TURN_CHANGES_KEY, null);
 
 const rootEl = ref<HTMLElement | null>(null);
 let widthObserver: ResizeObserver | null = null;
@@ -535,6 +541,13 @@ function onOpenBgDock(taskId: string) {
           @open-bg-dock="onOpenBgDock"
           @restore="restoreAnchored"
           @expand-live="expandLiveAnchored"
+        />
+        <!-- 回合变更结算卡：挂在消息流尾部、跟随当前轮（spec 2026-09-24）——
+             读完回答、正想"接下来呢"的那一秒它就在视线里。0 个文件的轮整卡不渲染。 -->
+        <TurnChangeCard
+          v-if="turnChanges"
+          :feed="turnChanges"
+          :session-id="props.sessionId"
         />
       </div>
       </div>
