@@ -256,13 +256,13 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 1. **§4.6 措辞修正**：`api.gitHeadRev` 的合法调用点就是 `startRound`（基线**生产者**），已在 §4.6 改写并记录实测 grep 输出。
 2. **`assemble_diff_pair` 的 10 参收口不止换结构体**：尾段按职责拆成 `normalized_texts` / `detect_binary` / `derive_status`，满足"每个函数 ≤4 输入"（`DiffSides` 8 字段的对象化不豁免数量）。行为逐字不变，既有用例兜底。
 3. **新字段线上名显式钉成 `baseRev`**（`#[serde(default, rename = "baseRev")]`）：Tauri 只转换**命令参数名**，嵌套 struct 的字段名走 serde 原样——写歪一个字母字段就静默消失。
-4. **发现一处既有 bug（本笔不修，已上报）**：`ChangeRoundData` 无 `rename_all`，既有 `rewind_to`(Rust) ↔ `rewindTo`(TS) **双向静默失联**（实证：本会话 `~/.aide/sessions/<id>-changes.json` 7/7 轮 `"rewind_to":null`；反向亦断）→ **重载后历史轮的「撤回到此处」不出现**。修法（另一笔）：该 struct 加 `rename_all = "camelCase"` + `rewind_to` 加 `alias = "rewind_to"` 兼容旧文件。
+4. **修掉一处既有 bug（用户拍板，独立提交 `a79b3ada`）**：`ChangeRoundData` 无 `rename_all`，既有 `rewind_to`(Rust) ↔ `rewindTo`(TS) **双向静默失联**（实证：本会话 `~/.aide/sessions/<id>-changes.json` 7/7 轮 `"rewind_to":null`；反向亦断）→ **重载后历史轮的「撤回到此处」不出现**。修法：该 struct 加 `rename_all = "camelCase"` 对齐两端 + `rewind_to` 加 `alias = "rewind_to"` 照读旧文件。TDD 三步都跑过：先见 camelCase 线上名用例红 → 只加 `rename_all` 见 alias 用例红（证明改名会丢老会话的锚点）→ 补齐转绿。**同一类问题的点检**：`BranchInfo` / `RecentSession` 等 TS 侧本就写 snake_case 的 struct 是一致的（镜像线上名），SDK 里那批 `wsKey` 全是命令参数或 `<id>.json` 的显式字面键——**孤例，无第二处**。
 
-### 9.4 验收命令与结果（最后一次**代码**改动 = `b71f1813` 之后；末笔仅文档）
+### 9.4 验收命令与结果（最后一次代码改动之后）
 
 | 命令 | 结果 |
 |---|---|
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 932 passed / 0 failed / 2 ignored |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 934 passed / 0 failed / 2 ignored |
 | `pnpm test` | 271 文件 / 3435 passed / 1 skipped |
 | `npx vue-tsc --noEmit` | 0 报错 |
 | §4.6 的 grep | 见 §4.6（全部合法） |
