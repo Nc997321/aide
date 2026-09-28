@@ -1,7 +1,7 @@
 # 变更「改前」的来源端口 + 基线源（设计）
 
 日期：2026-09-28
-状态：**待评审**
+状态：**已实现（2026-09-28）；真机未跑**（内容层由 Rust 真 git 临时仓用例证明，见 §9）
 起因：用户实测报告——面板「全部文件」里点任何文件，diff 窗口显示 `⋮ N unchanged lines ⋮`（两侧逐字节相同），而面板记着该文件 +29 −30。
 相关：`docs/superpowers/specs/2026-09-24-turn-change-card-design.md`（结算卡，本轮刚落地，其展开清单走同一条 diff 通路）
 
@@ -160,8 +160,13 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 
 ### 4.6 依赖方向（可 grep 验收）
 
-- `api.gitDiffPair` / `api.gitHeadRev` 的引用**只允许出现在 `diffSource/git.ts`**；`useDiffWindow` / 面板 / 卡片只认端口。
-- 验收：`grep -rn "gitDiffPair\|gitHeadRev" src packages --include=*.ts --include=*.vue | grep -v diffSource/git.ts | grep -v "\.test\.ts"` 只应命中 **api 门面自身**与 Git 面板的两个调用点（`GitPanel.vue:196` / `GitCompare.vue:113`）。后两者**不受端口约束**（它们是另一条既有通路：Git 面板直接看仓库），但本笔的 `DiffMode` 收口会改到它们的**调用写法**（语义不变）。
+- **内容来源**：`api.gitDiffPair` 的引用**只允许出现在 `diffSource/git.ts`**；`useDiffWindow` / 面板 / 卡片只认端口。
+- **基线生产者**：`api.gitHeadRev` 的唯一调用点是 `useConversationChanges.startRound`（§4.3）——它产出的 `baseRev` 是端口的**输入**，不是内容来源；端口管的是"内容从哪来"，不管元数据怎么取，故不受本约束。
+- 验收（实施后实测）：`grep -rn "gitDiffPair\|gitHeadRev" src packages --include=*.ts --include=*.vue | grep -v diffSource/git.ts | grep -v "\.test\.ts"` 命中四处，全部合法：
+  - `packages/aide-sdk/src/api.ts`（门面自身；同处的 `gitDiffPairRefs` 是另一条命令，被 `gitDiffPair` 子串带出）；
+  - `src/components/GitPanel.vue:202` / `src/components/git-panel/GitCompare.vue:113`（Git 面板的**既有通路**：直接看仓库，不受端口约束；本笔只改了 `DiffMode` 的调用写法，语义不变）；
+  - `src/composables/useConversationChanges.ts:202`（基线生产者，见上）；
+  - `packages/aide-sdk/src/types.ts:79`（`DiffMode` 注释里的**文字提及**，非调用）。
 
 ---
 
@@ -212,3 +217,55 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 3. TS 端口：`diffSource.ts` + 两个适配器 + 链与口径的单测；`useDiffWindow.openDiff` 改签名
 4. 消费者与取基线：`startRound` 取 sha；面板树行改传 `scope: "session"`、轮行与卡片传 `round`；组件测试
 5. 夹具截图 + spec 状态回写
+
+---
+
+## 9. 实现状态（2026-09-28）
+
+**已实现；真机未跑。** 提交从 `b5e7de9e` 起共 6 个：spec 修漏洞 → Rust 机制层 → 类型与落盘 → TS 端口 → 门面与接线 → 夹具与本回写（末笔只动文档）。
+
+### 9.1 §6 自测表逐条 → 覆盖它的测试
+
+| 要证明的事 | 覆盖 |
+|---|---|
+| **报告场景**：改 → 提交 → 回看仍可见 | `diffpair.rs::diff_pair_tests::since_rev_shows_change_after_commit`（真临时仓：v1 提交 → 记 sha → 改并提交 v2 → `Since(sha_v1)` 的旧侧是 **v1 内容**，不是 HEAD） |
+| 降级：rev 不可达 | `since_rev_missing_falls_back_to_head_view`（`base_missing` 置位、内容仍是 HEAD 视图、**不误判为新增**） |
+| 降级：无基线（老会话） | `diffSource.test.ts`「无基线 → `Unstaged`，note 照抄今天那句，一字不改」 |
+| 口径选对 | 端口 5 例（`diffSource.test.ts`）；消费者：`ChangeLogPanel.test.ts`（树 = **首轮** sha、轮 = **该轮** sha）、`TurnChangeCard.test.ts`（本轮口径 + 无基线传 `undefined`） |
+| 选源不再靠嗅探 | `diffSource.test.ts`「session + **有片段** → 仍走 git：口径优先于数据形状」 |
+| 落盘兼容 | `changes.rs`：`changes_round_trips_base_rev` / `changes_load_without_base_rev_is_none` / `changes_serializes_base_rev_under_the_camel_case_key`（线上名契约） |
+| 取基线时机 | `useConversationChanges.test.ts` 三条：开轮取一次并写进轮记录 / 非 git 仓库负缓存（两轮只 spawn 一次）/ 抛错**不**缓存（下一轮还要试） |
+| 行为不变（重构安全性） | `useDiffWindow.test.ts` 6 例（载荷与标注语义保留）+ `diff_pair_tests` 既有 7 例 + `batch_tests` 5 例 + `compare` 既有例 |
+| 视觉 | `docs/prototypes/_harness/diff-note-live.{html,ts}`（真 `WindowDiffPane`）：四条 note 各 **1 个行盒**（`Range.getClientRects` 实测）、宽 234 / 246 / 246 / 324px（窗宽 778）、diff 区仍占 195 / 220px；短号 7 位 |
+| 真机（可选，30 秒） | **未跑**（见 9.4） |
+
+### 9.2 §5 边界：逐条守住
+
+| 边界 | 实测 |
+|---|---|
+| 不持久化片段 | `touches` 仍被 `stripRuntimeFields` 剥掉（既有用例「落盘剥掉运行时字段」） |
+| 不逐文件基线 | 只有 `ChangeRound.baseRev` 一个 sha |
+| 跨目录会话文件 | 基线属于会话仓库；适配器只在 `baseRev` 有值时走 `Since`，取不到即退化为 HEAD 累计 |
+| 老会话不追溯 | Rust `#[serde(default)]` + TS `baseRev?`；老数据照读（用例已钉） |
+| `DiffViewer` / 文件查看器渲染不动 | 产品侧未改（`fileviewer/*` 只在夹具里被挂载） |
+| sidecar / 协议 / REGISTRY 不动 | `git diff --stat` 24 个文件全在 §9.3 清单内，sidecar 零改动 |
+| 「全部文件」树聚合口径不动 | `mergeChangeFiles` 未改 |
+
+### 9.3 实施中的四处偏差（完整台账见 SDD workspace）
+
+1. **§4.6 措辞修正**：`api.gitHeadRev` 的合法调用点就是 `startRound`（基线**生产者**），已在 §4.6 改写并记录实测 grep 输出。
+2. **`assemble_diff_pair` 的 10 参收口不止换结构体**：尾段按职责拆成 `normalized_texts` / `detect_binary` / `derive_status`，满足"每个函数 ≤4 输入"（`DiffSides` 8 字段的对象化不豁免数量）。行为逐字不变，既有用例兜底。
+3. **新字段线上名显式钉成 `baseRev`**（`#[serde(default, rename = "baseRev")]`）：Tauri 只转换**命令参数名**，嵌套 struct 的字段名走 serde 原样——写歪一个字母字段就静默消失。
+4. **发现一处既有 bug（本笔不修，已上报）**：`ChangeRoundData` 无 `rename_all`，既有 `rewind_to`(Rust) ↔ `rewindTo`(TS) **双向静默失联**（实证：本会话 `~/.aide/sessions/<id>-changes.json` 7/7 轮 `"rewind_to":null`；反向亦断）→ **重载后历史轮的「撤回到此处」不出现**。修法（另一笔）：该 struct 加 `rename_all = "camelCase"` + `rewind_to` 加 `alias = "rewind_to"` 兼容旧文件。
+
+### 9.4 验收命令与结果（最后一次**代码**改动 = `b71f1813` 之后；末笔仅文档）
+
+| 命令 | 结果 |
+|---|---|
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 932 passed / 0 failed / 2 ignored |
+| `pnpm test` | 271 文件 / 3435 passed / 1 skipped |
+| `npx vue-tsc --noEmit` | 0 报错 |
+| §4.6 的 grep | 见 §4.6（全部合法） |
+
+**真机（可选）**：在报告场景里点「全部文件」里任一文件 → diff 有内容且标注写明口径。未跑的理由：内容层已由真仓用例证明，口径与降级链由单测钉住，note 文案由真组件夹具核对——真机只增加"这台机器上确实如此"的确认，不增加信息。
+
