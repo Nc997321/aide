@@ -127,6 +127,7 @@ mod tests {
             }],
             rewind_to: Some(100 + index as u64),
             prompt: Some(format!("提问 {index}")),
+            base_rev: None,
         }
     }
 
@@ -248,6 +249,55 @@ mod tests {
 
         assert!(load_session_changes_blocking(id.clone()).is_err());
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn changes_serializes_base_rev_under_the_camel_case_key() {
+        // 跨 IPC 的**字段名**契约：Tauri 只转换命令的**参数名**（camelCase → snake_case），
+        // 嵌套 struct 的字段名走 serde 原样。TS 侧 `ChangeRound.baseRev` 是本字段的唯一消费者，
+        // 故线上名必须逐字是 `baseRev`——写歪了字段会**静默消失**（既有 `rewind_to` 就是这么丢的）。
+        let mut r = change_round(1);
+        r.base_rev = Some("b".repeat(40));
+        let json = serde_json::to_string(&r).unwrap();
+        assert!(
+            json.contains("\"baseRev\":\"bbbb"),
+            "wire key 必须是 baseRev：{}",
+            json
+        );
+    }
+
+    #[test]
+    fn changes_round_trips_base_rev() {
+        let id = format!("test-changes-baserev-{}", std::process::id());
+        let path = changes_path(&id);
+        let _ = std::fs::remove_file(&path);
+
+        let mut r = change_round(1);
+        r.base_rev = Some("a".repeat(40));
+        append_session_change_blocking(id.clone(), r).unwrap();
+
+        let rounds = load_session_changes_blocking(id.clone()).unwrap();
+        assert_eq!(rounds[0].base_rev.as_deref(), Some("a".repeat(40).as_str()));
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn changes_load_without_base_rev_is_none() {
+        // 2026-09-28 之前写下的轮记录没有该字段 → 必须照读（老会话不追溯、退化为 HEAD 累计）
+        let id = format!("test-changes-nobaserev-{}", std::process::id());
+        let path = changes_path(&id);
+        let _ = std::fs::remove_file(&path);
+        fs::create_dir_all(our_sessions_dir()).unwrap();
+        fs::write(
+            &path,
+            "{\"index\":1,\"time\":\"12:01\",\"files\":[],\"rewind_to\":101,\"prompt\":\"提问 1\"}\n",
+        )
+        .unwrap();
+
+        let rounds = load_session_changes_blocking(id.clone()).unwrap();
+        assert_eq!(rounds.len(), 1);
+        assert_eq!(rounds[0].base_rev, None);
         let _ = std::fs::remove_file(&path);
     }
 }

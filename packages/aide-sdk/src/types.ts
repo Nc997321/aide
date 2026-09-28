@@ -71,6 +71,9 @@ export interface DiffPair {
   isBinary: boolean;
   eolOnly: boolean;
   tooBig: boolean;
+  /** 机制标记：请求的基线提交已不在仓库中（rebase / GC），本次给的是 HEAD 视图。
+   *  与 eolOnly / tooBig / isBinary 同形——由 Rust 侧置位，消费端据此如实标注降级。 */
+  baseMissing?: boolean;
 }
 
 export interface LastEventInfo {
@@ -94,6 +97,10 @@ export interface ChangeRound {
    *  与 `files` 同源——`files` 是它的落盘投影（`toChangeFiles`）。
    *  历史轮（从磁盘加载）只有 `files`、没有它 → 点开走累计视图。 */
   touches?: TouchedFile[];
+  /** 「改前」引用：该轮开轮时刻的 HEAD 提交（开轮时取；旧数据没有）。
+   *  消费端按口径取用：轮视图取本轮、全部文件树取**首轮**的（会话起点）。
+   *  线上名即本名 `baseRev`（Rust `ChangeRoundData` 侧显式 rename，见其注释）。 */
+  baseRev?: string;
 }
 
 export interface Keybindings {

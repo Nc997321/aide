@@ -164,6 +164,14 @@ pub struct ChangeRoundData {
     /// 本轮对应的用户提问（变更面板轮次标题用）；旧数据无此字段，默认空。
     #[serde(default)]
     pub prompt: Option<String>,
+    /// 「改前」引用：**该轮开轮时刻**会话工作区仓库的 HEAD 提交。
+    /// 旧数据 / 非 git 仓库 / 取失败都没有它 —— 消费端据此退回 HEAD 累计，不追溯。
+    ///
+    /// 线上名显式钉成 `baseRev`：Tauri 只转换**命令参数名**，嵌套 struct 的字段名走
+    /// serde 原样，而本字段的唯一消费者是 TS 侧 `ChangeRound.baseRev`（本 struct 没有
+    /// `rename_all`，`rewind_to` 是那之前的遗留键；写歪一个字母字段就**静默消失**）。
+    #[serde(default, rename = "baseRev")]
+    pub base_rev: Option<String>,
 }
 
 // ── WorkspaceState ──
