@@ -53,7 +53,7 @@ describe("useDiffWindow", () => {
       ],
     });
 
-    await useDiffWindow().openDiff(row, "C:/repo");
+    await useDiffWindow().openDiff(row, { scope: "round", workspaceRoot: "C:/repo" });
 
     // 有片段就不查 git：本轮的精确 diff 与 HEAD 无关
     expect(mocks.gitDiffPair).not.toHaveBeenCalled();
@@ -67,14 +67,14 @@ describe("useDiffWindow", () => {
   });
 
   it("窗口拿绝对路径，git 拿仓库相对路径 + 会话工作区根当 cwd", async () => {
-    await useDiffWindow().openDiff(touched(), "C:/repo");
+    await useDiffWindow().openDiff(touched(), { scope: "round", workspaceRoot: "C:/repo" });
 
     expect(mocks.open.mock.calls[0]?.[0]).toBe("C:/repo/src/a.ts");
-    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/a.ts", { cwd: "C:/repo" });
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/a.ts", { mode: { kind: "unstaged" }, cwd: "C:/repo" });
   });
 
   it("无片段：回退 git 累计视图（单段）并标注来源", async () => {
-    await useDiffWindow().openDiff(touched(), "C:/repo");
+    await useDiffWindow().openDiff(touched(), { scope: "round", workspaceRoot: "C:/repo" });
 
     const diff = openedDiff();
     expect(diff?.parts).toHaveLength(1);
@@ -83,9 +83,9 @@ describe("useDiffWindow", () => {
   });
 
   it("无工作区根：cwd 透传 undefined（后端回落仓库根），窗口仍用原路径", async () => {
-    await useDiffWindow().openDiff(touched(), undefined);
+    await useDiffWindow().openDiff(touched(), { scope: "round", workspaceRoot: undefined });
 
-    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/a.ts", { cwd: undefined });
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/a.ts", { mode: { kind: "unstaged" }, cwd: undefined });
     expect(mocks.open.mock.calls[0]?.[0]).toBe("src/a.ts");
   });
 
@@ -96,7 +96,7 @@ describe("useDiffWindow", () => {
       segments: [{ oldText: "", newText: "AAA", addCount: 1, delCount: 0 }],
     });
 
-    await useDiffWindow().openDiff(row, "C:/repo");
+    await useDiffWindow().openDiff(row, { scope: "round", workspaceRoot: "C:/repo" });
 
     const part = openedDiff()?.parts[0];
     expect(part?.pair.status).toBe("added");
@@ -107,7 +107,7 @@ describe("useDiffWindow", () => {
   it("git 取 pair 失败：向上抛（调用方给用户反馈），窗口不打开", async () => {
     mocks.gitDiffPair.mockRejectedValueOnce(new Error("not a git repository"));
 
-    await expect(useDiffWindow().openDiff(touched(), "C:/repo")).rejects.toThrow(
+    await expect(useDiffWindow().openDiff(touched(), { scope: "round", workspaceRoot: "C:/repo" })).rejects.toThrow(
       "not a git repository",
     );
     expect(mocks.open).not.toHaveBeenCalled();
