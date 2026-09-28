@@ -1270,6 +1270,12 @@ export class SessionWorker {
       if (ev.type === "bg_task_ended") this.stopBgTaskTail(ev.id);
       this.emit(ev);
     }
+    // 子代理同理：进程没了，它们的终态通知再也来不了（异步子代理靠 structured
+    // task_notification 收尾）——补发「未产出」终态，dock 不留僵尸「N 个运行中」。
+    for (const id of this.subagentTracker.drainActive()) {
+      this.stopOutputTail(id);
+      this.emit({ type: "subagent_end", id, result: "（会话已停止，子代理未产出）", is_error: true });
+    }
     this.currentQuery?.close?.();
     this.currentQuery = null;
     // 兜底强杀（N4）：close() 是**优雅**关闭——query 为空 / CLI 卡在等权限或长工具

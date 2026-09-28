@@ -107,3 +107,20 @@ describe("SubagentTracker.getAgentName", () => {
     expect(t.getAgentName("u1")).toBeUndefined();
   });
 });
+
+// 会话终结兜底（对齐 BgTaskTracker.stopAllRunning）：进程没了，在跟踪的子代理再也
+// 等不到终态（异步子代理靠 structured task_notification 收尾）——drainActive 让
+// 调用方能把它们一次性收尾，UI 不留僵尸「运行中」。
+describe("SubagentTracker.drainActive", () => {
+  it("返回全部在跟踪的 id 并清空跟踪表（幂等）", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("u1", { subagent_type: "Explore", description: "a" });
+    t.handleToolUse("u2", { subagent_type: "Explore", description: "b" });
+    t.registerAsync("u2", "agent-2", "/tmp/u2.output");
+    expect(t.drainActive().sort()).toEqual(["u1", "u2"]);
+    expect(t.isActive("u1")).toBe(false);
+    expect(t.isAsync("u2")).toBe(false);
+    expect(t.getAsyncOutputFile("u2")).toBeUndefined();
+    expect(t.drainActive()).toEqual([]); // 幂等
+  });
+});

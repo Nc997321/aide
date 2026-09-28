@@ -216,6 +216,17 @@ describe("SessionWorker — fork source / routing key invariants", () => {
     expect(worker.isActive()).toBe(false);
   });
 
+  it("stop() 给在跟踪的子代理补终态（异步子代理的完成通知再也来不了）", () => {
+    const { worker, events } = makeWorker("s-stop");
+    worker.subagentTracker.handleToolUse("a1", { subagent_type: "Explore", description: "d" });
+    worker.subagentTracker.registerAsync("a1", "agent-1", "/tmp/a1.output");
+    worker.stop();
+    expect(events.filter((e) => e.type === "subagent_end")).toEqual([
+      { type: "subagent_end", id: "a1", result: "（会话已停止，子代理未产出）", is_error: true },
+    ]);
+    expect(worker.subagentTracker.isActive("a1")).toBe(false);
+  });
+
   it("stop() sets stopped flag (startLoop must exit before spawning)", () => {
     const { worker } = makeWorker();
     expect(worker._testIsStopped()).toBe(false);

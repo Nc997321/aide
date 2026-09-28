@@ -112,4 +112,18 @@ export class SubagentTracker {
     this.turnDispatchCount = 0;
     return n;
   }
+
+  /** 会话终结（session_stop / claude.exe 死亡）兜底：进程没了，在跟踪的子代理再也
+   *  等不到终态（异步子代理靠 structured task_notification 收尾）——返回其 id 列表
+   *  并清空跟踪表，调用方按 id 补发终态事件，UI 不留僵尸「运行中」。
+   *  事件构造不在这里（本类不碰 ChatEvent，同 handleToolResult 的边界）。幂等。 */
+  drainActive(): string[] {
+    const ids = [...this.active];
+    this.active.clear();
+    this.asyncMeta.clear();
+    this.modelReported.clear();
+    this.names.clear();
+    this.depthByToolUseId.clear();
+    return ids;
+  }
 }
