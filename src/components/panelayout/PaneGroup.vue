@@ -57,6 +57,9 @@ const {
   bgTasks,
   bgDockOpen,
   bgDockSelectedId,
+  subagents,
+  subagentDockOpen,
+  subagentDockSelectedId,
   rollbackText,
   consumeRollbackText,
   sendMessage,
@@ -232,6 +235,9 @@ async function onPickMode(mode: ChatMode) {
       :bg-tasks="bgTasks"
       :bg-dock-open="bgDockOpen"
       v-model:bg-dock-selected-id="bgDockSelectedId"
+      :subagents="subagents"
+      :subagent-dock-open="subagentDockOpen"
+      v-model:subagent-dock-selected-id="subagentDockSelectedId"
       :permission="pendingPermission"
       :permission-queue-count="pendingPermissionCount"
       :rollback-text="rollbackText"

@@ -1,65 +1,62 @@
 <script setup lang="ts">
-import { ref, computed } from "vue";
-import type { SubagentBlock, SubagentEntry, ToolCallBlock as ToolCallBlockData } from "@/types/chat";
-import ToolCallBlock from "./ToolCallBlock.vue";
-import { truncatedLabel } from "@/utils/messageBytes";
+import { computed, ref } from "vue";
+import type { SubagentBlock } from "@/types/chat";
+import SubagentTimeline from "./subagent/SubagentTimeline.vue";
+import { subagentStatus, subagentStepCount } from "@/utils/subagent";
 
-type ToolEntry = Extract<SubagentEntry, { type: "tool" }>;
-
+/**
+ * 消息流里的子代理块：**折叠行就是全部**（方案 A）——一行摘要「Agent · 类型 ·
+ * 描述 · 模型 · 状态步数 · 步数墨线」，点开才在原位展开完整时间线。
+ *
+ * 为什么默认一行：定稿消息里子代理会被折进过程胶囊（限高 440px 内滚），展开态
+ * 动辄上千像素，既看不全也别想扫读；「有几个在跑 / 跑到哪了」交给输入框上方的
+ * 子代理 dock（SubagentDock），消息流只留「这一轮派过谁、结果如何」。
+ */
 const props = defineProps<{ block: SubagentBlock }>();
-const expanded = ref(false);
-// 派发指令（task prompt）默认折叠——superpowers 的 implementer 契约能上千字，
-// 默认只露一行「派发指令 · N 字」，点开看全文。
-const promptExpanded = ref(false);
 
-const status = computed<"done" | "run" | "err">(() => {
-  if (props.block.isPending) return "run";
-  if (props.block.isError) return "err";
-  return "done";
+const expanded = ref(false);
+
+/** 状态三态：跑 / 完成 / 出错 —— 摘要胶囊、左条、文字色都据它取。 */
+const status = computed(() => subagentStatus(props.block));
+
+const stepCount = computed(() => subagentStepCount(props.block));
+
+/** 摘要里的状态胶囊：「● 8 步」这种，扫一眼就知道跑到哪；还没迈步的子代理退化成
+ *  措辞（0 步写出来只是噪音）。 */
+const statusChip = computed(() => {
+  const n = stepCount.value;
+  if (status.value === "run") return n > 0 ? `● ${n} 步` : "● 运行中";
+  if (status.value === "err") return n > 0 ? `✗ ${n} 步` : "✗ 出错";
+  return n > 0 ? `✓ ${n} 步` : "✓ 完成";
 });
 
-const stepCount = computed(() => props.block.entries.filter((e) => e.type === "tool").length);
+/** 微型步数墨线：一竖条 = 一步，密度即「这个子代理干了多少活」。只运行中画 ——
+ *  它是「正在动」的信号；完成后步数已成静态事实，数字足够。超上限截断，防长跑
+ *  子代理把一行铺满。 */
+const MAX_TICKS = 12;
+const ticks = computed(() => (status.value === "run" ? Math.min(stepCount.value, MAX_TICKS) : 0));
 
-const promptLabel = computed(() => `派发指令 · ${props.block.prompt?.length ?? 0} 字`);
-
-/** 把子代理内部的 tool entry 适配成主线程 ToolCallBlock 的 prop 形状，复用墨线渲染：
- *  子代理的工具步与主线程工具调用同款（铜点 / 虚线左尺 / SVG 箭头 / Bash 的 xterm /
- *  Edit 的 diff），保证嵌套时间线与父线程视觉同构。 */
-function asToolBlock(e: ToolEntry): ToolCallBlockData {
-  const parentRunning = props.block.isPending;
-  return {
-    type: "tool_call",
-    id: e.toolUseId,
-    name: e.toolName,
-    input: e.input,
-    result: e.result,
-    isError: e.isError,
-    // P2-1 写入时截断透传：ToolCallBlock 已有 .ti-truncated 渲染路径，零新 UI
-    truncated: e.truncated,
-    // 子步无独立 pending 流；父还在跑且本步尚无产出 → 视为执行中，复用呼吸点。
-    isPending: parentRunning && !e.result && !e.isError,
-  };
-}
+const statusHint = computed(() => {
+  if (status.value === "run") return "子代理执行中";
+  if (status.value === "err") return "子代理出错";
+  return "子代理已完成";
+});
 </script>
 
 <template>
   <div class="sa" :class="`sa--${status}`">
-    <!-- 分支括号：左侧铜色细线 + 方括号节点，标识「这是一段被嵌套的子线程」——
-         不是卡片盒子，而是主线程墨线的一条分支。方括号（上+左+下描边、右开口）
-         字面即「围合一个子线程」，与工具调用条目的圆点（主脊上的里程碑点）
-         形状区分、材质同源。 -->
-    <span class="sa-rail" aria-hidden="true">
-      <span class="sa-node"></span>
-    </span>
-
     <div class="sa-content">
-      <!-- 折叠行：角色 + 类型 pill + 描述 + 模型 + 步数 + 箭头 -->
+      <!-- 折叠行：角色 + 类型 pill + 描述 + 模型 + 状态步数 + 步数墨线 + 箭头。
+           这一行就是子代理在消息流里的全部存在感；完整时间线在后面（点开才有）。 -->
       <button class="sa-head" :aria-expanded="expanded" @click="expanded = !expanded">
         <span class="sa-role">Agent</span>
         <span class="sa-type" v-tooltip="`子代理类型：${block.agentName}`">{{ block.agentName }}</span>
         <span class="sa-desc">{{ block.description }}</span>
         <span v-if="block.model" class="sa-model" v-tooltip="`子代理使用的模型：${block.model}`">{{ block.model }}</span>
-        <span v-if="block.isPending && stepCount" class="sa-steps">{{ stepCount }} 步</span>
+        <span class="sa-chip" :class="`sa-chip--${status}`" v-tooltip="statusHint">{{ statusChip }}</span>
+        <span v-if="ticks" class="sa-ticks" aria-hidden="true">
+          <i v-for="n in ticks" :key="n"></i>
+        </span>
         <svg
           class="sa-chev" :class="{ 'sa-chev--open': expanded }"
           width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
@@ -68,66 +65,16 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
         </svg>
       </button>
 
-      <!-- 展开体：子线程的完整时间线，挂在虚线铜色左尺上。
-           派发指令（输入）→ 工具步 / 思考 / 文本（过程）→ 最终产出（输出），按发生顺序
-           排在同一条墨线上，嵌套关系编码在线条里，不靠卡片盒子暗示。 -->
-      <div v-if="expanded" class="sa-timeline">
-        <!-- 派发指令：主代理派发时塞进 Agent 工具 input 的完整任务描述（如 superpowers
-             的 implementer 契约）。作为时间线首项，折叠只露一行标签，点开看全文。 -->
-        <div v-if="block.prompt" class="sa-prompt">
-          <button class="sa-prompt-toggle" :aria-expanded="promptExpanded" @click="promptExpanded = !promptExpanded">
-            <svg class="sa-prompt-glyph" width="12" height="14" viewBox="0 0 12 14" fill="none" aria-hidden="true">
-              <!-- 带折角的页面轮廓 -->
-              <path d="M2 1.5h5l3 3v8h-8z" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" />
-              <!-- 折角 -->
-              <path d="M7 1.5v3h3" stroke="currentColor" stroke-width="1.1" stroke-linejoin="round" />
-              <!-- 正文行 -->
-              <path d="M3.5 7h5M3.5 9h5M3.5 11h3" stroke="currentColor" stroke-width="0.9" stroke-linecap="round" />
-            </svg>
-            <span class="sa-prompt-label">{{ promptLabel }}</span>
-            <svg
-              class="sa-chev" :class="{ 'sa-chev--open': promptExpanded }"
-              width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
-            >
-              <path d="M2 1.5l4 4.5-4 4.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
-            </svg>
-          </button>
-          <pre v-if="promptExpanded" class="sa-prompt-body">{{ block.prompt }}</pre>
-        </div>
-
-        <!-- 工具步 / 思考 / 文本：工具步直接复用 <ToolCallBlock>，与父线程同款墨线渲染。
-             entry.truncated（P2-1 写入时截断）→ text/thinking 尾随省略小标，
-             tool 走 asToolBlock 透传给 ToolCallBlock 的 .ti-truncated。 -->
-        <template v-for="(entry, i) in block.entries" :key="i">
-          <ToolCallBlock v-if="entry.type === 'tool'" :block="asToolBlock(entry)" />
-          <p v-else-if="entry.type === 'thinking'" class="sa-thinking">
-            {{ entry.text }}<span v-if="entry.truncated" class="sa-truncated">…{{ truncatedLabel(entry.truncated.originalBytes) }}</span>
-          </p>
-          <p v-else class="sa-text">
-            {{ entry.text }}<span v-if="entry.truncated" class="sa-truncated">…{{ truncatedLabel(entry.truncated.originalBytes) }}</span>
-          </p>
-        </template>
-
-        <!-- 降级占位：子代理 entries/result 大载荷已被摘要替换 -->
-        <div v-if="block.truncated" class="sa-truncated">{{ truncatedLabel(block.truncated.originalBytes) }}</div>
-
-        <!-- 最终产出（输出）：时间线尾端，子线程的收束。
-             有 entries 时它是工具步之后的总结；无 entries 时它是唯一产出。
-             resultTruncated（P2-1 写入时截断）在 pre 后随行小标。 -->
-        <div v-if="block.result" class="sa-result-wrap">
-          <pre class="sa-result">{{ block.result }}</pre>
-          <span v-if="block.resultTruncated" class="sa-truncated">…{{ truncatedLabel(block.resultTruncated.originalBytes) }}</span>
-        </div>
-        <div v-else-if="!block.entries.length && !block.truncated" class="sa-pending">
-          {{ block.asyncLaunched ? "子代理后台运行中…" : "子代理执行中…" }}
-        </div>
-      </div>
+      <!-- 展开体：完整时间线（派发指令 → 工具步/思考/文本 → 最终产出），与子代理 dock
+           的阅读区同一份实现（subagent/SubagentTimeline.vue）。 -->
+      <SubagentTimeline v-if="expanded" :block="block" />
     </div>
   </div>
 </template>
 
 <style scoped>
-/* 子代理：GALLERY .subagent — agentAccent 左边条 + 渐变背景 + 嵌套虚线 */
+/* 子代理：GALLERY .subagent — agentAccent 左边条 + 渐变背景。
+   左边条是子代理在整个应用里的签名（dock 状态条同款），认条不认字。 */
 .sa {
   position: relative;
   display: flex;
@@ -144,9 +91,9 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-/* GALLERY 子代理不再需要左侧括号节点，改用 agentAccent 色左边条 */
-.sa-rail {
-  display: none;
+/* 出错：左条转危险色 —— 折叠态一行也要能看出「这个子代理没跑成」 */
+.sa--err {
+  border-left-color: var(--aide-danger);
 }
 
 .sa-content {
@@ -216,15 +163,42 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   border-radius: 4px;
   padding: 0 4px;
 }
-.sa-steps {
+
+/* 状态胶囊：跑=agentAccent，完成=success，出错=danger */
+.sa-chip {
   flex-shrink: 0;
-  font-size: 10px;
-  font-style: italic;
-  color: var(--aide-text-muted);
+  font-size: 10.5px;
+  font-family: var(--aide-font-mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
+.sa-chip--run {
+  color: var(--aide-agent-accent);
+}
+.sa-chip--done {
+  color: var(--aide-success);
+}
+.sa-chip--err {
+  color: var(--aide-danger);
+}
+
+/* 步数墨线：一竖条一步（运行中才有） */
+.sa-ticks {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.sa-ticks i {
+  width: 3px;
+  height: 9px;
+  border-radius: 1px;
+  background: var(--aide-agent-accent);
+  opacity: 0.85;
+}
+
 .sa-chev {
   flex-shrink: 0;
-  font-size: 9px;
   color: var(--aide-text-muted);
   transition: transform var(--aide-ease-t);
 }
@@ -232,112 +206,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
   transform: rotate(90deg);
 }
 
-/* 子线程时间线：GALLERY .sa-nested 嵌套虚线缩进 */
-.sa-timeline {
-  margin: 0 12px 10px 22px;
-  border-left: 1px dashed color-mix(in srgb, var(--aide-agent-accent) 30%, transparent);
-  padding-left: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-/* 嵌套工具头行：GALLERY .sa-nested .tc-head */
-.sa-timeline :deep(.ti-row) {
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
-  background: var(--aide-bg-deep);
-}
-
-/* 派发指令行 */
-.sa-prompt {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.sa-prompt-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px 12px;
-  background: none;
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  color: var(--aide-text-secondary);
-  font-family: inherit;
-  font-size: 11px;
-  text-align: left;
-  transition: background var(--aide-ease-t), color var(--aide-ease-t);
-}
-.sa-prompt-toggle:hover {
-  background: color-mix(in srgb, var(--aide-agent-accent) 8%, transparent);
-  color: var(--aide-text-primary);
-}
-.sa-prompt-glyph {
-  flex-shrink: 0;
-  color: var(--aide-text-muted);
-}
-.sa-prompt-label {
-  flex: 1;
-}
-.sa-prompt-body {
-  margin: 0;
-  max-height: 260px;
-  overflow: auto;
-  white-space: pre-wrap;
-  font-size: 11px;
-  font-family: var(--aide-font-mono);
-  color: var(--aide-text-secondary);
-  background: var(--aide-bg-deep);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
-  padding: 6px 8px;
-  line-height: 1.5;
-}
-
-.sa-text {
-  margin: 0;
-  font-size: 11px;
-  white-space: pre-wrap;
-  color: var(--aide-text-secondary);
-}
-.sa-thinking {
-  margin: 0;
-  font-size: 11px;
-  white-space: pre-wrap;
-  color: var(--aide-text-muted);
-  font-style: italic;
-  opacity: 0.85;
-}
-
-.sa-result-wrap {
-  display: flex;
-  align-items: baseline;
-  gap: 6px;
-}
-.sa-result {
-  margin: 4px 0 0;
-  max-height: 240px;
-  overflow: auto;
-  white-space: pre-wrap;
-  font-size: 11.5px;
-  color: var(--aide-text-secondary);
-}
-.sa-pending {
-  padding: 2px 0;
-  font-style: italic;
-  color: var(--aide-text-muted);
-}
-.sa-truncated {
-  padding: 2px 0;
-  font-style: italic;
-  color: var(--aide-text-muted);
-}
-
-.sa-head:focus-visible,
-.sa-prompt-toggle:focus-visible {
+.sa-head:focus-visible {
   outline: 1px solid var(--aide-agent-accent);
   outline-offset: 1px;
 }

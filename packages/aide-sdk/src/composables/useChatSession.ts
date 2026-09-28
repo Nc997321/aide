@@ -43,6 +43,7 @@ import {
   sharedRateLimit,
   stopSessionById,
   toggleBgDock,
+  toggleSubagentDock,
   type SessionStore,
 } from "./useChatSession/state";
 import { __setEvictThresholdsForTest } from "./useChatSession/evict";
@@ -594,6 +595,16 @@ export function useChatSession(sessionId: Ref<string | null>) {
         if (s) s.bgDockSelectedId = v;
       },
     }),
+    /** 本会话派发过的子代理（运行中 + 已结束，时间序）——子代理 dock 的数据源。 */
+    subagents: computed(() => current.value?.subagents ?? []),
+    subagentDockOpen: computed(() => current.value?.subagentDockOpen ?? false),
+    subagentDockSelectedId: computed({
+      get: () => current.value?.subagentDockSelectedId ?? null,
+      set: (v) => {
+        const s = current.value;
+        if (s) s.subagentDockSelectedId = v;
+      },
+    }),
     sendMessage,
     sendBtw,
     respondPermission,
@@ -647,7 +658,7 @@ export async function canSendOrPrompt(): Promise<boolean> {
 }
 
 // ── 对外 re-export（子模块门面：外部只从宿主 import，目录结构即架构层级）──
-export { toggleBgDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
+export { toggleBgDock, toggleSubagentDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
 export { __setEvictThresholdsForTest };
 export { loadOlderPage, hasMoreOlder, resetPaginationForRevert };
 export { messagesOf } from "./useChatSession/state";

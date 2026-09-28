@@ -17,7 +17,8 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest } from "./useChatSession";
+import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest, toggleSubagentDock } from "./useChatSession";
+import { SUBAGENTS_CAP } from "./useChatSession/state";
 import { useBtwSession } from "./useBtwSession";
 import { useSessionState } from "./useSessionState";
 import { useSessionProviders } from "./useSessionProviders";
@@ -2083,5 +2084,118 @@ describe("正文逐字流式 + 空增量补戳（2026-09-13）", () => {
     await flush();
 
     expect(assistantBlocks(chat).map((b) => b.type)).toEqual(["text", "tool_call"]);
+  });
+});
+
+describe("子代理 dock — 派发列表与开合（2026-09-28）", () => {
+  beforeEach(() => {
+    __resetForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+  });
+
+  const startSubagent = (id: string, description = "调研 XXX") =>
+    emit({ type: "subagent_start", id, agentName: "Explore", description, session_id: "uuid-a" });
+  const endSubagent = (id: string) =>
+    emit({ type: "subagent_end", id, result: "结论", is_error: false, session_id: "uuid-a" });
+
+  async function openedChat() {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+    return chat;
+  }
+
+  it("派发即入列表；结束后仍留着（可回看），直到关面板才清", async () => {
+    const chat = await openedChat();
+
+    startSubagent("a1");
+    await flush();
+    expect(chat.subagents.value.map((s) => s.id)).toEqual(["a1"]);
+    expect(chat.subagents.value[0].isPending).toBe(true);
+    expect(chat.subagentDockOpen.value).toBe(false);
+
+    endSubagent("a1");
+    await flush();
+    expect(chat.subagents.value.map((s) => s.id)).toEqual(["a1"]); // 结束不移除
+    expect(chat.subagents.value[0].isPending).toBe(false);
+
+    toggleSubagentDock("uuid-a");
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(true);
+
+    toggleSubagentDock("uuid-a"); // 关闭 → 已结束的清掉
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(false);
+    expect(chat.subagents.value).toEqual([]);
+  });
+
+  it("关闭只清已结束的，运行中的留着——状态条还要继续报「N 个运行中」", async () => {
+    const chat = await openedChat();
+    startSubagent("a1");
+    startSubagent("a2");
+    await flush();
+    endSubagent("a1");
+    await flush();
+
+    toggleSubagentDock("uuid-a");
+    await flush();
+    toggleSubagentDock("uuid-a");
+    await flush();
+
+    expect(chat.subagents.value.map((s) => s.id)).toEqual(["a2"]);
+    expect(chat.subagents.value[0].isPending).toBe(true);
+  });
+
+  it("带 selectedId 打开：选中指定子代理；已开着时只切选中不关面板", async () => {
+    const chat = await openedChat();
+    startSubagent("a1");
+    startSubagent("a2");
+    await flush();
+
+    toggleSubagentDock("uuid-a", "a1");
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(true);
+    expect(chat.subagentDockSelectedId.value).toBe("a1");
+
+    toggleSubagentDock("uuid-a", "a2"); // 已开着：只切选中
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(true);
+    expect(chat.subagentDockSelectedId.value).toBe("a2");
+  });
+
+  it("不带 selectedId 打开：默认选中最近派发的运行中子代理", async () => {
+    const chat = await openedChat();
+    startSubagent("a1");
+    endSubagent("a1");
+    startSubagent("a2");
+    await flush();
+
+    toggleSubagentDock("uuid-a");
+    await flush();
+    expect(chat.subagentDockSelectedId.value).toBe("a2");
+  });
+
+  it(`列表上限 ${SUBAGENTS_CAP}：淘汰最老的已结束项，运行中的永不动`, async () => {
+    const chat = await openedChat();
+    startSubagent("a0");
+    endSubagent("a0");
+    for (let i = 1; i <= SUBAGENTS_CAP; i++) startSubagent(`a${i}`);
+    await flush();
+
+    expect(chat.subagents.value).toHaveLength(SUBAGENTS_CAP);
+    expect(chat.subagents.value.map((s) => s.id)).not.toContain("a0"); // 最老的已结束项被淘汰
+    expect(chat.subagents.value.every((s) => s.isPending)).toBe(true);
+  });
+
+  it("全是运行中时宁可超限也不丢活的", async () => {
+    const chat = await openedChat();
+    for (let i = 0; i <= SUBAGENTS_CAP; i++) startSubagent(`a${i}`);
+    await flush();
+
+    expect(chat.subagents.value).toHaveLength(SUBAGENTS_CAP + 1);
   });
 });

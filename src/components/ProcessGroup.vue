@@ -169,6 +169,18 @@ const summary = computed(() => {
   overflow: auto;
 }
 
+/* ⚠️ 子项一律不许被压扁 —— 这是「限高内滚」能成立的前提。
+   陷阱（2026-09-28 实锤）：flex 子项只要 overflow 不是 visible，其**自动最小高度
+   就是 0**（CSS Flexbox §4.5）。段内的子代理块 `.sa` / 工具卡 `.tool-item` 都带
+   `overflow: hidden`，于是它们被压到胶囊的剩余空间（~350px）、超出内容被自己的
+   overflow:hidden 裁掉；又因为子项被压到刚好装下，本容器**永不溢出** → 不长滚动条、
+   没有可滚区域，用户看到的「点开后看不全、滚不动」正是这么来的（转录截图里那行
+   被横向切断的文字 + .sa 自己的圆角底边落在切断处，就是「压扁后裁掉」的签名）。
+   回归夹具：docs/prototypes/_harness/process-capsule-clip-live.html（PASS/FAIL 自打印）。 */
+.pg-body > * {
+  flex-shrink: 0;
+}
+
 /* 段内纵向间距统一由 .pg-body 的 gap 说了算：清掉 ToolCallBlock 自带的相邻
    margin（.tool-item + .tool-item），否则工具条之间（gap+10px）比工具条与思考块
    之间（gap）宽出一截，平铺后层级看着不齐 */

@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>子代理 dock · 形态确认 v2</title>
+<style>
+/* ── 主题 token（glass 实值，抄自 src/themes/glass.ts） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-bg-raised: rgba(24,26,38,.48);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.14);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-accent-subtle: rgba(150,170,255,.16);
+  --aide-agent-accent:#d8a0c0;
+  --aide-success:#6ee7a8;
+  --aide-warning:#fcd34d;
+  --aide-danger:#f87171;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-border-strong: rgba(255,255,255,.17);
+  --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+  --aide-radius-sm:8px;
+  --aide-radius-md:10px;
+  --aide-radius-lg:14px;
+  --aide-ease-t:.16s cubic-bezier(.2,.8,.2,1);
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC',sans-serif;
+  --aide-ambient-scene:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%), #0a0b11;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--aide-font-ui);color:var(--aide-text-primary);
+  background:var(--aide-ambient-scene);min-height:100vh;padding:24px 28px 90px;font-size:13px;-webkit-font-smoothing:antialiased}
+h1{font-size:16px;font-weight:600;letter-spacing:.2px}
+.page-head p{margin-top:8px;font-size:12px;color:var(--aide-text-muted);line-height:1.85;max-width:980px}
+.page-head b{color:var(--aide-text-secondary);font-weight:600}
+.page-head code{font-family:var(--aide-font-mono);font-size:11.5px;color:var(--aide-text-secondary)}
+h2.sec{font-size:13px;font-weight:600;color:var(--aide-text-secondary);margin:34px 0 4px;letter-spacing:.3px}
+h2.sec .idx{color:var(--aide-accent);font-family:var(--aide-font-mono);font-size:11px;margin-right:7px}
+h2.sec + .sec-note{font-size:11.5px;color:var(--aide-text-muted);line-height:1.75;margin-bottom:16px;max-width:980px}
+h2.sec + .sec-note b{color:var(--aide-text-secondary);font-weight:600}
+h2.sec + .sec-note code{font-family:var(--aide-font-mono);color:var(--aide-text-secondary)}
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(430px,1fr));gap:16px;align-items:start}
+.wide{grid-column:1/-1}   /* 展开态按真实阅读宽度展示，不被网格压窄 */
+.cap{font-size:11px;color:var(--aide-text-muted);margin:0 0 8px;letter-spacing:.3px;line-height:1.7}
+.cap b{color:var(--aide-text-secondary);font-weight:600}
+.cap .pick{color:var(--aide-accent);font-weight:600}
+.pane{background:var(--aide-bg-deep);border:1px solid var(--aide-border-subtle);
+      border-radius:var(--aide-radius-lg);padding:14px;position:relative;overflow:hidden}
+.pane::before{content:'';position:absolute;inset:0 0 auto;height:1px;
+              background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent)}
+.flow{display:flex;flex-direction:column;gap:10px}
+.ask{margin-left:auto;max-width:80%;background:var(--aide-surface-default);
+     border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);
+     padding:7px 11px;font-size:12.5px;color:var(--aide-text-secondary);line-height:1.65}
+.say{font-size:12.5px;line-height:1.75;color:var(--aide-text-primary)}
+.say.dim{color:var(--aide-text-muted);font-size:11.5px}
+
+/* ── 过程胶囊（ProcessGroup） ── */
+.pg{background:var(--aide-bg-base);border:1px solid var(--aide-border-subtle);
+    border-radius:var(--aide-radius-md);box-shadow:var(--aide-highlight-inset);overflow:hidden}
+.pg-head{display:flex;align-items:center;gap:9px;padding:8px 12px;font-size:12px;color:var(--aide-text-secondary)}
+.pg-pill{flex-shrink:0;padding:1px 8px;border-radius:99px;background:var(--aide-surface-active);
+         border:1px solid var(--aide-border);font-size:10.5px;font-weight:600;color:var(--aide-text-primary)}
+.pg-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--aide-text-muted)}
+.caret{flex-shrink:0;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;
+       border-left:5px solid currentColor;opacity:.7}
+.pg-body{display:flex;flex-direction:column;gap:8px;border-top:1px solid var(--aide-border-subtle);
+         padding:10px 12px;max-height:300px;overflow:auto}
+.pg-body > *{flex-shrink:0}   /* ★ 修复点：子项不许被压扁（.sa/.tool-item 都带 overflow:hidden） */
+.think{font-size:11.5px;color:var(--aide-text-muted);font-style:italic;display:flex;gap:7px;align-items:center}
+
+/* ── 子代理块（SubagentCallBlock）——方案 A：一行摘要 ── */
+.sa{overflow:hidden;border:1px solid var(--aide-border-subtle);border-left:3px solid var(--aide-agent-accent);
+    border-radius:var(--aide-radius-md);background:linear-gradient(90deg,rgba(216,160,192,.05),var(--aide-bg-base) 40%);
+    box-shadow:var(--aide-highlight-inset)}
+.sa-head{display:flex;align-items:center;gap:9px;padding:6px 11px;font-size:12px;color:var(--aide-text-secondary);cursor:pointer}
+.sa-role{font-weight:600;color:var(--aide-text-primary)}
+.sa-type{flex-shrink:0;font-size:9.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;
+         color:var(--aide-agent-accent);background:rgba(216,160,192,.10);
+         border:1px solid rgba(216,160,192,.25);border-radius:3px;padding:1px 5px;white-space:nowrap}
+.sa-desc{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--aide-text-muted)}
+.sa-model{flex-shrink:0;font-size:10px;font-family:var(--aide-font-mono);color:var(--aide-text-muted);
+          border:1px solid var(--aide-border);border-radius:4px;padding:0 4px}
+.sa-chip{flex-shrink:0;font-size:10.5px;font-family:var(--aide-font-mono);color:var(--aide-agent-accent);white-space:nowrap}
+.sa-chip--done{color:var(--aide-success)}
+/* 一行摘要里的进度条：0..8 步的微型墨线（点开的理由不用读字） */
+.sa-steps-mini{flex-shrink:0;display:flex;gap:2px;align-items:center}
+.sa-steps-mini i{width:3px;height:9px;border-radius:1px;background:var(--aide-agent-accent);opacity:.85}
+.sa-steps-mini i.off{background:var(--aide-surface-active);opacity:1}
+
+/* ── 后台任务 dock（BgTaskDock，原样，作对照） ── */
+.bgtask{display:flex;flex-direction:column;margin:10px 0 0}
+.bgtask-bar{display:flex;align-items:center;gap:9px;width:100%;padding:6px 12px;
+  background:var(--aide-bg-raised);border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);
+  color:var(--aide-text-secondary);font-size:12px;cursor:pointer}
+.bgtask-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0;background:var(--aide-surface-active)}
+.bgtask-dot--run{background:var(--aide-success);animation:pulse 1.6s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+.bgtask-bar-text{font-weight:600;color:var(--aide-text-primary);white-space:nowrap}
+.bgtask-bar-names{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bgtask-caret{margin-left:auto;font-size:14px;color:var(--aide-text-muted);flex-shrink:0}
+
+/* ═══ 子代理 dock · D1：状态条（同几何、专属身份） ═══ */
+.sadock-l1{margin:6px 0 0;display:flex;flex-direction:column}
+.sadock-bar{display:flex;align-items:center;gap:9px;width:100%;padding:6px 12px;
+  border:1px solid rgba(216,160,192,.28);border-left:3px solid var(--aide-agent-accent);
+  border-radius:var(--aide-radius-md);
+  background:linear-gradient(90deg,rgba(216,160,192,.10),var(--aide-bg-raised) 46%);
+  color:var(--aide-text-secondary);font-size:12px;cursor:pointer;text-align:left}
+.sadock-bar:hover{border-color:rgba(216,160,192,.45)}
+.sadock-glyph{flex-shrink:0;color:var(--aide-agent-accent)}
+.sadock-bar-text{font-weight:600;color:var(--aide-text-primary);white-space:nowrap}
+.sadock-bar-text .n{color:var(--aide-agent-accent);font-family:var(--aide-font-mono)}
+.sadock-bar-names{font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sadock-caret{margin-left:auto;font-size:14px;color:var(--aide-text-muted);flex-shrink:0}
+
+/* ═══ 子代理 dock · D2：一代理一 chip（结构就不同：N 个 chip ≠ 1 条 bar） ═══ */
+.sadock-chips{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 0}
+.sa-chip-item{display:flex;align-items:center;gap:7px;padding:4px 10px;border-radius:99px;
+  border:1px solid rgba(216,160,192,.28);background:linear-gradient(180deg,rgba(216,160,192,.13),rgba(216,160,192,.05));
+  color:var(--aide-text-secondary);font-size:11.5px;cursor:pointer;text-align:left;max-width:100%}
+.sa-chip-item:hover{border-color:rgba(216,160,192,.5)}
+.sa-chip-item--sel{border-color:var(--aide-agent-accent);box-shadow:var(--aide-highlight-inset)}
+.sa-chip-item .nm{color:var(--aide-text-primary);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sa-chip-item .steps{font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-agent-accent);white-space:nowrap}
+.sa-chip-item .st{font-size:10px;color:var(--aide-success);animation:pulse 1.6s infinite}
+.sa-chip-item .st--done{color:var(--aide-success);animation:none}
+.sa-chip-more{display:flex;align-items:center;padding:4px 10px;border-radius:99px;border:1px dashed var(--aide-border);
+  color:var(--aide-text-muted);font-size:11.5px;cursor:pointer}
+
+/* ═══ 子代理 dock 面板（D1/D2 共用）：时间线阅读区 ═══ */
+.sadock{display:flex;height:286px;margin-top:6px;border:1px solid rgba(216,160,192,.25);
+  border-left:3px solid var(--aide-agent-accent);border-radius:var(--aide-radius-lg);
+  background:linear-gradient(90deg,rgba(216,160,192,.05),var(--aide-bg-raised) 26%);
+  box-shadow:var(--aide-highlight-inset);overflow:hidden}
+.sadock-list{width:238px;flex:none;border-right:1px solid var(--aide-border);padding:6px;
+  overflow-y:auto;display:flex;flex-direction:column;gap:2px}
+.sadock-grp{padding:6px 9px 3px;font-size:10px;letter-spacing:.5px;color:var(--aide-text-muted);text-transform:uppercase}
+.sadock-item{display:flex;align-items:center;gap:8px;width:100%;padding:7px 9px;background:none;border:none;
+  border-radius:var(--aide-radius-md);cursor:pointer;text-align:left}
+.sadock-item:hover{background:var(--aide-surface-default)}
+.sadock-item--sel{background:rgba(216,160,192,.14)}
+.sadock-st{flex-shrink:0;font-size:11px;width:14px;text-align:center;color:var(--aide-text-muted)}
+.sadock-st--run{color:var(--aide-success);animation:pulse 1.6s infinite}
+.sadock-st--done{color:var(--aide-success)}
+.sadock-st--err{color:var(--aide-danger)}
+.sadock-main{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px}
+.sadock-name{font-size:12px;color:var(--aide-text-primary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sadock-sub{font-family:var(--aide-font-mono);font-size:10px;color:var(--aide-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sadock-dur{flex-shrink:0;font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-text-muted);
+  font-variant-numeric:tabular-nums}
+.sadock-out{flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden}
+.sadock-out-head{display:flex;align-items:center;gap:9px;padding:8px 12px;border-bottom:1px solid var(--aide-border-subtle);
+  font-size:11.5px;color:var(--aide-text-secondary)}
+.sadock-out-head .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  color:var(--aide-text-muted);font-family:var(--aide-font-mono);font-size:10.5px}
+/* ★ 阅读区：普通滚动容器，内容多长都滚得到 */
+.sadock-body{flex:1;min-height:0;overflow-y:auto;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.sadock-body > *{flex-shrink:0}
+/* 时间线本体：与消息流里那块同一套墨线（虚线 agentAccent 左尺 + 工具步） */
+.tl{margin-left:4px;border-left:1px dashed rgba(216,160,192,.30);padding-left:11px;
+    display:flex;flex-direction:column;gap:6px}
+.sa-prompt{display:flex;align-items:center;gap:6px;padding:7px 11px;border:1px solid var(--aide-border-subtle);
+  border-radius:var(--aide-radius-sm);font-size:11px;color:var(--aide-text-secondary)}
+.sa-step{display:flex;align-items:center;gap:8px;padding:5px 10px;border:1px solid var(--aide-border-subtle);
+  border-radius:var(--aide-radius-sm);background:var(--aide-bg-deep);font-size:11px;color:var(--aide-text-secondary)}
+.sa-step .tool{color:var(--aide-text-primary);font-weight:600}
+.sa-step .arg{font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sa-txt{font-size:11px;line-height:1.6;color:var(--aide-text-secondary);white-space:pre-wrap}
+.sa-think{font-size:11px;line-height:1.6;color:var(--aide-text-muted);font-style:italic;white-space:pre-wrap}
+.sadock-empty{padding:14px;font-size:12px;color:var(--aide-text-muted);text-align:center}
+
+.inputbox{margin-top:10px;display:flex;align-items:center;gap:10px;padding:10px 12px;
+  background:var(--aide-bg-raised);border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);
+  color:var(--aide-text-muted);font-size:12.5px}
+.inputbox .send{margin-left:auto;font-size:11px;color:var(--aide-text-muted);
+  border:1px solid var(--aide-border);border-radius:var(--aide-radius-sm);padding:2px 8px}
+.stacklabel{font-size:10.5px;color:var(--aide-text-muted);margin:8px 0 -2px;letter-spacing:.3px}
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>子代理 dock · 形态确认 v2</h1>
+  <p>
+    上一版把后台任务那条 bar 原样抄了一遍 —— 你说得对，那是偷懒：两个 dock 同屏时只是两条长得一样的东西，只能靠读字分辨。
+    这一版把仓库里<b>已有的子代理视觉身份</b>搬进来：<code>agentAccent</code>（消息流里那块子代理的粉色左条）+
+    <code>agent</code> 节点字形（中心派发子节点，即 <code>icons.ts</code> 的 agent 语义）+ 大写类型 pill。
+    后台任务保持中性底 + 绿点不变。<br>
+    本页要你拍：<b>① dock 用哪一版身份</b>（D1 状态条皮肤 / D2 一代理一 chip），两种都附了「与后台任务同屏」的对照；
+    <b>② 内联块已按你选的 A 定稿</b>（页尾）。
+  </p>
+</div>
+
+<h2 class="sec"><span class="idx">01</span>dock 身份：两版，都要能和后台任务同屏分辨</h2>
+<p class="sec-note">
+  分辨不靠读字，靠<b>三处前注意特征</b>：颜色（agentAccent 粉 vs 中性绿）、字形（节点图 vs 圆点）、
+  以及左侧那道 3px 色条 —— 它和消息流里子代理块是同一道条，见过一次就认得出。下面每版都放到<b>两个 dock 同时出现</b>的场景里看。
+</p>
+<div class="grid2">
+
+  <!-- D1 -->
+  <div>
+    <p class="cap"><b>D1 · 状态条皮肤</b>（推荐）<br>几何和后台任务条一致（同宽、同高、同样压在输入框上方），身份完全靠色条 + 字形 + 措辞拉开；收起时一眼知道「粉的是子代理」</p>
+    <div class="pane">
+      <div class="flow">
+        <div class="ask">复审在飞。clean 之后收尾：ledger 收口行、删 workspace</div>
+        <div class="say">主线程继续干自己的活。</div>
+      </div>
+
+      <p class="stacklabel">▼ 同屏：子代理 dock（收起）</p>
+      <div class="sadock-l1">
+        <button class="sadock-bar">
+          <svg class="sadock-glyph" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="12.5" cy="8" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="sadock-bar-text"><span class="n">2</span> 个子代理运行中</span>
+          <span class="sadock-bar-names">CODE-ARCHITECT:TS-reviewer 等 2 个</span>
+          <span class="sadock-caret">▴</span>
+        </button>
+      </div>
+
+      <p class="stacklabel">▼ 同屏：后台任务 dock（原样，未改）</p>
+      <div class="bgtask">
+        <button class="bgtask-bar">
+          <span class="bgtask-dot bgtask-dot--run"></span>
+          <span class="bgtask-bar-text">1 个后台任务运行中</span>
+          <span class="bgtask-bar-names">pnpm test --run</span>
+          <span class="bgtask-caret">▴</span>
+        </button>
+      </div>
+
+      <div class="inputbox">输入消息…<span class="send">⠿</span></div>
+      <p class="say dim">两条同屏：粉条+节点图 = 子代理，中性+绿点 = 后台任务，不用读字。</p>
+    </div>
+  </div>
+
+  <!-- D1 展开 -->
+  <div class="wide">
+    <p class="cap"><b>D1 · 展开态</b><br>面板也用子代理的语言：左列表（运行中置顶、已完成置灰可回看）+ 右侧<b>时间线</b>（虚线 agentAccent 左尺 + 工具步，和消息流里那块同构），不是终端的样</p>
+    <div class="pane">
+      <div class="sadock-l1">
+        <button class="sadock-bar">
+          <svg class="sadock-glyph" width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="12.5" cy="8" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="sadock-bar-text"><span class="n">2</span> 个子代理运行中</span>
+          <span class="sadock-bar-names">CODE-ARCHITECT:TS-reviewer 等 2 个</span>
+          <span class="sadock-caret">▾</span>
+        </button>
+        <div class="sadock">
+          <div class="sadock-list">
+            <div class="sadock-grp">运行中</div>
+            <button class="sadock-item sadock-item--sel">
+              <span class="sadock-st sadock-st--run">●</span>
+              <span class="sadock-main">
+                <span class="sadock-name">Re-review final fix wave</span>
+                <span class="sadock-sub">CODE-ARCHITECT:TS-reviewer · 8 步</span>
+              </span>
+              <span class="sadock-dur">02:41</span>
+            </button>
+            <button class="sadock-item">
+              <span class="sadock-st sadock-st--run">●</span>
+              <span class="sadock-main">
+                <span class="sadock-name">核对 ledger 收口行</span>
+                <span class="sadock-sub">general-purpose · 2 步</span>
+              </span>
+              <span class="sadock-dur">00:12</span>
+            </button>
+            <div class="sadock-grp">已完成</div>
+            <button class="sadock-item">
+              <span class="sadock-st sadock-st--done">✓</span>
+              <span class="sadock-main">
+                <span class="sadock-name">清点 workspace 引用</span>
+                <span class="sadock-sub">Explore · 11 步</span>
+              </span>
+              <span class="sadock-dur">01:08</span>
+            </button>
+            <button class="sadock-item">
+              <span class="sadock-st sadock-st--err">✗</span>
+              <span class="sadock-main">
+                <span class="sadock-name">跑全量回归</span>
+                <span class="sadock-sub">general-purpose · 4 步</span>
+              </span>
+              <span class="sadock-dur">00:33</span>
+            </button>
+          </div>
+          <div class="sadock-out">
+            <div class="sadock-out-head">
+              <span class="sa-role">Agent</span>
+              <span class="sa-type">CODE-ARCHITECT:TS-REVIEWER</span>
+              <span class="grow">Re-review final fix wave · qwen3.8-max</span>
+              <span class="sadock-dur">8 步</span>
+            </div>
+            <div class="sadock-body">
+              <div class="tl">
+                <div class="sa-prompt">▤ 派发指令 · 2932 字 <span style="margin-left:auto;color:var(--aide-text-muted)">›</span></div>
+                <div class="sa-step"><span class="tool">Read</span><span class="arg">…review-3089610..40e2687.diff</span></div>
+                <div class="sa-step"><span class="tool">Read</span><span class="arg">…task-5-report.md</span></div>
+                <div class="sa-think">I need to read the files, verify the fix contents, and validate the claims. Next I'll inspect the actual files and check the current state…</div>
+                <div class="sa-txt">Alright, let me read all the source files.</div>
+                <div class="sa-step"><span class="tool">Read</span><span class="arg">useConversations.ts</span></div>
+                <div class="sa-step"><span class="tool">Read</span><span class="arg">useConversations.test.ts</span></div>
+                <div class="sa-step"><span class="tool">Grep</span><span class="arg">ConversationListQuery</span></div>
+                <div class="sa-step"><span class="tool">Read</span><span class="arg">ConversationItem.vue</span></div>
+                <div class="sa-step"><span class="tool">Bash</span><span class="arg">rg -n "conversationListQuery" README.md</span></div>
+                <div class="sa-think">还有 2 步在跑……上面这些全部滚得到（阅读区是普通滚动容器）。</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="inputbox">输入消息…<span class="send">⠿</span></div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">02</span>D2 · 一代理一 chip（结构性不同：N 个 chip ≠ 1 条 bar）</h2>
+<p class="sec-note">
+  如果嫌 D1「还是一条 bar」，这版连结构都不一样：每个运行中的子代理是一枚 chip（名字 + 步数 + 状态点），
+  <b>有几枚 chip 就是几个在跑</b>，点哪枚看哪枚 —— 数量与身份都不需要读字。代价：横向空间，agent 多时溢出成「+N」。
+</p>
+<div class="grid2">
+  <div>
+    <p class="cap"><b>D2 · 收起态（与后台任务同屏）</b></p>
+    <div class="pane">
+      <div class="flow">
+        <div class="ask">复审在飞。clean 之后收尾：ledger 收口行、删 workspace</div>
+      </div>
+      <div class="sadock-chips">
+        <button class="sa-chip-item sa-chip-item--sel">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" style="color:var(--aide-agent-accent);flex-shrink:0">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="nm">CODE-ARCHITECT:TS-reviewer</span>
+          <span class="steps">8 步</span>
+          <span class="st">●</span>
+        </button>
+        <button class="sa-chip-item">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" style="color:var(--aide-agent-accent);flex-shrink:0">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="nm">核对 ledger 收口行</span>
+          <span class="steps">2 步</span>
+          <span class="st">●</span>
+        </button>
+      </div>
+      <p class="stacklabel">▼ 同屏：后台任务 dock（原样）</p>
+      <div class="bgtask">
+        <button class="bgtask-bar">
+          <span class="bgtask-dot bgtask-dot--run"></span>
+          <span class="bgtask-bar-text">1 个后台任务运行中</span>
+          <span class="bgtask-bar-names">pnpm test --run</span>
+          <span class="bgtask-caret">▴</span>
+        </button>
+      </div>
+      <div class="inputbox">输入消息…<span class="send">⠿</span></div>
+    </div>
+  </div>
+
+  <div class="wide">
+    <p class="cap"><b>D2 · 展开态</b><br>点 chip 打开面板；面板里不再需要左侧列表（chip 行就是选择器），整块给时间线</p>
+    <div class="pane">
+      <div class="sadock-chips">
+        <button class="sa-chip-item sa-chip-item--sel">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" style="color:var(--aide-agent-accent);flex-shrink:0">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="nm">CODE-ARCHITECT:TS-reviewer</span>
+          <span class="steps">8 步</span>
+          <span class="st">●</span>
+        </button>
+        <button class="sa-chip-item">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.2" style="color:var(--aide-agent-accent);flex-shrink:0">
+            <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8"/>
+            <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none"/>
+            <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none"/>
+          </svg>
+          <span class="nm">核对 ledger 收口行</span>
+          <span class="steps">2 步</span>
+          <span class="st">●</span>
+        </button>
+      </div>
+      <div class="sadock" style="height:286px">
+        <div class="sadock-out">
+          <div class="sadock-out-head">
+            <span class="sa-role">Agent</span>
+            <span class="sa-type">CODE-ARCHITECT:TS-REVIEWER</span>
+            <span class="grow">Re-review final fix wave · qwen3.8-max</span>
+            <span class="sadock-dur">8 步</span>
+          </div>
+          <div class="sadock-body">
+            <div class="tl">
+              <div class="sa-prompt">▤ 派发指令 · 2932 字 <span style="margin-left:auto;color:var(--aide-text-muted)">›</span></div>
+              <div class="sa-step"><span class="tool">Read</span><span class="arg">…review-3089610..40e2687.diff</span></div>
+              <div class="sa-step"><span class="tool">Read</span><span class="arg">…task-5-report.md</span></div>
+              <div class="sa-think">I need to read the files, verify the fix contents, and validate the claims…</div>
+              <div class="sa-txt">Alright, let me read all the source files.</div>
+              <div class="sa-step"><span class="tool">Grep</span><span class="arg">ConversationListQuery</span></div>
+              <div class="sa-step"><span class="tool">Read</span><span class="arg">ConversationItem.vue</span></div>
+              <div class="sa-think">还有 2 步在跑……</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="inputbox">输入消息…<span class="send">⠿</span></div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">03</span>内联块 · 方案 A 定稿（你已选）</h2>
+<p class="sec-note">
+  消息流里只占一行：<b>运行中</b>给「● 8 步」+ 微型步数墨线，<b>完成</b>给「✓ 8 步」；点开仍在原位展开全文（完整记录留在对话里，dock 关了也不丢）。
+  这一版还给它加了微型步数条 —— 扫一眼就知道跑到哪了，同样不靠读字。
+</p>
+<div class="grid2">
+  <div>
+    <p class="cap"><b>运行中</b></p>
+    <div class="pane">
+      <div class="flow">
+        <div class="pg">
+          <div class="pg-head"><span class="caret" style="transform:rotate(90deg)"></span>
+            <span class="pg-pill">过程</span><span class="pg-sum">1 段思考 · Read ×2 · 1 个子代理</span></div>
+          <div class="pg-body">
+            <div class="think">▸ 思考 84 字</div>
+            <div class="sa">
+              <div class="sa-head">
+                <span class="sa-role">Agent</span>
+                <span class="sa-type">CODE-ARCHITECT:TS-…</span>
+                <span class="sa-desc">Re-review final fix wave</span>
+                <span class="sa-model">qwen3.8-max</span>
+                <span class="sa-chip">● 8 步</span>
+                <span class="sa-steps-mini"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>
+                <span class="caret" style="transform:rotate(90deg);color:var(--aide-text-muted)"></span>
+              </div>
+            </div>
+            <div class="think">▸ 思考 45 字</div>
+          </div>
+        </div>
+        <div class="say">复审还在跑，我先把 ledger 收口行清了。</div>
+      </div>
+    </div>
+  </div>
+  <div>
+    <p class="cap"><b>已完成</b>（同一行，只是状态换掉）</p>
+    <div class="pane">
+      <div class="flow">
+        <div class="pg">
+          <div class="pg-head"><span class="caret" style="transform:rotate(90deg)"></span>
+            <span class="pg-pill">过程</span><span class="pg-sum">1 段思考 · 1 个子代理</span></div>
+          <div class="pg-body">
+            <div class="sa">
+              <div class="sa-head">
+                <span class="sa-role">Agent</span>
+                <span class="sa-type">EXPLORE</span>
+                <span class="sa-desc">清点 workspace 引用</span>
+                <span class="sa-model">qwen3.8-max</span>
+                <span class="sa-chip sa-chip--done">✓ 11 步 · 01:08</span>
+                <span class="caret" style="transform:rotate(90deg);color:var(--aide-text-muted)"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="say">清点完了，11 处引用，我把它们列给你。</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">04</span>顺带修掉的压扁 bug（背景）</h2>
+<p class="sec-note">
+  截图里「点开后看不全、滚不动」的原因：胶囊展开体 <code>.pg-body</code> 是 <code>display:flex; column; max-height:440px; overflow:auto</code>，
+  子代理块根节点 <code>.sa</code> 带 <code>overflow:hidden</code> —— flex 子项只要 overflow 不是 visible，自动最小高度就是 0，
+  于是 <code>.sa</code> 被压到剩余空间（约 350px）并裁掉多出来的内容；子项被压到刚好装下，<code>.pg-body</code> 永不溢出 → <b>没有滚动条、没有可滚区域</b>。同一原因也命中 <code>.tool-item</code>。<br>
+  修法：展开体子项 <code>flex-shrink: 0</code>（本页所有胶囊都按修好的样子渲染）+ 一条夹具回归测试。
+</p>
+
+</body>
+</html>

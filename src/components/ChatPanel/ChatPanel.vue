@@ -8,12 +8,13 @@ import TaskListPanel from "../TaskListPanel.vue";
 import InterruptButton from "../InterruptButton.vue";
 import PermissionDialog from "../PermissionDialog.vue";
 import BgTaskDock from "../BgTaskDock.vue";
+import SubagentDock from "../SubagentDock.vue";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
-import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, TaskItem } from "@/types/chat";
+import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, SubagentBlock, TaskItem } from "@/types/chat";
 import type { WorkspaceInfo } from "@/types";
 import { api } from "@/api";
 import { deriveSessionFileRules } from "@/utils/permissionRuleDerivation";
@@ -70,6 +71,10 @@ const props = defineProps<{
   /** 父层恒传（PaneGroup 的 useChatSession computed 透传），非可选 */
   bgDockOpen: boolean;
   bgDockSelectedId?: string | null;
+  /** 本会话派发过的子代理（运行中 + 已结束）+ dock 开合状态（useChatSession 透传） */
+  subagents?: SubagentBlock[];
+  subagentDockOpen: boolean;
+  subagentDockSelectedId?: string | null;
   /** 本会话待确认的权限/提问请求——渲染在消息区和输入框之间（见模板），
    *  不是浮层，见 PermissionDialog.vue 顶部注释。 */
   permission?: PermissionRequest | null;
@@ -92,6 +97,7 @@ const emit = defineEmits<{
    *  sessionRules 为会话级规则草稿（「允许」文件工具时前端推导，随放行透传） */
   "respond-permission": [req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string }, sessionRules?: PermissionRuleDraft[]];
   "update:bgDockSelectedId": [id: string];
+  "update:subagentDockSelectedId": [id: string];
   /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
   "select-workspace": [ws: WorkspaceInfo];
   /** hero 模式切换（日常 / 工程）：同样只改归属与意图，不切活动工作区 */
@@ -581,6 +587,17 @@ function onOpenBgDock(taskId: string) {
       <span class="chat-thinking-text">正在思考</span>
       <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
     </div>
+
+    <!-- 子代理 dock：同样式 inline dock，压在后台任务条之上——子代理是当前回合的活，
+         后台 shell 更「背景」；两者视觉刻意不同（agentAccent 左条 vs 中性+绿点），
+         同屏时不必读字。开合/清理语义在 toggleSubagentDock（结束的留着回看，关面板才清）。 -->
+    <SubagentDock
+      :session-id="props.sessionId"
+      :subagents="subagents ?? []"
+      :open="subagentDockOpen"
+      :selected-id="subagentDockSelectedId ?? null"
+      @update:selected-id="(id: string) => emit('update:subagentDockSelectedId', id)"
+    />
 
     <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。
          位于活动状态行之下（状态行固定在上，后台条出现/消失不顶走它）。

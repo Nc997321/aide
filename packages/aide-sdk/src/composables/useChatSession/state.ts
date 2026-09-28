@@ -81,6 +81,15 @@ export interface SessionStore {
   bgDockOpen: boolean;
   /** dock 里当前选中查看输出的任务 id */
   bgDockSelectedId: string | null;
+  /** 本会话派发过的子代理（subagent_start 累积；运行中与已结束同列一条时间序列表）。
+   *  已结束的不立即移除——dock 面板留着供回看；面板关闭时清，或全部结束后延时自动
+   *  撤条（见 toggleSubagentDock / scheduleSubagentDockAutoHide）。与 messages 里的块
+   *  是同一批对象引用，进度照旧由 events 写入。 */
+  subagents: SubagentBlock[];
+  /** 子代理 dock 面板是否展开（纯 UI 状态，不落盘） */
+  subagentDockOpen: boolean;
+  /** dock 里当前选中查看的子代理 id */
+  subagentDockSelectedId: string | null;
   /** 可切换的权限模式列表（sidecar 广播，纯展示字符串） */
   permissionModes: PermissionModeOption[];
   /** 当前生效的权限模式 value；空串表示还没从 sidecar 学到 */
@@ -233,6 +242,77 @@ export const BG_TASK_OUTPUT_CAP = 256 * 1024;
 export const SUBAGENT_ENTRY_CAP = 256 * 1024;
 /** 后台任务列表上限——超出时淘汰最老的已结束项。 */
 export const BG_TASKS_CAP = 50;
+/** 子代理 dock 列表上限——超出时淘汰最老的已结束项（运行中的永不动）。 */
+export const SUBAGENTS_CAP = 12;
+
+/** 记录一次子代理派发（subagent_start）：入 dock 列表 + 兜底上限。
+ *  运行中的子代理不淘汰——列表再挤也不能把「正在跑的那个」挤掉；淘汰只吃已结束项。 */
+export function trackSubagent(sid: string, block: SubagentBlock): void {
+  if (disposedSids.has(sid)) return;
+  const store = getStore(sid);
+  store.subagents.push(block);
+  while (store.subagents.length > SUBAGENTS_CAP) {
+    const idx = store.subagents.findIndex((s) => !s.isPending);
+    if (idx < 0) break; // 全是运行中：宁可超限也不丢活的
+    store.subagents.splice(idx, 1);
+  }
+}
+
+/** 切换子代理 dock 开合。关闭时清掉已结束的子代理（查看期已过；运行中的留着，
+ *  面板关了状态条还要继续报「N 个运行中」）。selectedId：指定打开后选中的子代理
+ *  （消息流里的内联块 / chip 点击时带）——已开着时只切选中项，不关面板。 */
+export function toggleSubagentDock(sid: string, selectedId?: string): void {
+  if (disposedSids.has(sid)) return;
+  const store = getStore(sid);
+  if (store.subagentDockOpen) {
+    if (selectedId && store.subagents.some((s) => s.id === selectedId)) {
+      store.subagentDockSelectedId = selectedId;
+    } else if (!selectedId) {
+      store.subagentDockOpen = false;
+      store.subagents = store.subagents.filter((s) => s.isPending);
+      if (store.subagents.length === 0) store.subagentDockSelectedId = null;
+    }
+    return;
+  }
+  clearSubagentDockAutoHide(sid);
+  store.subagentDockOpen = true;
+  // 选中项：指定的 → 最近派发的运行中 → 列表末尾（最近一个）
+  if (selectedId && store.subagents.some((s) => s.id === selectedId)) {
+    store.subagentDockSelectedId = selectedId;
+  } else if (!store.subagents.some((s) => s.id === store.subagentDockSelectedId)) {
+    store.subagentDockSelectedId =
+      [...store.subagents].reverse().find((s) => s.isPending)?.id ??
+      store.subagents[store.subagents.length - 1]?.id ??
+      null;
+  }
+}
+
+/** 面板关着、全部子代理结束时，状态条的自动撤条延迟（「✓ 全部完成」短暂停留再消失）。 */
+const SUBAGENT_DOCK_AUTOHIDE_MS = 4000;
+const subagentDockAutoHideTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+export function clearSubagentDockAutoHide(sid: string): void {
+  const t = subagentDockAutoHideTimers.get(sid);
+  if (t) {
+    clearTimeout(t);
+    subagentDockAutoHideTimers.delete(sid);
+  }
+}
+
+export function scheduleSubagentDockAutoHide(sid: string): void {
+  clearSubagentDockAutoHide(sid);
+  subagentDockAutoHideTimers.set(
+    sid,
+    setTimeout(() => {
+      const store = stores[sid];
+      if (store && !store.subagentDockOpen && store.subagents.every((s) => !s.isPending)) {
+        store.subagents = [];
+        store.subagentDockSelectedId = null;
+      }
+      subagentDockAutoHideTimers.delete(sid);
+    }, SUBAGENT_DOCK_AUTOHIDE_MS),
+  );
+}
 
 /** 切换后台任务 dock 开合。关闭→打开的瞬间清掉「打开前就已结束」的任务（用户确认
  *  的清理规则：结束不立即移除，下次点开列表时才移除）；打开→关闭同样清掉已结束的
@@ -332,6 +412,9 @@ export function getStore(sid: string): SessionStore {
       bgTasks: [],
       bgDockOpen: false,
       bgDockSelectedId: null,
+      subagents: [],
+      subagentDockOpen: false,
+      subagentDockSelectedId: null,
       permissionModes: [],
       currentPermissionMode: "",
       slashCommands: null,
@@ -449,6 +532,7 @@ export function disposeSession(sid: string): void {
   removeSessionState(sid);
   identityStore.releaseBinding(sid);
   clearBgDockAutoHide(sid);
+  clearSubagentDockAutoHide(sid);
   pendingSids.delete(sid);
   delete lastDispatchedPrompt[sid];
   pendingToolCalls.delete(sid);

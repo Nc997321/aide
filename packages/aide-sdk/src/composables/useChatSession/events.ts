@@ -44,6 +44,7 @@ import {
   SUBAGENT_ENTRY_CAP,
   appendSubagentTextEntry,
   clearBgDockAutoHide,
+  clearSubagentDockAutoHide,
   diag,
   disposedSids,
   finalizeSession,
@@ -58,6 +59,8 @@ import {
   resetRuntimeState,
   resolveSid,
   scheduleBgDockAutoHide,
+  scheduleSubagentDockAutoHide,
+  trackSubagent,
   sharedModels,
   sharedPermissionModes,
   sharedRateLimit,
@@ -603,6 +606,10 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       };
       msg.blocks.push(block);
       registerSubagent(sid, saId, block);
+      // dock 列表（运行中/已结束同一列，供输入框上方的子代理 dock 渲染）+ 新派发
+      // 取消「全部完成」的待撤条
+      clearSubagentDockAutoHide(sid);
+      trackSubagent(sid, block);
       break;
     }
     case "subagent_text_delta":
@@ -670,6 +677,9 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         block.isError = e["is_error"] as boolean;
         block.isPending = false;
         unregisterSubagent(sid, saId);
+        // 结束的子代理留在 dock 列表里（用户可能正看着）——面板关着且没有运行中的
+        // 了，短暂停留后自动撤条；面板开着则等关闭时清（同后台任务 dock 语义）。
+        scheduleSubagentDockAutoHide(sid);
       }
       break;
     }

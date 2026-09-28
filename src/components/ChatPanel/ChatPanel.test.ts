@@ -96,6 +96,9 @@ function baseProps(overrides: Record<string, unknown> = {}) {
     permissionModes: [{ value: "auto", displayName: "自动模式" }],
     currentPermissionMode: "auto",
     focused: true,
+    // 子代理 dock 的数据源（PaneGroup 恒传）——不传会触发「缺少必需 prop」告警
+    subagents: [],
+    subagentDockOpen: false,
     ...overrides,
   };
 }
