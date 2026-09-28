@@ -248,9 +248,55 @@ describe("ChangeLogPanel — 变更文件点击打开", () => {
     await wrapper.get(".cft-file").trigger("click");
     await flushPromises();
 
-    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/App.vue", { cwd: "C:/repo" });
+    // 老会话的轮没有 baseRev → 无基线，退回 HEAD 累计（今天的句子照旧）
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/App.vue", { mode: { kind: "unstaged" }, cwd: "C:/repo" });
     expect(mocks.viewerOpen).toHaveBeenCalledWith("C:/repo/src/App.vue", {
       diff: expect.objectContaining({ note: expect.stringContaining("累计视图") }),
+    });
+  });
+
+  it("全部文件树：以**会话口径**取 diff（基线 = 首轮 baseRev，会话起点）", async () => {
+    mocks.rounds = [
+      { index: 1, time: "10:00", prompt: "第一轮", files: [], baseRev: "aaaaaaa1111111111111111111111111111111111" },
+      {
+        index: 2,
+        time: "10:10",
+        prompt: "第二轮",
+        files: [{ path: "src/App.vue", status: "M", additions: 1, deletions: 0 }],
+        baseRev: "bbbbbbb2222222222222222222222222222222222",
+      },
+    ];
+    const wrapper = mountPanel();
+
+    await wrapper.get(".cft-file").trigger("click");
+    await flushPromises();
+
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/App.vue", {
+      mode: { kind: "since", rev: "aaaaaaa1111111111111111111111111111111111" }, // 首轮 = 会话起点
+      cwd: "C:/repo",
+    });
+  });
+
+  it("轮次行：以**本轮口径**取 diff（基线 = 该轮自己的 baseRev）", async () => {
+    mocks.rounds = [
+      { index: 1, time: "10:00", prompt: "第一轮", files: [], baseRev: "aaaaaaa1111111111111111111111111111111111" },
+      {
+        index: 2,
+        time: "10:10",
+        prompt: "第二轮",
+        files: [{ path: "src/App.vue", status: "M", additions: 1, deletions: 0 }],
+        baseRev: "bbbbbbb2222222222222222222222222222222222",
+      },
+    ];
+    const wrapper = mountPanel();
+
+    await expandRound(wrapper, 2);
+    await wrapper.get(".cfl-row").trigger("click");
+    await flushPromises();
+
+    expect(mocks.gitDiffPair).toHaveBeenCalledWith("src/App.vue", {
+      mode: { kind: "since", rev: "bbbbbbb2222222222222222222222222222222222" }, // 本轮，不是会话起点
+      cwd: "C:/repo",
     });
   });
 

@@ -2,7 +2,7 @@ import { getTransport } from "./transport";
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem, LoadMessagesResult,
   ClipboardFilesRead,
-  ProjectInfo, DiffEntry, DiffPair, LastEventInfo, ChangeRound, AppSettings,
+  ProjectInfo, DiffEntry, DiffPair, DiffMode, LastEventInfo, ChangeRound, AppSettings,
   CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry,
   AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
@@ -522,18 +522,19 @@ export const api = {
   gitRemoteUrl(): Promise<string | null> {
     return getTransport().invoke("git_remote_url");
   },
-  /** 行级 diff 双份原文：工作区变更（staged）或历史提交（commitHash），二选一。
-   *  未指定的键拍平为 null（Rust Option None）。 */
-  gitDiffPair(
-    path: string,
-    opts?: { staged?: boolean; commitHash?: string; cwd?: string },
-  ): Promise<DiffPair> {
+  /** 行级 diff 双份原文。**取哪两方由 `mode` 单值标签决定**——原先是 `staged` +
+   *  `commitHash` 两个相邻可选参数（靠"不同时给"的约定维持），加第三维（基线 rev）
+   *  就会变成三选一的隐式约定。 */
+  gitDiffPair(path: string, opts: { mode: DiffMode; cwd?: string }): Promise<DiffPair> {
     return getTransport().invoke("git_diff_pair", {
       path,
-      staged: opts?.staged ?? null,
-      commitHash: opts?.commitHash ?? null,
-      cwd: opts?.cwd ?? null,
+      mode: opts.mode,
+      cwd: opts.cwd ?? null,
     });
+  },
+  /** 仓库 HEAD 提交（变更基线用）；非 git 仓库 / 还没提交过 → null。 */
+  gitHeadRev(cwd?: string): Promise<string | null> {
+    return getTransport().invoke("git_head_rev", { cwd: cwd ?? null });
   },
   /** 行级 diff 双份原文：任意两 ref 直比（分支对比视图）。base 必填（对比场景恒有）。 */
   gitDiffPairRefs(path: string, refs: { base: string; head: string }, oldPath?: string): Promise<DiffPair> {

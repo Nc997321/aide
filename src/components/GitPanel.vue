@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, watch, computed } from "vue";
 import { api } from "../api";
+import type { DiffMode } from "../types";
 import { useGit } from "../composables/useGit";
 import { useFileViewer, windowDiffOfPair } from "../composables/useFileViewer";
 import { useModal } from "../composables/useModal";
@@ -192,8 +193,13 @@ function onFileClick(path: string, staged?: boolean, commitHash?: string) {
 
 async function openDiffInViewer(relPath: string, staged?: boolean, commitHash?: string) {
   try {
-    // staged undefined / commitHash 空 → null（Rust None），与旧「不传 key」语义一致
-    const pair = await api.gitDiffPair(relPath, { staged, commitHash: commitHash || undefined });
+    // 取哪两方由 mode 单值标签决定（原先 staged/commitHash 两个相邻可选参数靠"不同时给"维持）
+    const mode: DiffMode = commitHash
+      ? { kind: "commit", hash: commitHash }
+      : staged
+        ? { kind: "staged" }
+        : { kind: "unstaged" };
+    const pair = await api.gitDiffPair(relPath, { mode });
     // git 命令吃仓库相对路径；fileViewer 窗口必须拿绝对路径
     // （文件树定位/打开真实文件/路径展示都建立在绝对路径约定上）
     fileViewer.open(toAbsPath(relPath), { diff: windowDiffOfPair(pair) });

@@ -3,7 +3,8 @@ import { computed, ref, watch } from "vue";
 import { mergeChangeFiles, asTouchedFile } from "../utils/changeFiles";
 import type { ChangeRound, ChangeFile } from "../composables/useConversationChanges";
 import { useFileResolver } from "../composables/useFileResolver";
-import { useDiffWindow } from "../composables/useDiffWindow";
+import { useDiffWindow, type DiffOpenOptions } from "../composables/useDiffWindow";
+import { sessionBaseRev } from "../composables/diffSource";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { useToast } from "../composables/useToast";
 import { errorText } from "../utils/errors";
@@ -64,19 +65,29 @@ async function openFile(f: ChangeFile) {
   await openResolved(f.path, wsRoot.value);
 }
 
-/** 点条目 = 弹 diff 窗口：片段还在内存 → 本轮精确 diff，否则累计视图。
- *  失败给 toast——窗口没弹出来必须让用户知道，而不是点了没反应。 */
-async function openDiff(row: TouchedFile) {
+/** 点条目 = 弹 diff 窗口。**口径由调用点声明**（见 diffSource.ts 的端口）：
+ *  轮次行 = 本轮、顶部统一树 = 会话以来。失败给 toast——窗口没弹出来必须让用户知道，
+ *  而不是点了没反应。 */
+async function openDiff(row: TouchedFile, opts: DiffOpenOptions) {
   try {
-    await openDiffWindow(row, wsRoot.value);
+    await openDiffWindow(row, opts);
   } catch (e) {
     showToast(`加载 diff 失败：${errorText(e)}`, "danger");
   }
 }
 
-/** 顶部统一树是跨轮视图，没有片段 → 以累计视图打开。 */
-function openDiffFromTree(f: ChangeFile) {
-  void openDiff(asTouchedFile(f));
+/** 顶部统一树是**跨轮视图** → 会话口径；基线取首轮（会话起点），没有就退化为 HEAD 累计。 */
+async function openDiffFromTree(f: ChangeFile) {
+  await openDiff(asTouchedFile(f), {
+    scope: "session",
+    workspaceRoot: wsRoot.value,
+    baseRev: sessionBaseRev(props.rounds),
+  });
+}
+
+/** 轮次行 = **本轮口径**，基线取该轮开轮时的提交。 */
+async function openDiffForRound(round: ChangeRound, row: TouchedFile) {
+  await openDiff(row, { scope: "round", workspaceRoot: wsRoot.value, baseRev: round.baseRev });
 }
 
 /**
@@ -196,7 +207,7 @@ const renderItems = computed<RenderItem[]>(() => {
             :workspace-root="wsRoot"
             @toggle="toggleRound(item.round.index)"
             @open-file="openFile"
-            @open-diff="openDiff"
+            @open-diff="(row: TouchedFile) => openDiffForRound(item.round, row)"
             @revert-round="revertWithToast(() => revertRound(item.round))"
             @revert-file="(path: string) => revertWithToast(() => props.revertSingleFile(item.round, path))"
           />

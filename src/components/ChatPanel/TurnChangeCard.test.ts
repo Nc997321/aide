@@ -7,7 +7,7 @@ import type { ChangeFile, ChangeRound } from "@/types";
 const mocks = vi.hoisted(() => ({
   ensureTabShown: vi.fn(),
   openResolved: vi.fn(async () => {}),
-  openDiff: vi.fn(async (_row: unknown, _wsRoot?: string) => {}),
+  openDiff: vi.fn(async (_row: unknown, _opts?: unknown) => {}),
   workspaceOf: vi.fn((): { wsKey: string; wsPath: string } | null => null),
 }));
 
@@ -26,7 +26,7 @@ vi.mock("../../composables/useSessionWorkspaces", () => ({
   useSessionWorkspaces: () => ({ workspaceOf: mocks.workspaceOf }),
 }));
 vi.mock("../../composables/useDiffWindow", () => ({
-  useDiffWindow: () => ({ openDiff: (row: unknown, wsRoot?: string) => mocks.openDiff(row, wsRoot) }),
+  useDiffWindow: () => ({ openDiff: (row: unknown, opts: unknown) => mocks.openDiff(row, opts) }),
 }));
 vi.mock("../../composables/useToast", () => ({
   useToast: () => ({ toastState: { visible: false, text: "", kind: "info" }, showToast: showToastMock }),
@@ -51,9 +51,9 @@ function mountCard(feed: TurnChangesFeed, sessionId: string | null = "s1") {
   });
 }
 
-/** 一轮（默认已结算；pending 由用例显式给）。 */
-function round(index: number, files: ChangeFile[], pending = false): ChangeRound {
-  return { index, time: "10:00", files, pending };
+/** 一轮（默认已结算；pending 与 baseRev 由用例显式给）。 */
+function round(index: number, files: ChangeFile[], pending = false, baseRev?: string): ChangeRound {
+  return { index, time: "10:00", files, pending, baseRev };
 }
 
 beforeEach(() => {
@@ -161,16 +161,35 @@ describe("TurnChangeCard — 展开、清单与两个出口", () => {
     expect(w.find(".tf-body").exists()).toBe(false);
   });
 
-  it("点文件行开 diff（带会话所属工作区根），且不冒泡成「收起卡片」", async () => {
-    const w = mountCard(makeFeed(reactive([round(1, [f("src/a.ts", 7, 2)])])));
+  it("点文件行开 diff（本轮口径 + 该轮基线），且不冒泡成「收起卡片」", async () => {
+    const w = mountCard(makeFeed(reactive([
+      round(1, [f("src/a.ts", 7, 2)], false, "aaaaaaa1111111111111111111111111111111111"),
+    ])));
     await w.get(".tf").trigger("click");
     await w.get(".cfl-row").trigger("click");
     await flushPromises();
 
-    expect(mocks.openDiff).toHaveBeenCalledTimes(1);
-    expect(mocks.openDiff.mock.calls[0][0]).toMatchObject({ path: "src/a.ts" });
-    expect(mocks.openDiff.mock.calls[0][1]).toBe("C:/repo");
+    expect(mocks.openDiff).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "src/a.ts" }),
+      {
+        scope: "round",
+        workspaceRoot: "C:/repo",
+        baseRev: "aaaaaaa1111111111111111111111111111111111",
+      },
+    );
     expect(w.find(".tf-body").exists()).toBe(true); // 清单没被这次点击塌掉
+  });
+
+  it("轮记录没有 baseRev（老会话）→ 窗口拿 undefined 基线，退化为 HEAD 累计", async () => {
+    const w = mountCard(makeFeed(reactive([round(1, [f("src/a.ts", 1, 0)])])));
+    await w.get(".tf").trigger("click");
+    await w.get(".cfl-row").trigger("click");
+    await flushPromises();
+
+    expect(mocks.openDiff).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "src/a.ts" }),
+      { scope: "round", workspaceRoot: "C:/repo", baseRev: undefined },
+    );
   });
 
   it("diff 打不开不静默：toast 说清失败", async () => {

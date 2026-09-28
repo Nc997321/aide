@@ -76,6 +76,13 @@ export interface DiffPair {
   baseMissing?: boolean;
 }
 
+/** `gitDiffPair` 的取数模式（与 Rust `DiffMode` 的 serde tag 对齐：kind 判别）。 */
+export type DiffMode =
+  | { kind: "unstaged" }
+  | { kind: "staged" }
+  | { kind: "commit"; hash: string }
+  | { kind: "since"; rev: string };
+
 export interface LastEventInfo {
   event_type: string | null;
   stop_reason: string | null;

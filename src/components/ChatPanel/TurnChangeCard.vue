@@ -81,10 +81,15 @@ async function openFile(f: ChangeFile) {
   await openResolved(f.path, wsRoot.value);
 }
 
-/** 点文件行 = 弹该文件 diff（失败出声——窗口没弹出来不能是"点了没反应"）。 */
+/** 点文件行 = 弹该文件 diff（失败出声——窗口没弹出来不能是"点了没反应"）。
+ *  口径 = **本轮**（卡上的清单就是这一轮的账单），基线取该轮开轮时的提交。 */
 async function openDiff(row: TouchedFile) {
   try {
-    await openDiffWindow(row, wsRoot.value);
+    await openDiffWindow(row, {
+      scope: "round",
+      workspaceRoot: wsRoot.value,
+      baseRev: round.value?.baseRev,
+    });
   } catch (e) {
     showToast(`加载 diff 失败：${errorText(e)}`, "danger");
   }

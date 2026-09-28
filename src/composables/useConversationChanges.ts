@@ -29,6 +29,10 @@ function sessionWsRoot(sid: string): string | null {
   return useSessionWorkspaces().workspaceOf(sid)?.wsPath || null;
 }
 
+/** 已确认「不是 git 仓库」的工作区根：不必每轮白掏一次 spawn（实测 ~101ms/次）。
+ *  只缓存 `Ok(None)`（unborn HEAD / 非仓库）；命令**失败**不缓存——那是暂态，下一轮还要试。 */
+const noGitRoots = new Set<string>();
+
 function changeAttribution(): ChangeAttribution {
   if (!attribution) {
     attribution = createChangeAttribution({
@@ -54,6 +58,7 @@ function changeAttribution(): ChangeAttribution {
  *  __resetForTest 同惯例）。订阅句柄不动。 */
 export function __resetForTest(): void {
   attribution = null;
+  noGitRoots.clear(); // 模块级缓存：不复位会把上个用例的"非 git 仓库"结论带过来
 }
 
 /** 把一批归集增量并入轮次。
@@ -167,11 +172,12 @@ export function useConversationChanges(sessionId: () => string) {
     }
   }
 
-  /** 轮开始（状态 → running）：建 pending 轮（标题=本轮提问）+ 记 rewind 锚点。
+  /** 轮开始（状态 → running）：建 pending 轮（标题=本轮提问）+ 记 rewind 锚点 + 记基线。
    *  prompt 同步取——异步链落定前注册表可能已被清。
    *
-   *  不再拍 git 快照：本轮改了哪些文件由归集器的游标增量给出（drain 取走即
-   *  清空），不需要「轮首 diff 基线」这种依赖全局工作区单例的时间窗推断。 */
+   *  不拍 git **快照**：本轮改了哪些文件由归集器的游标增量给出（drain 取走即清空）。
+   *  只取一个 HEAD **提交号**（`baseRev`）当"改前"引用——cwd 取会话自持的工作区根，
+   *  不依赖全局工作区单例的时间窗推断。 */
   function startRound(sid: string) {
     if (isPendingSession(sid)) return;
     const prompt = getLastDispatchedPrompt(sid) || undefined;
@@ -186,6 +192,19 @@ export function useConversationChanges(sessionId: () => string) {
       } catch (_) {
         t.pendingRewindPosition = null;
       }
+      // 基线（"改前"）：开轮时刻的 HEAD 提交。与 jsonl 字节锚点同批取，**不依赖 fs 事件时序**
+      // （事件订阅失败时首次触碰会晚于提交，基线就取成了提交之后的 sha）。取不到就不记 ——
+      // 那条记录将来退回 HEAD 累计，绝不出现错的内容。
+      let baseRev: string | undefined;
+      const root = sessionWsRoot(sid);
+      if (root && !noGitRoots.has(root)) {
+        try {
+          baseRev = (await api.gitHeadRev(root)) ?? undefined;
+          if (!baseRev) noGitRoots.add(root);
+        } catch (e) {
+          console.warn("[changelog] read HEAD rev failed, this round has no baseline:", e);
+        }
+      }
       t.roundCounter += 1;
       t.rounds.push({
         index: t.roundCounter,
@@ -194,6 +213,7 @@ export function useConversationChanges(sessionId: () => string) {
         rewindTo: t.pendingRewindPosition ?? undefined,
         prompt,
         pending: true,
+        baseRev,
       });
     });
   }

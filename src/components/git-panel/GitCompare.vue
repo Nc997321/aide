@@ -110,7 +110,7 @@ async function onCompareFileClick(f: CompareFile) {
 async function onCommitFileClick(f: DiffEntry, hash: string) {
   // 提交详情文件：该提交的行级 diff（h^ vs h）
   try {
-    const pair = await api.gitDiffPair(f.path, { commitHash: hash });
+    const pair = await api.gitDiffPair(f.path, { mode: { kind: "commit", hash } });
     // 同 GitPanel：git 用相对路径，fileViewer 窗口用绝对路径
     fileViewer.open(toAbsPath(f.path), { diff: windowDiffOfPair(pair) });
   } catch (e) {

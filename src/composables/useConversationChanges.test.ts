@@ -18,6 +18,8 @@ vi.mock("../api", () => ({
     appendSessionChange: vi.fn().mockResolvedValue(undefined),
     loadSessionChanges: vi.fn().mockResolvedValue([]),
     sessionJsonlSize: vi.fn().mockResolvedValue(100),
+    /** 开轮基线（HEAD 提交）。默认给一个 sha；用例可覆写成 null（非 git）或 reject。 */
+    gitHeadRev: vi.fn().mockResolvedValue("0123456789abcdef0123456789abcdef01234567"),
     // gitDiffFiles 保留在 mock 里是为了断言「不再被调用」——归集换了数据源后，
     // 它若被调用就说明又退回了全局工作区 diff。
     gitDiffFiles: vi.fn().mockResolvedValue([]),
@@ -97,7 +99,7 @@ async function flushAsync(n = 12) {
 }
 
 const apiMock = api as unknown as Record<
-  "saveSessionChanges" | "appendSessionChange" | "loadSessionChanges" | "sessionJsonlSize" | "gitDiffFiles" | "gitRevertFile" | "truncateSessionJsonl" | "stopChatSession",
+  "saveSessionChanges" | "appendSessionChange" | "loadSessionChanges" | "sessionJsonlSize" | "gitHeadRev" | "gitDiffFiles" | "gitRevertFile" | "truncateSessionJsonl" | "stopChatSession",
   ReturnType<typeof vi.fn>
 >;
 const listenMock = vi.mocked(listen);
@@ -112,31 +114,34 @@ function round(index: number, paths: string[], rewindTo?: number): ChangeRound {
   };
 }
 
+// ── 用例卫生：**文件级**（所有 describe 共用）──
+// 归集器、"非 git 仓库"负缓存都是模块级单例：不复位会把上个用例的结论带过来。
+beforeEach(async () => {
+  // 冲刷上个用例可能残留的异步链（revertRound 的文件恢复循环是 await 串行，
+  // 上一用例断言完不等于链已跑完——残留的 gitRevertFile 会落进本用例的计数）。
+  await flushAsync(30);
+  __resetForTest();
+  for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockClear();
+  for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockResolvedValue(undefined);
+  apiMock.loadSessionChanges.mockResolvedValue([]);
+  apiMock.gitDiffFiles.mockResolvedValue([]);
+  listenMock.mockClear();
+  fsMocks.fsHandler = null;
+  fsMocks.unlistens = 0;
+  vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+});
+afterEach(() => {
+  // 先停作用域（watch 不再响应），再清全局 sessionState（下个测试从零开始）
+  for (const d of disposers) d();
+  disposers.length = 0;
+  const { state, removeSessionState } = useSessionState();
+  for (const sid of Object.keys(state)) removeSessionState(sid);
+  useSessionWorkspaces().clearAll();
+  vi.restoreAllMocks();
+});
+
 describe("useConversationChanges 用户操作错误处理（P0）", () => {
-  beforeEach(async () => {
-    // 冲刷上个用例可能残留的异步链（revertRound 的文件恢复循环是 await 串行，
-    // 上一用例断言完不等于链已跑完——残留的 gitRevertFile 会落进本用例的计数）。
-    await flushAsync(30);
-    __resetForTest(); // 归集器是模块级单例：不复位会把上个测试的桶带过来
-    for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockClear();
-    for (const k of Object.keys(apiMock)) apiMock[k as keyof typeof apiMock].mockResolvedValue(undefined);
-    apiMock.loadSessionChanges.mockResolvedValue([]);
-    apiMock.gitDiffFiles.mockResolvedValue([]);
-    listenMock.mockClear();
-    fsMocks.fsHandler = null;
-    fsMocks.unlistens = 0;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    vi.spyOn(console, "warn").mockImplementation(() => {});
-  });
-  afterEach(() => {
-    // 先停作用域（watch 不再响应），再清全局 sessionState（下个测试从零开始）
-    for (const d of disposers) d();
-    disposers.length = 0;
-    const { state, removeSessionState } = useSessionState();
-    for (const sid of Object.keys(state)) removeSessionState(sid);
-    useSessionWorkspaces().clearAll();
-    vi.restoreAllMocks();
-  });
 
   it("revertSingleFile 恢复文件失败 → 向上抛（用户主动操作不吞）+ console.error", async () => {
     apiMock.loadSessionChanges.mockResolvedValue([round(1, ["a.ts"])]);
@@ -517,5 +522,60 @@ describe("revertFileGlobally — 统一树的撤回（跨轮语义）", () => {
 
     await expect(hook.revertFileGlobally("a.ts")).rejects.toThrow("locked");
     expect(hook.rounds.value[0].files).toHaveLength(1);
+  });
+});
+
+describe("开轮基线（baseRev）——「改前」引用", () => {
+  it("开轮取一次基线（cwd = 会话工作区根），写进轮记录", async () => {
+    const { setSessionState } = useSessionState();
+    const rev = "0123456789abcdef0123456789abcdef01234567";
+    apiMock.gitHeadRev.mockResolvedValue(rev);
+    const { hook } = await mountWithSid();
+
+    setSessionState(SID, "running");
+    await nextTick();
+    await flushAsync();
+
+    expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(1);
+    expect(apiMock.gitHeadRev).toHaveBeenCalledWith(WS_ROOT);
+    expect(hook.rounds.value[0]?.baseRev).toBe(rev);
+  });
+
+  it("非 git 仓库（Ok(None)）→ 不写字段，且负缓存生效（两轮只 spawn 一次）", async () => {
+    const { setSessionState } = useSessionState();
+    apiMock.gitHeadRev.mockResolvedValue(null);
+    const { hook } = await mountWithSid();
+
+    setSessionState(SID, "running");
+    await nextTick();
+    await flushAsync();
+    setSessionState(SID, "waiting");
+    await nextTick();
+    await flushAsync();
+    setSessionState(SID, "running");
+    await nextTick();
+    await flushAsync();
+
+    expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(1); // 缓存了"不是 git 仓库"
+    expect(hook.rounds.value.every((r) => r.baseRev === undefined)).toBe(true);
+  });
+
+  it("取基线抛错 → 不写字段，但**不缓存**（下一轮还要试）", async () => {
+    const { setSessionState } = useSessionState();
+    apiMock.gitHeadRev.mockRejectedValue(new Error("boom"));
+    const { hook } = await mountWithSid();
+
+    setSessionState(SID, "running");
+    await nextTick();
+    await flushAsync();
+    setSessionState(SID, "waiting");
+    await nextTick();
+    await flushAsync();
+    setSessionState(SID, "running");
+    await nextTick();
+    await flushAsync();
+
+    expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(2); // 暂态失败不进负缓存
+    expect(hook.rounds.value.every((r) => r.baseRev === undefined)).toBe(true);
   });
 });
