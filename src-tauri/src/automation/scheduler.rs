@@ -72,6 +72,17 @@ struct RunFinalize {
     error: Option<String>,
 }
 
+/// 外壳按 cwd 算好的路径政策快照（state 读属外壳，纯函数 builder 不碰）。
+///
+/// 运行轮与蒸馏轮**共用同一份**：这两个 builder 曾经各搓各的 payload，蒸馏轮
+/// 因此漏了下发 `session_dir`，resume 落回全局配置根找不到会话——手册从未生成
+/// （2026-09-24 实锤）。共用一个来源 + 同源断言才是防复发的结构性修法。
+struct PathPolicy {
+    cwd: String,
+    trusted: bool,
+    codegraph_enabled: bool,
+}
+
 pub struct AutomationService {
     /// 内存任务表（CRUD 命令维护；磁盘 task.json 是权威，启动时加载）
     tasks: Mutex<BTreeMap<String, AutomationTask>>,
@@ -330,18 +341,24 @@ impl AutomationService {
         }
     }
 
+    /// 外壳的路径政策读：cwd → (trusted, codegraph_enabled)。state 读属外壳，
+    /// 纯函数 builder 只消费结果——两个 builder 共用，保证对同一 cwd 判断一致。
+    fn path_policy(cwd: &str) -> PathPolicy {
+        PathPolicy {
+            cwd: cwd.to_string(),
+            trusted: crate::commands::workspace::is_path_trusted(cwd),
+            codegraph_enabled: crate::commands::workspace::is_codegraph_enabled_for_path(cwd),
+        }
+    }
+
     /// 构造发给 runtime 的 send 命令（纯函数，单测锁定协议形状）。
     /// 模型/effort 与普通会话同形走 env 通道（worker 读作初始值 → options.model/effort）；
     /// model 空 = 跟随提供商默认（自定义 provider 的正确兜底）。
-    /// trusted / codegraph_enabled 由调用方算好传入（政策读属外壳，不进纯函数，
-    /// 与 `start_run` 里 trusted 的注入同款）。
     fn build_send_command(
         task: &AutomationTask,
         run_id: &str,
         prompt: &str,
-        cwd: &str,
-        trusted: bool,
-        codegraph_enabled: bool,
+        policy: &PathPolicy,
     ) -> Value {
         let mut env = serde_json::Map::new();
         if !task.model.is_empty() {
@@ -357,14 +374,14 @@ impl AutomationService {
             "cmd": "send",
             "session_id": run_id, // 运行与会话 1:1，run_id 即 session_id
             "prompt": prompt,
-            "cwd": cwd,
+            "cwd": policy.cwd.as_str(),
             "env": env,
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
             "auto_title": false,
-            "trusted": trusted,
+            "trusted": policy.trusted,
             // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
             // （与 chat.rs 的下发同语义；调用方按 cwd 查 state.json 注入）。
-            "codegraph_enabled": codegraph_enabled,
+            "codegraph_enabled": policy.codegraph_enabled,
             // 自动化运行**刻意不发** LSP 语言：queryOptions 对 automation 的既有立场是
             // 「全关：每次都是全新会话，精简基座 = 省钱 + 行为确定」，而挂 LSP 工具既加
             // 工具 schema（每轮重发）又可能为一个无人值守的运行拉起 GB 级语言服务器。
@@ -382,6 +399,46 @@ impl AutomationService {
                 // 混进去就是影子参数。默认取作用域隔离目录，任务可显式指定。
                 "session_dir": super::session_dir(task).to_string_lossy(),
                 "max_turns": RUN_MAX_TURNS,
+            }
+        })
+    }
+
+    /// 蒸馏轮会话 id 约定（`<runId>-d`）：路由键与命令 session_id 必须同源。
+    fn distill_session_id(run_id: &str) -> String {
+        format!("{}-d", run_id)
+    }
+
+    /// 构造蒸馏轮的 send 命令（纯函数，单测锁定协议形状）。
+    ///
+    /// resume 的是**运行会话**，因此 `session_dir` 必须与运行轮同源——拿全局配置根
+    /// 就找不到那份转录（见 [`PathPolicy`] 文档里的事故）。两个 builder 消费同一个
+    /// [`PathPolicy`] 是防这类字段漂移的结构性约束，只靠人眼比对不可靠。
+    fn build_distill_command(task: &AutomationTask, run: &RunRecord, policy: &PathPolicy) -> Value {
+        let distill_sid = Self::distill_session_id(&run.run_id);
+        serde_json::json!({
+            "cmd": "send",
+            "session_id": distill_sid,
+            "prompt": Self::distill_prompt(task),
+            "cwd": policy.cwd.as_str(),
+            "trusted": policy.trusted,
+            "codegraph_enabled": policy.codegraph_enabled,
+            // 同上（distill 支线同属自动化）：不发 LSP 语言。
+            "lsp_languages": Vec::<String>::new(),
+            "permission_mode": Self::preset_permission_mode(task.permission_preset),
+            "auto_title": false,
+            "resume_session_id": run.session_id,
+            "automation": {
+                "task_id": task.id,
+                "run_id": distill_sid,
+                "preset": task.permission_preset,
+                // 蒸馏轮要写 playbook.md / scripts/，工具面恒全量（不分预设收窄）
+                "tools": ["*"],
+                "mcp_allowlist": task.connectors,
+                "task_dir": super::task_dir(&task.id).to_string_lossy(),
+                // 与运行轮同源：resume 的目标会话就在这个配置根下
+                "session_dir": super::session_dir(task).to_string_lossy(),
+                "max_turns": DISTILL_MAX_TURNS,
+                "fork": true,
             }
         })
     }
@@ -447,9 +504,8 @@ impl AutomationService {
             .workspace_path
             .clone()
             .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
-        let trusted = crate::commands::workspace::is_path_trusted(&cwd);
-        // 政策读在这里（外壳）算好，纯函数 build_send_command 只管拼装。
-        let codegraph_enabled = crate::commands::workspace::is_codegraph_enabled_for_path(&cwd);
+        // 政策读在这里（外壳）算好，纯函数 builder 只管拼装。
+        let policy = Self::path_policy(&cwd);
 
         let run = RunRecord {
             run_id: run_id.clone(),
@@ -518,8 +574,7 @@ impl AutomationService {
             self.persist_task(&task_mut)?;
         }
 
-        let cmd =
-            Self::build_send_command(&task, &run_id, &prompt, &cwd, trusted, codegraph_enabled);
+        let cmd = Self::build_send_command(&task, &run_id, &prompt, &policy);
 
         let app = self
             .app
@@ -1004,37 +1059,12 @@ impl AutomationService {
         task: AutomationTask,
         run: RunRecord,
     ) -> Result<(), String> {
-        let distill_sid = format!("{}-d", run.run_id);
+        let distill_sid = Self::distill_session_id(&run.run_id);
         let cwd = task
             .workspace_path
             .clone()
             .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
-        let trusted = crate::commands::workspace::is_path_trusted(&cwd);
-        let cmd = serde_json::json!({
-            "cmd": "send",
-            "session_id": distill_sid,
-            "prompt": Self::distill_prompt(&task),
-            "cwd": cwd,
-            "trusted": trusted,
-            // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
-            // （与 chat.rs 的下发同语义）。
-            "codegraph_enabled": crate::commands::workspace::is_codegraph_enabled_for_path(&cwd),
-            // 同上（distill 支线同属自动化）：不发 LSP 语言。
-            "lsp_languages": Vec::<String>::new(),
-            "permission_mode": Self::preset_permission_mode(task.permission_preset),
-            "auto_title": false,
-            "resume_session_id": run.session_id,
-            "automation": {
-                "task_id": task.id,
-                "run_id": distill_sid,
-                "preset": task.permission_preset,
-                "tools": ["*"],
-                "mcp_allowlist": task.connectors,
-                "task_dir": super::task_dir(&task.id).to_string_lossy(),
-                "max_turns": DISTILL_MAX_TURNS,
-                "fork": true,
-            }
-        });
+        let cmd = Self::build_distill_command(&task, &run, &Self::path_policy(&cwd));
 
         let app = self.app.get().ok_or("AutomationService 未启动")?;
         let runtime = app
@@ -1322,6 +1352,38 @@ mod tests {
     use super::*;
     use crate::automation::{IntervalUnit, MissedPolicy, Schedule};
 
+    /// 路径政策快照的测试替身：builder 是纯函数，政策读由调用方注入，
+    /// 单测因此不碰 state.json。
+    fn policy(cwd: &str, trusted: bool, codegraph_enabled: bool) -> PathPolicy {
+        PathPolicy {
+            cwd: cwd.into(),
+            trusted,
+            codegraph_enabled,
+        }
+    }
+
+    /// 一条成功的运行记录。蒸馏轮 builder 只消费 run_id / session_id 两项，
+    /// 但按真实形状造，免得字段增删时测试替身先失真。
+    fn run_record(run_id: &str, sdk_sid: &str) -> RunRecord {
+        RunRecord {
+            run_id: run_id.into(),
+            session_id: sdk_sid.into(),
+            trigger: RunTrigger::Manual,
+            mode: RunMode::Explore,
+            started_at: "2026-09-24T19:27:57".into(),
+            finished_at: Some("2026-09-24T19:28:19".into()),
+            status: RunStatus::Succeeded,
+            stop_reason: Some("end_turn".into()),
+            usage: None,
+            rounds: Some(8),
+            cost_usd: Some(0.34),
+            summary: None,
+            distill_cost_usd: None,
+            error: None,
+            note: None,
+        }
+    }
+
     fn task(preset: PermissionPreset) -> AutomationTask {
         AutomationTask {
             id: "aut_test".into(),
@@ -1370,9 +1432,7 @@ mod tests {
             &task(PermissionPreset::Auto),
             "run_1",
             "提示词",
-            "C:/ws",
-            true,
-            false,
+            &policy("C:/ws", true, false),
         );
         // run_id 即 session_id（1:1 映射契约）
         assert_eq!(cmd["session_id"], "run_1");
@@ -1402,9 +1462,7 @@ mod tests {
             &task(PermissionPreset::Auto),
             "run_3",
             "p",
-            "C:/ws",
-            true,
-            true,
+            &policy("C:/ws", true, true),
         );
         assert_eq!(cmd["codegraph_enabled"], true);
     }
@@ -1415,9 +1473,7 @@ mod tests {
             &task(PermissionPreset::Full),
             "run_2",
             "p",
-            "C:/ws",
-            false,
-            false,
+            &policy("C:/ws", false, false),
         );
         assert_eq!(cmd["permission_mode"], "bypassPermissions");
         assert_eq!(cmd["automation"]["preset"], "full");
@@ -1428,7 +1484,8 @@ mod tests {
         // 空模型 = 跟随提供商默认：env 里不出这个 key（worker 回落 provider env）
         let mut t = task(PermissionPreset::Full);
         t.model = String::new();
-        let cmd = AutomationService::build_send_command(&t, "run_2", "p", "C:/ws", false, false);
+        let cmd =
+            AutomationService::build_send_command(&t, "run_2", "p", &policy("C:/ws", false, false));
         assert!(cmd["env"].get("ANTHROPIC_MODEL").is_none());
         assert_eq!(cmd["automation"]["tools"][0], "*");
     }
@@ -1476,12 +1533,68 @@ mod tests {
     fn send_command_session_dir_is_explicit_field_not_env() {
         let mut t = task(PermissionPreset::Auto);
         t.session_dir = Some("D:/custom/cfg".into());
-        let cmd = AutomationService::build_send_command(&t, "run_1", "p", "C:/ws", true, false);
+        let cmd =
+            AutomationService::build_send_command(&t, "run_1", "p", &policy("C:/ws", true, false));
         assert_eq!(cmd["automation"]["session_dir"], "D:/custom/cfg");
         assert!(
             cmd["env"].get("CLAUDE_CONFIG_DIR").is_none(),
             "CLAUDE_CONFIG_DIR 不该藏在 env 里（影子参数）"
         );
+    }
+
+    /// 蒸馏轮命令形状：resume 运行会话、fork 成新 id、**并带上 session_dir**。
+    ///
+    /// `session_dir` 是 2026-09-24 事故的回归锁：漏下发的后果是 sidecar 回落全局
+    /// 配置根（`automation.ts` 的 `sessionDir ?? ""`），resume 找不到运行会话的转录，
+    /// 蒸馏无声失败——执行手册一次都没生成过（runs.jsonl 的 distillCostUsd 恒 null、
+    /// playbookState 恒 none、任务目录里没有 playbook.md）。
+    #[test]
+    fn distill_command_shape_locks_protocol() {
+        let t = task(PermissionPreset::Auto);
+        let run = run_record("run_1", "7576831f-d39a-4dc0-baeb-961ef8401efd");
+        let pol = policy("C:/ws", true, false);
+        let cmd = AutomationService::build_distill_command(&t, &run, &pol);
+
+        // 会话 id 约定：路由键与命令 session_id 同源（<runId>-d）
+        assert_eq!(cmd["session_id"], "run_1-d");
+        assert_eq!(cmd["automation"]["run_id"], "run_1-d");
+        // resume 运行会话本体、fork 成新 id（同 id 会让关运行 tab 的 session_stop 误杀蒸馏轮）
+        assert_eq!(
+            cmd["resume_session_id"],
+            "7576831f-d39a-4dc0-baeb-961ef8401efd"
+        );
+        assert_eq!(cmd["automation"]["fork"], true);
+        // 关键回归点：会话目录必须与运行轮逐字相同，否则 resume 找不到转录
+        let send = AutomationService::build_send_command(&t, "run_1", "p", &pol);
+        assert_eq!(cmd["automation"]["session_dir"], send["automation"]["session_dir"]);
+        assert_eq!(cmd["automation"]["max_turns"], DISTILL_MAX_TURNS);
+        assert!(cmd["automation"].get("max_budget_usd").is_none());
+    }
+
+    /// 防漂移锚点：两个 builder 消费**同一份** [`PathPolicy`]，共用字段必须逐字相同。
+    ///
+    /// 蒸馏轮漏字段是「两份 payload 各搓各的」的直接后果——只补一个字段治标，
+    /// 这条同源断言才治本（字段名清单与新 payload 同步扩）。
+    #[test]
+    fn both_builders_agree_on_shared_fields() {
+        let mut t = task(PermissionPreset::Auto);
+        t.session_dir = Some("D:/custom/cfg".into());
+        let run = run_record("run_9", "sdk-sid-9");
+        let pol = policy("D:/ws", true, true);
+
+        let send = AutomationService::build_send_command(&t, "run_9", "p", &pol);
+        let distill = AutomationService::build_distill_command(&t, &run, &pol);
+
+        for key in ["task_id", "preset", "task_dir", "session_dir", "mcp_allowlist"] {
+            assert_eq!(
+                send["automation"][key], distill["automation"][key],
+                "运行轮与蒸馏轮的 automation.{key} 漂移了"
+            );
+        }
+        // 路径政策三件套同理（同一份快照注入，不是各查各的 state）
+        for key in ["cwd", "trusted", "codegraph_enabled"] {
+            assert_eq!(send[key], distill[key], "{key} 漂移了");
+        }
     }
 
     #[test]
