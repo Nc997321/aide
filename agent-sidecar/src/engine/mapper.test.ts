@@ -36,6 +36,30 @@ function userToolResult(toolUseId: string, content: string, isError = false) {
   };
 }
 
+/** async（后台）子代理的 launch-ack：Agent 工具后台派发时 tool_result 立即返回的回执
+ *  （不是结果）。CLI ≥2.1.x 的 Agent 默认后台派发（工具面原文：Agents run in the
+ *  background by default）。 */
+function agentLaunchAck(toolUseId: string, agentId = "ab99381a4a2eb9ccd") {
+  return {
+    type: "user",
+    message: {
+      role: "user",
+      content: [{
+        type: "tool_result",
+        tool_use_id: toolUseId,
+        content: `Async agent launched successfully. agentId: ${agentId} (internal ID - do not mention to user.) The agent is working in the background. output_file: C:\\x\\tasks\\${agentId}.output\nDo NOT Read or tail this file via the shell tool`,
+      }],
+    },
+  };
+}
+
+/** CLI 的结构化任务帧（system/task_notification）：后台 shell 任务与 async 子代理共用
+ *  的终态通道。2026-09-28 SDK 0.3.252 线上实探：async 子代理完成只到这一条（带
+ *  tool_use_id=Agent tool_use id），<task-notification> XML 用户消息不进 SDK 流。 */
+function taskNotificationFrame(fields: Record<string, unknown>) {
+  return { type: "system", subtype: "task_notification", ...fields };
+}
+
 describe("mapSdkMessage routing for Task tools", () => {
   it("does not emit tool_use_start for TaskCreate", () => {
     const events: ChatEvent[] = [];
@@ -1092,6 +1116,54 @@ describe("mapSdkMessage routing for subagent tools", () => {
   (e) => events.push(e),
   { tasks: tasks, subagents: subagents, tools: tools });
     expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "model 不存在", is_error: true }]);
+  });
+
+  it("structured task_notification 收尾 async 子代理（CLI 默认后台派发的唯一终态通道）", () => {
+    // 事故：Agent 默认后台派发后，tool_result 只是 launch-ack，真终态走这条 structured
+    // 帧；它被后台任务分支无条件 return 吞掉 → 子代理永远停在「运行中」。
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    const deps = { tasks: new TaskTracker(), subagents, tools: new ToolLifecycleTracker() };
+    mapSdkMessage(assistantToolUse("a1", "Agent", { subagent_type: "Explore", description: "调研 XXX" }), (e) => events.push(e), deps);
+    mapSdkMessage(agentLaunchAck("a1"), (e) => events.push(e), deps);
+    events.length = 0;
+    const spy = vi.spyOn(tailMod, "stopOutputTail");
+    mapSdkMessage(
+      taskNotificationFrame({ tool_use_id: "a1", task_id: "ad0a04aa19328f37b", status: "completed", summary: "完整报告…" }),
+      (e) => events.push(e),
+      deps,
+    );
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "完整报告…", is_error: false }]);
+    expect(subagents.isActive("a1")).toBe(false);
+    expect(spy).toHaveBeenCalledWith("a1");
+    spy.mockRestore();
+  });
+
+  it("structured 终态 status 非 completed → is_error:true（async 子代理）", () => {
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    const deps = { tasks: new TaskTracker(), subagents, tools: new ToolLifecycleTracker() };
+    mapSdkMessage(assistantToolUse("a1", "Agent", { subagent_type: "Explore", description: "调研 XXX" }), (e) => events.push(e), deps);
+    mapSdkMessage(agentLaunchAck("a1"), (e) => events.push(e), deps);
+    events.length = 0;
+    mapSdkMessage(taskNotificationFrame({ tool_use_id: "a1", task_id: "t9", status: "failed", summary: "model 不存在" }), (e) => events.push(e), deps);
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "model 不存在", is_error: true }]);
+  });
+
+  it("前台子代理的 structured 终态不收尾——真结果仍由 tool_result 决定", () => {
+    // 前台子代理两帧同刻到达（顺序不定）：structured 先到也不能收，否则结果从
+    // tool_result 的全文降级成 summary，且紧随的 tool_result 会掉进通用分支。
+    const events: ChatEvent[] = [];
+    const subagents = new SubagentTracker();
+    const deps = { tasks: new TaskTracker(), subagents, tools: new ToolLifecycleTracker() };
+    mapSdkMessage(assistantToolUse("a1", "Agent", { subagent_type: "Explore", description: "调研 XXX" }), (e) => events.push(e), deps);
+    events.length = 0;
+    mapSdkMessage(taskNotificationFrame({ tool_use_id: "a1", task_id: "t9", status: "completed", summary: "OK" }), (e) => events.push(e), deps);
+    expect(events).toEqual([]);
+    expect(subagents.isActive("a1")).toBe(true);
+    mapSdkMessage(userToolResult("a1", "调研结论：用了 Vue3+Tauri。"), (e) => events.push(e), deps);
+    expect(events).toEqual([{ type: "subagent_end", id: "a1", result: "调研结论：用了 Vue3+Tauri。", is_error: false }]);
+    expect(subagents.isActive("a1")).toBe(false);
   });
 
   it("普通 user 文本消息（非 task-notification）不被误当完成", () => {

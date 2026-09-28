@@ -92,6 +92,13 @@ export class SubagentTracker {
     return this.asyncMeta.get(id)?.outputFile;
   }
 
+  /** 该 id 是否是 async（后台）子代理——已收到 launch-ack，tool_result 只是回执，
+   *  终态只能靠结构化 task_notification 送到。前台子代理不走这条：它的 tool_result
+   *  里才是真结果（两帧同刻到达，结构化先收会把结果降级成 summary）。 */
+  isAsync(id: string): boolean {
+    return this.asyncMeta.has(id);
+  }
+
   /** task-notification 完成时调用：清 async 元数据 + 关 active（复用 handleToolResult）。 */
   handleAsyncResult(id: string): boolean {
     this.asyncMeta.delete(id);

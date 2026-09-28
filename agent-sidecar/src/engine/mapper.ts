@@ -482,11 +482,32 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
     return;
   }
 
-  // 后台任务终态信号（structured 通道）。注意：local_bash 的终态实际走
-  // <task-notification> XML 用户消息（下方 user-string 分支，2026-07-25 转录实锤），
-  // 这条 structured system/task_notification 只是防御性兜底——两个通道都按 tracker
-  // 去重（done 守卫），先到先处理。只处理 tracker 里登记过的任务，其余安静忽略。
+  // 任务终态信号（structured 通道），两类消费者看 tool_use_id 分派。
+  //
+  // ① async（后台）子代理：CLI ≥2.1.x 的 Agent 默认后台派发，完成时 SDK 线上
+  //    只到这一条（tool_use_id = 那次 Agent tool_use 的 id，summary = 子代理最终
+  //    全文）——<task-notification> XML 用户消息不进 SDK 流（2026-09-28 线上实探：
+  //    它只在转录里留 queue-operation/attachment 记录）。必须在这里收尾，否则
+  //    子代理永远停在「运行中」（tool_result 只是 launch-ack，不会再来第二条）。
+  //    前台子代理不在此收尾：两帧同刻到达、顺序不定，structured 先收会把结果
+  //    从 tool_result 的全文降级成 summary，随即的 tool_result 还会掉进通用分支。
+  //
+  // ② 后台 shell 任务：XML 通道是主路径（下方 user-string 分支，2026-07-25 转录
+  //    实锤），这条 structured 帧是防御性兜底——两条都按 tracker 去重（done 守卫），
+  //    先到先处理；只处理 tracker 里登记过的任务，其余安静忽略。
   if (msg.type === "system" && msg.subtype === "task_notification") {
+    const toolUseId = typeof msg.tool_use_id === "string" ? msg.tool_use_id : undefined;
+    if (toolUseId && subagents.isAsync(toolUseId)) {
+      (outputTailHooks?.stop ?? globalStopOutputTail)(toolUseId);
+      subagents.handleAsyncResult(toolUseId);
+      emit({
+        type: "subagent_end",
+        id: toolUseId,
+        result: typeof msg.summary === "string" ? msg.summary : "",
+        is_error: msg.status !== "completed",
+      });
+      return;
+    }
     const ev = bgTaskHooks?.tracker.handleNotification(msg);
     if (ev) {
       bgTaskHooks?.stopTail(msg.task_id as string);
