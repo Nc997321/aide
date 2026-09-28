@@ -1,15 +1,31 @@
 import type { ChatMessage, ContentBlock } from "../../types/chat";
 import { estimateBlockBytes, computeStoreBytes, summarizeText } from "../../utils/messageBytes";
 import type { SessionStore } from "./state";
-import { releaseFarthestPages } from "./recycle";
+import { releaseFarthestPages, RECYCLE_BYTES_BUDGET } from "./recycle";
 
 /**
  * P0-3 store 内存兜底（估算字节超阈值降级大 block 为摘要）。
  * 终稿职责定位：滚动层（useChatScroll）只做「取回/锚定/置底」不管内存；
  *  store 层这里管内存——两阶段：
  *  ① 超阈值时从最早消息起降级大 block（保留消息结构）；
- *  ② 降完仍超（小 block 洞：全部块都 ≤16KB 时①落空）→ 调 recycle 释放热区外
- *     已加载页（页 = jsonl 字节区间，重取可完整恢复，含 tool_call.input）。
+ *  ② 降完仍超 → 调 recycle 把已加载页压回 recycle 的上界（页 = jsonl 字节区间，
+ *     重取可完整恢复，含 tool_call.input）。
+ *
+ * ②的职责**不是**「兜住小 block 洞」——旧注释这么写，实际兜不住：字节大头在
+ * live 段，而 live 段永不进页（页只从磁盘读来时建，见 pagination 的 pageEntryFrom），
+ * 页能给出的上限就是 RECYCLE_BYTES_BUDGET（2MB），相对 32MB 阈值只是零头。
+ * ②真正的价值是**跨触发路径的兜底**：recycle 的上界平时靠滚动停驻（useChatScroll
+ * 的 settleRecycle）执行，而 hydrate / restorePage / 定位补历史这些路径不产生滚动
+ * 事件，没人执行它——②在内存告急时补这一刀。
+ *
+ * 已知且**有意未解**的缺口：全由 ≤16KB 小块构成、且驻留在 live 段的数据没有字节
+ * 出口（阶段① 只认 >16KB 的块，②够不到 live 段）。要真正解决得让 live 段能沉淀成
+ * 页（结构改动），不在本模块范围内。
+ *
+ * ⚠️② 的预算必须与 **recycle 同一尺度**（页字节），不能再用 store 尺度：
+ * 2026-09-28 取证——此前传的是 `storeBytes * 0.8`（25.6MB），而它拿去比的是
+ * loadedPagesBytes（≤2MB），2MB 永远不大于 25.6MB ⇒ 循环体一次不进，恒返回 0，
+ * 是一段永不生效的死代码（取证用例见 useChatSession.evictPhase2.test.ts）。
  */
 
 /** store 估算字节阈值（UTF-16,length×2）：超出时从最早消息起降级大 block。
@@ -106,11 +122,13 @@ export function maybeEvict(sid: string, store: SessionStore): void {
       bytes -= saved;
     }
   }
-  // 阶段②：小 block 洞兜底——①降完仍超阈值，说明占用大头是不可降级的小块/对象
-  // 结构，按页释放（热区由滚动层 setViewportHot 上报，无上报时保最新 2 页）
+  // 阶段②：①降完仍超阈值 → 把页压回 recycle 的上界（见文件头：这不是"兜小 block 洞"，
+  // 页给不出那个量；它兜的是「无滚动事件因而没人执行上界」的路径）。
+  // 预算与 recycle 同尺度是**不变量**，别再写成 storeBytes 派生的值（那会恒返回 0）。
+  // 热区由滚动层 setViewportHot 上报，无上报时保最新 2 页。
   if (bytes > evictThresholds.storeBytes) {
     const released = releaseFarthestPages(sid, {
-      budget: evictThresholds.storeBytes * 0.8,
+      budget: RECYCLE_BYTES_BUDGET,
       preserveNewest: 2,
     });
     if (released > 0) degraded = true;

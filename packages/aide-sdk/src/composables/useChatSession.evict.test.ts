@@ -258,21 +258,30 @@ describe("P0-3 旧消息淘汰 maybeEvict", () => {
   it("二阶段兜底：块全小（①落空）仍超阈值 → 释放最老已加载页", async () => {
     // store 阈值 100B（必超）、block 阈值 100KB（① 永不降级）→ 落到阶段②
     __setEvictThresholdsForTest(100, 100 * 1024);
-    // 三页：preserveNewest=2 豁免最新两页，最老页应被释放成骨架
+    // 三页：preserveNewest=2 豁免最新两页，最老页应被释放成骨架。
+    //
+    // ⚠️ 夹具要求：**已加载页总字节必须越过页上界**（RECYCLE_BYTES_BUDGET = 2MB），
+    // 否则阶段② 的预算（现与 recycle 同尺度）不会被触发。这正是本条用例曾经失真的
+    // 地方：2026-09-28 之前阶段② 的预算是 store 尺度的派生值（100B × 0.8 = 80B），
+    // 于是"1000 字节的页"就能触发它——用例一直是绿的，而**生产路径恒返回 0**
+    // （真实预算 25.6MB vs 页上界 2MB，见 useChatSession.evictPhase2.test.ts）。
+    // 现在页上界是硬约束：真实页 ≤256KB（读取 limit 所限），所以生产上要 ≥9 页越界
+    // 才会走到这里；本夹具把最老页放大到 2.2MB 以免铺 9 次 loadOlder。
+    // 偏移仍保持相邻页首尾相接（ledger 不变式）。
     const mk = (prefix: string, start: number, end: number) => ({
       messages: [{ role: "claude", timestamp: 0, blocks: [{ type: "text" as const, text: `${prefix}${"x".repeat(80)}` }] }],
       nextOffsetBytes: start,
       endOffsetBytes: end,
     });
-    invokeMock.mockResolvedValueOnce(mk("p0", 2000, 3000)); // hydrate 尾部页
+    invokeMock.mockResolvedValueOnce(mk("p0", 2_201_000, 2_202_000)); // hydrate 尾部页
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
     await flush();
     await flush();
     const { loadOlderPage } = await import("./useChatSession");
-    invokeMock.mockResolvedValueOnce(mk("p1", 1000, 2000));
+    invokeMock.mockResolvedValueOnce(mk("p1", 2_200_000, 2_201_000));
     await loadOlderPage("uuid-a", 64 * 1024);
-    invokeMock.mockResolvedValueOnce(mk("p2", 0, 1000));
+    invokeMock.mockResolvedValueOnce(mk("p2", 0, 2_200_000)); // 最老页：2.2MB，越界
     await loadOlderPage("uuid-a", 64 * 1024);
     const { pageLedgers } = await import("./useChatSession/state");
     const ledger = pageLedgers.get("uuid-a")!;
