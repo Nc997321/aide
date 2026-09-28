@@ -89,7 +89,7 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
         <span class="changelog-round-time">{{ round.time }}</span>
       </button>
       <button
-        v-if="round.rewindTo !== undefined"
+        v-if="typeof round.rewindTo === 'number'"
         class="changelog-round-revert"
         v-tooltip="'撤回到此处：回滚对话与文件到该轮之前'"
         @click="emit('revert-round')"

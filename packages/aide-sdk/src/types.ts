@@ -93,7 +93,10 @@ export interface ChangeRound {
   index: number;
   time: string;
   files: ChangeFile[];
-  rewindTo?: number;
+  /** 本轮回退锚点（.jsonl 字节位置）。**磁盘上是 `null` 而不是 `undefined`**——
+   *  Rust `Option<u64>` 的 `None` 经 IPC 序列化成 null；老数据全是这个形状。
+   *  判断"有没有锚点"必须用数值判定（`typeof === "number"`），`!== undefined` 会把 null 放进来。 */
+  rewindTo?: number | null;
   /** 本轮对应的用户提问，作为变更面板轮次标题 */
   prompt?: string;
   /** 运行时态：轮次进行中（files 随轮实时刷新）。仅内存/UI 使用，
@@ -106,7 +109,7 @@ export interface ChangeRound {
   touches?: TouchedFile[];
   /** 「改前」引用：该轮开轮时刻的 HEAD 提交（开轮时取；旧数据没有）。
    *  消费端按口径取用：轮视图取本轮、全部文件树取**首轮**的（会话起点）。
-   *  线上名即本名 `baseRev`（Rust `ChangeRoundData` 侧显式 rename，见其注释）。 */
+   *  线上名即本名 `baseRev`（Rust `ChangeRoundData` 用 `rename_all = "camelCase"` 对齐，见其注释）。 */
   baseRev?: string;
 }
 

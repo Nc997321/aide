@@ -29,9 +29,8 @@ function sessionWsRoot(sid: string): string | null {
   return useSessionWorkspaces().workspaceOf(sid)?.wsPath || null;
 }
 
-/** 已确认「不是 git 仓库」的工作区根：不必每轮白掏一次 spawn（实测 ~101ms/次）。
- *  只缓存 `Ok(None)`（unborn HEAD / 非仓库）；命令**失败**不缓存——那是暂态，下一轮还要试。 */
-const noGitRoots = new Set<string>();
+// 注：这里曾有一个「非 git 仓库」的模块级负缓存（`noGitRoots`），已移除——
+// `Ok(None)` 有"非仓库"与"unborn HEAD"两义，缓存会钉死新项目会话（见 startRound 里的说明）。
 
 function changeAttribution(): ChangeAttribution {
   if (!attribution) {
@@ -58,7 +57,6 @@ function changeAttribution(): ChangeAttribution {
  *  __resetForTest 同惯例）。订阅句柄不动。 */
 export function __resetForTest(): void {
   attribution = null;
-  noGitRoots.clear(); // 模块级缓存：不复位会把上个用例的"非 git 仓库"结论带过来
 }
 
 /** 把一批归集增量并入轮次。
@@ -195,12 +193,16 @@ export function useConversationChanges(sessionId: () => string) {
       // 基线（"改前"）：开轮时刻的 HEAD 提交。与 jsonl 字节锚点同批取，**不依赖 fs 事件时序**
       // （事件订阅失败时首次触碰会晚于提交，基线就取成了提交之后的 sha）。取不到就不记 ——
       // 那条记录将来退回 HEAD 累计，绝不出现错的内容。
+      //
+      // **不做负缓存**：`Ok(None)` 有两义——"不是仓库"（永久）与"unborn HEAD"（瞬态，首个提交
+      // 就消失）。缓存会把一个刚 `git init` 的项目会话整场钉死在没有基线，本笔要修的那个 bug
+      // 会在这种会话里原样复发；而"不是仓库"那一路在 Rust 侧 `.git` 早退、连 spawn 都没有，
+      // 省下的只是一次 IPC 往返。每轮一次取数的代价照旧（~101ms，后台链上）。
       let baseRev: string | undefined;
       const root = sessionWsRoot(sid);
-      if (root && !noGitRoots.has(root)) {
+      if (root) {
         try {
           baseRev = (await api.gitHeadRev(root)) ?? undefined;
-          if (!baseRev) noGitRoots.add(root);
         } catch (e) {
           console.warn("[changelog] read HEAD rev failed, this round has no baseline:", e);
         }
@@ -396,7 +398,7 @@ export function useConversationChanges(sessionId: () => string) {
       // Truncate .jsonl to the position before this round started。
       // 截断失败必须中止整个回滚：若继续恢复文件，会出现「文件已回滚但对话
       // 历史未截断」的半回滚状态，与用户看到的撤回到处语义相悖。
-      if (round.rewindTo !== undefined && sid) {
+      if (typeof round.rewindTo === "number" && sid) {
         try {
           await api.truncateSessionJsonl(sid, round.rewindTo);
         } catch (e) {

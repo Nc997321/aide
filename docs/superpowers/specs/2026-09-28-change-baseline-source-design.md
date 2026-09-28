@@ -248,7 +248,7 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 | 跨目录会话文件 | 基线属于会话仓库；适配器只在 `baseRev` 有值时走 `Since`，取不到即退化为 HEAD 累计 |
 | 老会话不追溯 | Rust `#[serde(default)]` + TS `baseRev?`；老数据照读（用例已钉） |
 | `DiffViewer` / 文件查看器渲染不动 | 产品侧未改（`fileviewer/*` 只在夹具里被挂载） |
-| sidecar / 协议 / REGISTRY 不动 | `git diff --stat` 24 个文件全在 §9.3 清单内，sidecar 零改动 |
+| sidecar / 协议 / REGISTRY 不动 | `git diff --stat` 26 个文件全在 §9.3/§9.5 清单内，sidecar 零改动 |
 | 「全部文件」树聚合口径不动 | `mergeChangeFiles` 未改 |
 
 ### 9.3 实施中的四处偏差（完整台账见 SDD workspace）
@@ -262,10 +262,20 @@ pub async fn git_diff_pair(ws: State<'_, WorkspaceState>, path: String, mode: Di
 
 | 命令 | 结果 |
 |---|---|
-| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 934 passed / 0 failed / 2 ignored |
-| `pnpm test` | 271 文件 / 3435 passed / 1 skipped |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib` | 935 passed / 0 failed / 2 ignored |
+| `pnpm test` | 271 文件 / 3436 passed / 1 skipped |
 | `npx vue-tsc --noEmit` | 0 报错 |
 | §4.6 的 grep | 见 §4.6（全部合法） |
 
 **真机（可选）**：在报告场景里点「全部文件」里任一文件 → diff 有内容且标注写明口径。未跑的理由：内容层已由真仓用例证明，口径与降级链由单测钉住，note 文案由真组件夹具核对——真机只增加"这台机器上确实如此"的确认，不增加信息。
+
+### 9.5 整支评审后的修复（评审范围 `863a302b..7c605760`；0 Critical / 3 Important / 3 Minor）
+
+| 发现 | 修法 | 用例（先红后绿） |
+|---|---|---|
+| `Since` 拿 7 位短号当**取数键**——撞前缀时 `git show <短号>:path` 失败 → 静默判成"整片新增"（违背"绝不出现错的内容"） | `OldSide { rev, label }`：取数用调用方给的完整 rev，短号只当标签 | `diffpair.rs::since_rev_fetches_with_the_given_rev_not_the_label` |
+| `rewindTo: null`（Rust `None` 经 IPC 就是 null，不是 undefined）让**所有历史轮**亮出必失败的「撤回到此处」——点下去先杀会话、再拿 null 当字节位失败 | 两处判定改 `typeof === "number"`；`ChangeRound.rewindTo` 类型与注释写明 `number \| null` | `ChangeLogPanel.test.ts` 的按钮用例（加 null 轮）、`useConversationChanges.test.ts::锚点是 null → 撤回不截断` |
+| 负缓存把 `Ok(None)` 的"非仓库"（永久）与"unborn HEAD"（瞬态）混判 → 刚 `git init` 的项目会话整场无基线，原始 bug 原样复发 | **删掉负缓存**（"非仓库"那一路在 Rust 侧 `.git` 早退、连 spawn 都没有，省下的只是一次 IPC） | `useConversationChanges.test.ts::unborn HEAD / 非 git 仓库 → 不缓存：首个提交之后就有基线` |
+
+修复后全量：Rust 935 / TS 3436 / `vue-tsc` 0 报错。留档的 minor（未做）：`Since` 每次多一次 spawn（verify + show 串行，~200ms）、T1–T3 三个中间提交在 `git bisect` 上是坏点、夹具里四条 note 文案与实现逐字重复。
 

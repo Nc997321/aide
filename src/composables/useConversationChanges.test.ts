@@ -104,7 +104,7 @@ const apiMock = api as unknown as Record<
 >;
 const listenMock = vi.mocked(listen);
 
-function round(index: number, paths: string[], rewindTo?: number): ChangeRound {
+function round(index: number, paths: string[], rewindTo?: number | null): ChangeRound {
   return {
     index,
     time: "10:00",
@@ -541,9 +541,10 @@ describe("开轮基线（baseRev）——「改前」引用", () => {
     expect(hook.rounds.value[0]?.baseRev).toBe(rev);
   });
 
-  it("非 git 仓库（Ok(None)）→ 不写字段，且负缓存生效（两轮只 spawn 一次）", async () => {
+  it("unborn HEAD / 非 git 仓库（Ok(None)）→ 本轮不写字段，但**不缓存**：首个提交之后就有基线", async () => {
     const { setSessionState } = useSessionState();
-    apiMock.gitHeadRev.mockResolvedValue(null);
+    const rev = "0123456789abcdef0123456789abcdef01234567";
+    apiMock.gitHeadRev.mockResolvedValue(null); // 第 1 轮：仓库还没提交过（unborn）
     const { hook } = await mountWithSid();
 
     setSessionState(SID, "running");
@@ -552,12 +553,17 @@ describe("开轮基线（baseRev）——「改前」引用", () => {
     setSessionState(SID, "waiting");
     await nextTick();
     await flushAsync();
+    expect(hook.rounds.value[0]?.baseRev).toBeUndefined();
+
+    // agent 在会话里 git init + 首提交（unborn 是**瞬态**，不是"这个目录永远不是仓库"）
+    apiMock.gitHeadRev.mockResolvedValue(rev);
     setSessionState(SID, "running");
     await nextTick();
     await flushAsync();
 
-    expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(1); // 缓存了"不是 git 仓库"
-    expect(hook.rounds.value.every((r) => r.baseRev === undefined)).toBe(true);
+    expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(2); // 没被负缓存吞掉
+    const last = hook.rounds.value[hook.rounds.value.length - 1];
+    expect(last?.baseRev).toBe(rev);
   });
 
   it("取基线抛错 → 不写字段，但**不缓存**（下一轮还要试）", async () => {
@@ -577,5 +583,17 @@ describe("开轮基线（baseRev）——「改前」引用", () => {
 
     expect(apiMock.gitHeadRev).toHaveBeenCalledTimes(2); // 暂态失败不进负缓存
     expect(hook.rounds.value.every((r) => r.baseRev === undefined)).toBe(true);
+  });
+
+  it("锚点是 null（磁盘上的「没有锚点」形状）→ 撤回不截断对话，也绝不把 null 当字节位传下去", async () => {
+    const N = "uuid-null-rewind";
+    const { setSessionState } = useSessionState();
+    apiMock.loadSessionChanges.mockResolvedValue([round(1, ["a.ts"], null)]);
+    const { hook } = await mountWithSid(N);
+    await vi.waitFor(() => expect(hook.rounds.value).toHaveLength(1));
+
+    await hook.revertRound(hook.rounds.value[0]);
+
+    expect(apiMock.truncateSessionJsonl).not.toHaveBeenCalled();
   });
 });

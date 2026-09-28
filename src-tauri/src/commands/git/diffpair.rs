@@ -262,6 +262,26 @@ struct SideLabels {
     new: String,
 }
 
+/// 工作区模式的旧侧：`rev` 是**取数键**（必须能解析到那个对象），`label` 是给人看的标签。
+///
+/// 两者必须分开：`Since` 的标签是 7 位短号，而**短号在 git 层可能歧义**（撞前缀时
+/// `git show <短号>:<path>` 非零退出 → `show_blob` 给 `None` → 静默判成"整片新增"，
+/// 正是本笔承诺绝不出现的那类错内容）。取数一律用调用方给的完整 rev。
+struct OldSide {
+    rev: String,
+    label: String,
+}
+
+impl OldSide {
+    /// HEAD 视图（未暂存模式与基线失效的降级路径）：取数与标签都是 `HEAD`。
+    fn head() -> Self {
+        Self {
+            rev: "HEAD".to_string(),
+            label: "HEAD".to_string(),
+        }
+    }
+}
+
 /// 把已取到的两侧 blob/标签组装成 [`DiffPair`]：too-big 短路、binary 检测、
 /// 行尾归一化、eol_only 判定、status 推导。`build_diff_pair` 与
 /// `compare::git_diff_pair_refs` 共用此尾段。
@@ -353,7 +373,7 @@ pub(super) fn build_diff_pair(
     match mode {
         DiffMode::Commit { hash } => commit_sides(root, path, hash),
         DiffMode::Staged => staged_sides(root, path),
-        DiffMode::Unstaged => worktree_sides(root, path, "HEAD".to_string(), false),
+        DiffMode::Unstaged => worktree_sides(root, path, OldSide::head(), false),
         DiffMode::Since { rev } => since_sides(root, path, rev),
     }
 }
@@ -391,21 +411,28 @@ fn since_sides(root: &std::path::Path, path: &str, rev: &str) -> Result<DiffPair
     )?;
     if !verify.status.success() {
         // 基线不可达（rebase / GC）→ 不比，给 HEAD 视图 + 标记，由上层如实标注
-        return worktree_sides(root, path, "HEAD".to_string(), true);
+        return worktree_sides(root, path, OldSide::head(), true);
     }
-    let short = &rev[..7.min(rev.len())];
-    worktree_sides(root, path, short.to_string(), false)
+    worktree_sides(
+        root,
+        path,
+        OldSide {
+            rev: rev.to_string(), // 取数用完整 rev（短号可能歧义，见 `OldSide`）
+            label: rev[..7.min(rev.len())].to_string(),
+        },
+        false,
+    )
 }
 
-/// 某个提交（`old_label`）→ 工作区：旧侧走 blob，新侧读盘。
+/// 某个提交（`old`）→ 工作区：旧侧走 blob，新侧读盘。
 fn worktree_sides(
     root: &std::path::Path,
     path: &str,
-    old_label: String,
+    old: OldSide,
     base_missing: bool,
 ) -> Result<DiffPair, String> {
-    let old = show_blob(&format!("{}:{}", old_label, path), root)?;
-    let old_too_big = old
+    let old_bytes = show_blob(&format!("{}:{}", old.rev, path), root)?;
+    let old_too_big = old_bytes
         .as_ref()
         .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
         .unwrap_or(false);
@@ -413,11 +440,11 @@ fn worktree_sides(
     let new_exists = new_path.exists();
     let (new, new_too_big) = read_worktree_side(&new_path, new_exists)?;
     let sides = DiffSides {
-        old_label,
+        old_label: old.label,
+        old_exists: old_bytes.is_some(),
+        old_bytes,
         new_label: "工作区".to_string(),
-        old_exists: old.is_some(),
         new_exists,
-        old_bytes: old,
         new_bytes: new,
         old_too_big,
         new_too_big,
@@ -719,6 +746,34 @@ mod diff_pair_tests {
         assert_eq!(pair.old_label, "HEAD", "降级后标签如实写 HEAD");
         assert_eq!(pair.old_text, "v2\n");
         assert_eq!(pair.new_text, "v2\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 基线用**引用名**（不是 sha）：取数必须用调用方给的 rev 本身，
+    /// **不能**拿显示标签（`&rev[..7]`）去取——短号可能歧义，取数失败会被静默判成"整片新增"。
+    #[test]
+    fn since_rev_fetches_with_the_given_rev_not_the_label() {
+        let root = setup_repo("since_refname");
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        git(&root, &["branch", "baseline-branch"]);
+
+        std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v2"]);
+
+        let pair = build_diff_pair(
+            &root,
+            "a.txt",
+            &DiffMode::Since {
+                rev: "refs/heads/baseline-branch".into(),
+            },
+        )
+        .unwrap();
+        assert_eq!(pair.status, "modified", "旧侧取数失败会被误判成整片新增");
+        assert_eq!(pair.old_text, "v1\n");
+        assert!(!pair.base_missing);
         let _ = std::fs::remove_dir_all(&root);
     }
 
