@@ -192,3 +192,47 @@ describe("collapse", () => {
     expect(p.browserActive.value).toBe(false);
   });
 });
+
+describe("ensureTabShown：幂等展开任意 tab（结算卡的「变更面板 ↗」走它）", () => {
+  it("已在该 tab 且面板展开时再点 → 不收起（select 是 toggle，不能用）", () => {
+    const p = useRightPanel();
+    p.select("changes"); // 展开
+    expect(p.collapsed.value).toBe(false);
+
+    p.ensureTabShown("changes");
+    p.ensureTabShown("changes"); // 幂等：调几次都一样
+
+    expect(p.tab.value).toBe("changes");
+    expect(p.collapsed.value).toBe(false);
+  });
+
+  it("从别的 tab 切过去，并保证面板是展开的", () => {
+    const p = useRightPanel();
+    p.select("files");
+    p.ensureTabShown("changes");
+    expect(p.tab.value).toBe("changes");
+    expect(p.collapsed.value).toBe(false);
+  });
+
+  it("收起态调它 → 展开（不切走别的 tab 的语义）", () => {
+    const p = useRightPanel();
+    p.collapse();
+    p.ensureTabShown("changes");
+    expect(p.collapsed.value).toBe(false);
+    expect(p.tab.value).toBe("changes");
+  });
+
+  it("browser 走同一条路径：懒挂载标记照旧置位", () => {
+    const p = useRightPanel();
+    p.ensureTabShown("browser");
+    expect(p.browserEverActive.value).toBe(true);
+    p.ensureTabShown("browser"); // 幂等
+    expect(p.collapsed.value).toBe(false);
+  });
+
+  it("非 browser 的 tab 不动 browserEverActive（懒挂载只认浏览器）", () => {
+    const p = useRightPanel();
+    p.ensureTabShown("changes");
+    expect(p.browserEverActive.value).toBe(false);
+  });
+});

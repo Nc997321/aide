@@ -67,15 +67,21 @@ function setMaximized(on: boolean) {
 }
 
 /**
- * **幂等**展开浏览器面板（agent 的 focus 请求走它）。
+ * **幂等**展开到某个 tab（不是 toggle）。
  *
- * 不能用 `select('browser')`：那是 toggle，用户正看着浏览器时会把面板**收起来**
- * ——一个"给我看看"的请求变成"把你的面板关掉"。
+ * 不能用 `select(id)`：那是 toggle，用户已经在该 tab 时会把面板**收起来**——
+ * 一个"给我看看"的请求变成"把你的面板关掉"。agent 的 focus 请求（浏览器）与
+ * 结算卡的「变更面板 ↗」都踩这个坑，故裁决收在这里一处。
  */
-function ensureBrowserShown() {
-  browserEverActive.value = true;
-  tab.value = "browser";
+function ensureTabShown(id: RightTabId) {
+  if (id === "browser") browserEverActive.value = true; // 懒挂载：浏览器组件首次激活才挂
+  tab.value = id;
   collapsed.value = false;
+}
+
+/** 展开浏览器面板（agent 的 focus 请求走它）。 */
+function ensureBrowserShown() {
+  ensureTabShown("browser");
 }
 
 // ── 宽度：两档（窄工具 tab / 浏览器宽档），值只存内存（跨重启按窗口重算，用户 2026-09-20 定）──
@@ -131,6 +137,7 @@ export function useRightPanel() {
     collapse,
     setMaximized,
     ensureBrowserShown,
+    ensureTabShown,
     widths,
     widthProfile,
     setWidth,
