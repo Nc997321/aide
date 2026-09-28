@@ -3,7 +3,7 @@
 //! 按域拆分：spawn 基建在 [`runtime`]，输出归一化在 [`types`]，工作树/暂存/提交
 //! 操作在 [`operations`]，stash 在 [`stash`]，分支在 [`branches`]，工作树状态在
 //! [`status`]，远端同步在 [`remote_op`]，提交历史在 [`commits`]，编辑器 diff
-//! 数据层在 [`diffpair`]，目录指纹轮询在 [`fingerprint`]；分支对比在 [`compare`]，
+//! 数据层在 [`diffpair`]，仓库 HEAD 在 [`head`]，目录指纹轮询在 [`fingerprint`]；分支对比在 [`compare`]，
 //! 标签在 [`tags`]。`pub use` 把各子模块的公开项重新导出到
 //! `crate::commands::git` 命名空间，使 `lib.rs` 里
 //! `commands::git::git_log` 等注册路径在拆分后仍解析。
@@ -16,6 +16,8 @@ pub mod branches;
 pub mod commits;
 pub mod diffpair;
 pub mod fingerprint;
+pub mod head;
+pub use head::*;
 pub mod operations;
 pub mod remote_op;
 pub mod runtime;

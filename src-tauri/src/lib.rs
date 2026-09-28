@@ -473,6 +473,7 @@ pub fn run() {
             commands::git::git_pull,
             commands::git::git_delete_branch,
             commands::git::git_diff_pair,
+            commands::git::git_head_rev,
             commands::git::git_status,
             commands::git::git_unpushed_commits,
             commands::git::git_push,

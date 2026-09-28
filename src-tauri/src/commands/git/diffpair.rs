@@ -11,6 +11,9 @@ use std::time::{Duration, Instant};
 use tauri::State;
 // ── Diff pair：编辑器级 diff 查看器的数据层 ──
 
+/// 单侧超过此字节数 → 标 `too_big` 并给空文本，避免巨大 payload 跨 IPC。
+const MAX_DIFF_BYTES: u64 = 1_000_000;
+
 #[derive(Debug, serde::Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct DiffPair {
@@ -22,6 +25,24 @@ pub struct DiffPair {
     pub is_binary: bool,
     pub eol_only: bool,
     pub too_big: bool,
+    /// `Since(rev)` 的 rev 已不在仓库中（rebase / GC 之后不可达）→ 已退回 HEAD 视图：
+    /// 内容仍是 HEAD 的（不是空、不是整片新增），由上层如实标注降级。
+    pub base_missing: bool,
+}
+
+/// 取哪两方来比。**单值标签**：原先是 `staged: Option<bool>` + `commit_hash: Option<String>`
+/// 两个相邻可选参数（靠"不同时给"的约定维持），再加一个基线 rev 就是三个——按参数铁律收成一个。
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum DiffMode {
+    /// HEAD → 工作区（默认；变更面板的累计兜底）
+    Unstaged,
+    /// HEAD → 索引
+    Staged,
+    /// h^ → h（历史提交）
+    Commit { hash: String },
+    /// rev → 工作区（变更基线的"改前"）
+    Since { rev: String },
 }
 
 /// 统一行尾为 LF：CRLF/LF 翻转不该让 merge 视图每行都标变更。
@@ -223,31 +244,94 @@ mod batch_tests {
     }
 }
 
+/// `assemble_diff_pair` 的输入：两侧的标签/存在性/内容/超限标记。
+pub(super) struct DiffSides {
+    pub old_label: String,
+    pub new_label: String,
+    pub old_exists: bool,
+    pub new_exists: bool,
+    pub old_bytes: Option<Vec<u8>>,
+    pub new_bytes: Option<Vec<u8>>,
+    pub old_too_big: bool,
+    pub new_too_big: bool,
+}
+
+/// 一条 `cat-file --batch` 取回的两侧标签。命名成对传，避免两个 `String` 挨着写反而调换。
+struct SideLabels {
+    old: String,
+    new: String,
+}
+
 /// 把已取到的两侧 blob/标签组装成 [`DiffPair`]：too-big 短路、binary 检测、
 /// 行尾归一化、eol_only 判定、status 推导。`build_diff_pair` 与
-/// `compare::git_diff_pair_refs` 共用此尾段。`(old_exists,new_exists)==(false,false)`
-/// 时按 `root` 下 `path` 的磁盘存在性兜底（与原内联逻辑一致）。
+/// `compare::git_diff_pair_refs` 共用此尾段。
 pub(super) fn assemble_diff_pair(
-    old_label: String,
-    new_label: String,
-    old_exists: bool,
-    new_exists: bool,
-    old_bytes: Option<Vec<u8>>,
-    new_bytes: Option<Vec<u8>>,
-    old_too_big: bool,
-    new_too_big: bool,
+    sides: DiffSides,
     root: &std::path::Path,
     path: &str,
+    base_missing: bool,
 ) -> DiffPair {
-    let too_big = old_too_big || new_too_big;
-    let is_binary = !too_big
-        && (old_bytes.as_deref().map(looks_binary).unwrap_or(false)
-            || new_bytes.as_deref().map(looks_binary).unwrap_or(false));
+    let too_big = sides.old_too_big || sides.new_too_big;
+    let (old_text, new_text, eol_only) = normalized_texts(&sides, too_big);
+    let is_binary = detect_binary(&sides, too_big);
+    let status = derive_status(sides.old_exists, sides.new_exists, root, path).to_string();
+    let DiffSides {
+        old_label,
+        new_label,
+        ..
+    } = sides;
+    DiffPair {
+        old_text,
+        new_text,
+        old_label,
+        new_label,
+        status,
+        is_binary,
+        eol_only,
+        too_big,
+        base_missing,
+    }
+}
 
-    let status = match (old_exists, new_exists) {
+/// too-big 时两侧文本一律空（不给巨大 payload 跨 IPC）；否则按 LF 归一化——
+/// 归一化后相等但原文不等 → `eol_only`。
+fn normalized_texts(sides: &DiffSides, too_big: bool) -> (String, String, bool) {
+    if too_big {
+        return (String::new(), String::new(), false);
+    }
+    let old_raw = sides
+        .old_bytes
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    let new_raw = sides
+        .new_bytes
+        .as_deref()
+        .map(|b| String::from_utf8_lossy(b).into_owned())
+        .unwrap_or_default();
+    let old_text = normalize_eol(&old_raw);
+    let new_text = normalize_eol(&new_raw);
+    let eol_only = old_text == new_text && old_raw != new_raw;
+    (old_text, new_text, eol_only)
+}
+
+/// 两侧字节里是否有 NUL（`too_big` 已短路，不再探测）。
+fn detect_binary(sides: &DiffSides, too_big: bool) -> bool {
+    !too_big
+        && (sides.old_bytes.as_deref().map(looks_binary).unwrap_or(false)
+            || sides.new_bytes.as_deref().map(looks_binary).unwrap_or(false))
+}
+
+/// status 推导；两边都取不到（如未跟踪的空文件）时按 `root` 下 `path` 的磁盘存在性兜底。
+fn derive_status(
+    old_exists: bool,
+    new_exists: bool,
+    root: &std::path::Path,
+    path: &str,
+) -> &'static str {
+    match (old_exists, new_exists) {
         (false, true) => "added",
         (true, false) => "deleted",
-        // 两侧皆空（如未跟踪的空文件）：按磁盘存在性兜底
         (false, false) => {
             if root.join(path).exists() {
                 "added"
@@ -256,170 +340,136 @@ pub(super) fn assemble_diff_pair(
             }
         }
         (true, true) => "modified",
-    };
-
-    if too_big {
-        return DiffPair {
-            old_text: String::new(),
-            new_text: String::new(),
-            old_label,
-            new_label,
-            status: status.to_string(),
-            is_binary,
-            eol_only: false,
-            too_big,
-        };
-    }
-
-    let old_str = old_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
-    let new_str = new_bytes.map(|b| String::from_utf8_lossy(&b).into_owned());
-
-    let old_raw_str = old_str.unwrap_or_default();
-    let new_raw_str = new_str.unwrap_or_default();
-    let old_text = normalize_eol(&old_raw_str);
-    let new_text = normalize_eol(&new_raw_str);
-    let eol_only = old_text == new_text && old_raw_str != new_raw_str;
-
-    DiffPair {
-        old_text,
-        new_text,
-        old_label,
-        new_label,
-        status: status.to_string(),
-        is_binary,
-        eol_only,
-        too_big,
     }
 }
 
-/// 三种场景取数：未暂存 = HEAD vs 磁盘；已暂存 = HEAD vs 索引；提交 = h^ vs h。
-/// 返回前两侧都做行尾归一化；归一化后相等但原文不等 → eol_only。
-/// 单侧超过 1MB 时标记 too_big 并返回空文本，避免巨大 payload 跨 IPC。
+/// 取数 → 组装。按 [`DiffMode`] 分派：未暂存 = HEAD vs 磁盘；已暂存 = HEAD vs 索引；
+/// 提交 = h^ vs h；基线 = rev vs 工作区。单侧超过 1MB 时标记 `too_big` 并返回空文本。
 pub(super) fn build_diff_pair(
     root: &std::path::Path,
     path: &str,
-    staged: bool,
-    commit_hash: Option<&str>,
+    mode: &DiffMode,
 ) -> Result<DiffPair, String> {
-    const MAX_DIFF_BYTES: u64 = 1_000_000;
-
-    let (
-        old_label,
-        new_label,
-        old_exists,
-        new_exists,
-        old_bytes,
-        new_bytes,
-        old_too_big,
-        new_too_big,
-    ) = if let Some(h) = commit_hash {
-        let short = &h[..7.min(h.len())];
-        // 一条 cat-file --batch 取 h^:path 与 h:path（原 2 个 show_blob 串行 spawn）
-        let blobs = show_blobs(
-            &[&format!("{}^:{}", h, path), &format!("{}:{}", h, path)],
-            root,
-        )?;
-        let mut it = blobs.into_iter();
-        let old = it.next().unwrap_or(None);
-        let new = it.next().unwrap_or(None);
-        let old_exists = old.is_some();
-        let new_exists = new.is_some();
-        let old_too_big = old
-            .as_ref()
-            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
-            .unwrap_or(false);
-        let new_too_big = new
-            .as_ref()
-            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
-            .unwrap_or(false);
-        (
-            format!("{}^", short),
-            short.to_string(),
-            old_exists,
-            new_exists,
-            old,
-            new,
-            old_too_big,
-            new_too_big,
-        )
-    } else if staged {
-        // 一条 cat-file --batch 取 HEAD:path 与 :path（索引 blob）
-        let blobs = show_blobs(&[&format!("HEAD:{}", path), &format!(":{}", path)], root)?;
-        let mut it = blobs.into_iter();
-        let old = it.next().unwrap_or(None);
-        let new = it.next().unwrap_or(None);
-        let old_exists = old.is_some();
-        let new_exists = new.is_some();
-        let old_too_big = old
-            .as_ref()
-            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
-            .unwrap_or(false);
-        let new_too_big = new
-            .as_ref()
-            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
-            .unwrap_or(false);
-        (
-            "HEAD".to_string(),
-            "已暂存".to_string(),
-            old_exists,
-            new_exists,
-            old,
-            new,
-            old_too_big,
-            new_too_big,
-        )
-    } else {
-        let old = show_blob(&format!("HEAD:{}", path), root)?;
-        let new_path = root.join(path);
-        let new_exists = new_path.exists();
-        let (new, new_too_big) = if new_exists {
-            let meta = std::fs::metadata(&new_path)
-                .map_err(|e| format!("Failed to read metadata for {}: {}", path, e))?;
-            if meta.len() > MAX_DIFF_BYTES {
-                (None, true)
-            } else {
-                (std::fs::read(&new_path).ok(), false)
-            }
-        } else {
-            (None, false)
-        };
-        let old_exists = old.is_some();
-        let old_too_big = old
-            .as_ref()
-            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
-            .unwrap_or(false);
-        (
-            "HEAD".to_string(),
-            "工作区".to_string(),
-            old_exists,
-            new_exists,
-            old,
-            new,
-            old_too_big,
-            new_too_big,
-        )
-    };
-
-    Ok(assemble_diff_pair(
-        old_label,
-        new_label,
-        old_exists,
-        new_exists,
-        old_bytes,
-        new_bytes,
-        old_too_big,
-        new_too_big,
-        root,
-        path,
-    ))
+    match mode {
+        DiffMode::Commit { hash } => commit_sides(root, path, hash),
+        DiffMode::Staged => staged_sides(root, path),
+        DiffMode::Unstaged => worktree_sides(root, path, "HEAD".to_string(), false),
+        DiffMode::Since { rev } => since_sides(root, path, rev),
+    }
 }
 
+/// h^ → h：一条 `cat-file --batch` 取两侧 blob（原 2 个 show_blob 串行 spawn）。
+fn commit_sides(root: &std::path::Path, path: &str, hash: &str) -> Result<DiffPair, String> {
+    let short = &hash[..7.min(hash.len())];
+    let blobs = show_blobs(
+        &[&format!("{}^:{}", hash, path), &format!("{}:{}", hash, path)],
+        root,
+    )?;
+    let labels = SideLabels {
+        old: format!("{}^", short),
+        new: short.to_string(),
+    };
+    Ok(assemble_diff_pair(batch_sides(blobs, labels), root, path, false))
+}
+
+/// HEAD → 索引：一条 `cat-file --batch` 取 `HEAD:path` 与 `:path`（索引 blob）。
+fn staged_sides(root: &std::path::Path, path: &str) -> Result<DiffPair, String> {
+    let blobs = show_blobs(&[&format!("HEAD:{}", path), &format!(":{}", path)], root)?;
+    let labels = SideLabels {
+        old: "HEAD".to_string(),
+        new: "已暂存".to_string(),
+    };
+    Ok(assemble_diff_pair(batch_sides(blobs, labels), root, path, false))
+}
+
+/// rev → 工作区。**先校验 rev**：`git show <坏 rev>:<path>` 与"该 rev 下没有这个文件"
+/// 在 git 层都只是非零退出（见 [`show_blob`]），不校验就会把整份文件误判成**新增**。
+fn since_sides(root: &std::path::Path, path: &str, rev: &str) -> Result<DiffPair, String> {
+    let verify = git_run(
+        &["rev-parse", "--verify", &format!("{}^{{commit}}", rev)],
+        root,
+    )?;
+    if !verify.status.success() {
+        // 基线不可达（rebase / GC）→ 不比，给 HEAD 视图 + 标记，由上层如实标注
+        return worktree_sides(root, path, "HEAD".to_string(), true);
+    }
+    let short = &rev[..7.min(rev.len())];
+    worktree_sides(root, path, short.to_string(), false)
+}
+
+/// 某个提交（`old_label`）→ 工作区：旧侧走 blob，新侧读盘。
+fn worktree_sides(
+    root: &std::path::Path,
+    path: &str,
+    old_label: String,
+    base_missing: bool,
+) -> Result<DiffPair, String> {
+    let old = show_blob(&format!("{}:{}", old_label, path), root)?;
+    let old_too_big = old
+        .as_ref()
+        .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
+        .unwrap_or(false);
+    let new_path = root.join(path);
+    let new_exists = new_path.exists();
+    let (new, new_too_big) = read_worktree_side(&new_path, new_exists)?;
+    let sides = DiffSides {
+        old_label,
+        new_label: "工作区".to_string(),
+        old_exists: old.is_some(),
+        new_exists,
+        old_bytes: old,
+        new_bytes: new,
+        old_too_big,
+        new_too_big,
+    };
+    Ok(assemble_diff_pair(sides, root, path, base_missing))
+}
+
+/// 工作区一侧：不存在 → `(None, false)`；超限 → `(None, true)`；否则读盘。
+fn read_worktree_side(
+    new_path: &std::path::Path,
+    new_exists: bool,
+) -> Result<(Option<Vec<u8>>, bool), String> {
+    if !new_exists {
+        return Ok((None, false));
+    }
+    let meta = std::fs::metadata(new_path)
+        .map_err(|e| format!("Failed to read metadata for {}: {}", new_path.display(), e))?;
+    if meta.len() > MAX_DIFF_BYTES {
+        return Ok((None, true));
+    }
+    Ok((std::fs::read(new_path).ok(), false))
+}
+
+/// 一条 `cat-file --batch` 的两侧结果 → [`DiffSides`]（标签由调用方给，超限按字节数标）。
+fn batch_sides(blobs: Vec<Option<Vec<u8>>>, labels: SideLabels) -> DiffSides {
+    let mut it = blobs.into_iter();
+    let old = it.next().unwrap_or(None);
+    let new = it.next().unwrap_or(None);
+    DiffSides {
+        old_label: labels.old,
+        new_label: labels.new,
+        old_exists: old.is_some(),
+        new_exists: new.is_some(),
+        old_too_big: old
+            .as_ref()
+            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
+            .unwrap_or(false),
+        new_too_big: new
+            .as_ref()
+            .map(|b| b.len() as u64 > MAX_DIFF_BYTES)
+            .unwrap_or(false),
+        old_bytes: old,
+        new_bytes: new,
+    }
+}
+
+/// 编辑器级 diff 的两侧内容：`mode` 决定"跟谁比"（见 [`DiffMode`]）。
 #[tauri::command]
 pub async fn git_diff_pair(
     workspace_state: State<'_, WorkspaceState>,
     path: String,
-    staged: Option<bool>,
-    commit_hash: Option<String>,
+    mode: DiffMode,
     // 会话所属工作区；省略 = 当前活动工作区（见 `project_root_for` 的存在理由）
     cwd: Option<String>,
 ) -> Result<DiffPair, String> {
@@ -427,21 +477,15 @@ pub async fn git_diff_pair(
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }
-    git_run_blocking(move || {
-        build_diff_pair(
-            &root,
-            &path,
-            staged.unwrap_or(false),
-            commit_hash.as_deref(),
-        )
-    })
-    .await
+    git_run_blocking(move || build_diff_pair(&root, &path, &mode)).await
 }
 
 #[cfg(test)]
 mod diff_pair_tests {
     use super::*;
     use std::process::Command;
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt;
 
     fn git(root: &std::path::Path, args: &[&str]) {
         let out = Command::new("git")
@@ -469,6 +513,18 @@ mod diff_pair_tests {
         root
     }
 
+    /// 测试用：当前 HEAD 的 sha。
+    fn head_sha(root: &std::path::Path) -> String {
+        let mut cmd = Command::new("git");
+        cmd.args(["rev-parse", "HEAD"]).current_dir(root);
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(0x08000000);
+        }
+        let out = cmd.output().unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
     #[test]
     fn modified_unstaged_returns_head_vs_worktree() {
         let root = setup_repo("modified");
@@ -477,7 +533,7 @@ mod diff_pair_tests {
         git(&root, &["commit", "-m", "v1"]);
         std::fs::write(root.join("a.txt"), "line1\nCHANGED\nline3\n").unwrap();
 
-        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Unstaged).unwrap();
         assert_eq!(pair.status, "modified");
         assert!(pair.old_text.contains("line2"));
         assert!(pair.new_text.contains("CHANGED"));
@@ -497,7 +553,7 @@ mod diff_pair_tests {
         std::fs::write(root.join("a.txt"), "v2\n").unwrap();
         git(&root, &["add", "a.txt"]);
 
-        let pair = build_diff_pair(&root, "a.txt", true, None).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Staged).unwrap();
         assert_eq!(pair.status, "modified");
         assert_eq!(pair.old_text, "v1\n");
         assert_eq!(pair.new_text, "v2\n");
@@ -525,7 +581,7 @@ mod diff_pair_tests {
         .trim()
         .to_string();
 
-        let pair = build_diff_pair(&root, "a.txt", false, Some(&head)).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Commit { hash: head }).unwrap();
         assert_eq!(pair.old_text, "v1\n");
         assert_eq!(pair.new_text, "v2\n");
         assert_eq!(pair.status, "modified");
@@ -540,7 +596,7 @@ mod diff_pair_tests {
         git(&root, &["commit", "-m", "init"]);
         std::fs::write(root.join("new.txt"), "brand new\n").unwrap();
 
-        let pair = build_diff_pair(&root, "new.txt", false, None).unwrap();
+        let pair = build_diff_pair(&root, "new.txt", &DiffMode::Unstaged).unwrap();
         assert_eq!(pair.status, "added");
         assert_eq!(pair.old_text, "");
         assert_eq!(pair.new_text, "brand new\n");
@@ -555,7 +611,7 @@ mod diff_pair_tests {
         git(&root, &["commit", "-m", "v1"]);
         std::fs::remove_file(root.join("a.txt")).unwrap();
 
-        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Unstaged).unwrap();
         assert_eq!(pair.status, "deleted");
         assert_eq!(pair.old_text, "gone\n");
         assert_eq!(pair.new_text, "");
@@ -571,7 +627,7 @@ mod diff_pair_tests {
         // 同一内容换成 CRLF——正是"假新文件"bug 的真实场景
         std::fs::write(root.join("a.txt"), "line1\r\nline2\r\n").unwrap();
 
-        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Unstaged).unwrap();
         assert!(pair.eol_only);
         assert_eq!(pair.old_text, pair.new_text); // 归一化后相等
         let _ = std::fs::remove_dir_all(&root);
@@ -585,11 +641,86 @@ mod diff_pair_tests {
         git(&root, &["commit", "-m", "v1"]);
         std::fs::write(root.join("a.txt"), "x".repeat(1_100_000)).unwrap();
 
-        let pair = build_diff_pair(&root, "a.txt", false, None).unwrap();
+        let pair = build_diff_pair(&root, "a.txt", &DiffMode::Unstaged).unwrap();
         assert!(pair.too_big);
         assert_eq!(pair.old_text, "");
         assert_eq!(pair.new_text, "");
         assert_eq!(pair.status, "modified");
         let _ = std::fs::remove_dir_all(&root);
     }
+
+    /// 报告场景：改文件 → 提交 → 用**开轮时**的提交当基线，改动仍看得见。
+    #[test]
+    fn since_rev_shows_change_after_commit() {
+        let root = setup_repo("since_after_commit");
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        let base = head_sha(&root);
+
+        // agent 改文件并提交（一轮的典型收尾）
+        std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v2"]);
+
+        let pair = build_diff_pair(
+            &root,
+            "a.txt",
+            &DiffMode::Since { rev: base.clone() },
+        )
+        .unwrap();
+        assert_eq!(pair.status, "modified");
+        assert_eq!(pair.old_text, "v1\n", "旧侧必须是开轮提交的内容，不是 HEAD");
+        assert_eq!(pair.new_text, "v2\n");
+        assert_eq!(pair.old_label, &base[..7]);
+        assert_eq!(pair.new_label, "工作区");
+        assert!(!pair.base_missing);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 基线之后才新建的文件：rev 有效但该 rev 下没有它 → 正常显示为 added（不是"基线失效"）。
+    #[test]
+    fn since_rev_with_file_absent_at_rev_is_added() {
+        let root = setup_repo("since_added");
+        std::fs::write(root.join("old.txt"), "keep\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        let base = head_sha(&root);
+
+        std::fs::write(root.join("new.txt"), "brand new\n").unwrap();
+
+        let pair = build_diff_pair(&root, "new.txt", &DiffMode::Since { rev: base }).unwrap();
+        assert_eq!(pair.status, "added");
+        assert!(!pair.base_missing, "rev 有效，不该标成基线失效");
+        assert!(pair.new_text.contains("brand new"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// 基线失效（rebase / GC 之后不可达）：**不比**，给 HEAD 视图 + 标记，绝不把整份文件当新增。
+    #[test]
+    fn since_rev_missing_falls_back_to_head_view() {
+        let root = setup_repo("since_missing");
+        std::fs::write(root.join("a.txt"), "v1\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v1"]);
+        std::fs::write(root.join("a.txt"), "v2\n").unwrap();
+        git(&root, &["add", "."]);
+        git(&root, &["commit", "-m", "v2"]);
+
+        let pair = build_diff_pair(
+            &root,
+            "a.txt",
+            &DiffMode::Since {
+                rev: "0000000000000000000000000000000000000000".into(),
+            },
+        )
+        .unwrap();
+        assert!(pair.base_missing);
+        assert_eq!(pair.old_label, "HEAD", "降级后标签如实写 HEAD");
+        assert_eq!(pair.old_text, "v2\n");
+        assert_eq!(pair.new_text, "v2\n");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // 未提交的空仓库（unborn HEAD）与 HEAD 取 sha 的两条用例见 `head.rs` 自己的测试模块。
 }

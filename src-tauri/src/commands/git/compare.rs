@@ -9,7 +9,7 @@ use tauri::State;
 use tracing::{error, info};
 
 use super::commits::{parse_commit_lines, CommitEntry};
-use super::diffpair::{assemble_diff_pair, show_blobs, DiffPair};
+use super::diffpair::{assemble_diff_pair, show_blobs, DiffPair, DiffSides};
 use super::runtime::{git_run, git_run_blocking};
 use super::types::unquote_git_path;
 use crate::commands::{detect_git_branch, project_root_for_commands, WorkspaceState};
@@ -352,16 +352,19 @@ pub async fn git_diff_pair_refs(
             .unwrap_or(false);
 
         Ok(assemble_diff_pair(
-            base_c,
-            head_c,
-            old_exists,
-            new_exists,
-            old,
-            new,
-            old_too_big,
-            new_too_big,
+            DiffSides {
+                old_label: base_c,
+                new_label: head_c,
+                old_exists,
+                new_exists,
+                old_bytes: old,
+                new_bytes: new,
+                old_too_big,
+                new_too_big,
+            },
             &root,
             &path_c,
+            false,
         ))
     })
     .await
