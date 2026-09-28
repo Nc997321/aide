@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>回合变更结算卡 · 定稿（含生命周期）</title>
+<style>
+/* ── 主题 token（glass 实值，抄自 src/themes/glass.ts） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-bg-raised: rgba(24,26,38,.48);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.14);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-accent-subtle: rgba(150,170,255,.16);
+  --aide-success:#6ee7a8;
+  --aide-warning:#fcd34d;
+  --aide-danger:#f87171;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-border-strong: rgba(255,255,255,.17);
+  --aide-highlight-inset: inset 0 1px 0 rgba(255,255,255,.12);
+  --aide-accent-ring: 0 0 0 2.5px rgba(150,170,255,.42);
+  --aide-radius-sm:8px;
+  --aide-radius-md:10px;
+  --aide-radius-lg:14px;
+  --aide-ease-t:.16s cubic-bezier(.2,.8,.2,1);
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC',sans-serif;
+  --aide-ambient-scene:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%), #0a0b11;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--aide-font-ui);color:var(--aide-text-primary);
+  background:var(--aide-ambient-scene);min-height:100vh;padding:24px 28px 80px;font-size:13px;-webkit-font-smoothing:antialiased}
+h1{font-size:16px;font-weight:600;letter-spacing:.2px}
+.page-head p{margin-top:8px;font-size:12px;color:var(--aide-text-muted);line-height:1.85;max-width:900px}
+.page-head code{font-family:var(--aide-font-mono);font-size:11.5px;color:var(--aide-text-secondary)}
+h2.sec{font-size:13px;font-weight:600;color:var(--aide-text-secondary);margin:36px 0 4px;letter-spacing:.3px}
+h2.sec .idx{color:var(--aide-accent);font-family:var(--aide-font-mono);font-size:11px;margin-right:7px}
+h2.sec + .sec-note{font-size:11.5px;color:var(--aide-text-muted);line-height:1.75;margin-bottom:18px;max-width:900px}
+h2.sec + .sec-note b{color:var(--aide-text-secondary);font-weight:600}
+
+/* ── 对话原语 ── */
+.pane{background:var(--aide-bg-deep);border:1px solid var(--aide-border-subtle);
+      border-radius:var(--aide-radius-lg);padding:16px 16px 20px;position:relative;overflow:hidden}
+.pane::before{content:'';position:absolute;inset:0 0 auto;height:1px;
+              background:linear-gradient(90deg,transparent,rgba(255,255,255,.14),transparent)}
+.flow{display:flex;flex-direction:column;gap:12px}
+.ask{margin-left:auto;max-width:78%;background:var(--aide-surface-default);
+     border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);
+     padding:7px 11px;font-size:12.5px;color:var(--aide-text-secondary);line-height:1.65}
+.say{font-size:12.5px;line-height:1.75;color:var(--aide-text-primary)}
+.say.dim{color:var(--aide-text-secondary)}
+.pg{background:var(--aide-bg-base);border:1px solid var(--aide-border-subtle);
+    border-radius:var(--aide-radius-md);box-shadow:var(--aide-highlight-inset);overflow:hidden}
+.pg-head{display:flex;align-items:center;gap:9px;padding:8px 12px;font-size:12px;color:var(--aide-text-secondary)}
+.pg-pill{flex-shrink:0;padding:1px 8px;border-radius:99px;background:var(--aide-surface-active);
+         border:1px solid var(--aide-border);font-size:10.5px;font-weight:600;color:var(--aide-text-primary)}
+.pg-sum{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--aide-text-muted)}
+.caret{flex-shrink:0;width:0;height:0;border-top:4px solid transparent;border-bottom:4px solid transparent;
+       border-left:5px solid currentColor;opacity:.7;transition:transform var(--aide-ease-t)}
+.caret--down{transform:rotate(90deg)}
+.card{border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);overflow:hidden;background:var(--aide-bg-base)}
+.card-head{display:flex;align-items:center;gap:8px;padding:7px 10px;font-size:12px;
+           background:var(--aide-surface-default);border-bottom:1px solid var(--aide-border-subtle)}
+.card-head .name{color:var(--aide-text-primary);font-weight:600}
+.card-head .path{color:var(--aide-text-muted);font-family:var(--aide-font-mono);font-size:11px;
+                 overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+.card-head .add{color:var(--aide-success);font-family:var(--aide-font-mono);font-size:11px;font-variant-numeric:tabular-nums}
+.card-head .del{color:var(--aide-danger);font-family:var(--aide-font-mono);font-size:11px;font-variant-numeric:tabular-nums}
+.card-head .open{color:var(--aide-accent);font-size:11px}
+.diff{background:var(--aide-bg-deep);font-family:var(--aide-font-mono);
+      font-size:11.5px;line-height:1.7;padding:6px 0;max-height:120px;overflow:auto}
+.row{display:grid;grid-template-columns:34px 12px 1fr;white-space:pre}
+.row .gut{text-align:right;padding-right:7px;color:var(--aide-text-muted);user-select:none;font-variant-numeric:tabular-nums}
+.row .mark{text-align:center;color:var(--aide-text-muted)}
+.row .code{padding-left:8px;overflow-x:auto;color:var(--aide-text-secondary)}
+.row.add{background:color-mix(in srgb, color-mix(in oklch, var(--aide-success) 68%, var(--aide-text-muted)) 12%, transparent)}
+.row.del{background:color-mix(in srgb, color-mix(in oklch, var(--aide-danger) 68%, var(--aide-text-muted)) 13%, transparent)}
+.row.add .mark{color:var(--aide-success)} .row.del .mark{color:var(--aide-danger)}
+.k{color:var(--aide-accent)} .s{color:var(--aide-success)}
+
+/* ═══════ 结算卡（定稿） ═══════ */
+.tf{border:1px solid color-mix(in srgb, var(--aide-accent) 24%, transparent);
+    border-radius:var(--aide-radius-md);
+    background:radial-gradient(130% 190% at 0% 0%, var(--aide-accent-subtle), transparent 58%), var(--aide-bg-base);
+    box-shadow:var(--aide-highlight-inset);
+    padding:9px 13px 11px;display:flex;flex-direction:column;gap:9px;
+    font-family:var(--aide-font-ui);color:var(--aide-text-secondary);
+    transition:border-color var(--aide-ease-t),background var(--aide-ease-t)}
+.tf:hover{border-color:color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  background:radial-gradient(130% 190% at 0% 0%, color-mix(in srgb, var(--aide-accent) 22%, transparent), transparent 58%), var(--aide-bg-raised)}
+.tf .top{display:flex;align-items:center;gap:9px;min-width:0}
+.tf .label{font-size:10.5px;font-weight:600;letter-spacing:1.1px;color:var(--aide-accent);
+           text-transform:uppercase;white-space:nowrap}
+.tf .of{margin-left:auto}
+.tf .nums{display:flex;align-items:baseline;gap:10px;max-width:480px}
+.unit{font-size:13px;color:var(--aide-text-secondary);font-variant-numeric:tabular-nums;white-space:nowrap}
+.unit .n{font-family:var(--aide-font-mono);color:var(--aide-text-primary);font-weight:600;font-size:14px}
+.tf .nums .unit{margin-right:5px}
+.big{font-family:var(--aide-font-mono);font-variant-numeric:tabular-nums;font-weight:600;
+     letter-spacing:-.02em;line-height:1;font-size:19px}
+.big.add{color:var(--aide-success)}
+.big.del{color:var(--aide-danger)}
+/* 比例条：绿=加、红=删，按行数分配**比例**（不是量级）。长度恒定、贴右端、右端不挂文字 */
+.bar{display:flex;gap:1.5px;height:5px;border-radius:99px;
+     background:var(--aide-surface-hover);overflow:hidden;min-width:0;align-self:center;
+     flex:0 1 230px;margin-left:auto}
+.bar i{display:block;border-radius:99px;min-width:2px}
+.bar .a{background:var(--aide-success);opacity:.9}
+.bar .d{background:var(--aide-danger);opacity:.9}
+.pillbtn{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;
+         border:1px solid var(--aide-border);border-radius:99px;
+         background:var(--aide-surface-default);color:var(--aide-text-secondary);
+         font-size:11px;padding:3px 10px;font-family:var(--aide-font-ui);white-space:nowrap}
+.tf:hover .pillbtn{background:var(--aide-surface-hover);border-color:var(--aide-border-strong);color:var(--aide-text-primary)}
+.pillbtn .caret{border-left-color:currentColor}
+.txtbtn{flex-shrink:0;color:var(--aide-accent);font-size:11px;white-space:nowrap;
+        background:none;border:0;font-family:var(--aide-font-ui);padding:0;cursor:pointer}
+.txtbtn:hover{text-decoration:underline}
+.tf-body{margin-top:8px;background:var(--aide-bg-deep);
+         border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);padding:3px 0}
+.f-row{display:flex;align-items:center;gap:7px;padding:4px 10px;font-size:12px;
+       cursor:pointer;white-space:nowrap;transition:background var(--aide-ease-t)}
+.f-row:hover{background:var(--aide-surface-default)}
+.f-status{flex-shrink:0;width:16px;height:16px;display:flex;align-items:center;justify-content:center;
+          font-size:10px;font-weight:700;border-radius:4px;font-family:var(--aide-font-mono)}
+.s-M{background:color-mix(in srgb, var(--aide-warning) 15%, transparent);color:var(--aide-warning)}
+.s-A{background:color-mix(in srgb, var(--aide-success) 15%, transparent);color:var(--aide-success)}
+.s-D{background:color-mix(in srgb, var(--aide-danger) 15%, transparent);color:var(--aide-danger)}
+.f-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
+        font-family:var(--aide-font-mono);font-size:12px;color:var(--aide-text-secondary)}
+.f-dir{color:var(--aide-text-muted)}
+.f-stats{flex-shrink:0;font-family:var(--aide-font-mono);font-size:11.5px;font-variant-numeric:tabular-nums}
+.f-add{color:var(--aide-success)} .f-del{color:var(--aide-danger)}
+.f-act{flex-shrink:0;background:none;border:0;color:var(--aide-text-muted);cursor:pointer;
+       padding:1px 4px;border-radius:3px;opacity:0;display:flex;transition:opacity var(--aide-ease-t),color var(--aide-ease-t)}
+.f-row:hover .f-act{opacity:1}
+.f-act:hover{color:var(--aide-danger);background:color-mix(in srgb, var(--aide-danger) 12%, transparent)}
+/* 进行中：呼吸点 + 无按钮布局 */
+.tf--live{border-color:color-mix(in srgb, var(--aide-text-muted) 22%, transparent);
+  background:var(--aide-bg-base)}
+.tf--live .label{color:var(--aide-text-muted)}
+.dot{width:5px;height:5px;border-radius:50%;background:var(--aide-accent);opacity:.85;flex-shrink:0}
+.tf--live .dot{animation:breathe 1.7s ease-in-out infinite}
+@keyframes breathe{0%,100%{opacity:.35;transform:scale(.85)}50%{opacity:.95;transform:scale(1.15)}}
+
+/* ═══════ 生命周期时间轴 ═══════ */
+.tline{list-style:none;max-width:680px;margin:0 auto;display:flex;flex-direction:column}
+.tline > li{position:relative;padding:0 0 30px 32px}
+.tline > li:last-child{padding-bottom:0}
+.tline > li::before{content:'';position:absolute;left:3px;top:5px;width:8px;height:8px;border-radius:50%;
+  background:var(--aide-accent);box-shadow:0 0 0 3px color-mix(in srgb,var(--aide-accent) 15%,transparent)}
+.tline > li:not(:last-child)::after{content:'';position:absolute;left:7px;top:19px;bottom:2px;width:1px;
+  background:linear-gradient(180deg, var(--aide-border), var(--aide-border-subtle))}
+.tl-head{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap;margin-bottom:10px}
+.tl-head b{font-size:12.5px;font-weight:600;color:var(--aide-text-primary)}
+.tl-head .trig{font-size:10.5px;font-family:var(--aide-font-mono);color:var(--aide-text-muted);
+  background:var(--aide-surface-default);border-radius:4px;padding:1px 6px}
+.tl-head .why{font-size:11.5px;color:var(--aide-text-muted);line-height:1.7;margin-top:-2px;flex-basis:100%}
+.tl-body{display:flex;flex-direction:column;gap:10px}
+.tailmark{display:flex;align-items:center;gap:8px;font-size:10.5px;color:var(--aide-text-muted);
+  letter-spacing:.4px}
+.tailmark::before,.tailmark::after{content:'';height:1px;background:var(--aide-border-subtle);flex:1}
+
+/* ═══════ 视口（往回翻） ═══════ */
+.viewport{border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-lg);
+  background:var(--aide-bg-deep);overflow:hidden;max-width:680px;margin:0 auto}
+.vp-bar{display:flex;align-items:center;gap:8px;padding:7px 12px;font-size:10.5px;color:var(--aide-text-muted);
+  border-bottom:1px solid var(--aide-border-subtle);letter-spacing:.4px}
+.vp-body{padding:14px 16px;display:flex;flex-direction:column;gap:12px;max-height:430px;overflow:hidden;position:relative}
+.vp-body::after{content:'';position:absolute;inset:auto 0 0;height:60px;
+  background:linear-gradient(180deg, transparent, var(--aide-bg-deep))}
+.vp-hint{padding:9px 12px;font-size:11px;color:var(--aide-text-muted);border-top:1px solid var(--aide-border-subtle);
+  background:var(--aide-surface-default);line-height:1.7}
+.vp-hint b{color:var(--aide-text-secondary);font-weight:600}
+.ghost{opacity:.5}
+
+table{margin-top:10px;border-collapse:collapse;font-size:12px;width:100%;max-width:1080px}
+th,td{border:1px solid var(--aide-border);padding:7px 10px;text-align:left;vertical-align:top;line-height:1.65}
+th{background:var(--aide-surface-default);font-weight:600;color:var(--aide-text-secondary);white-space:nowrap}
+td:first-child{color:var(--aide-text-secondary);white-space:nowrap;font-family:var(--aide-font-mono);font-size:11.5px}
+code{font-family:var(--aide-font-mono);font-size:11.5px;color:var(--aide-text-secondary)}
+.ok{color:var(--aide-success)} .no{color:var(--aide-danger)} .warn{color:var(--aide-warning)}
+@media (prefers-reduced-motion: reduce){.tf--live .dot{animation:none}*{transition:none !important}}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>回合变更结算卡 — 定稿</h1>
+  <p>
+    变体已全部删除（面板入口 3 案取 <code>A</code>、统计位 3 案取 <code>③</code>、比例条形态取 <code>B1</code>）。
+    本页只剩两件事：<b>它长什么样</b>，以及<b>它在同一位置怎么变</b>——后者是这一版新增的，因为
+    "锚在流尾、跟随当前轮"这件事，静态一张卡说不清楚。
+  </p>
+</div>
+
+<!-- ══════════════ 01 生命周期 ══════════════ -->
+<h2 class="sec"><span class="idx">01</span>生命周期：同一个位置，四种形态</h2>
+<p class="sec-note">
+  卡片<b>永远挂在消息流最尾部</b>，内容跟着当前轮走。它不是一个会堆叠的流水账——是<b>一条跟着你走的实时结算条</b>。
+  下面四步是同一块屏幕位置的四张快照，看清"同一个东西在变"。
+</p>
+
+<ol class="tline">
+
+  <li>
+    <div class="tl-head">
+      <b>轮开始：还没动文件 —— 卡片不存在</b>
+      <span class="trig">sessionState → running</span>
+      <span class="why">和"0 个文件不渲染"是同一条规则：<b>不占位、不显示"0 个文件"</b>。此刻流尾和平时一模一样，只有流式回答。这也意味着卡片出现的那一刻自带信息量。</span>
+    </div>
+    <div class="tl-body">
+      <div class="ask">把权限弹窗的 window listener 改成 preventDefault 后再让路</div>
+      <div class="say dim">我先看一下现有的消费点。</div>
+      <div class="tailmark">消息流尾部（没有任何卡片）</div>
+      <div class="pg ghost"><div class="pg-head"><span class="caret"></span><span class="pg-pill">过程</span>
+        <span class="pg-sum">1 段思考 · Grep ×3</span></div></div>
+    </div>
+  </li>
+
+  <li>
+    <div class="tl-head">
+      <b>第一个文件落下：卡片出现，并实时长</b>
+      <span class="trig">file-tree-changed → 实时 drain</span>
+      <span class="why">它的出现本身就是信号——"Claude 开始动我的文件了"。数字随每次编辑实时长（用的还是既有事件链，不用新增订阅）。<b>此时没有 `变更面板 ↗`、没有 `展开`</b>：这轮还没结束，"账单"还不存在，给入口等于让人点进半成品。</span>
+    </div>
+    <div class="tl-body">
+      <div class="tailmark">消息流尾部</div>
+      <div class="tf tf--live">
+        <div class="top"><span class="dot"></span><span class="label">正在改</span>
+          <span class="unit of"><span class="n">1</span> 个文件</span></div>
+        <div class="nums"><span class="big add">+12</span>
+          <span class="bar"><i class="a" style="flex:12"></i></span></div>
+      </div>
+      <div class="tailmark">…改到第三个文件（同一个位置）</div>
+      <div class="tf tf--live">
+        <div class="top"><span class="dot"></span><span class="label">正在改</span>
+          <span class="unit of"><span class="n">3</span> 个文件</span></div>
+        <div class="nums"><span class="big add">+48</span><span class="big del">−6</span>
+          <span class="bar"><i class="a" style="flex:48"></i><i class="d" style="flex:6"></i></span></div>
+      </div>
+    </div>
+  </li>
+
+  <li>
+    <div class="tl-head">
+      <b>轮结束：它安定成一张账单</b>
+      <span class="trig">sessionState → waiting</span>
+      <span class="why">同一块位置，形态换了一档：卡名变「本轮变更」、边框与泛光亮起来（accent 属于"结算完成的产出"），两个出口出现。此刻你刚读完回答，视线正落在这里。</span>
+    </div>
+    <div class="tl-body">
+      <div class="say">已按 <code>defaultPrevented</code> 让路，六个消费点都过了一遍。</div>
+      <div class="tailmark">消息流尾部</div>
+      <div class="tf">
+        <div class="top"><span class="label">本轮变更</span>
+          <button class="txtbtn of">变更面板 ↗</button>
+          <span class="pillbtn">展开 <span class="caret"></span></span></div>
+        <div class="nums"><span class="unit"><span class="n">4</span> 个文件</span>
+          <span class="big add">+203</span><span class="big del">−2</span>
+          <span class="bar"><i class="a" style="flex:203"></i><i class="d" style="flex:2"></i></span></div>
+      </div>
+    </div>
+  </li>
+
+  <li>
+    <div class="tl-head">
+      <b>展开：就地看本轮清单</b>
+      <span class="trig">点卡片 / 展开 ▾</span>
+      <span class="why">清单直接复用 <code>ChangeFileList</code>（状态徽标、文件类型图标、弱化目录段、hover 出的撤回全现成）。点文件行开 diff 窗口——<b>不在这里铺 diff</b>：一轮 6 个文件各铺一个，卡片就成了第二堵墙。</span>
+    </div>
+    <div class="tl-body">
+      <div class="tf">
+        <div class="top"><span class="label">本轮变更</span>
+          <button class="txtbtn of">变更面板 ↗</button>
+          <span class="pillbtn">收起 <span class="caret caret--down"></span></span></div>
+        <div class="nums"><span class="unit"><span class="n">4</span> 个文件</span>
+          <span class="big add">+203</span><span class="big del">−2</span>
+          <span class="bar"><i class="a" style="flex:203"></i><i class="d" style="flex:2"></i></span></div>
+      </div>
+      <div class="tf-body">
+        <div class="f-row"><span class="f-status s-M">M</span><span class="f-name"><span class="f-dir">src/components/</span>PermissionDialog.vue</span><span class="f-stats"><span class="f-add">+7</span> <span class="f-del">−2</span></span><button class="f-act" title="撤回此文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button></div>
+        <div class="f-row"><span class="f-status s-M">M</span><span class="f-name"><span class="f-dir">src/composables/</span>useKeyboardConsume.ts</span><span class="f-stats"><span class="f-add">+3</span> <span class="f-del">−1</span></span><button class="f-act" title="撤回此文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button></div>
+        <div class="f-row"><span class="f-status s-A">A</span><span class="f-name"><span class="f-dir">docs/specs/</span>2026-08-20-evidence-results-review-brief.md</span><span class="f-stats"><span class="f-add">+64</span></span><button class="f-act" title="撤回此文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button></div>
+        <div class="f-row"><span class="f-status s-M">M</span><span class="f-name"><span class="f-dir">src/components/</span>PermissionDialog.test.ts</span><span class="f-stats"><span class="f-add">+129</span> <span class="f-del">−1</span></span><button class="f-act" title="撤回此文件"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6.69 3L3 13"/></svg></button></div>
+      </div>
+    </div>
+  </li>
+
+  <li>
+    <div class="tl-head">
+      <b>下一轮开始：它变回「正在改」</b>
+      <span class="trig">sessionState → running（新轮）</span>
+      <span class="why">上一轮的账单<b>退场</b>，同一位置换成新轮的实时条。<b>退场 ≠ 丢失</b>：那一轮的记录早已落盘（<code>&lt;sid&gt;-changes.json</code>），在变更面板里完整留着——卡上的 <code>变更面板 ↗</code> 就是通往它的门。代价是往回翻看不到历史轮的卡，见 §02。</span>
+    </div>
+    <div class="tl-body">
+      <div class="ask">那顺手把测试补一下</div>
+      <div class="tailmark">消息流尾部（同一个位置）</div>
+      <div class="tf tf--live">
+        <div class="top"><span class="dot"></span><span class="label">正在改</span>
+          <span class="unit of"><span class="n">1</span> 个文件</span></div>
+        <div class="nums"><span class="big add">+12</span>
+          <span class="bar"><i class="a" style="flex:12"></i></span></div>
+      </div>
+    </div>
+  </li>
+
+</ol>
+
+<!-- ══════════════ 02 往回翻 ══════════════ -->
+<h2 class="sec"><span class="idx">02</span>代价：往回翻是什么样</h2>
+<p class="sec-note">
+  这是"锚在流尾"唯一的代价，画出来别让它停在口头上：<b>历史轮的卡不在对话里</b>，
+  它们由变更面板承担（面板管全部轮次 + 跨轮统一文件树 + 逐轮撤回）。往下滚到底，卡还在原处。
+</p>
+
+<div class="viewport">
+  <div class="vp-bar">↑ 你往上滚，看前面几轮</div>
+  <div class="vp-body">
+    <div class="pg ghost"><div class="pg-head"><span class="caret"></span><span class="pg-pill">过程</span>
+      <span class="pg-sum">1 段思考 · Read ×2</span></div></div>
+    <div class="say dim">这一段走 <code>perm</code> 的兜底分支。</div>
+    <div class="pg ghost"><div class="pg-head"><span class="caret"></span><span class="pg-pill">过程</span>
+      <span class="pg-sum">2 段思考 · Grep ×4 · Edit ×3</span></div></div>
+    <div class="card">
+      <div class="card-head"><span class="name">Edit</span><span class="path">…/ChatDrawer.ets</span>
+        <span class="add">+18</span><span class="del">-4</span><span class="open">打开 ↗</span><span class="caret caret--down"></span></div>
+    </div>
+    <div class="say dim">改完了，三处消费点都过了一遍。</div>
+    <div class="card">
+      <div class="card-head"><span class="name">Edit</span><span class="path">…/WorkspaceModel.ets</span>
+        <span class="add">+6</span><span class="del">-1</span><span class="open">打开 ↗</span><span class="caret caret--down"></span></div>
+    </div>
+  </div>
+  <div class="vp-hint">
+    ↑ 这一段里<b>没有任何结算卡</b>——不是漏了，是设计如此。这些轮的账单在变更面板里躺着。
+    想看：滚到底，在最新那张卡上点 <b>变更面板 ↗</b>。
+  </div>
+</div>
+
+<!-- ══════════════ 03 边界与状态 ══════════════ -->
+<h2 class="sec"><span class="idx">03</span>边界与状态</h2>
+<div class="pane" style="max-width:680px;margin:0 auto;display:flex;flex-direction:column;gap:13px;padding:16px">
+  <div class="tf">
+    <div class="top"><span class="label">本轮变更</span>
+      <button class="txtbtn of">变更面板 ↗</button><span class="pillbtn">展开 <span class="caret"></span></span></div>
+    <div class="nums"><span class="unit"><span class="n">1</span> 个文件</span>
+      <span class="big add">+64</span><span class="bar"><i class="a" style="flex:64"></i></span></div>
+  </div>
+  <div class="tf">
+    <div class="top"><span class="label">本轮变更</span>
+      <button class="txtbtn of">变更面板 ↗</button><span class="pillbtn">展开 <span class="caret"></span></span></div>
+    <div class="nums"><span class="unit"><span class="n">12</span> 个文件</span>
+      <span class="big add">+1,240</span><span class="big del">−386</span>
+      <span class="bar"><i class="a" style="flex:1240"></i><i class="d" style="flex:386"></i></span></div>
+  </div>
+  <div class="tf">
+    <div class="top"><span class="label">本轮变更</span>
+      <button class="txtbtn of">变更面板 ↗</button><span class="pillbtn">展开 <span class="caret"></span></span></div>
+    <div class="nums"><span class="unit"><span class="n">7</span> 个文件</span>
+      <span class="big add">+86</span><span class="big del">−412</span>
+      <span class="bar"><i class="a" style="flex:86"></i><i class="d" style="flex:412"></i></span></div>
+  </div>
+  <div style="font-size:11px;color:var(--aide-text-muted);margin-top:2px">↓ 零变更的轮：<b style="color:var(--aide-text-secondary)">整卡不渲染</b>（不是"0 个文件"）</div>
+  <div class="pg" style="opacity:.45"><div class="pg-head"><span class="caret"></span><span class="pg-pill">过程</span><span class="pg-sum">1 段思考 · Read ×2</span></div></div>
+</div>
+
+<table>
+  <tr><th style="width:160px">情形</th><th>行为</th><th style="width:320px">备注</th></tr>
+  <tr><td>0 个文件</td><td class="ok">整卡不渲染</td><td>纯聊天 / 纯查询的轮次不该凭空多出一张卡。<b>进行中同样适用</b>——不显示"正在改 · 0 个文件"，卡片在第一个文件落下时才出现</td></tr>
+  <tr><td>进行中（≥1 文件）</td><td><code>正在改 · N 个文件</code> + 呼吸点；<b>无面板入口、无展开</b></td><td>"账单"还不存在，不给入口</td></tr>
+  <tr><td>纯新增轮</td><td>比例条退化为纯绿实心条；<code>−0</code> 不渲染</td><td>轨道用 <code>surface-hover</code>，否则是一根凭空浮着的绿线</td></tr>
+  <tr><td>首次出现变更</td><td>整卡淡入 + accent 描边微亮一次，随后归于安静</td><td>一次性；入口已常驻，这一步只把"第一次"标出来</td></tr>
+  <tr><td>撤回整轮</td><td class="no">卡上不提供</td><td>我们的 revert = 杀进程 + 截断 <code>.jsonl</code> + 还原文件，<b>不可逆</b>。自动出现的卡上放一键不可逆操作 = 事故温床。留在面板（有完整确认弹窗）。展开后的<b>单文件</b>撤回保留，与面板一致</td></tr>
+  <tr><td>重载后</td><td>卡片仍在流尾，数字一致</td><td>轮次从磁盘加载，不依赖任何内存态</td></tr>
+</table>
+
+<!-- ══════════════ 04 细节台账 ══════════════ -->
+<h2 class="sec"><span class="idx">04</span>细节台账（实现依据）</h2>
+<table>
+  <tr><th style="width:160px">项</th><th>决定</th><th style="width:320px">为什么</th></tr>
+  <tr><td>行 1 / 行 2 分工</td><td>行 1 = 身份 + 动作；行 2 = 全部统计量</td>
+    <td><code>4 个文件</code> 与 <code>+203 −2</code> 同族（都是"这轮有多大"），拆行是把同类割开；统计量塞进行 1 则是"身份 + 一个统计量"混装</td></tr>
+  <tr><td>卡面</td><td><code>bg-base</code> + accent 左上泛光 + accent 24% 描边 + 内高光</td><td>用<b>颜色</b>区别于灰调的过程胶囊，不用体量</td></tr>
+  <tr><td>数字</td><td>行数 19px / 600 / 收 <code>-.02em</code> / 等宽；文件数 13px（数字 14px）</td><td>大数字收字距才"紧"；等宽保证展开收起不跳位。文件数是同族次级量，不是注释</td></tr>
+  <tr><td>比例条 · 语义</td><td>长度<b>恒定</b>，只让绿/红分割表达"偏加 / 偏删"</td><td>长度若随数字宽度或改动量伸缩，读起来像"长度 = 改动量"——<b>假信号</b>；真按量级需要一个会漂移、翻历史时回溯缩放的参照</td></tr>
+  <tr><td>比例条 · 位置</td><td>贴右端，<b>右端不挂任何文字</b></td><td>紧挨着条的标签会被读成"条在量它"</td></tr>
+  <tr><td>比例条 · 形制</td><td>5px · <code>gap:1.5px</code> · <code>min-width:2px</code> · 圆角 99px · 轨道 <code>surface-hover</code></td><td>1.5px 缝才不糊成一条；<code>min-width</code> 保证 <code>−1</code> 行也看得见</td></tr>
+  <tr><td>着色范围</td><td>只有数字与比例条着色，标签 / 文件数 / 路径一律灰</td><td>一行里只有一处颜色 = 层级清楚</td></tr>
+  <tr><td>零值省略</td><td><code>−0</code> 不渲染；纯新增轮不出现空的红段</td><td>对标截图里满屏的 <code>+64 -0</code> 是纯噪音</td></tr>
+  <tr><td>悬停</td><td>只动 accent 透明度与底色，<b>不加边框、不改尺寸</b></td><td>边框变化会改变盒模型让整卡"抖"</td></tr>
+  <tr><td>展开按钮 / 箭头</td><td>圆角胶囊；border 三角（同 <code>ProcessGroup</code>）旋转 90°</td><td>一行小字当入口是"小气"的来源；字符 <code>▾</code> / emoji 换字体就变形</td></tr>
+  <tr><td>面板入口</td><td>11px accent 无底无边，沿用变更卡头部 <code>打开 ↗</code> 的形制；点击走<b>「确保显示」</b>而非 <code>select()</code></td><td><code>useRightPanel.select()</code> 是 toggle——已在该 tab 时点它会把面板<b>收起来</b>（<code>ensureBrowserShown</code> 就是为同一坑存在的）</td></tr>
+  <tr><td>展开体</td><td>复用 <code>ChangeFileList</code> + <code>roundRows(round)</code></td><td>零新代码</td></tr>
+  <tr><td>宽对话列</td><td>统计行封顶 <code>max-width:480px</code>，余量甩右侧</td><td>不封顶则数字与条之间裂出几百像素空带。宽窗最终形态待定</td></tr>
+</table>
+
+</body>
+</html>
