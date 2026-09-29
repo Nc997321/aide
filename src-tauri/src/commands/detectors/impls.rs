@@ -29,7 +29,9 @@ impl ProjectDetector for TauriDetector {
     }
 
     fn languages(&self, _root: &Path) -> Vec<&'static str> {
-        vec!["rust", "typescript", "vue"]
+        // 不再声明 "vue"：.vue 由 TS 服务器的 Vue 插件服务，没有独立的 vue 服务
+        // （vue-language-server 是需要客户端桥接的 proxy，见 lsp/vue_plugin.rs 抬头）。
+        vec!["rust", "typescript"]
     }
 }
 

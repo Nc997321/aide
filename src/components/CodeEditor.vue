@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, onMounted, onUnmounted, computed } from "vue";
+import type { LspServiceId } from "../utils/lspLang";
 import { EditorView, basicSetup } from "codemirror";
 import { keymap } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
@@ -32,7 +33,9 @@ const props = defineProps<{
   /** 滚动位置记忆（会话级）；不传则不记 */
   scrollMemory?: ScrollMemoryOptions;
   workspaceRoot?: string;
-  lspLang?: string;
+  /** LSP 服务 id（见 utils/lspLang 的 LspServiceId）：收窄到字面量联合，
+   *  打错一个字母就编译不过——后端 `lang_from_id_str` 解析不出会**静默**不给 LSP。 */
+  lspLang?: LspServiceId;
 }>();
 
 const emit = defineEmits<{

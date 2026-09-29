@@ -64,6 +64,10 @@
   pre code { background: none; border: none; padding: 0; color: var(--accent); }
   .check { color: var(--muted); font-size: 13px; }
   .check code { color: var(--ok); }
+  .note {
+    color: var(--muted); font-size: 12.5px; line-height: 1.75;
+    border-left: 3px solid var(--border); padding: 2px 0 2px 10px; margin-top: 10px;
+  }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
   th { color: var(--muted); font-weight: 600; }
@@ -103,7 +107,7 @@
 <section id="quick">
   <h2>① 快速自检：本机装了哪些</h2>
   <p>在终端（PowerShell / CMD）逐条运行，有路径输出 = 已装：</p>
-  <pre><code>where rust-analyzer typescript-language-server vue-language-server gopls jdtls pyright-langserver kotlin-language-server</code></pre>
+  <pre><code>where rust-analyzer typescript-language-server gopls jdtls pyright-langserver kotlin-language-server</code></pre>
   <p class="check">更快的方式：打开 Aide → 标题栏 LSP 徽章 → 面板直接显示每语言状态（✓ 就绪 / ✗ 未安装 / ! 启动失败）。</p>
 </section>
 
@@ -128,17 +132,27 @@
     <pre><code>npm i -g typescript-language-server typescript</code></pre>
     <div class="step">2. 验证：</div>
     <p class="check"><code>where typescript-language-server</code> 有输出即可。TS/JS 共用一个 server。</p>
+    <p class="note">缺 <code>@types/xxx</code> 导致类型提示不全时，请自己 <code>npm i -D @types/xxx</code>：
+    Aide <strong>不会</strong>在你项目里跑包管理器（有些编辑器会自动装——那会写你的 package.json 与 node_modules，
+    我们不做）。项目的 TypeScript 版本由项目自己的 <code>node_modules/typescript</code> 决定；
+    工程在子目录（如 <code>frontend/</code>）里也能被找到。</p>
   </article>
 </section>
 
 <section id="vue">
-  <h2>④ Vue</h2>
+  <h2>④ Vue / React 项目（<code>.vue</code>、<code>.tsx</code>）</h2>
   <article>
-    <div class="lang-head"><h3>vue-language-server（Volar）</h3><span class="bin">vue-language-server</span></div>
-    <div class="step">1. 安装：</div>
-    <pre><code>npm i -g @vue/language-server</code></pre>
-    <div class="step">2. 验证：</div>
-    <p class="check"><code>where vue-language-server</code> 有输出即可。Vue 项目强烈建议装（.vue 文件的诊断/补全/跳转）。</p>
+    <div class="lang-head"><h3>不需要额外 server</h3></div>
+    <p><code>.vue</code> / <code>.tsx</code> / <code>.jsx</code> 都由上面那个 <strong>typescript-language-server</strong>
+    服务（同一门语言，多一种文件形态），面板上对应的是 <strong>TypeScript</strong> 行。</p>
+    <div class="step">Vue 项目额外前提：项目自己装了 <code>@vue/typescript-plugin</code>（Volar 的 tsserver 插件形态，
+    通常随 <code>vue-tsc</code> / <code>@vue/language-server</code> 一起进来）。装了 Aide 会自动把它挂进 TS 服务器
+    （<code>node_modules/@vue/typescript-plugin</code> 存在即可）；<strong>没装则 .vue 不提供诊断/跳转，但 .ts 照常可用</strong>——
+    这是探测不到插件时的如实降级，不是故障。</div>
+    <pre><code>npm i -D @vue/typescript-plugin    # 项目里装（不是全局）</code></pre>
+    <p class="check">验证：装好后重开 Aide；打开一个 .vue 文件，在 .ts 里对某个符号查引用应能看到 .vue 里的用法。</p>
+    <p class="note">独立的 <code>vue-language-server</code>（Volar）已不再支持：它是需要宿主桥接 tsserver 的 proxy，
+    我们接不动，装了也不出结果——所以别为它花时间。</p>
   </article>
 </section>
 

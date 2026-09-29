@@ -114,6 +114,23 @@ impl DetectorChain {
         Vec::new()
     }
 
+    /// 该目录下**被认领的项目**声明的 LSP 语言（去重）。
+    /// 与 `detect_targets` 独立：不要求 targets 非空——一个没有 dev 脚本的 Node 项目
+    /// 仍该起 TS server。
+    fn languages(&self, root: &Path) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for det in &self.detectors {
+            if det.matches(root) {
+                for lang in det.languages(root) {
+                    if !out.contains(&lang) {
+                        out.push(lang);
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn detect_command(&self, root: &Path) -> Option<String> {
         self.detect_targets(root)
             .into_iter()
@@ -326,6 +343,26 @@ struct SubdirScanDetector {
     chain: DetectorChain,
 }
 
+/// 遍历**一层**子目录（跳过表 + 文件名排序 = run target 同一份纪律），逐个交给 `f`。
+fn for_each_subdir(root: &Path, mut f: impl FnMut(&Path)) {
+    let Ok(entries) = fs::read_dir(root) else {
+        return;
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    for entry in entries {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().to_string();
+        if should_skip_dir(&name) {
+            continue;
+        }
+        f(&path);
+    }
+}
+
 impl ProjectDetector for SubdirScanDetector {
     fn priority(&self) -> u8 {
         5
@@ -334,43 +371,37 @@ impl ProjectDetector for SubdirScanDetector {
         root.is_dir()
     }
     fn build_targets(&self, root: &Path) -> Vec<RunTarget> {
-        let Ok(entries) = fs::read_dir(root) else {
-            return Vec::new();
-        };
-        let mut entries: Vec<_> = entries.flatten().collect();
-        entries.sort_by_key(|e| e.file_name());
         let mut targets = Vec::new();
-        for entry in entries {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-            let name = entry.file_name().to_string_lossy().to_string();
-            if should_skip_dir(&name) {
-                continue;
-            }
-            targets.extend(self.chain.detect_targets(&path));
-        }
+        for_each_subdir(root, |path| targets.extend(self.chain.detect_targets(path)));
         targets
+    }
+
+    /// 子目录里的项目**也属于这个工作区**：run target 早就下钻一层找它，语言声明同理。
+    /// 不下钻的话，`frontend/`（Vite+Vue）、`server/` 这类布局对 LSP 完全隐形
+    /// ——2026-09-29 agri-ai-agent 实测只探测出 Java（TS/Vue 全在 `frontend/`）。
+    ///
+    /// 深度与 run target 同界（一层）且共用跳过表；更深的项目由 `lsp::detector` 的
+    /// 有界扩展名计数兜底。
+    fn languages(&self, root: &Path) -> Vec<&'static str> {
+        let mut out: Vec<&'static str> = Vec::new();
+        for_each_subdir(root, |path| {
+            for lang in self.chain.languages(path) {
+                if !out.contains(&lang) {
+                    out.push(lang);
+                }
+            }
+        });
+        out
     }
 }
 
 /// 走探测器链收集所有 matching 探测器声明的 LSP 语言 id 字符串（去重）。
 /// 供 lsp::detector::detect_languages 用。与 detect_run_targets 独立：不要求 targets 非空，
 /// 只要 matches 即收 languages（一个无 dev 脚本的 Node 项目仍该起 ts server）。
+/// **含一层子目录里的项目**（`SubdirScanDetector::languages`）——`frontend/` 这类布局
+/// 与根层项目同等对待。
 pub(crate) fn detect_languages_from_markers(root: &Path) -> Vec<&'static str> {
-    let mut out: Vec<&'static str> = Vec::new();
-    let chain = DetectorChain::default_chain();
-    for det in &chain.detectors {
-        if det.matches(root) {
-            for lang in det.languages(root) {
-                if !out.contains(&lang) {
-                    out.push(lang);
-                }
-            }
-        }
-    }
-    out
+    DetectorChain::default_chain().languages(root)
 }
 
 #[cfg(test)]

@@ -135,6 +135,11 @@ node probe.mjs --server node --args "<tls>/lib/cli.mjs,--stdio" \
 仍走 `LanguageId::Vue` → 那个坏掉的 `vue-language-server`，本批**没修**：本次的收益在
 **TS 侧**（`.ts` 的引用查询看得见 `.vue` 用法），那正是 token 痛的来源。
 
+> **已修（2026-09-29）**：`.vue` 作为查询目标改走 TS 服务器——`detector::from_ext` 把
+> `.vue` 归 TypeScript，独立 `vue` 语言 id 退役；didOpen 的 languageId 仍是 `"vue"`
+> （插件声明的 id，见 `document_lang_id`）。同批把插件候选表补齐（全局嵌套布局此前探不到）
+> 并让语言探测认子目录里的项目。
+
 ## 提示词 A/B：能不能靠注入系统提示解决？（**结论：不能，已量化**）
 
 问的判据是机器可判的：同一任务、同一模型、同一插件，唯一变量是 `--append-system-prompt-file`（内容 = `lspHint.ts` 真正注入的那 930 字符，由脚本从源码抽取，不会漂移）。
@@ -361,6 +366,7 @@ node probe-navto.mjs --server node \
 **仍未修**（下一步）：`.vue` 作为**查询目标**仍走 `vue-language-server` → 那个必崩的进程
 每次查询被拉起一次（日志里每 30s 一条 `TypeError: ... ts.server.protocol`），既拖红面板
 也让按名查询多一个「没答上的语言」。正解是让它也走 tsserver + Vue 插件。
+（**已于 2026-09-29 落地**，见 §5 末尾的「已修」标注。）
 
 ### 8. 首轮真机测试暴露的两条（2026-09-19，两次独立会话）
 
