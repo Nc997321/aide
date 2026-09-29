@@ -134,6 +134,8 @@ impl BrowserFacade {
             user_agent: None,
             devtools: false,
             displayed,
+            // 直通：门面不认识用途（脚本内容由调用方决定），只保证它落在**首次导航之前**。
+            init_script: dto.init_script.clone(),
             on_page_load: Some(self.observer(id.clone())),
         };
         if let Err(e) = self.engine.create(&window, id.clone(), cfg) {

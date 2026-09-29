@@ -53,6 +53,11 @@ pub enum BrowserQuery {
     Open {
         url: String,
         label: Option<String>,
+        /// **建视图时、首次导航之前**注册的启动脚本（recorder）。`None` = 不注册。
+        ///
+        /// 为什么要在这条路上给：`add_init_script` 只对**将来**创建的文档生效，而建视图即导航
+        /// ——调用方拿到回包再补注册时，第一份文档早创建了（`CreateCfg::init_script` 有详细说明）。
+        init_script: Option<String>,
     },
     /// 关掉一个视图（agent 用完自己收）。
     Close { view_id: Option<String> },
@@ -146,6 +151,7 @@ fn parse_query(event: &Value) -> BrowserQuery {
             Some(url) => BrowserQuery::Open {
                 url: url.to_string(),
                 label: opt_str(event, "label"),
+                init_script: opt_str(event, "init_script"),
             },
             None => BrowserQuery::Malformed("open requires a string `url`".into()),
         },
@@ -231,6 +237,41 @@ mod tests {
         assert_eq!(r.query, BrowserQuery::Focus { view_id: None });
     }
 
+    /// 「开视图时就 arm」：`init_script` 是**建视图时、首次导航之前**注册的启动脚本。
+    /// 少了这条路，「agent 自己开的 tab 收不到它加载期的请求」就无解（2026-09-29 走查实锤：
+    /// 拿到回包再补注册已经晚了一步 —— 建视图即导航）。
+    #[test]
+    fn parses_open_with_init_script() {
+        let armed = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r", "op": "open",
+            "url": "http://localhost:5173/", "label": "dev",
+            "init_script": "window.__aideRec = 1"
+        }))
+        .unwrap();
+        assert_eq!(
+            armed.query,
+            BrowserQuery::Open {
+                url: "http://localhost:5173/".into(),
+                label: Some("dev".into()),
+                init_script: Some("window.__aideRec = 1".into()),
+            }
+        );
+
+        // 缺省 = 不注册（用户自己开的 tab 与老 sidecar 都走这条：注册由 recorder 按需补）。
+        let plain = parse_browser_query(&json!({
+            "type": "browser_query", "request_id": "r", "op": "open", "url": "http://a/"
+        }))
+        .unwrap();
+        assert_eq!(
+            plain.query,
+            BrowserQuery::Open {
+                url: "http://a/".into(),
+                label: None,
+                init_script: None,
+            }
+        );
+    }
+
     /// tab 级 op 的解析：`open` 必填 url、`navigate` 必填 url，缺了**不静默丢弃**。
     #[test]
     fn parses_tab_lifecycle_ops() {
@@ -244,6 +285,7 @@ mod tests {
             BrowserQuery::Open {
                 url: "http://localhost:5173/".into(),
                 label: Some("vue-admin dev".into()),
+                init_script: None,
             }
         );
         assert_eq!(open.query.op_name(), "open");

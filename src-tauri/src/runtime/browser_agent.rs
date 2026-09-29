@@ -131,7 +131,11 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
             }
         }
 
-        BrowserQuery::Open { url, label } => {
+        BrowserQuery::Open {
+            url,
+            label,
+            init_script,
+        } => {
             let dto = CreateBrowserDto {
                 url,
                 // 默认视口是**策略**（门面不认识"默认多大"）：parked 期间页面按这个宽度布局，
@@ -145,6 +149,8 @@ fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
                 displayed: Some(false), // parked：后台干活，不抢用户前台
                 label,
                 origin: Some(OriginDto::Agent),
+                // 直通给引擎：**首次导航之前**注册（这样第一份文档从首个请求起就被覆盖）。
+                init_script,
             };
             match facade.create(&dto) {
                 Ok(view) => ok_payload(serde_json::json!({ "view_id": view.id, "view": view })),

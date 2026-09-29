@@ -10,16 +10,27 @@ import { cancelAllBrowserQueries, resolveBrowserResult } from "../browserClient.
 import type { ChatEvent } from "../../engine/types.js";
 
 describe("buildTabCall：action → 桥载荷", () => {
-  it("open 带 url 与 label；label 省略时字段根本不出现", () => {
-    expect(buildTabCall("open", { url: "http://localhost:5173/", label: "dev" })).toEqual({
+  /**
+   * open 必带 recorder 的启动脚本：Rust 侧会把它注册在**首次导航之前**（见 `CreateCfg::init_script`），
+   * 于是 agent 自己开的 tab 第一份文档从它的第一个请求起就被覆盖。只钉"带上了、是那一份"——
+   * 脚本原文由 `recorder.ts` 单一来源供给，逐字快照在这里是维护负担。
+   */
+  it("open 带 url 与 label，且带上 recorder 启动脚本；label 省略时它不出现", () => {
+    // 载荷是判别联合，取字段前先摊平成可索引的形状（断言的是**载荷里有什么**）。
+    const withLabel = buildTabCall("open", { url: "http://localhost:5173/", label: "dev" }) as Record<
+      string,
+      unknown
+    >;
+    expect(withLabel).toMatchObject({
       op: "open",
       url: "http://localhost:5173/",
       label: "dev",
     });
-    expect(buildTabCall("open", { url: "http://localhost:5173/" })).toEqual({
-      op: "open",
-      url: "http://localhost:5173/",
-    });
+    expect(String(withLabel["init_script"])).toContain("__aideRec");
+
+    const plain = buildTabCall("open", { url: "http://localhost:5173/" }) as Record<string, unknown>;
+    expect(plain["label"]).toBeUndefined();
+    expect(String(plain["init_script"])).toContain("__aideRec");
   });
 
   it("view_id 缺省**照样透传**：由 Rust 按「全库恰好一个视图」解析，多视图时它会明确报错", () => {

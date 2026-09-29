@@ -19,6 +19,7 @@
  */
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser, type BrowserCall } from "../browserClient.js";
+import { RECORDER_SOURCE, noteRecorderRegistered } from "./recorder.js";
 import { runEval } from "./runEval.js";
 import { formatBridgeFailure, str } from "./format.js";
 
@@ -38,9 +39,12 @@ export function buildTabCall(action: TabAction, args: TabArgs): BrowserCall {
   switch (action) {
     case "open": {
       if (!args.url) throw new Error('action="open" needs a url');
-      return args.label
-        ? { op: "open", url: args.url, label: args.label }
-        : { op: "open", url: args.url };
+      // `init_script` = **建视图时就 arm**（Rust 注册在首次导航之前，见 `CreateCfg::init_script`）：
+      // agent 自己开的 tab，第一份文档从它的**第一个请求**起就被 recorder 覆盖。晚一步补注册会
+      // 漏掉加载期请求，而那正是 "页面一打开就是空白" 那类问题的答案所在。
+      // `op` 用 `as const`：不然对象字面量把它宽成 string，判别联合收窄不了（BrowserCall 是联合）。
+      const base = { op: "open" as const, url: args.url, init_script: RECORDER_SOURCE };
+      return args.label ? { ...base, label: args.label } : base;
     }
     case "navigate": {
       if (!args.url) throw new Error('action="navigate" needs a url');
@@ -132,7 +136,9 @@ export function renderTabResult(
         `Opened view ${where}.\n\n` +
         `It is PARKED: the page runs in the background (rendering, timers and screenshots all ` +
         `work) and the user's panel was not disturbed. Pass view_id "${id}" to the other browser ` +
-        `tools — with several views open they require it.`
+        `tools — with several views open they require it. ` +
+        `Its network/console recorder is armed at creation, so this view's requests are on record ` +
+        `from the very first one (browser_network / browser_console need no reload here).`
       );
     }
     case "close":
@@ -197,7 +203,17 @@ async function performNavigate(args: TabArgs, emit: (e: ChatEvent) => void): Pro
   return renderTabResult("navigate", resp.data, observed);
 }
 
-/** 非 navigate 的 tab 动作：一条直路（发桥 → 渲染）。 */
+/**
+ * `open` 的视图**生下来就 arm 了**（载荷里的 `init_script`）——把它记进 recorder 的账，
+ * 免得第一次 `browser_network` / `browser_console` 再补发一遍注册。其余动作无副作用。
+ */
+function noteOpenedView(action: TabAction, data: unknown): void {
+  if (action !== "open") return;
+  const id = asRecord(data)?.["view_id"];
+  if (typeof id === "string") noteRecorderRegistered(id);
+}
+
+/** 非 navigate 的 tab 动作：一条直路（发桥 → 记账 → 渲染）。 */
 async function performSimpleTabAction(
   action: TabAction,
   args: TabArgs,
@@ -205,6 +221,7 @@ async function performSimpleTabAction(
 ): Promise<string> {
   const resp = await queryBrowser(buildTabCall(action, args), emit);
   if (!resp.ok) return formatBridgeFailure(resp);
+  noteOpenedView(action, resp.data);
   return renderTabResult(action, resp.data);
 }
 

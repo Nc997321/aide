@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<title>browser_act fixture（fill 如实性 + press 键盘 + selector 歧义）</title>
+<!--
+  `browser_act` 的三条新纪律的**正向判据页**（2026-09-29 走查反馈）。
+
+  为什么要有这一页：fill 的读回校验、press 的"真实按键是否真被页面收到"、selector 歧义的拒绝，
+  都是**页面侧行为**——单测只能钉逻辑（actions.test.ts 用桩元素），真页面上到底谁收到、值落没落住
+  只能靠这一页。页面自己把"发生了什么"记在 `window.__state()` 里，agent 一次 `browser_eval` 读回。
+
+  起服务（仓库根，与别的夹具同款一行）：
+    node -e "const h=require('http'),f=require('fs');h.createServer((q,s)=>{s.writeHead(200,{'content-type':'text/html; charset=utf-8','cache-control':'no-store'});s.end(f.readFileSync('docs/testing/browser-act-fixture.html'))}).listen(8781,'127.0.0.1',()=>console.log('fixture → http://127.0.0.1:8781/'))"
+
+  页面里的目标（判据见 docs/browser-act-test-checklist.md）：
+    #plain         普通输入框（fill 应当成功，事件路径 input+change，值落住）
+    #commit        回车才提交的输入框（模拟 Element Plus：change/blur/Enter 才 commit）
+    #controlled    受控组件：input 事件后立刻把值改回空（fill 必须**如实失败**）
+    #rich          contenteditable（fill 必须拒绝；不是表单元素）
+    #off           禁用输入框（fill 必须拒绝）
+    .search ×3     宽选择器命中多个（不给 index 必须拒绝并列候选）
+-->
+<meta charset="utf-8">
+<style>
+  body { font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif; margin: 24px; max-width: 720px; }
+  label { display: block; margin: 10px 0 2px; font-weight: 600; }
+  input, [contenteditable] { padding: 6px 8px; min-width: 260px; border: 1px solid #bbb; border-radius: 4px; }
+  [contenteditable] { display: block; min-height: 44px; border-style: dashed; }
+  #out { margin-top: 16px; padding: 10px; background: #f4f4f4; border-radius: 4px; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<h1>browser_act fixture</h1>
+
+<label for="plain">plain（普通输入框）</label>
+<input id="plain" name="plain" class="search" placeholder="普通输入框">
+
+<label for="commit">commit（回车才提交，模拟 Element Plus）</label>
+<input id="commit" name="commit" class="search" placeholder="回车提交">
+
+<label for="controlled">controlled（受控组件：值会被改回去）</label>
+<input id="controlled" name="controlled" placeholder="值会被改回去">
+
+<label for="rich">rich（contenteditable，不是表单元素）</label>
+<div id="rich" contenteditable="true"></div>
+
+<label for="off">off（禁用）</label>
+<input id="off" name="off" placeholder="禁用输入框" disabled>
+
+<label>第三组：宽选择器会命中上面几个带 class="search" 的输入框</label>
+
+<div id="out">（这里显示页面自己观察到的事件）</div>
+
+<script>
+  var log = [];
+  var state = { commits: 0, keys: [], plainEvents: [], controlledInputs: 0 };
+  function note(what) {
+    log.push(what);
+    document.getElementById('out').textContent =
+      'commits: ' + state.commits + '\n' +
+      'keys: ' + JSON.stringify(state.keys) + '\n' +
+      'log: ' + JSON.stringify(log);
+  }
+
+  // 普通输入框：记录派发到它身上的事件（fill 的事件路径应当与工具自报一致）
+  var plain = document.getElementById('plain');
+  ['input', 'change'].forEach(function (name) {
+    plain.addEventListener(name, function () { state.plainEvents.push(name); note('plain:' + name); });
+  });
+
+  // 回车才提交：keydown 记真键名（press 走 CDP 时这里收到的是 isTrusted 事件）
+  var commit = document.getElementById('commit');
+  commit.addEventListener('keydown', function (e) {
+    state.keys.push({ key: e.key, trusted: e.isTrusted, type: e.type });
+    if (e.key === 'Enter') { state.commits += 1; }
+    note('keydown:' + e.key);
+  });
+  commit.addEventListener('change', function () { note('commit:change'); });
+
+  // 受控组件：input 事件后立刻清空（框架回写值的等价物）—— fill 必须报「读回的不是写入值」
+  var controlled = document.getElementById('controlled');
+  controlled.addEventListener('input', function () {
+    state.controlledInputs += 1;
+    controlled.value = '';
+    note('controlled:reverted');
+  });
+
+  // 页面自报：给 agent 一次读回全部事实
+  window.__state = function () {
+    return {
+      values: {
+        plain: plain.value,
+        commit: commit.value,
+        controlled: controlled.value,
+        rich: document.getElementById('rich').textContent,
+        off: document.getElementById('off').value,
+      },
+      plainEvents: state.plainEvents,
+      keys: state.keys,
+      commits: state.commits,
+      controlledInputs: state.controlledInputs,
+      log: log,
+    };
+  };
+
+  window.__expect = function () {
+    return {
+      plainFill: 'plain.value === 写入值，且 plainEvents 含 input 与 change',
+      controlledFill: '工具报失败（读回为空），controlledInputs >= 1，页面值仍是空',
+      richFill: '工具报失败（不是 input/textarea/select），rich 文本仍是空',
+      offFill: '工具报失败（disabled），off.value 仍是空',
+      selectorAmbiguity: '不给 index 时工具报失败并列出候选；给了 index 后成功',
+      pressEnter: 'keys 里有一条 {key:"Enter", trusted:true}，commits === 1',
+      pressNoFocus: '工具报「nothing is focused」，keys 不新增',
+    };
+  };
+</script>
+</body>
+</html>

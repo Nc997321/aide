@@ -38,7 +38,9 @@ export type BrowserCall =
    *  `Page.addScriptToEvaluateOnNewDocument` 是同一件事的两条路——CDP 那条在本机 WebView2 上
    *  **被接受但不交货**（静默失败），故注入只走这条。只对将来的文档生效，注册累积。 */
   | { op: "init_script"; view_id?: string; script: string }
-  | { op: "open"; url: string; label?: string }
+  /** `init_script` 由 Rust 注册在**首次导航之前**（`CreateCfg::init_script`）：agent 自己开的
+   *  tab 因此从第一份文档的第一个请求起就被 recorder 覆盖。 */
+  | { op: "open"; url: string; label?: string; init_script?: string }
   | { op: "close"; view_id?: string }
   | { op: "navigate"; view_id?: string; url: string }
   | { op: "back"; view_id?: string }

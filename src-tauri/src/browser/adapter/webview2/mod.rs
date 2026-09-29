@@ -85,8 +85,19 @@ impl BrowserEngine for Webview2Engine {
         // 观察者在 `cfg.initial_url` 被移进 builder 之前取出（partial move 顺序敏感）。
         let observer = cfg.on_page_load.clone();
 
+        // 带启动脚本时**先建空白文档**：`AddScriptToExecuteOnDocumentCreated` 只对将来创建的
+        // 文档生效，而这里是"建视图即导航"——直接建在目标 URL 上，注册就永远晚一步。空白文档
+        // 是个占位（马上被替换），真文档则在注册**之后**创建，于是从它的第一个请求起就被覆盖。
+        let arm = cfg.init_script.clone();
+        let target = cfg.initial_url.clone();
+        let initial = if arm.is_some() {
+            blank_url()?
+        } else {
+            cfg.initial_url.clone()
+        };
+
         let mut builder =
-            WebviewBuilder::new(Self::label(&id), WebviewUrl::External(cfg.initial_url))
+            WebviewBuilder::new(Self::label(&id), WebviewUrl::External(initial))
                 // 页面加载信号 → 端口观察者。WebView2 侧是 `ContentLoading` / `NavigationCompleted`
                 // 两个事件（wry 映射，见 wry `webview2/mod.rs`）。
                 //
@@ -126,17 +137,19 @@ impl BrowserEngine for Webview2Engine {
             .add_child(builder, pos, size)
             .map_err(|e| EngineError::CreateFailed(e.to_string()))?;
 
+        // 注册失败 / 导航失败都**如实失败**（返回 Err 让门面回收注册表占位），不静默降级成
+        // 「视图开好了但没录上」——那正是这套工具最恨的假成功。
+        if let Some(script) = arm {
+            native::add_init_script(&webview, &script)?;
+            navigate_via_eval(&webview, &target)?;
+        }
+
         self.lock()?.insert(id, webview);
         Ok(())
     }
 
     fn navigate(&self, id: &BrowserViewId, url: &Url) -> Result<(), EngineError> {
-        let wv = self.handle(id)?;
-        // serde_json 给出带引号、已转义的 JS 字符串字面量，杜绝注入/引号截断。
-        let literal = serde_json::to_string(url.as_str())
-            .map_err(|e| EngineError::NavigationFailed(e.to_string()))?;
-        wv.eval(format!("window.location.href = {literal};"))
-            .map_err(|e| EngineError::NavigationFailed(e.to_string()))
+        navigate_via_eval(&self.handle(id)?, url)
     }
 
     fn reload(&self, id: &BrowserViewId) -> Result<(), EngineError> {
@@ -224,4 +237,24 @@ impl BrowserEngine for Webview2Engine {
         self.lock()?.remove(id);
         Ok(())
     }
+}
+
+/// 用一句脚本导航（`window.location.href = "…"`）。
+///
+/// `serde_json` 给出带引号、已转义的 JS 字符串字面量，杜绝注入/引号截断。
+/// 创建（arm 路径）与 `navigate` 共用它：两条路必须**逐字一致**，否则「开了就录」那条路会
+/// 悄悄偏离正常导航的行为。
+fn navigate_via_eval(wv: &Webview<Wry>, url: &Url) -> Result<(), EngineError> {
+    let literal = serde_json::to_string(url.as_str())
+        .map_err(|e| EngineError::NavigationFailed(e.to_string()))?;
+    wv.eval(format!("window.location.href = {literal};"))
+        .map_err(|e| EngineError::NavigationFailed(e.to_string()))
+}
+
+/// 注册启动脚本前的**占位文档**（见 `create` 里 arm 路径的说明）。
+///
+/// `url::Url::parse` 对常量串不会失败；写成 `?` 而不是 `expect` 是因为这里不该有 panic 路径
+/// （引擎方法一律返回 `Result`，失败如实上报）。
+fn blank_url() -> Result<Url, EngineError> {
+    Url::parse("about:blank").map_err(|e| EngineError::CreateFailed(format!("about:blank: {e}")))
 }

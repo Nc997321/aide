@@ -28,12 +28,23 @@ import { runEval } from "./runEval.js";
 import {
   buildClickFallbackScript,
   buildFillScript,
+  buildFocusScript,
+  buildKeyFallbackScript,
   buildResolveScript,
   type ActTarget,
 } from "./actions.js";
+import type { KeyStroke } from "./keys.js";
 
 /** 工具层能直接用的文本结果。 */
 type TextOut = string;
+
+/** `press` 的一次请求：目标 + 已解析的按键 + 模型给的原始键名（合成兜底要用它）。 */
+export interface PressRequest {
+  target: ActTarget;
+  /** `resolveKey` 的产物。键名不认识在**工具层**就拦掉了（本地失败，不发桥）。 */
+  stroke: KeyStroke;
+  raw: { key: string; modifiers: string[] };
+}
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -51,14 +62,17 @@ export function describeResolveFailure(v: Record<string, unknown>): string {
   const lines = [`Could not find the target: ${String(v["error"] ?? "unknown")}`];
   const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
   if (candidates.length) {
-    // 候选有两种来源（页面脚本给 `candidatesKind`）：页面上**能点的**元素 / 只是**带着这段
-    // 文本**的元素。后者来自"文本在、但它的元素不被认为可点击"那条分支——把它说成"可点击元素"
-    // 会让模型以为点它就行，实际得改用选择器。
+    // 候选有三种来源（页面脚本给 `candidatesKind`）：页面上**能点的**元素 / 只是**带着这段
+    // 文本**的元素（"文本在、但它的元素不被认为可点击"那条分支——说成"可点击元素"会让模型
+    // 以为点它就行，实际得改用选择器）/ **selector 自己命中的那一批**（歧义，下一步是给
+    // index 或收窄选择器，不是换词）。
     lines.push(
       "",
       v["candidatesKind"] === "text-hits"
         ? "Elements carrying that text (not recognized as clickable — retry with a `selector` from one of these):"
-        : "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):",
+        : v["candidatesKind"] === "selector-matches"
+          ? "Elements the selector matched (nothing was written — retry with `index`, or narrow the `selector`):"
+          : "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):",
     );
     for (const c of candidates) {
       const r = asRecord(c);
@@ -114,21 +128,29 @@ async function evalScript(
   return { ok: true, value };
 }
 
-/** 一次 CDP 鼠标输入。成了回 `null`，否则回**面向模型的失败原因**。 */
-async function cdpMouse(
+/** 一次 CDP 输入派发（鼠标 / 键盘共用）。成了回 `null`，否则回**面向模型的失败原因**。 */
+async function cdpInput(
+  viewId: string | undefined,
+  method: string,
+  params: Record<string, unknown>,
+  label: string,
+  emit: (e: ChatEvent) => void,
+): Promise<string | null> {
+  const resp = await queryBrowser({ op: "call_cdp", view_id: viewId, method, params }, emit);
+  if (!resp.ok) return `${label} failed: ${resp.error ?? "unknown"}`;
+  const rejected = cdpMethodError(resp.data);
+  if (rejected) return `${label} was rejected by the runtime: ${rejected}`;
+  return null;
+}
+
+/** 一次 CDP 鼠标输入（点击/悬停的公共形状）。 */
+function cdpMouse(
   viewId: string | undefined,
   params: Record<string, unknown>,
   label: string,
   emit: (e: ChatEvent) => void,
 ): Promise<string | null> {
-  const resp = await queryBrowser(
-    { op: "call_cdp", view_id: viewId, method: "Input.dispatchMouseEvent", params },
-    emit,
-  );
-  if (!resp.ok) return `${label} failed: ${resp.error ?? "unknown"}`;
-  const rejected = cdpMethodError(resp.data);
-  if (rejected) return `${label} was rejected by the runtime: ${rejected}`;
-  return null;
+  return cdpInput(viewId, "Input.dispatchMouseEvent", params, label, emit);
 }
 
 /**
@@ -212,16 +234,91 @@ export async function performFill(
 
   const v = r.value;
   if (v["ok"] !== true) {
-    const lines = [`Could not fill the target: ${String(v["error"] ?? "unknown")}`];
+    // 解析失败走**同一份**失败渲染（`candidatesKind` 是它的标志：三种候选各有各的下一步）；
+    // fill 自己的失败（读回对不上 / 目标不可填）没有候选，用自己的抬头——把两者混成一句会让
+    // 模型拿着"值没落住"的结论去改选择器。
+    const lines = [
+      v["candidatesKind"]
+        ? describeResolveFailure(v)
+        : `Could not fill the target: ${String(v["error"] ?? "unknown")}`,
+    ];
     const options = Array.isArray(v["options"]) ? v["options"] : [];
     if (options.length) {
       lines.push("", `<select> options available: ${options.map((o) => String(o)).join(" | ")}`);
     }
-    const candidates = Array.isArray(v["candidates"]) ? v["candidates"] : [];
-    if (candidates.length) lines.push("", `${candidates.length} other clickable element(s) on the page — retry with a selector.`);
     return (lines.join("\n"));
   }
-  return (`Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}${matchNote(v)}.`);
+  // 派发了哪些事件**必须写出来**（2026-09-29 走查反馈）：受控组件认的是 input/change，而
+  // "框架会不会把它当用户输入"是模型判断下一步的依据——它此前只能自己写 eval 去探。
+  const events = Array.isArray(v["events"]) ? v["events"].map((e) => String(e)).filter(Boolean) : [];
+  const how = events.length ? ` (dispatched ${events.join(" + ")})` : "";
+  return (
+    `Set ${describeHit(v)} to ${JSON.stringify(String(v["value"] ?? value))}${how}${matchNote(v)}.`
+  );
+}
+
+/**
+ * 按键：**先确定键落在谁身上**（聚焦脚本），再走 CDP 真实按键；不可用则由脚本合成兜底。
+ *
+ * 存在的理由（2026-09-29 走查反馈，本批最大的缺口）：`el-input` 这类 `change`(blur/Enter) 提交的
+ * 控件，`fill` 之后必须"按一下回车"才算完事；没有这条通道时 agent 只能退化成 eval 探 v-model，
+ * 一半的兜底都花在这上面。
+ *
+ * 两发都要成（按下 + 抬起，同点击）：只按下不抬起 = 键卡住，比不按更糟（页面停在按下态）。
+ */
+export async function performPress(
+  viewId: string | undefined,
+  req: PressRequest,
+  emit: (e: ChatEvent) => void,
+): Promise<TextOut> {
+  const focused = await evalScript(viewId, buildFocusScript(req.target), emit);
+  if (!focused.ok) return focused.text;
+  const v = focused.value;
+  if (v["ok"] !== true) return describeResolveFailure(v);
+  const hit = describeHit(v);
+
+  const down = await cdpInput(
+    viewId,
+    "Input.dispatchKeyEvent",
+    req.stroke.down,
+    `${req.stroke.label} keyDown`,
+    emit,
+  );
+  if (!down) {
+    const up = await cdpInput(
+      viewId,
+      "Input.dispatchKeyEvent",
+      req.stroke.up,
+      `${req.stroke.label} keyUp`,
+      emit,
+    );
+    if (!up) return `Pressed ${req.stroke.label} on ${hit} with a real key event via CDP${matchNote(v)}.`;
+    // 危险中间态：已按下未抬起。必须说清，让模型知道这个键可能还按着。
+    return (
+      `${up} — keyDown was delivered, so the key may be left held down. ` +
+      `Press it again, or reload the page, before trusting what the page does next.`
+    );
+  }
+
+  // 兜底：CDP 不可用（WebView2 版本差异）。**必须说清这不是等价路径。**
+  const fallback = await evalScript(
+    viewId,
+    buildKeyFallbackScript(req.target, req.raw.key, req.stroke.code, req.raw.modifiers),
+    emit,
+  );
+  if (!fallback.ok) {
+    return `Press failed. CDP path: ${down}. Script fallback also failed: ${fallback.text}`;
+  }
+  const fv = fallback.value;
+  if (fv["ok"] !== true) {
+    return `Press failed. CDP path: ${down}. Script fallback: ${String(fv["error"] ?? "unknown")}`;
+  }
+  return (
+    `Pressed ${req.stroke.label} on ${describeHit(fv)} using a SYNTHETIC event (script fallback)` +
+    `${matchNote(fv)} — CDP real key input was unavailable (${down}). A synthetic key does not move ` +
+    `focus, does not type, and is not trusted, so widgets that only react to real input may ignore it. ` +
+    `Verify the page actually changed.`
+  );
 }
 
 /**

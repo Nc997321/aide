@@ -14,7 +14,15 @@ import type { ChatEvent } from "../engine/types.js";
 import { queryBrowser, type BrowserCall } from "./browserClient.js";
 import { runEval } from "./browser/runEval.js";
 import { buildProjectionScript } from "./browser/projection.js";
-import { describeResolveFailure, matchNote, performClick, performFill, performHover } from "./browser/act.js";
+import {
+  describeResolveFailure,
+  matchNote,
+  performClick,
+  performFill,
+  performHover,
+  performPress,
+} from "./browser/act.js";
+import { resolveKey } from "./browser/keys.js";
 import { performTabAction } from "./browser/tab.js";
 import { evalInFrame, readFramesFromResult } from "./browser/frames.js";
 import { captureScreenshot } from "./browser/screenshot.js";
@@ -212,55 +220,140 @@ export function buildBrowserEvalTool(
   );
 }
 
+/** `browser_act` 的入参（zod 推出来的形状）。 */
+type ActArgs = {
+  view_id?: string;
+  action: "click" | "fill" | "hover" | "press";
+  text?: string;
+  selector?: string;
+  tag?: string;
+  index?: number;
+  value?: string;
+  key?: string;
+  modifiers?: ("ctrl" | "shift" | "alt" | "meta")[];
+};
+
+/**
+ * 入参守门：**本地就能判定的错，绝不发桥**（桥对面是桌面 Rust，发出去才发现参数不对要等 15s
+ * 超时，而超时文案会把"你少给了 url/key"伪装成"浏览器卡了"）。返回 null = 放行。
+ */
+function validateActArgs(args: ActArgs): string | null {
+  if (args.action === "press") {
+    if (!args.key) {
+      return (
+        'action=press needs `key` — e.g. "Enter", "Escape", "Tab". ' +
+        "Without a target the key goes to the element that currently has focus."
+      );
+    }
+    return null;
+  }
+  // 非 press：目标必给，且 key/modifiers 属于 press——**明说，不静默忽略**。
+  if (!args.selector && !args.text) {
+    return "Give a target: either `text` (the visible label) or `selector` (CSS).";
+  }
+  if (args.key !== undefined || args.modifiers !== undefined) {
+    return '`key` / `modifiers` only apply to action="press".';
+  }
+  if (args.action === "fill" && args.value === undefined) {
+    return "action=fill needs `value`.";
+  }
+  return null;
+}
+
+/** 动作分发：一种动作一行（新增动作 = 这里加一条）。四种都回文本，故没有兜底分支。 */
+async function runAct(
+  args: ActArgs,
+  target: ActTarget,
+  emit: (e: ChatEvent) => void,
+): Promise<string> {
+  switch (args.action) {
+    case "click":
+      return performClick(args.view_id, target, emit);
+    case "hover":
+      return performHover(args.view_id, target, emit);
+    case "fill":
+      return performFill(args.view_id, target, String(args.value ?? ""), emit);
+    case "press": {
+      const raw = { key: args.key ?? "", modifiers: args.modifiers ?? [] };
+      const stroke = resolveKey(raw.key, raw.modifiers);
+      // 键名不认识 / 拿 press 打字：本地就拒（`keys.ts` 的文案已带上支持的键与下一步）。
+      if (!stroke.ok) return stroke.error;
+      return performPress(args.view_id, { target, stroke, raw }, emit);
+    }
+  }
+}
+
 export function buildBrowserActTool(
   env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
     "browser_act",
-    "Perform an action on the page in an embedded browser view: click, fill, or hover an element. " +
+    "Perform an action on the page in an embedded browser view: click, fill, hover, or press a key. " +
       "Target the element by `text` (its visible label — preferred, e.g. the 刷新 button) or by a CSS `selector`. " +
       "This is how you move through a UI or fill a form. It does NOT submit anything by itself — submitting is a separate " +
       "click on the submit control, so only do that when the user asked for it. " +
       "Clicks use real CDP mouse input when the runtime supports it and fall back to synthetic events otherwise; " +
-      "the result tells you which path was used — synthetic clicks may not drive every widget, so verify the page changed.",
+      "the result tells you which path was used — synthetic clicks may not drive every widget, so verify the page changed. " +
+      "action=press sends a real key (Enter, Escape, Tab, …) to the focused element — after a `fill`, that is how you " +
+      "commit a field whose framework submits on Enter or blur rather than on the value itself (note that Enter may " +
+      "trigger the page's own submit handler: press it only when that is what you mean).",
     {
       view_id: viewIdArg,
       action: z
-        .enum(["click", "fill", "hover"])
-        .describe("click = mouse click; fill = set a field's value; hover = move the mouse over it (opens hover menus/tooltips)"),
+        .enum(["click", "fill", "hover", "press"])
+        .describe(
+          "click = mouse click; fill = set a field's value; hover = move the mouse over it (opens hover " +
+            "menus/tooltips); press = send a real key to the focused element, or to `text`/`selector` when given",
+        ),
       text: z.string().optional().describe("Visible label of the target (preferred). Most specific match wins."),
-      selector: z.string().optional().describe("CSS selector for the target. Takes precedence over `text` when both are given."),
+      selector: z
+        .string()
+        .optional()
+        .describe(
+          "CSS selector for the target. Takes precedence over `text` when both are given. If it matches more " +
+            "than one element, pass `index` — the tool will not guess which one you meant.",
+        ),
       tag: z.string().optional().describe("Restrict text matching to one tag, e.g. 'button'. Only used with `text`."),
-      index: z.number().int().min(0).optional().describe("When several elements match, pick this one (default 0 = the most specific)."),
+      index: z
+        .number()
+        .int()
+        .min(0)
+        .optional()
+        .describe(
+          "When several elements match, pick this one. Required for a `selector` matching more than one element; " +
+            "with `text`, default 0 = the most specific match.",
+        ),
       value: z
         .string()
         .optional()
         .describe("Required for action=fill. For a <select>, pass either the option's value or its visible text."),
+      key: z
+        .string()
+        .optional()
+        .describe(
+          "Key name for action=press: Enter, Escape, Tab, Space, Backspace, Delete, ArrowUp, ArrowDown, " +
+            "ArrowLeft, ArrowRight, Home, End, PageUp, PageDown — or a single letter/digit combined with " +
+            "`modifiers` (e.g. \"a\" with [\"ctrl\"]). To put text in a field use action=fill.",
+        ),
+      modifiers: z
+        .array(z.enum(["ctrl", "shift", "alt", "meta"]))
+        .optional()
+        .describe('Only with action=press: modifiers to hold down (e.g. ["ctrl"] for Ctrl+A).'),
     },
     async (args) => {
       if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
+      const bad = validateActArgs(args);
+      if (bad) return textResult(bad);
+
       const target: ActTarget = {
         selector: args.selector,
         text: args.text,
         tag: args.tag,
         index: args.index,
       };
-      if (!target.selector && !target.text) {
-        return textResult("Give a target: either `text` (the visible label) or `selector` (CSS).");
-      }
-      if (args.action === "fill" && args.value === undefined) {
-        return textResult("action=fill needs `value`.");
-      }
       try {
-        switch (args.action) {
-          case "click":
-            return textResult(await performClick(args.view_id, target, emit));
-          case "hover":
-            return textResult(await performHover(args.view_id, target, emit));
-          case "fill":
-            return textResult(await performFill(args.view_id, target, String(args.value), emit));
-        }
+        return textResult(await runAct(args, target, emit));
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         return textResult(`Browser action failed unexpectedly: ${detail}`);

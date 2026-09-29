@@ -241,4 +241,6 @@ pub struct CreateBrowserDto {
     pub label: Option<String>,
     /// `None` = 用户开的（面板路径不传）。
     pub origin: Option<OriginDto>,
+    /// **首次导航之前**注册的启动脚本（agent 开 tab 时带 recorder）；`None` = 不注册。
+    pub init_script: Option<String>,
 }

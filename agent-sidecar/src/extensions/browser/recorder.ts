@@ -271,6 +271,15 @@ const registeredViews = new Set<string>();
 let cachedResolvedId: string | undefined;
 
 /**
+ * 记账：这个视图的启动脚本**已经在创建时注册过**了——`browser_tab` 的 `open` 会把
+ * `RECORDER_SOURCE` 放进载荷，Rust 侧注册在首次导航之前（见 `CreateCfg::init_script`）。
+ * 不记这一笔，第一次 `browser_network` 会再补发一遍注册（白跑一趟，且每份新文档多跑一遍脚本）。
+ */
+export function noteRecorderRegistered(viewId: string): void {
+  registeredViews.add(viewId);
+}
+
+/**
  * 给**未来的文档**装上（`init_script` op：Rust 侧落到 WebView2 宿主 API
  * `AddScriptToExecuteOnDocumentCreated`）。注册挂在视图上，故同一视图只发一次；
  * 失败**如实带出**，不吞。

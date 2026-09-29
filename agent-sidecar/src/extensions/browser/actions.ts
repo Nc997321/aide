@@ -251,6 +251,17 @@ ${CLICKABLE_JS}
     for (var i = 0; i < found.length; i++) { if (visible(found[i])) vis.push(found[i]); }
     var pool = vis.length ? vis : Array.prototype.slice.call(found);
     if (!pool.length) return { error: 'selector matched nothing: ' + TARGET.selector };
+    // 多命中且**没显式给 index** → 不猜。selector 的池子是文档序，第一个没有任何理由，而默默取它
+    // 是个替调用方做的决定（2026-09-29 走查实锤：宽 selector 把值灌进了另一个控件的搜索框）。
+    // 显式 index（含 0）是调用方自己的表达，照办——「要第一个」因此仍然是一句话的事。
+    if (pool.length > 1 && TARGET.index === undefined) {
+      return {
+        error: 'selector ' + JSON.stringify(TARGET.selector) + ' matched ' + pool.length +
+          ' elements — pass index to pick one, or narrow the selector (nothing was touched)',
+        candidatesKind: 'selector-matches',
+        candidates: pool.slice(0, 8).map(describe)
+      };
+    }
     var used = Math.min(TARGET.index || 0, pool.length - 1);
     return { el: pool[used], count: pool.length, used: used };
   }
@@ -275,6 +286,23 @@ ${CLICKABLE_JS}
     if (TARGET.selector) return bySelector();
     if (TARGET.text) return byText();
     return { error: 'no target given: provide selector or text' };
+  }
+
+  /**
+   * 按键的目标（press 专用）：**给了就解析，没给就是当前焦点**——"fill 之后按回车"靠的就是
+   * 后者，不该逼调用方把刚填过的字段再说一遍。
+   *
+   * 页面上**什么都没聚焦**时如实失败：发出的键没人接，模型看到的只是"按了没反应"（幽灵故障）。
+   * 焦点落在 body/documentElement 上等于没聚焦（事件落到 document，没有任何控件收到）。
+   */
+  function targetOrActive() {
+    if (TARGET.selector || TARGET.text) return resolve();
+    var act = document.activeElement;
+    if (!act || act === document.body || act === document.documentElement) {
+      return { error: 'nothing is focused in the page — focus a field first (fill or click it), ' +
+        'or pass text/selector to press' };
+    }
+    return { el: act };
   }
 
   /**
@@ -360,10 +388,18 @@ export function buildResolveScript(target: ActTarget, opts: { scroll?: boolean }
 }
 
 /**
- * 设值（`fill`）：置 value 并派发 `input` + `change`。
+ * 设值（`fill`）：置 value 并派发 `input` + `change`，然后**读回校验**。
  *
  * **两个事件都要派发**：Vue/React 受控组件靠 `input` 同步内部状态，而复选框/下拉/表单序列化
- * 靠 `change`。只派发一个会出现「看起来填上了，提交时是空的」。
+ * 靠 `change`。只派发一个会出现「看起来填上了，提交时是空的」。派发了哪两个由调用方写进结果
+ * （模型据此判断要不要再补一次 `press`/聚焦事件），脚本自己只负责**如实回报**。
+ *
+ * **读回校验（2026-09-29 走查反馈）**：写了不等于落住。受控组件会把值改回去、file 输入框会
+ * 静静吞掉赋值——只回报"我写了 X"就是假成功。这里写完读一次，对不上就如实失败，把读到的值
+ * 报出来。判定口径按元素类型各算各的（<select> 比 option 的 value、勾选框比 checked）。
+ *
+ * **不是表单元素就拒绝**：旧实现对任何元素都 `el.value = VALUE`——在 contenteditable 这类元素上
+ * 那是挂了个 expando 属性（页面毫无变化），却照样回 "Set … to …"。禁用/只读同理：页面不会收。
  */
 export function buildFillScript(target: ActTarget, value: string): string {
   return `(() => {${preamble(target)}
@@ -375,8 +411,69 @@ export function buildFillScript(target: ActTarget, value: string): string {
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) { /* 非必需 */ }
     el.focus && el.focus();
 
-    if (el.tagName === 'SELECT') {
-      var matched = null;
+    // 三块各一件事：落值（含拒绝）→ 派发事件 → 读回校验。want / readBack 是它们的接口。
+    var want = null;
+    var readBack = null;
+${fillDispatchScript()}
+${fillEventsScript()}
+${fillVerifyScript()}
+  } catch (e) {
+    return { ok: false, error: 'fill failed: ' + String((e && e.message) || e) };
+  }
+})()`;
+}
+
+/**
+ * 落值分派：先拒**写了也没用**的目标（禁用 / 只读 / file / 不是表单元素），再按类型落值。
+ * 每种类型自己绑好 `want`（读回应当等于什么）与 `readBack`（怎么读）。
+ */
+function fillDispatchScript(): string {
+  return `    if (el.disabled === true) {
+      return { ok: false, error: 'the control is disabled — the page will not accept a value', hit: describe(el) };
+    }
+    if (el.readOnly === true) {
+      return { ok: false, error: 'the control is read-only — if setting it programmatically is really ' +
+        'what you mean, use browser_eval', hit: describe(el) };
+    }
+    var tag = el.tagName;
+    if (tag === 'SELECT') {
+${fillSelectBranch()}
+    } else if (el.type === 'checkbox' || el.type === 'radio') {
+${fillChoiceBranch()}
+    } else if (tag === 'INPUT' && el.type === 'file') {
+      return { ok: false, error: 'a file input cannot be filled from script — that is a browser ' +
+        'security boundary, so drive the real picker instead', hit: describe(el) };
+    } else if (tag === 'INPUT' || tag === 'TEXTAREA') {
+${fillTextBranch()}
+    } else {
+      return { ok: false, error: 'this element is not an input, textarea or select — it has no value ' +
+        'to set (a contenteditable takes text through browser_eval, or click into it and press keys)',
+        hit: describe(el) };
+    }`;
+}
+
+/** 派发 `input` + `change`：Vue/React 受控组件靠前者同步内部状态，勾选/下拉/表单序列化靠后者。 */
+function fillEventsScript(): string {
+  return `    var evOpts = { bubbles: true, cancelable: true };
+    try { el.dispatchEvent(new Event('input', evOpts)); } catch (e) { /* 老环境忽略 */ }
+    try { el.dispatchEvent(new Event('change', evOpts)); } catch (e) { /* 老环境忽略 */ }`;
+}
+
+/** 读回校验 + 两个信封：读回对不上就是**失败**（把读到的值一并带出去，模型据此判断下一步）。 */
+function fillVerifyScript(): string {
+  return `    var got = readBack();
+    if (got !== want) {
+      return { ok: false, error: 'the element reads back ' + JSON.stringify(got) + ' after the write, ' +
+        'not ' + JSON.stringify(want) + ' — a control or framework reverted or ignored it, so nothing ' +
+        'was really set', hit: describe(el), events: ['input', 'change'] };
+    }
+    return { ok: true, hit: describe(el), value: el.value, want: want, events: ['input', 'change'],
+             matched: r.count, usedIndex: r.used };`;
+}
+
+/** `<select>`：按 option 的 value 或可见文本落值；没有匹配项时把候选清单带出去。 */
+function fillSelectBranch(): string {
+  return `      var matched = null;
       for (var i = 0; i < el.options.length; i++) {
         var o = el.options[i];
         if (o.value === VALUE || (o.textContent || '').trim() === VALUE) { matched = o; break; }
@@ -387,19 +484,90 @@ export function buildFillScript(target: ActTarget, value: string): string {
         return { ok: false, error: 'no option matching ' + JSON.stringify(VALUE), options: opts, hit: describe(el) };
       }
       el.value = matched.value;
-    } else if (el.type === 'checkbox' || el.type === 'radio') {
-      var want = VALUE === 'true' || VALUE === 'checked' || VALUE === '1';
-      if (el.checked !== want) el.click();
-    } else {
-      el.value = VALUE;
-    }
+      want = String(matched.value);
+      readBack = function () { return String(el.value); };`;
+}
 
-    var evOpts = { bubbles: true, cancelable: true };
-    try { el.dispatchEvent(new Event('input', evOpts)); } catch (e) { /* 老环境忽略 */ }
-    try { el.dispatchEvent(new Event('change', evOpts)); } catch (e) { /* 老环境忽略 */ }
-    return { ok: true, hit: describe(el), value: el.value, matched: r.count, usedIndex: r.used };
+/** 勾选类：读回口径是 `checked`（它的 `value` 是提交值，不是勾没勾）。 */
+function fillChoiceBranch(): string {
+  return `      var checked = VALUE === 'true' || VALUE === 'checked' || VALUE === '1';
+      if (el.checked !== checked) el.click();
+      want = String(checked);
+      readBack = function () { return String(el.checked === true); };`;
+}
+
+/** 文本类：写 value，读回口径就是它自己（受控组件改回去时两边就对不上）。 */
+function fillTextBranch(): string {
+  return `      el.value = VALUE;
+      want = VALUE;
+      readBack = function () { return String(el.value); };`;
+}
+
+/**
+ * 按键的第一步：**确定键落在谁身上**（并把它聚焦），把命中的元素报回来。
+ *
+ * 为什么先要这一发：`Input.dispatchKeyEvent` 交给**页面当前焦点**，而"我以为光标在搜索框里"
+ * 是这类工具最容易出的错位。先读一次、如实回报，错位当场可见；顺带把目标聚焦（要按键的字段
+ * 常常还没被点过）。真实的键盘事件随后由 CDP 派发（见 `act.ts` 的 `performPress`）。
+ */
+export function buildFocusScript(target: ActTarget): string {
+  return `(() => {${preamble(target)}
+  try {
+    var r = targetOrActive();
+    if (r.error) return failure(r.error, r);
+    var el = r.el;
+    try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) { /* 非必需 */ }
+    try { el.focus && el.focus(); } catch (e) { /* 不可聚焦的元素照样可能挂着 document 级 handler */ }
+    return { ok: true, hit: describe(el) };
   } catch (e) {
-    return { ok: false, error: 'fill failed: ' + String((e && e.message) || e) };
+    return { ok: false, error: 'focus failed: ' + String((e && e.message) || e) };
+  }
+})()`;
+}
+
+/**
+ * CDP 不可用时的按键兜底：合成 `keydown` / `keyup`。
+ *
+ * **不等价**（与点击的兜底同款纪律）：非 `isTrusted`、不会移动焦点、不产生字符——只对"自己监听
+ * keydown"的页面有效。走这条路必须由调用方如实说明，不假装与真按键一样。
+ */
+export function buildKeyFallbackScript(
+  target: ActTarget,
+  key: string,
+  code: string,
+  modifiers: string[],
+): string {
+  const has = (m: string) => modifiers.some((x) => String(x).toLowerCase() === m);
+  const base = {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    key,
+    code,
+    ctrlKey: has("ctrl"),
+    altKey: has("alt"),
+    metaKey: has("meta"),
+    shiftKey: has("shift"),
+  };
+  return `(() => {${preamble(target)}
+  try {
+    var r = targetOrActive();
+    if (r.error) return failure(r.error, r);
+    var el = r.el;
+    try { el.focus && el.focus(); } catch (e) { /* 非必需 */ }
+    var BASE = ${JSON.stringify(base)};
+    var names = ['keydown', 'keyup'];
+    for (var i = 0; i < names.length; i++) {
+      var ev;
+      try {
+        ev = window.KeyboardEvent ? new window.KeyboardEvent(names[i], BASE)
+                                  : new Event(names[i], BASE);
+      } catch (e) { ev = new Event(names[i], BASE); }
+      try { el.dispatchEvent(ev); } catch (e) { /* 派发不了也照样如实回报 */ }
+    }
+    return { ok: true, hit: describe(el) };
+  } catch (e) {
+    return { ok: false, error: 'key fallback failed: ' + String((e && e.message) || e) };
   }
 })()`;
 }

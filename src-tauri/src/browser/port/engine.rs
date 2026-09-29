@@ -58,6 +58,13 @@ pub struct CreateCfg {
     /// 建出来时**露不露在面板上**。`false` = 直接建在停靠点（parked），不闪一帧——
     /// agent 开的 tab 属于这种：它要在后台干活，不该抢用户的前台。
     pub displayed: bool,
+    /// 建视图时**在首次导航之前**注册的启动脚本（recorder）；`None` = 不注册。
+    ///
+    /// 为什么必须在这里给：`add_init_script` 只对**将来**创建的文档生效，而本模块的创建是
+    /// **建视图即导航**——调用方拿到回包再补注册时，第一份文档早创建完了（竞态）。带这个字段
+    /// 时创建走「空白文档 → 注册 → 导航」，于是**第一份真文档从它的第一个请求起**就被覆盖，
+    /// 这正是「页面一打开就是空白，其实是加载期那条 XHR 返回了错误」的场景。
+    pub init_script: Option<String>,
     /// 页面加载信号回传口。`None` = 不关心（无广播需求）。
     pub on_page_load: Option<PageLoadObserver>,
 }
@@ -191,6 +198,7 @@ mod engine_test {
             user_agent: None,
             devtools: false,
             displayed: false,
+            init_script: None,
             on_page_load: None,
         };
         assert!(!cfg.displayed);

@@ -14,6 +14,8 @@ import { describe, it, expect } from "vitest";
 import {
   buildClickFallbackScript,
   buildFillScript,
+  buildFocusScript,
+  buildKeyFallbackScript,
   buildResolveScript,
   type ActTarget,
 } from "./actions.js";
@@ -39,18 +41,22 @@ function el(
     cursor?: string;
     parent?: unknown;
     children?: unknown[];
+    id?: string;
+    /** 其余属性（`placeholder` / `name` / `aria-label`）：候选行靠它把元素说清楚。 */
+    attrs?: Record<string, string>;
   } = {},
 ) {
   return {
     tagName: tag.toUpperCase(),
     textContent: opts.text ?? "",
     className: opts.cls ?? "",
-    id: "",
+    id: opts.id ?? "",
     children: opts.children ?? [],
     parentElement: opts.parent ?? null,
     cursor: opts.cursor ?? "auto",
     getBoundingClientRect: () => opts.rect ?? { left: 10, top: 20, width: 40, height: 16 },
-    getAttribute: (name: string) => (name === "class" ? (opts.cls ?? null) : null),
+    getAttribute: (name: string) =>
+      name === "class" ? (opts.cls ?? null) : (opts.attrs?.[name] ?? null),
     scrollIntoView: () => {},
     matches: () => opts.markup === true,
   };
@@ -73,12 +79,15 @@ function stubDom(opts: {
   textNodes?: Array<{ data: string; parentElement: unknown }>;
   clickableHints?: unknown[];
   scroll?: { x: number; y: number };
+  /** 页面当前聚焦的元素（按键脚本读它）。缺省 null = 什么都没聚焦。 */
+  activeElement?: unknown;
 }): StubDom {
   const nodes = opts.textNodes ?? [];
   let i = 0;
   return {
     document: {
       body: {},
+      activeElement: opts.activeElement ?? null,
       // 脚本读滚动偏移时会先看 window.pageXOffset，再退回 documentElement——两个都要在桩里，
       // 缺一个就是解引用 undefined 抛异常，而异常会被脚本的 try 折成"resolve failed"，
       // 让**所有**解析用例静默变成失败分支。
@@ -92,6 +101,10 @@ function stubDom(opts: {
     window: {
       pageXOffset: opts.scroll?.x ?? 0,
       pageYOffset: opts.scroll?.y ?? 0,
+      // 按键兜底脚本走 `window.KeyboardEvent`（真页面就是它）；桩里给一个只留 type 的最小实现。
+      KeyboardEvent: class {
+        constructor(public type: string) {}
+      },
       getComputedStyle: (e: { cursor?: string }) => ({
         visibility: "visible",
         display: "block",
@@ -314,6 +327,209 @@ describe("browser_act：命中歧义报数", () => {
 });
 
 /**
+ * `selector` 多命中：**默认取 index 0 是个易错猜测**（2026-09-29 真机走查实锤：宽 selector 把值
+ * 灌进了另一个控件的搜索框，工具只加了一句注脚）。文本匹配的多命中**不在此列**——它的池子按
+ * 「最具体」排序，index 0 有语义；selector 的池子是文档序，第一个没有任何理由。
+ */
+describe("browser_act：selector 多命中不许替调用方猜", () => {
+  const inputs = () => [
+    el("input", { attrs: { placeholder: "故障类型", name: "faultType" } }),
+    el("input", { attrs: { placeholder: "委外单位", name: "vendor" } }),
+    el("input", { attrs: { placeholder: "备注", name: "memo" } }),
+  ];
+
+  it("未给 index → 失败 + 候选清单（含 placeholder，让模型一眼挑对）", () => {
+    const out = runResolve({ selector: "input" }, stubDom({ candidates: inputs() }));
+
+    expect(out["ok"]).toBe(false);
+    expect(String(out["error"])).toContain("matched 3 elements");
+    expect(out["candidatesKind"]).toBe("selector-matches");
+    const cands = out["candidates"] as Array<Record<string, unknown>>;
+    expect(cands.length).toBe(3);
+    expect(JSON.stringify(cands)).toContain("故障类型");
+    expect(JSON.stringify(cands)).toContain("faultType");
+  });
+
+  it("显式 index:0 → 照旧成功（要第一个是合法表达，只是必须说出来）", () => {
+    const out = runResolve({ selector: "input", index: 0 }, stubDom({ candidates: inputs() }));
+
+    expect(out["ok"]).toBe(true);
+    expect(out["usedIndex"]).toBe(0);
+  });
+
+  it("只命中一个 → 不报歧义", () => {
+    const out = runResolve({ selector: "input" }, stubDom({ candidates: inputs().slice(0, 1) }));
+
+    expect(out["ok"]).toBe(true);
+  });
+
+  it("文本多命中不受影响（池子已按最具体排序，index 0 是语义而不是猜测）", () => {
+    const a = el("div", { text: "保存", cursor: "pointer" });
+    const b = el("div", { text: "保存", cursor: "pointer" });
+    const out = runResolve({ text: "保存" }, stubDom({ candidates: [a, b] }));
+
+    expect(out["ok"]).toBe(true);
+  });
+});
+
+/** 跑一次设值脚本。 */
+function runFill(target: ActTarget, value: string, dom: StubDom): Record<string, unknown> {
+  const factory = new Function(
+    "window",
+    "document",
+    "NodeFilter",
+    "return " + buildFillScript(target, value),
+  ) as (w: unknown, d: unknown, nf: unknown) => Record<string, unknown>;
+  return factory(dom.window, dom.document, dom.NodeFilter);
+}
+
+/** 跑任意一段（按键那两条脚本与解析脚本共用同一个出口）。 */
+function runScript(script: string, dom: StubDom): Record<string, unknown> {
+  const factory = new Function(
+    "window",
+    "document",
+    "NodeFilter",
+    "return " + script,
+  ) as (w: unknown, d: unknown, nf: unknown) => Record<string, unknown>;
+  return factory(dom.window, dom.document, dom.NodeFilter);
+}
+
+/**
+ * 表单元素桩。`revertTo` 模拟**受控组件**：写进去的值被改回去（React 的受控 input、EP 的部分
+ * 封装都会这样），这正是「看起来填上了、提交时是空的」那类事故的最小形态。
+ */
+function field(
+  tag: string,
+  opts: {
+    type?: string;
+    value?: string;
+    revertTo?: string;
+    attrs?: Record<string, string>;
+    disabled?: boolean;
+    readOnly?: boolean;
+  } = {},
+) {
+  const e = el(tag, { attrs: opts.attrs }) as Record<string, unknown>;
+  let stored = opts.value ?? "";
+  Object.defineProperty(e, "value", {
+    get: () => stored,
+    set: (v: unknown) => {
+      stored = opts.revertTo === undefined ? String(v) : opts.revertTo;
+    },
+  });
+  const events: string[] = [];
+  e["type"] = opts.type;
+  e["disabled"] = opts.disabled;
+  e["readOnly"] = opts.readOnly;
+  e["events"] = events;
+  e["focus"] = () => {};
+  e["dispatchEvent"] = (ev: { type: string }) => {
+    events.push(ev.type);
+    return true;
+  };
+  return e;
+}
+
+/**
+ * fill 的三条新纪律（2026-09-29 走查反馈）：① 派发了哪些事件要说；② **值真落了才叫 Set**
+ * （读回校验）；③ 根本不是表单元素时不许假成功（现在的实现会给它挂一个 expando 属性然后报成功）。
+ */
+describe("browser_act fill：值真的落了吗", () => {
+  it("文本输入：派发 input+change，并读回确认值落住", () => {
+    const e = field("input", { attrs: { name: "faultType" } });
+    const out = runFill({ selector: "input" }, "电压异常", stubDom({ candidates: [e] }));
+
+    expect(out["ok"]).toBe(true);
+    expect(out["value"]).toBe("电压异常");
+    expect(e["events"]).toEqual(["input", "change"]);
+  });
+
+  it("受控组件把值改回去 → 如实报读回值 + 不报成功", () => {
+    const e = field("input", { revertTo: "" });
+    const out = runFill({ selector: "input" }, "电压异常", stubDom({ candidates: [e] }));
+
+    expect(out["ok"]).toBe(false);
+    expect(String(out["error"])).toContain("reads back");
+    expect(String(out["error"])).toContain("电压异常");
+  });
+
+  it("非表单元素（contenteditable 这类）→ 拒绝并指路，不写 expando 属性", () => {
+    const div = el("div", { text: "正文", attrs: { contenteditable: "" } });
+    const out = runFill({ selector: "div" }, "电压异常", stubDom({ candidates: [div] }));
+
+    expect(out["ok"]).toBe(false);
+    expect(String(out["error"])).toContain("not an input, textarea or select");
+    expect((div as Record<string, unknown>)["value"]).toBeUndefined();
+  });
+
+  it("disabled 控件 → 拒绝（页面不会收这个值）", () => {
+    const e = field("input", { disabled: true });
+    const out = runFill({ selector: "input" }, "x", stubDom({ candidates: [e] }));
+
+    expect(out["ok"]).toBe(false);
+    expect(String(out["error"])).toContain("disabled");
+  });
+});
+
+/**
+ * 按键（`action:"press"`）的两条脚本：**键落在谁身上**必须先确定，再交给 CDP 派发。
+ * 没给目标时按 `activeElement` 走（"fill 之后按回车"就是这个形状），而**页面上什么都没聚焦**
+ * 必须如实失败——发一个没人接的键，回来就是"按了没反应"的幽灵故障。
+ */
+describe("browser_act press：按键落在谁身上", () => {
+  it("给了目标 → 聚焦它，并把命中的元素报回来", () => {
+    const e = el("input", { attrs: { name: "q" } }) as Record<string, unknown>;
+    let focused = false;
+    e["focus"] = () => {
+      focused = true;
+    };
+
+    const out = runScript(buildFocusScript({ selector: "input" }), stubDom({ candidates: [e] }));
+
+    expect(out["ok"]).toBe(true);
+    expect(focused).toBe(true);
+    expect((out["hit"] as Record<string, unknown>)["tag"]).toBe("input");
+  });
+
+  it("没给目标 → 用当前 activeElement（fill 之后那个字段）", () => {
+    const e = el("input", { attrs: { name: "q" } });
+    const out = runScript(buildFocusScript({}), stubDom({ activeElement: e }));
+
+    expect(out["ok"]).toBe(true);
+    expect((out["hit"] as Record<string, unknown>)["name"]).toBe("q");
+  });
+
+  it("没给目标且页面上没有任何焦点（body）→ 失败并指路，不发键", () => {
+    const dom = stubDom({ activeElement: null });
+    (dom.document as Record<string, unknown>)["activeElement"] = (
+      dom.document as Record<string, unknown>
+    )["body"];
+
+    const out = runScript(buildFocusScript({}), dom);
+
+    expect(out["ok"]).toBe(false);
+    expect(String(out["error"])).toContain("nothing is focused");
+  });
+
+  it("合成兜底：keydown + keyup 都派发到同一个元素，仍报它（不是可信事件由调用方说）", () => {
+    const e = el("input", { attrs: { name: "q" } }) as Record<string, unknown>;
+    const seen: string[] = [];
+    e["dispatchEvent"] = (ev: { type: string }) => {
+      seen.push(ev.type);
+      return true;
+    };
+
+    const out = runScript(
+      buildKeyFallbackScript({ selector: "input" }, "Enter", "Enter", []),
+      stubDom({ candidates: [e] }),
+    );
+
+    expect(out["ok"]).toBe(true);
+    expect(seen).toEqual(["keydown", "keyup"]);
+  });
+});
+
+/**
  * 转义纪律（注入脚本的硬约束；同款一组见 `clickable.test.ts`）。
  *
  * 解析脚本每个用例都在跑（`runResolve` 就是 `new Function`），另**两个**脚本此前没有任何测试
@@ -329,5 +545,10 @@ describe("browser_act：注入脚本的转义纪律", () => {
 
   it("兜底点击脚本是合法 JS", () => {
     expect(() => new Function(buildClickFallbackScript(target))).not.toThrow();
+  });
+
+  it("按键的两条脚本都是合法 JS", () => {
+    expect(() => new Function(buildFocusScript(target))).not.toThrow();
+    expect(() => new Function(buildKeyFallbackScript(target, "Enter", "Enter", ["ctrl"]))).not.toThrow();
   });
 });

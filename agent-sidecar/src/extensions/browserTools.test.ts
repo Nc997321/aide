@@ -526,6 +526,229 @@ describe("browser_act — 命中歧义报数", () => {
   });
 });
 
+/**
+ * 2026-09-29 走查反馈：① selector 多命中时"默默取 index 0"会把值灌进另一个控件（歧义现在是失败，
+ * 且必须**指回 disambiguate 的两个动作**：给 index / 收窄 selector）；② fill 成功了要说清派发了
+ * 哪些事件，失败了要说清**读到的是什么**——"我写了"和"它落住了"是两回事。
+ */
+describe("browser_act — selector 歧义与 fill 的如实回报", () => {
+  it("selector 多命中 → 指向 index/收窄 selector，并列出候选", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "fill", selector: "input", value: "电压异常" },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: false,
+        error: 'selector "input" matched 3 elements — pass index to pick one, or narrow the selector (nothing was touched)',
+        candidatesKind: "selector-matches",
+        candidates: [
+          { tag: "input", text: "故障类型", id: null, name: "faultType", cls: null },
+          { tag: "input", text: "委外单位", id: null, name: "vendor", cls: null },
+        ],
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("matched 3 elements");
+    expect(text).toContain("Elements the selector matched");
+    expect(text).toContain("faultType");
+    expect(text).toContain("vendor");
+    expect(events).toHaveLength(1); // 只发了解析这一发——歧义时不许写任何东西
+  });
+
+  it("fill 成功 → 结果里印出派发了哪些事件（模型据此判断要不要补按键/聚焦）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "fill", text: "设备名称", value: "泵-01" },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: true,
+        hit: { tag: "input", text: "设备名称" },
+        value: "泵-01",
+        events: ["input", "change"],
+        matched: 1,
+        usedIndex: 0,
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Set <input>");
+    expect(text).toContain("dispatched input + change");
+  });
+
+  it("fill 读回对不上 → 明说没落住，绝不报 Set", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "fill", text: "设备名称", value: "泵-01" },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: false,
+        error:
+          'the element reads back "" after the write, not "泵-01" — a control or framework reverted ' +
+          'or ignored it, so nothing was really set',
+        hit: { tag: "input", text: "设备名称" },
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("reads back");
+    expect(text).not.toContain("Set <input>");
+  });
+});
+
+/**
+ * 键盘（`action:"press"`）。这是 2026-09-29 走查反馈里最大的缺口：「fill 之后按回车」在
+ * Element Plus 那类 `change`(blur/Enter) 提交的表单里是**必须**的一步，此前只能退化成 eval。
+ *
+ * 两发都要成（按下 + 抬起），方法与点击同款：真按键优先，CDP 不可用才合成兜底，且**如实标注**。
+ */
+/**
+ * 「开视图时就 arm」（2026-09-29 走查反馈第 3 条）。晚一步补注册会漏掉**加载期请求**，而那正是
+ * 这套工具最值钱的场景；open 载荷里的 `init_script` 由 Rust 注册在首次导航之前，所以第一份文档
+ * 从它的第一个请求起就被覆盖。
+ */
+describe("browser_tab — open 时 arm recorder", () => {
+  it("open 的载荷带 init_script；同一视图之后读取**不再重复注册**", async () => {
+    const { events, emit } = emitCollector();
+    const openP = toolByName({} as NodeJS.ProcessEnv, emit, "browser_tab").handler(
+      { action: "open", url: "http://localhost:5173/" },
+      {},
+    );
+    const q0 = await waitForQuery(events, 0);
+    expect(q0.op).toBe("open");
+    expect(String(q0.init_script)).toContain("__aideRec");
+    reply(q0, { ok: true, data: { view_id: "browser-77", view: { id: "browser-77" } } });
+    await openP;
+
+    const netP = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler(
+      { view_id: "browser-77" },
+      {},
+    );
+    const q1 = await waitForQuery(events, 1);
+    // 直接读缓冲（一次求值）——**没有** init_script 那一发
+    expect(q1.op).toBe("call_cdp");
+    reply(q1, evalOk({ ok: true, armedBefore: true, items: [], total: 0, matched: 0, cap: 100 }));
+    await netP;
+
+    expect(events.filter((e: any) => e.op === "init_script")).toHaveLength(0);
+  });
+});
+
+describe("browser_act — press 键盘", () => {
+  const FOCUSED = evalOk({ ok: true, hit: { tag: "input", text: "设备名称", name: "q" } });
+
+  it("先确定键落在谁身上，再走 CDP 真实按键（keyDown + keyUp）", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "press", key: "Enter" },
+      {},
+    );
+    reply(await waitForQuery(events, 0), FOCUSED);
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("Pressed Enter");
+    expect(text).toContain("<input");
+    expect(text).toContain("via CDP");
+
+    const keys = (events as any[]).filter((e) => e.method === "Input.dispatchKeyEvent");
+    expect(keys).toHaveLength(2);
+    expect(keys[0].params.type).toBe("keyDown");
+    expect(keys[0].params.key).toBe("Enter");
+    expect(keys[1].params.type).toBe("keyUp");
+  });
+
+  it("没给目标 → 走当前焦点（fill 之后那个字段），不要求把元素再说一遍", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "press", key: "Enter" },
+      {},
+    );
+    const q0 = await waitForQuery(events, 0);
+    // 第一发必须是**聚焦脚本**（读 activeElement），不是解析脚本
+    expectEvalRequest(q0, "document.activeElement");
+    reply(q0, FOCUSED);
+    reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+    reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+
+    expect((await p).content[0].text).toContain("Pressed Enter");
+  });
+
+  it("CDP 不可用 → 合成按键兜底，并说清不是可信事件", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "press", key: "Enter" },
+      {},
+    );
+    reply(await waitForQuery(events, 0), FOCUSED);
+    reply(await waitForQuery(events, 1), { ok: false, error: "cdp unavailable" }); // keyDown 发不出去
+    reply(
+      await waitForQuery(events, 2),
+      evalOk({ ok: true, hit: { tag: "input", text: "设备名称", name: "q" } }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("SYNTHETIC");
+    expect(text).toContain("Pressed Enter");
+  });
+
+  it("页面上什么都没聚焦 → 如实失败，一发按键都不发", async () => {
+    const { events, emit } = emitCollector();
+    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "press", key: "Enter" },
+      {},
+    );
+    reply(
+      await waitForQuery(events, 0),
+      evalOk({
+        ok: false,
+        error: "nothing is focused in the page — focus a field first (fill or click it), or pass text/selector to press",
+        candidatesKind: "clickable",
+        candidates: [],
+      }),
+    );
+
+    const text = (await p).content[0].text;
+    expect(text).toContain("nothing is focused");
+    expect(events.filter((e: any) => e.method === "Input.dispatchKeyEvent")).toHaveLength(0);
+  });
+
+  it("缺 key / 给错修饰键 / 拿 press 打字 → 本地就拒（不发桥）", async () => {
+    const env = {} as NodeJS.ProcessEnv;
+    const cases: [Record<string, unknown>, string][] = [
+      [{ action: "press" }, "needs `key`"],
+      [{ action: "press", key: "Enter", modifiers: ["hyper"] }, "unsupported modifier"],
+      [{ action: "press", key: "a" }, "fill"],
+    ];
+    for (const [args, expectText] of cases) {
+      const { events, emit } = emitCollector();
+      const r = await toolByName(env, emit, "browser_act").handler(args, {});
+      expect(r.content[0].text, JSON.stringify(args)).toContain(expectText);
+      expect(events, JSON.stringify(args)).toHaveLength(0);
+    }
+  });
+
+  it("key/modifiers 只属于 press：给了 click 就明说，不静默忽略", async () => {
+    const { events, emit } = emitCollector();
+    const r = await toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+      { action: "click", text: "刷新", key: "Enter" },
+      {},
+    );
+    expect(r.content[0].text).toContain("only apply to");
+    expect(events).toHaveLength(0);
+  });
+});
+
 describe("browser_act — 入参守门（不浪费一次往返）", () => {
   it("既没 text 也没 selector → 直接回文本，不发桥", async () => {
     const { events, emit } = emitCollector();
