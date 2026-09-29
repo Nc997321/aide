@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node scripts/check-sync-io-commands.mjs && node scripts/check-overlay-layers.mjs && vue-tsc --noEmit && vite build",
+    "build": "node scripts/check-sync-io-commands.mjs && node scripts/check-overlay-layers.mjs && node scripts/check-lsp-parity.mjs && vue-tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:sidecar:dev": "npm --prefix agent-sidecar run build",
@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "check:tauri-imports": "node scripts/check-tauri-imports.mjs",
     "check:sync-io": "node scripts/check-sync-io-commands.mjs",
-    "check:overlay-layers": "node scripts/check-overlay-layers.mjs"
+    "check:overlay-layers": "node scripts/check-overlay-layers.mjs",
+    "check:lsp-parity": "node scripts/check-lsp-parity.mjs"
   },
   "dependencies": {
     "@aide/sdk": "workspace:*",

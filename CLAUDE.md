@@ -68,6 +68,8 @@
 
 Java/jdtls 专属配置**只准**待在 `src-tauri/src/lsp/profiles/java.rs`。公共层（`manager.rs` / `mod.rs` / `protocol.rs` / `cmLsp.ts`）必须语言无关——新命令一律按文件扩展名分派（`lang_from_ext_of`）。
 
+**扩展名有三条轴，别混用**（2026-09-29 立，起因：agri-ai-agent 只探测出 Java）：**服务归属** = `LanguageId::from_ext`（唯一权威表；`.vue`/`.tsx` 归 TypeScript、`.jsx` 归 JavaScript，**没有独立的 vue 语言**——`vue-language-server` 是要客户端桥接的 proxy，装了也零响应）；**文档 languageId** = `document_lang_id`（`.vue` 必须发 `"vue"`、`.tsx`/`.jsx` 必须发 `*react`，否则 TLS 丢弃文档 / 按 TS 解析 SFC 与 JSX；前端只报服务 id，这个字符串由 Rust 推）；**探针靶子** = `probe_exts`（只递 server 原生能解析的形态，`.vue` 不算）。语言探测必须下钻：marker 链认领一级子目录里的项目，扩展名计数走有界遍历。前端影子表 `src/utils/lspLang.ts` 必须与 `from_ext` 同步（`pnpm check:lsp-parity` 构建期兜）。**TS 的 typescript SDK 必须由 `lsp/profiles/ts_sdk.rs` 解析后用 `initializationOptions.tsserver.path` 递进去**（**且必须恒发 `disableAutomaticTypingAcquisition: true`**：tsserver 默认会在用户工作区跑包管理器装 `@types/*`——实测把 `frontend/` 的顶层依赖挪进 `node_modules/.ignored/` 让前端跑不起来，用户既没批准也不可见；缺 `@types` 由用户自己装）——TLS 只在工作区根及其祖先里找 SDK，工程在子目录（`frontend/`）时它看不见，`initialize` 直接失败；路径还必须是平台原生分隔符（它按 `path.sep` 切分反推模块根）。详见 `src-tauri/src/lsp/detector.rs` 抬头与 `profiles/ts_sdk.rs`。
+
 ## 架构红线：远程控制是单设备模型（刻意设计，改动前先确认）
 
 `remote/auth.rs` 的 `TokenStore` 只存单个 `remote/token`——**新设备配对 = 覆盖旧 token = 静默踢掉旧设备**。这是安全设计，不是缺陷。若要改成多设备共存必须意识到这是**安全降级**（配对码泄露后恶意设备静默共存），改前先跟用户确认。

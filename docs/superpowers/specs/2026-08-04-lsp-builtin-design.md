@@ -3,6 +3,7 @@
 - 日期：2026-08-04
 - 状态：设计已评审，待写实施计划
 - 作者：Heaven + Claude（brainstorming）
+- ⚠️ **局部失效（2026-09-29）**：语言探测与 Vue 归属已改——`.vue` 归 **TypeScript**（由 TS 服务器的 `@vue/typescript-plugin` 覆盖，独立的 `vue` 语言 id 已退役；`§语言探测方式` 里 `Tauri→{rust,ts,vue}` 的 vue 不再成立）；探测**下钻一级子目录**并改用有界扩展名遍历。三条扩展名轴（服务归属 `from_ext` / 文档 languageId `document_lang_id` / 探针靶子 `probe_exts`）以 `src-tauri/src/lsp/detector.rs` 抬头为准。本文其余设计（模块树、协议、信任门、排除目录）仍有效。
 
 ## 1. 背景与目标
 

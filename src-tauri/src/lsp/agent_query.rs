@@ -87,11 +87,12 @@ fn fail(status: AgentLspStatus, msg: &str) -> AgentQueryOutcome {
 
 /// 本次查询该为哪些语言准备 server：显式坐标 → 该文件的扩展名；只给名字 →
 /// 该工作区探测到的全部语言（agent 只拿得到一个名字，没有扩展名可据以分派）。
-fn target_languages(args: &Value, workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
+/// 探测本身是文件系统遍历，走 async 外壳（不占 tokio worker——与 `first_source_files` 同一条纪律）。
+async fn target_languages(args: &Value, workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
     if let Some(p) = resolve_position(args) {
         return crate::lsp::lang_from_ext_of(&p.file).into_iter().collect();
     }
-    crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root))
+    crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await
 }
 
 /// agent 语义查询入口。
@@ -107,7 +108,7 @@ pub async fn run_agent_query(
     let state = state.inner();
     // 1. **确保 server 起来**。agent 查询可能先于编辑器到达（用户没打开过该语言的
     //    文件）——只 `mgr.get()` 会直接报 no_server，而正确行为是把它拉起来。
-    let langs = target_languages(args, workspace_root);
+    let langs = target_languages(args, workspace_root).await;
     if langs.is_empty() {
         return fail(AgentLspStatus::NoServer, "no language detected for this query");
     }
@@ -201,7 +202,8 @@ async fn lookup_symbol(
     name: &str,
     workspace_root: &str,
 ) -> Result<SymbolLookup, AgentLspStatus> {
-    let langs = crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root));
+    let langs =
+        crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await;
     if langs.is_empty() {
         return Err(AgentLspStatus::NoServer);
     }
@@ -494,7 +496,7 @@ async fn first_source_file(
 /// 该语言的代表文件（每个顶层目录一个，最多 `max` 个）。
 ///
 /// 遍历本体在 `detector::representative_sources`（有界；TS profile 判「这工作区有没有 .vue」
-/// 用的是 `find_source_file`——同一套边界纪律只留一份）。**放 spawn_blocking**：遍历文件系统
+/// 用的是 `find_source_with_ext`——同一套边界纪律只留一份）。**放 spawn_blocking**：遍历文件系统
 /// 属重 IO，不许占 tokio worker（CLAUDE.md 的同步命令红线同理）。
 async fn first_source_files(
     workspace_root: &str,
@@ -685,9 +687,11 @@ async fn ensure_doc_open(
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file_path);
+    // 文档 languageId 与编辑器路径**同一个出口**（`document_lang_id`）：`.vue` 发 "vue"
+    // 才被 TS 服务器的 Vue 插件覆盖，发服务 id（"typescript"）会按 TS 解析整个 SFC。
     h.open_doc(
         &uri,
-        lang_id.id_str(),
+        crate::lsp::detector::document_lang_id(file_path, lang_id),
         text,
         crate::lsp::docs::DocOrigin::Agent,
     )

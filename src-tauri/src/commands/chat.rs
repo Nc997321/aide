@@ -233,6 +233,20 @@ fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
     !effort.is_some_and(|e| e.eq_ignore_ascii_case("low"))
 }
 
+/// 该工作区配得上 LSP 的语言（sidecar 据此决定挂不挂 aide-lsp 工具）。
+/// 探测要遍历工作区（有界，但仍是文件系统 IO）——放 `spawn_blocking`，不占 tokio worker
+/// （与 `lsp::agent_query::first_source_files` 同一条纪律）。JoinError（任务取消/线程池关闭）
+/// → 空表：退化成「不挂 LSP 工具」，与「探不到语言」走同一条路径。
+async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) -> Vec<String> {
+    let app = app.clone();
+    let root = workspace_root.to_string();
+    tokio::task::spawn_blocking(move || {
+        crate::commands::workspace::lsp_languages_for_path(&app, &root)
+    })
+    .await
+    .unwrap_or_default()
+}
+
 #[tauri::command]
 pub async fn send_message(
     session_id: String,
@@ -349,9 +363,7 @@ pub async fn send_message(
     // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
     // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
-    cmd["lsp_languages"] = json!(crate::commands::workspace::lsp_languages_for_path(
-        &app, &cwd_str
-    ));
+    cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the

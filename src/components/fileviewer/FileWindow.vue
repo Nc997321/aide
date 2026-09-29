@@ -19,27 +19,7 @@ import { useContextMenu, type MenuItem } from "../../composables/useContextMenu"
 import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { marked } from "../../utils/markdown";
-
-/** 文件扩展名 → LSP language id（用于 cmLsp 扩展）。 */
-function lspLangFor(filePath: string): string | undefined {
-  const ext = filePath.split(".").pop()?.toLowerCase() || "";
-  const map: Record<string, string> = {
-    rs: "rust",
-    ts: "typescript", mts: "typescript", cts: "typescript",
-    js: "javascript", mjs: "javascript", cjs: "javascript",
-    vue: "vue",
-    go: "go",
-    py: "python", pyi: "python",
-    java: "java",
-    kt: "kotlin", kts: "kotlin",
-    dart: "dart",
-    cs: "csharp",
-    rb: "ruby",
-    php: "php",
-    ex: "elixir", exs: "elixir",
-  };
-  return map[ext];
-}
+import { lspLangFor } from "../../utils/lspLang";
 
 const props = defineProps<{
   win: FileWindowState;

@@ -25,19 +25,13 @@ export const LSP_INSTALL_GUIDES: Record<string, LspInstallGuide> = {
     shortName: "TS",
     displayName: "TypeScript",
     serverBinary: "typescript-language-server",
-    note: "npm 全局安装 typescript-language-server + typescript。",
+    note: "npm 全局安装 typescript-language-server + typescript。Vue 项目（.vue）还需在项目内装 @vue/typescript-plugin，否则 .vue 无诊断/跳转（.ts 照常）。",
   },
   javascript: {
     shortName: "JS",
     displayName: "JavaScript",
     serverBinary: "typescript-language-server",
     note: "npm 全局安装 typescript-language-server + typescript。",
-  },
-  vue: {
-    shortName: "Vue",
-    displayName: "Vue",
-    serverBinary: "vue-language-server",
-    note: "npm 全局安装 @vue/language-server（Volar）。",
   },
   go: {
     shortName: "Go",

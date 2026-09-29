@@ -15,7 +15,8 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 > 注：v1 **未捆绑任何 server**（registry 预留 Bundled 机制但打包未落地）。全部语言走 PATH 发现 / 设置覆盖——机器上没装的 server 会弹 "LSP server not found" toast，功能降级 codegraph/grep。各语言安装见下节。
 
 - [ ] rust-analyzer（Rust，PATH 发现）：本仓库自身 `src-tauri/` 打开 → 诊断 + 跳转 + 补全 + hover
-- [ ] typescript-language-server（TS/JS，PATH 发现）：本仓库 `src/` 打开 `.ts`/`.vue`
+- [ ] typescript-language-server（TS/JS，PATH 发现）：本仓库 `src/` 打开 `.ts`/`.tsx`/`.jsx`/`.vue`（`.vue` 需项目装了 `@vue/typescript-plugin`；没装时该文件静默无服务，`.ts` 照常）
+- [ ] **子目录项目探测 + TS 起得来**：工作区根是后端、前端在 `frontend/`（agri-ai-agent 形状）→ 面板应报出两种语言、各自起 server；**TS 行须显示 ✓ 就绪**（typescript SDK 在子目录里也由 `ts_sdk` 解析注入；修前是 `! 启动失败` —— TLS 只在工作区根找 SDK）。另：在这种工作区里按名查一个 `frontend/src` 里的符号，应能命中
 - [ ] pyright-langserver（Python，PATH 发现；npm 包名 `pyright`，二进制 `pyright-langserver`）：任一 Python 项目
 - [ ] gopls（Go，PATH 发现）：任一 Go 项目 + 验 directoryFilters 排除注入
 - [ ] jdtls（Java，PATH 发现）：任一 Java 项目（需先装 jdtls，见下）。验：打开 `.java` → 诊断 + 跳转 + 补全；`-data` 目录落在项目内 `.aide/jdtls-workspace/`（源码目录无 .project/.classpath/.settings）；jdtls stderr 无 `--stdio` 参数报错

@@ -68,7 +68,7 @@ pub async fn lsp_workspace_symbol(
     lang: Option<String>,
     state: tauri::State<'_, Arc<LspState>>,
 ) -> Result<LspSymbolSearchResult, String> {
-    let lang_ids = resolve_query_languages(&lang, &workspace_root);
+    let lang_ids = resolve_query_languages(&lang, &workspace_root).await;
     let mgr = state.0.lock().await;
     let mut candidates = Vec::new();
     // 一个语言都没答上（server 都没起来）时保持 NotReady——**空候选 + NotReady**
@@ -102,14 +102,17 @@ pub async fn lsp_workspace_symbol(
 }
 
 /// `lang` 显式给了就只查它（认不出的语言 → 空列表，即「什么都不查」）；
-/// 缺省时探该工作区的全部语言。
-fn resolve_query_languages(
+/// 缺省时探该工作区的全部语言（遍历文件系统 → async 外壳，不占 tokio worker）。
+async fn resolve_query_languages(
     lang: &Option<String>,
     workspace_root: &str,
 ) -> Vec<crate::lsp::detector::LanguageId> {
     match lang {
         Some(l) => crate::lsp::detector::lang_from_id_str(l).into_iter().collect(),
-        None => crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root)),
+        None => {
+            crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root))
+                .await
+        }
     }
 }
 

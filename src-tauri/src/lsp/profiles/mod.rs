@@ -10,6 +10,7 @@ mod go;
 mod java;
 mod rust;
 mod ts;
+mod ts_sdk;
 
 pub use default::DefaultProfile;
 pub use go::GoProfile;
@@ -23,8 +24,9 @@ pub fn profile(lang: LanguageId) -> &'static dyn ServerProfile {
         LanguageId::Java => &JavaProfile,
         LanguageId::Rust => &RustProfile,
         LanguageId::Go => &GoProfile,
+        // .vue 也走这里：它的支持是挂进 TS 服务器的插件（见 ts.rs），不是独立 server
         LanguageId::TypeScript | LanguageId::JavaScript => &TsProfile,
-        // Vue 等其余语言走通用默认（--stdio + 5s 握手，PATH 发现）
+        // 其余语言走通用默认（--stdio + 5s 握手，PATH 发现）
         _ => &DefaultProfile,
     }
 }

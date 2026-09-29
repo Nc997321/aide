@@ -78,7 +78,10 @@ fn lang_from_id_str(s: &str) -> Option<crate::lsp::detector::LanguageId> {
 
 #[tauri::command]
 pub async fn lsp_detect_languages(workspace_root: String) -> Result<Vec<String>, String> {
-    let langs = crate::lsp::detector::detect_languages(std::path::Path::new(&workspace_root));
+    // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：走 async 外壳，
+    // 不占 tokio worker（与 agent 查询路径同一条纪律）。
+    let langs =
+        crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await;
     Ok(langs.iter().map(|l| l.id_str().to_string()).collect())
 }
 
@@ -217,9 +220,13 @@ pub async fn lsp_did_open(
         return Ok(());
     }
     let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    // 文档 languageId **由文件形态推**，不透明传前端那个字符串（它是服务 id）：
+    // `.vue` 要发 "vue"（TS 插件声明的 id）、`.tsx` 要发 "typescriptreact"，发错
+    // 前者 TLS 丢弃文档、后者按 TS 解析（见 `detector::document_lang_id`）。
+    let doc_lang = crate::lsp::detector::document_lang_id(&file_path, lang_id);
     // 去重与通知组装都在 `open_doc` 里——与 agent 查询路径**共用同一份**（唯一区别是
     // 来源标记）。这里标 `Editor`：用户真开着这个文件，它的诊断/通知该进 UI。
-    h.open_doc(&uri, &lang, text, crate::lsp::docs::DocOrigin::Editor)
+    h.open_doc(&uri, doc_lang, text, crate::lsp::docs::DocOrigin::Editor)
         .await
 }
 

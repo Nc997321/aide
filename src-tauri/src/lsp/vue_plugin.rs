@@ -35,46 +35,93 @@ pub fn find(workspace: &str) -> Option<PathBuf> {
 
 /// 该工作区有没有 `.vue` 文件——决定要不要为它付插件的代价。
 ///
-/// 复用 `detector::find_source_file` 的**有界**遍历（深度 ≤4、跳过重目录）：只做一次
-/// `is_some()` 判定，找到第一个就返回，不遍历全仓。Vue 项目的 `.vue` 一般躺在
-/// `src/components/…`（3 层），4 层够。
+/// 按**扩展名**找（`find_source_with_ext`），不按语言：`.vue` 的服务归属是 TypeScript
+/// （见 `detector::from_ext`），而「有没有 .vue 文件」问的是文件形态，是另一件事。
+/// 复用同一份**有界**遍历（深度 ≤4、跳过重目录）：只做一次 `is_some()` 判定，找到第一个
+/// 就返回，不遍历全仓。Vue 项目的 `.vue` 一般躺在 `src/components/…`（3 层），4 层够。
 pub fn has_vue_files(workspace: &str) -> bool {
-    crate::lsp::detector::find_source_file(
-        Path::new(workspace),
-        crate::lsp::detector::LanguageId::Vue,
-    )
-    .is_some()
+    crate::lsp::detector::find_source_with_ext(Path::new(workspace), "vue").is_some()
 }
 
 /// 候选目录，按「越可能是真值越靠前」排：
 /// 1. 项目自己的 `node_modules`（Vue 项目的标准位置，也是唯一有版本保证的那份）
 /// 2. 项目内嵌套（npm 会把嵌套依赖装进包自己的 `node_modules`）
-/// 3. pnpm 内容寻址布局（`.pnpm/@vue+typescript-plugin@<版本>/node_modules/<包>`）
-/// 4. node 可执行文件同级的全局前缀（WinGet / portable / nvm 这类安装方式）
-/// 5. Windows npm 的默认全局前缀（`%APPDATA%\npm\node_modules`）
+/// 3. **一层子目录**里各项目的 `node_modules`（后端仓库 + `frontend/` 前端那种布局，
+///    见 `subdir_plugin_dirs`）
+/// 4. pnpm 内容寻址布局（`.pnpm/@vue+typescript-plugin@<版本>/node_modules/<包>`）
+/// 5. node 可执行文件同级的全局前缀（WinGet / portable / nvm 这类安装方式）
+/// 6. Windows npm 的默认全局前缀（`%APPDATA%\npm\node_modules`，扁平与「Volar 内嵌」
+///    两种布局都探——后者是 `npm i -g @vue/language-server` 的真实产物）
 ///
-/// 前三条基于**路径推导**（纯函数，单测不依赖本机装没装）；后两条要问环境。
+/// 前四条基于**路径推导**（纯函数，单测不依赖本机装没装）；后两条要问环境。
 fn candidates(workspace: &str) -> Vec<PathBuf> {
     let ws = Path::new(workspace);
-    let nested = |base: PathBuf| base.join("@vue").join("language-server").join("node_modules").join(PLUGIN_NAME);
-
     let mut out = vec![
         ws.join("node_modules").join(PLUGIN_NAME),
-        nested(ws.join("node_modules")),
+        nested(&ws.join("node_modules")),
     ];
-    if let Ok(entries) = std::fs::read_dir(ws.join("node_modules").join(".pnpm")) {
-        for e in entries.flatten() {
-            if e.file_name().to_string_lossy().starts_with("@vue+typescript-plugin@") {
-                out.push(e.path().join("node_modules").join(PLUGIN_NAME));
-            }
-        }
-    }
+    out.extend(subdir_plugin_dirs(ws));
+    out.extend(pnpm_plugin_dirs(&ws.join("node_modules")));
     if let Some(node_dir) = which::which("node").ok().and_then(|n| n.parent().map(PathBuf::from)) {
         out.push(node_dir.join("node_modules").join(PLUGIN_NAME));
-        out.push(nested(node_dir.join("node_modules")));
+        out.push(nested(&node_dir.join("node_modules")));
     }
     if let Some(appdata) = std::env::var_os("APPDATA") {
-        out.push(Path::new(&appdata).join("npm").join("node_modules").join(PLUGIN_NAME));
+        let npm_root = Path::new(&appdata).join("npm").join("node_modules");
+        out.push(npm_root.join(PLUGIN_NAME));
+        // 全局装的 Volar 把插件**嵌在自己包里**（npm i -g @vue/language-server 的结果，
+        // 本机实测就是 `<npm 全局>/@vue/language-server/node_modules/@vue/typescript-plugin`）
+        // ——漏了这一条，「装了插件却永远探不到」，Vue 支持静默不启用。
+        out.push(nested(&npm_root));
+    }
+    out
+}
+
+/// npm 嵌套布局：Volar 把插件嵌在自己的 `node_modules` 里。
+fn nested(base: &Path) -> PathBuf {
+    base.join("@vue")
+        .join("language-server")
+        .join("node_modules")
+        .join(PLUGIN_NAME)
+}
+
+/// pnpm 内容寻址布局：`<node_modules>/.pnpm/@vue+typescript-plugin@<版本>/node_modules/<包>`。
+/// 根与子项目各查自己那份（pnpm 的工作区根才放 `.pnpm`，子项目也可能自带一份）。
+fn pnpm_plugin_dirs(node_modules: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(node_modules.join(".pnpm")) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with("@vue+typescript-plugin@"))
+        .map(|e| e.path().join("node_modules").join(PLUGIN_NAME))
+        .collect()
+}
+
+/// 一层子目录里的 `node_modules/@vue/typescript-plugin`：**后端仓库 + 前端子目录**
+/// （`frontend/`、`web/`、`client/`…）的布局，插件装在前端项目自己那份 node_modules 里
+/// ——agri-ai-agent 就是这个形状，只认工作区根的 node_modules 会漏。
+///
+/// 与 `detector` 共用一份跳过表（重目录/点目录不进去），按目录名排序保证确定性；
+/// **只下钻一层**：`apps/web/` 那种更深的形状要支持得把工作区开到子项目上（本层不做）。
+fn subdir_plugin_dirs(ws: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(ws) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<_> = entries.flatten().collect();
+    entries.sort_by_key(|e| e.file_name());
+    let mut out = Vec::new();
+    for entry in entries {
+        if !entry.path().is_dir()
+            || crate::lsp::detector::is_skip_dir(&entry.file_name().to_string_lossy())
+        {
+            continue;
+        }
+        let node_modules = entry.path().join("node_modules");
+        out.push(node_modules.join(PLUGIN_NAME));
+        // 子项目里装的 Volar 同样可能把插件嵌在自己包内（与全局那条同形）
+        out.push(nested(&node_modules));
+        out.extend(pnpm_plugin_dirs(&node_modules));
     }
     out
 }
@@ -112,6 +159,89 @@ mod tests {
         let ws = tmp("nested");
         install_at(&ws.join("node_modules").join("@vue").join("language-server").join("node_modules").join(PLUGIN_NAME));
         assert!(find(ws.to_str().unwrap()).is_some(), "npm 嵌套布局没命中");
+    }
+
+    /// 子项目自己的 node_modules（后端仓库 + `frontend/` 前端）：agri-ai-agent 的形状。
+    #[test]
+    fn finds_plugin_in_subproject_node_modules() {
+        let ws = tmp("subdir");
+        let frontend = ws.join("frontend");
+        install_at(&frontend.join("node_modules").join(PLUGIN_NAME));
+        assert_eq!(
+            find(ws.to_str().unwrap()),
+            Some(frontend.join("node_modules").join(PLUGIN_NAME)),
+            "工作区根的 node_modules 不存在时，该命中子项目那份"
+        );
+    }
+
+    /// Windows npm 全局前缀（`%APPDATA%\npm\node_modules`）两种布局都要在候选里：
+    /// 扁平那份，以及**全局装的 Volar 把插件嵌在自己包内**那份（本机实测的布局）。
+    #[cfg(windows)]
+    #[test]
+    fn covers_both_global_npm_layouts() {
+        // 生产函数对 APPDATA 缺席是安全的（`if let`）；无 profile 的服务环境里跳过本用例
+        let Some(appdata) = std::env::var_os("APPDATA") else {
+            return;
+        };
+        let npm_root = Path::new(&appdata).join("npm").join("node_modules");
+        let list = candidates(tmp("globalshape").to_str().unwrap());
+        assert!(
+            list.contains(&npm_root.join(PLUGIN_NAME)),
+            "扁平全局布局漏了：{list:?}"
+        );
+        assert!(
+            list.contains(
+                &npm_root
+                    .join("@vue")
+                    .join("language-server")
+                    .join("node_modules")
+                    .join(PLUGIN_NAME)
+            ),
+            "嵌套全局布局漏了（装了却探不到 = Vue 支持静默不启用）：{list:?}"
+        );
+    }
+
+    /// 子项目里的另外两种布局也要探到（与根/全局那两条同形）：Volar 把插件嵌在自己包内、
+    /// pnpm 内容寻址。漏了就是「装了却永远探不到」——Vue 支持静默不启用。
+    #[test]
+    fn finds_all_subproject_layouts() {
+        let nested_ws = tmp("subdirnested");
+        let frontend = nested_ws.join("frontend");
+        let nested_path = frontend
+            .join("node_modules")
+            .join("@vue")
+            .join("language-server")
+            .join("node_modules")
+            .join(PLUGIN_NAME);
+        install_at(&nested_path);
+        assert_eq!(find(nested_ws.to_str().unwrap()), Some(nested_path));
+
+        let pnpm_ws = tmp("subdirpnpm");
+        let pnpm_path = pnpm_ws
+            .join("frontend")
+            .join("node_modules")
+            .join(".pnpm")
+            .join("@vue+typescript-plugin@3.3.11")
+            .join("node_modules")
+            .join(PLUGIN_NAME);
+        install_at(&pnpm_path);
+        assert_eq!(find(pnpm_ws.to_str().unwrap()), Some(pnpm_path));
+    }
+
+    /// 子目录扫描要守同一份边界：`node_modules` 与点目录不进去（否则要 stat 一堆依赖目录，
+    /// 还会造出 `<ws>/node_modules/node_modules/...` 这种噪音候选）。
+    #[test]
+    fn subdir_scan_skips_heavy_and_dot_dirs() {
+        let ws = tmp("subdirskip");
+        fs::create_dir_all(ws.join("node_modules").join("some-pkg")).unwrap();
+        fs::create_dir_all(ws.join(".cache").join("x")).unwrap();
+        let list = candidates(ws.to_str().unwrap());
+        let noise = |p: &PathBuf| {
+            p.starts_with(ws.join("node_modules").join("some-pkg"))
+                || p.starts_with(ws.join(".cache"))
+                || p.starts_with(ws.join("node_modules").join("node_modules"))
+        };
+        assert!(!list.iter().any(noise), "重目录/点目录不该出候选：{list:?}");
     }
 
     #[test]
