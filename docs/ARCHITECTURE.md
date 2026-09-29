@@ -82,7 +82,18 @@ Aide 把 `CLAUDE_CONFIG_DIR` 显式注入 sidecar 指向 `~/.aide/claude/`（见
     └── <sessionId>.jsonl             每行 JSON event (type: user/assistant/system/...)  (claude.exe 写)
 ```
 
-路径编码: `C:\path\to\project` → `C--path-to-project`（`:` 和 `\` → `-`）
+路径编码——**同一条路径会算出三种不同名字**（以 `C:\p\my.app` 为例）。用错变换不会报错，只会变成"这是个新项目"，因此必须逐处对齐：
+
+| 用途 | 规则 | 结果 |
+|---|---|---|
+| Aide 的 key：`registeredWorkspaces[].key` / `workspace` / `hiddenWorkspaces` / `lsp_workspaces` / `workspace_jdks` / `recent.json` / `events.jsonl` | `:` `\` `/` → `-`，**保留点号**（`path_to_key`） | `C--p-my.app` |
+| 信任键：`trustedWorkspaces` / `codegraph_workspaces` | 上一行再点号归一（`trust_key_from_path`） | `C--p-my-app` |
+| `projects/` 的真实目录名（claude.exe 决定，Aide 侧只是镜像） | realpath 后**所有非字母数字** → `-`；超 200 字符截断并掺入路径哈希（不可反推） | `C--p-my-app` |
+| jdtls data 目录 `lsp/jdtls-workspace/` | `:` `\` `/` → `_`，保留点号 | `C__p_my.app` |
+
+后两者与前两者的差异是「点号归一」兜不住的：`resolve_project_dirs` 只做点号归一匹配，所以含点号的工作区磁盘上可能长期并存**两个孪生转录目录**（`my.app` / `my-app`）。含点号或下划线的路径尤其容易踩（`hello_rust` 的目录名是 `hello-rust`）。
+
+**移动项目目录** = 身份失配 = 记忆与历史"消失"（实为留在旧 key 名下），迁移用 `scripts/migrate-workspace.mjs`（须关闭 Aide；默认 dry-run 打印计划，`--apply` 备份后执行，`--restore` 回滚）。受影响存储的完整清单记在该脚本的头部注释。
 
 Aide 自己的元数据: `~/.aide/sessions/<sessionId>.json` — 只存 displayName（与上面 claude.exe 的 `claude/sessions/` 分目录、schema 不同，按所有权分离）。
 
