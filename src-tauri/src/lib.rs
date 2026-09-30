@@ -10,7 +10,8 @@ mod conversation;
 mod diagnostics;
 mod host_door;
 mod lsp;
-mod policy;
+/// 权限策略住在 aide-core（Host 自持）；保留 `crate::policy` 路径。
+use aide_core::policy;
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
 pub(crate) mod remote_workspace;
@@ -23,6 +24,7 @@ use std::path::PathBuf;
 
 use commands::file_assoc::PendingOpenFile;
 use commands::WorkspaceState;
+use runtime::provider::ProviderSettings as _;
 use tauri::{Emitter, Manager};
 
 fn init_logging() {
@@ -86,6 +88,11 @@ pub fn run() {
     }
     let saved_key = commands::load_workspace_state();
     let workspace_state = std::sync::Arc::new(WorkspaceState::new());
+    // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
+    let settings_service = std::sync::Arc::new(settings::SettingsService::new(
+        settings::SettingsPaths::new().expect("settings paths"),
+        std::sync::Arc::new(settings::KeyringSecretStore::new()),
+    ));
     if let Some(key) = saved_key {
         // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
         // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
@@ -142,10 +149,7 @@ pub fn run() {
         )
         .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
-        .manage(std::sync::Arc::new(settings::SettingsService::new(
-            settings::SettingsPaths::new().expect("settings paths"),
-            std::sync::Arc::new(settings::KeyringSecretStore::new()),
-        )))
+        .manage(std::sync::Arc::clone(&settings_service))
         .manage(runtime::AgentRuntimeManager::new())
         // 后台任务快照注册表：事件泵喂入（runtime/mod.rs），list_bg_tasks RPC 读
         .manage(std::sync::Arc::new(
@@ -183,6 +187,7 @@ pub fn run() {
             // 本机 Host 核心：与 Tauri 共享同一个活动工作区实例；事件经 Tauri 广播。
             app.manage(aide_core::Core::new(
                 std::sync::Arc::clone(&workspace_state),
+                std::sync::Arc::clone(&settings_service),
                 std::sync::Arc::new(host_door::TauriSink(app.handle().clone())),
             ));
             app.state::<std::sync::Arc<settings::SettingsService>>()
@@ -424,8 +429,6 @@ pub fn run() {
             commands::workspace::is_workspace_trusted,
             commands::workspace::trust_workspace,
             commands::workspace::untrust_workspace,
-            commands::settings::get_settings,
-            commands::settings::set_settings,
             commands::proxy::detect_available_proxy,
             commands::settings::notify_send,
             commands::settings::session_notification_info,
@@ -501,8 +504,6 @@ pub fn run() {
             commands::run_configs::save_run_configs,
             commands::run_configs::detect_run_targets,
             // JDK registry (scan / resolve) — per-project JDK injection
-            commands::jdk::scan_jdks,
-            commands::jdk::resolve_jdk,
             // Run process lifecycle commands
             commands::run_process::run_process_start,
             commands::run_process::run_process_stop,

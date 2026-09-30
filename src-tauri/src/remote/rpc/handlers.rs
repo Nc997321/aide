@@ -568,26 +568,6 @@ pub fn untrust_workspace(
 
 // ── 设置与供应商 ──
 
-pub fn get_settings(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let service = app.state::<Arc<SettingsService>>();
-        to_json(crate::commands::settings::get_settings(service).await)
-    })
-}
-
-pub fn set_settings(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Args {
-            settings: Value,
-        }
-        let a: Args = parse(params)?;
-        let service = app.state::<Arc<SettingsService>>();
-        to_json(crate::commands::settings::set_settings(a.settings, service).await)
-    })
-}
-
 pub fn get_providers(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let service = app.state::<Arc<SettingsService>>();

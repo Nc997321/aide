@@ -27,20 +27,20 @@ pub struct SettingsPaths {
 
 impl SettingsPaths {
     pub fn new() -> Result<Self, SettingsError> {
-        let user_config = crate::commands::our_config_dir();
+        let user_config = crate::paths::our_config_dir();
         let managed_root = managed_settings_root()?;
         Ok(Self {
             managed_document: managed_root.join("settings.json"),
             user_document: user_config.join("settings.json"),
             project_file_name: ".aide/settings.json".to_string(),
             local_file_name: ".aide/settings.local.json".to_string(),
-            legacy_config: crate::commands::config_path(),
+            legacy_config: crate::paths::config_path(),
             legacy_backup: user_config.join("config.json.migrated.bak"),
-            state: crate::commands::state_path(),
+            state: crate::paths::state_path(),
         })
     }
 
-    #[cfg(test)]
+    /// 全部落在 `root` 下的一组路径（测试 / 隔离环境用）。
     pub fn for_test(root: PathBuf) -> Self {
         Self {
             managed_document: root.join("managed").join("settings.json"),
@@ -215,7 +215,7 @@ impl SettingsStore {
         write_result
     }
 
-    #[cfg(test)]
+    #[doc(hidden)]
     pub fn fail_next_persist(&self) {
         self.fail_next_persist.store(true, Ordering::SeqCst);
     }
@@ -470,7 +470,8 @@ impl SettingsService {
         Ok(state.revision)
     }
 
-    #[cfg(test)]
+    /// 测试钩子：下一次落盘失败（验证原子写失败路径）。
+    #[doc(hidden)]
     pub fn fail_next_persist_for_test(&self) {
         self.store.fail_next_persist();
     }

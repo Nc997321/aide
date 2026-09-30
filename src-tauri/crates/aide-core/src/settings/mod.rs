@@ -21,12 +21,10 @@ pub use descriptors::{
     all_descriptors, descriptor, descriptor_for_legacy_id, validate_descriptor_catalog,
     SettingDescriptor, SettingValueKind,
 };
-pub use schema::{PermissionEffect, SettingsScope, StoredPermissionRule};
-#[cfg(test)]
-pub use schema::{PermissionSection, SettingsDocument};
-pub use secrets::{KeyringSecretStore, SecretMutation};
-#[cfg(test)]
-pub use secrets::{MemorySecretStore, SecretStore};
+pub use schema::{
+    PermissionEffect, PermissionSection, SettingsDocument, SettingsScope, StoredPermissionRule,
+};
+pub use secrets::{MemorySecretStore, SecretMutation, SecretStore};
 pub use store::{SettingsPaths, SettingsService};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

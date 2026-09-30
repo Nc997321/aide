@@ -308,8 +308,47 @@ pub fn system_default_provider() -> ProviderConfig {
     }
 }
 
-impl crate::settings::SettingsService {
-    pub fn list_provider_views(
+/// 供应商配置读写（`SettingsService` 上的供应商视图）。扩展 trait：设置服务住在
+/// aide-core，供应商层待 Host 的 HTTPS 端口定案后整体迁入（见 docs/host-model.md）。
+pub trait ProviderSettings {
+    fn list_provider_views(
+        &self,
+    ) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError>;
+    fn resolve_runtime_provider(
+        &self,
+        id: &str,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
+    fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError>;
+    fn resolve_active_runtime_provider(
+        &self,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
+    fn list_runtime_providers(
+        &self,
+    ) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError>;
+    fn save_provider_model_mappings(
+        &self,
+        id: &str,
+        mappings: &ProviderModelMappings,
+    ) -> Result<(), crate::settings::SettingsError>;
+    fn resolve_runtime_provider_from_values(
+        &self,
+        values: &serde_json::Value,
+        id: &str,
+    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
+    fn save_provider_inputs(
+        &self,
+        inputs: Vec<ProviderConfigInput>,
+    ) -> Result<(), crate::settings::SettingsError>;
+    #[cfg(test)]
+    fn save_provider_input_for_test(
+        &self,
+        id: &str,
+        secret: &str,
+    ) -> Result<(), crate::settings::SettingsError>;
+}
+
+impl ProviderSettings for crate::settings::SettingsService {
+    fn list_provider_views(
         &self,
     ) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
@@ -343,7 +382,7 @@ impl crate::settings::SettingsService {
             .collect()
     }
 
-    pub fn resolve_runtime_provider(
+    fn resolve_runtime_provider(
         &self,
         id: &str,
     ) -> Result<ProviderConfig, crate::settings::SettingsError> {
@@ -351,7 +390,7 @@ impl crate::settings::SettingsService {
         self.resolve_runtime_provider_from_values(&values, id)
     }
 
-    pub fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError> {
+    fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError> {
         let values = &self.effective_document_blocking(None)?.values;
         // camelCase first (canonical), then snake_case fallback for legacy config.json keys
         // that were copied as-is by run_legacy_migration.
@@ -363,7 +402,7 @@ impl crate::settings::SettingsService {
         Ok(id.to_string())
     }
 
-    pub fn resolve_active_runtime_provider(
+    fn resolve_active_runtime_provider(
         &self,
     ) -> Result<ProviderConfig, crate::settings::SettingsError> {
         let doc = self.effective_document_blocking(None)?;
@@ -378,7 +417,7 @@ impl crate::settings::SettingsService {
 
     /// Returns all providers WITH secrets resolved (for action paths that may need creds).
     /// Mirrors `list_provider_views` but builds `ProviderConfig` with api_key/auth_token.
-    pub fn list_runtime_providers(
+    fn list_runtime_providers(
         &self,
     ) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
@@ -408,7 +447,7 @@ impl crate::settings::SettingsService {
 
     /// Persist model_mappings for a single provider entry. Mutates the `providers[]` entry
     /// whose id matches. If no matching entry, no-op (does NOT create a top-level key).
-    pub fn save_provider_model_mappings(
+    fn save_provider_model_mappings(
         &self,
         id: &str,
         mappings: &ProviderModelMappings,
@@ -463,7 +502,7 @@ impl crate::settings::SettingsService {
         Ok(provider)
     }
 
-    pub fn save_provider_inputs(
+    fn save_provider_inputs(
         &self,
         inputs: Vec<ProviderConfigInput>,
     ) -> Result<(), crate::settings::SettingsError> {
@@ -539,7 +578,7 @@ impl crate::settings::SettingsService {
     }
 
     #[cfg(test)]
-    pub fn save_provider_input_for_test(
+    fn save_provider_input_for_test(
         &self,
         id: &str,
         secret: &str,
@@ -807,6 +846,8 @@ pub fn ensure_migrated() -> Result<(), String> {
 #[cfg(test)]
 mod secret_boundary_tests {
     use std::sync::Arc;
+
+    use super::ProviderSettings as _;
 
     use crate::settings::{MemorySecretStore, SettingsPaths, SettingsService};
 

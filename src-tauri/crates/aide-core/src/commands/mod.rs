@@ -2,6 +2,7 @@
 
 pub mod fs;
 pub mod git;
+pub mod jdk;
 pub mod watch;
 
 use serde::Deserialize;

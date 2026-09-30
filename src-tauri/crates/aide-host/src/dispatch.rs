@@ -223,11 +223,20 @@ async fn invoke_lsp(cmd: &str, args: Value) -> Option<Result<Value, String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aide_core::{NullSink, WorkspaceState};
+    use aide_core::NullSink;
     use aide_host::commands::TRANSCRIPT_COMMANDS;
 
     fn core() -> Arc<Core> {
-        Core::new(Arc::new(WorkspaceState::new()), Arc::new(NullSink))
+        {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "aide-host-test-core-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        Core::isolated(dir, Arc::new(NullSink))
+    }
     }
 
     fn call(cmd: &str, args: Value, root: Option<String>) -> InvokeParams {

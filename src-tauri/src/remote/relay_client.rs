@@ -162,8 +162,8 @@ async fn handle_message(
                     error: "未认证：请先配对".into(),
                 });
             }
-            let reply = match rpc::lookup(&command) {
-                Some(handler) => match handler(gateway.app_handle.clone(), params).await {
+            let reply = match rpc::dispatch(gateway.app_handle.clone(), &command, params) {
+                Some(call) => match call.await {
                     Ok(payload) => DesktopToPhone::InvokeOk { id, payload },
                     Err(error) => DesktopToPhone::InvokeErr { id, error },
                 },

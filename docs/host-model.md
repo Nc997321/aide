@@ -51,7 +51,9 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 |---|---|---|
 | P0-1 | aide-core 骨架（Core / EventSink / registry）+ fs / 搜索 / git 51 条命令迁入；桌面与 aide-host 共用，删除两份平行分派（Tauri 薄包装 + `git_dispatch.rs`） | ✅ 2026-09-30 |
 | P0-2 | 文件监听迁入（首个经 `EventSink` 推事件的能力）：`file_tree_watch` 成为 core 命令；aide-host 的通知帧 = Core 事件原样外送，专用 `watch` 方法删除（协议 v2，桌面握手强校验版本） | ✅ 2026-09-30 |
-| P0-3 | 前端命令按模块迁入（会话 / 设置 / 权限 / 定制项 / 运行配置…）；Core 按需获得 Host 路径（aide home / claude home / 资源目录） | |
+| P0-3a | 地基迁入：Host 数据目录布局（`paths`）、分层设置服务（`settings`，密钥端口 `SecretStore`：桌面 = OS 钥匙串，远程 = 内存）、`app_settings` + state.json、权限策略（`policy`）、JDK 扫描；`get_settings` / `set_settings` / `scan_jdks` / `resolve_jdk` 成为 core 命令；手机远程 RPC 白名单新增 `CORE_EXPOSED`（只登记名字，执行走 core 表） | ✅ 2026-09-30 |
+| P0-3b | 前端命令按模块迁入（定制项 / 会话存储 / 工作区注册表 / 最近 / 通知 / 迁移 / 运行配置 / 记忆观测…）；远程 RPC 包装逐条挪进 `CORE_EXPOSED` | |
+| P0-3c | 供应商层迁入：**先定 Host 的 HTTPS 端口**（ureq+rustls 经 ring 带 C/汇编，违反 aide-host 纯 Rust 约束）；过渡期供应商视图是桌面扩展 trait `ProviderSettings` | |
 | P0-4 | 长寿状态迁入 Core：agent runtime / PTY / LSP manager / automation；`AppHandle` 在后端只剩 GUI 能力 | |
 | P1 | 窗口连 WSL Host：GUI 泛化转发全部 invoke + 事件，Host 原生路径直出前端；删除 `routes.rs` 与路径翻译 | |
 | P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |

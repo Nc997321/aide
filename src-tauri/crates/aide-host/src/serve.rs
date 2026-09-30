@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use aide_core::settings::{MemorySecretStore, SettingsPaths, SettingsService};
 use aide_core::{Core, EventSink, WorkspaceState};
 use aide_host::protocol::{
     HelloInfo, InvokeParams, Notification, Request, Response, METHOD_HELLO, METHOD_INVOKE,
@@ -50,7 +51,11 @@ pub async fn run() -> i32 {
         }
     });
 
-    let core = Core::new(Arc::new(WorkspaceState::new()), Arc::new(NotifySink(tx.clone())));
+    let core = Core::new(
+        Arc::new(WorkspaceState::new()),
+        Arc::new(host_settings()),
+        Arc::new(NotifySink(tx.clone())),
+    );
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
@@ -100,6 +105,21 @@ async fn handle(method: &str, params: Value, core: Arc<Core>) -> Result<Value, S
         }
         other => Err(format!("aide-host: unknown method `{other}`")),
     }
+}
+
+/// 目标机上的设置：文件落目标机 `~/.aide/`；密钥只在内存（由桌面钥匙串随连接下发，
+/// 从不落目标机磁盘——服务器可能多人共用）。初始化失败只留痕：设置类命令会如实报
+/// NotInitialized，其余命令照常可用。
+fn host_settings() -> SettingsService {
+    let paths = SettingsPaths::new().unwrap_or_else(|e| {
+        eprintln!("[aide-host] settings paths: {e}");
+        SettingsPaths::for_test(aide_core::paths::our_config_dir())
+    });
+    let service = SettingsService::new(paths, Arc::new(MemorySecretStore::default()));
+    if let Err(e) = service.initialize_blocking() {
+        eprintln!("[aide-host] settings initialise failed: {e}");
+    }
+    service
 }
 
 fn hello() -> HelloInfo {

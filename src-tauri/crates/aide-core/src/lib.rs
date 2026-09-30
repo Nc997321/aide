@@ -9,14 +9,20 @@
 //! 因此本 crate **禁止依赖 Tauri**：它需要的宿主能力（发事件、资源路径…）一律经
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
+pub mod app_settings;
 pub mod commands;
+pub mod paths;
+pub mod policy;
 pub mod registry;
+pub mod settings;
 pub mod workspace;
 
 use std::sync::Arc;
 
 use aide_workspace::watch::FileWatchService;
 use serde_json::Value;
+
+use settings::SettingsService;
 
 pub use registry::{lookup, Reply};
 pub use workspace::WorkspaceState;
@@ -37,15 +43,22 @@ impl EventSink for NullSink {
 pub struct Core {
     /// 活动工作区（全局单例语义沿用桌面现状；按会话的归属走命令参数 `cwd`）。
     pub workspace: Arc<WorkspaceState>,
+    /// 分层设置（managed / user / project）+ 密钥端口。
+    pub settings: Arc<SettingsService>,
     /// 文件树监听（同一时刻只盯一个根：一个窗口一棵树）。
     pub(crate) watch: FileWatchService,
     events: Arc<dyn EventSink>,
 }
 
 impl Core {
-    pub fn new(workspace: Arc<WorkspaceState>, events: Arc<dyn EventSink>) -> Arc<Self> {
+    pub fn new(
+        workspace: Arc<WorkspaceState>,
+        settings: Arc<SettingsService>,
+        events: Arc<dyn EventSink>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             workspace,
+            settings,
             watch: FileWatchService::default(),
             events,
         })
@@ -55,8 +68,31 @@ impl Core {
         self.events.emit(event, payload);
     }
 
+    /// 一个与本机真实数据隔离的 Host：设置落在 `root` 下、密钥只在内存（测试用）。
+    pub fn isolated(root: std::path::PathBuf, events: Arc<dyn EventSink>) -> Arc<Self> {
+        let settings = SettingsService::new(
+            settings::SettingsPaths::for_test(root),
+            Arc::new(settings::MemorySecretStore::default()),
+        );
+        let _ = settings.initialize_blocking();
+        Self::new(Arc::new(WorkspaceState::new()), Arc::new(settings), events)
+    }
+
     /// 事件出口本身（给长寿的后台线程持有——持 `Arc<Core>` 会让 Core 与它的线程互相引用）。
     pub fn events(&self) -> Arc<dyn EventSink> {
         Arc::clone(&self.events)
     }
+}
+
+/// 测试用：每次一个独立目录的隔离 Host。
+#[cfg(test)]
+pub(crate) fn test_core(events: Arc<dyn EventSink>) -> Arc<Core> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "aide-core-test-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    Core::isolated(dir, events)
 }

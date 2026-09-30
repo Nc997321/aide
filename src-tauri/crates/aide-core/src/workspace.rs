@@ -38,18 +38,10 @@ impl WorkspaceState {
             Some(c) if !c.trim().is_empty() => PathBuf::from(c),
             _ => self
                 .active_root()
-                .or_else(user_home)
+                .or_else(crate::paths::user_home)
                 .unwrap_or_else(|| PathBuf::from(".")),
         }
     }
-}
-
-pub fn user_home() -> Option<PathBuf> {
-    std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .ok()
-        .filter(|h| !h.is_empty())
-        .map(PathBuf::from)
 }
 
 #[cfg(test)]

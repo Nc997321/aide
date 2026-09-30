@@ -471,14 +471,14 @@ async fn git_tags(core: Arc<Core>, a: GitTagsArgs) -> Result<Vec<TagEntry>, Stri
 #[cfg(test)]
 mod tests {
     use crate::registry::lookup;
-    use crate::{Core, NullSink, WorkspaceState};
+    use crate::NullSink;
     use serde_json::json;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn git_runs_against_explicit_cwd() {
         // 非 git 目录：命令真的跑到了实现（报错 / 空结果都行），而不是参数层就被拒。
-        let core = Core::new(Arc::new(WorkspaceState::new()), Arc::new(NullSink));
+        let core = crate::test_core(Arc::new(NullSink));
         let dir = std::env::temp_dir();
         let r = lookup("git_head_rev").unwrap()(core, json!({ "cwd": dir })).await;
         if let Err(e) = r {

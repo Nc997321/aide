@@ -92,7 +92,7 @@ fn best_effort_cleanup_legacy(store: &SettingsStore, legacy: Value) {
     // 搬成功才删文件。曾直接整删，导致迁移完成标记每次启动被抹掉、迁移引导
     // 弹窗每次重启复现。播种失败则保留 legacy 文件，下次启动重试。
     if let Err(error) =
-        crate::commands::settings::seed_state_from_legacy(paths.legacy_config(), paths.state())
+        crate::app_settings::seed_state_from_legacy(paths.legacy_config(), paths.state())
     {
         tracing::warn!(
             path = %paths.state().display(),

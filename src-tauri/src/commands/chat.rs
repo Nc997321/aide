@@ -1,4 +1,5 @@
-use crate::commands::settings::{get_settings, DEFAULT_OUTPUT_STYLE};
+use crate::runtime::provider::ProviderSettings as _;
+use crate::commands::settings::{public_settings, DEFAULT_OUTPUT_STYLE};
 use crate::commands::{project_root_for_commands, WorkspaceState};
 use crate::runtime::env::build_runtime_env_vars;
 use crate::runtime::AgentRuntimeManager;
@@ -301,13 +302,16 @@ pub async fn send_message(
 
     let active =
         resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
-    // Clone the Arc before `get_settings` takes the `State` by value — the
-    // permission snapshot below still needs the service.
     let snapshot_service = settings_service.inner().clone();
     // 读设置失败不阻塞发送（proxy / thinking / output_style 各有兜底），但不能无声：
     // 用户选了非默认输出样式却读不到设置时，这条日志是唯一线索（同上方登记工作区的
     // 「失败不阻塞但不静默」处理）。
-    let settings = match get_settings(settings_service).await {
+    let read_service = settings_service.inner().clone();
+    let settings = match tokio::task::spawn_blocking(move || public_settings(&read_service))
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| r)
+    {
         Ok(s) => Some(s),
         Err(e) => {
             tracing::warn!(
@@ -386,7 +390,6 @@ pub async fn send_message(
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the
     // send still goes out and the sidecar defers to the provider permission mode.
-    // `snapshot_service` was cloned above (before `get_settings` consumed the State).
     let snapshot_cwd = cwd.clone();
     if let Ok(Ok(snapshot)) = tokio::task::spawn_blocking(move || {
         snapshot_service.permission_snapshot_blocking(Some(&snapshot_cwd))

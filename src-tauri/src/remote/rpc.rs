@@ -40,6 +40,38 @@ pub fn lookup(command: &str) -> Option<Handler> {
         .map(|(_, h)| *h)
 }
 
+/// 执行一条远程命令：先查手写包装表，再查「已迁入 aide-core 的白名单」——后者直接走
+/// Host 命令表（与桌面同一实现、零包装）。None = 不在白名单，拒绝。
+pub fn dispatch(app: AppHandle, command: &str, params: Value) -> Option<BoxFuture<'static, Result<Value, String>>> {
+    if let Some(h) = lookup(command) {
+        return Some(h(app, params));
+    }
+    if !CORE_EXPOSED.contains(&command) {
+        return None;
+    }
+    let run = aide_core::lookup(command)?;
+    Some(Box::pin(async move {
+        use tauri::Manager;
+        let core = app
+            .try_state::<std::sync::Arc<aide_core::Core>>()
+            .ok_or("host core not initialised")?
+            .inner()
+            .clone();
+        match run(core, params).await? {
+            aide_core::Reply::Json(v) => Ok(v),
+            aide_core::Reply::Bytes(_) => Err("远程通道不支持二进制结果".to_string()),
+        }
+    }))
+}
+
+/// 已迁入 aide-core 的远程可用命令（**只登记名字**：白名单仍是这里，实现是 core 命令表）。
+/// 收录原则同 [`REGISTRY`]。命令迁入 core 后，把它从 REGISTRY 挪到这里并删掉手写包装。
+static CORE_EXPOSED: &[&str] = &[
+    // ── 设置 ──
+    "get_settings",
+    "set_settings",
+];
+
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
 static REGISTRY: &[(&str, Handler)] = &[
     // ── 聊天控制（闭包直调路径）──
@@ -90,9 +122,7 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("is_workspace_trusted", handlers::is_workspace_trusted),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
-    // ── 设置与供应商 ──
-    ("get_settings", handlers::get_settings),
-    ("set_settings", handlers::set_settings),
+    // ── 供应商（设置本体已迁入 core，见 CORE_EXPOSED）──
     ("get_providers", handlers::get_providers),
     ("set_providers", handlers::set_providers),
     ("get_active_provider_id", handlers::get_active_provider_id),
@@ -152,5 +182,14 @@ mod tests {
     #[test]
     fn registry_exposes_daily_workspace() {
         assert!(lookup("daily_workspace").is_some());
+    }
+
+    /// 白名单登记的 core 命令必须真的在 core 表里（否则远程端调用即「未知命令」）。
+    #[test]
+    fn core_exposed_commands_exist_in_core() {
+        for name in CORE_EXPOSED {
+            assert!(aide_core::lookup(name).is_some(), "{name} not in aide-core");
+            assert!(lookup(name).is_none(), "{name} registered twice");
+        }
     }
 }

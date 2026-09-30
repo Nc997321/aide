@@ -14,7 +14,17 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::user_home;
+use std::sync::Arc;
+
+use super::NoArgs;
+use crate::paths::user_home;
+use crate::registry::{blocking, Command};
+use crate::{command, Core};
+
+pub static COMMANDS: &[Command] = &[
+    command!("scan_jdks", scan_jdks),
+    command!("resolve_jdk", resolve_jdk),
+];
 
 /// 一个已登记的 JDK。`version` 为主版本号字符串（"21" / "8"），便于展示与匹配。
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -171,19 +181,21 @@ fn candidate_jdk_homes() -> Vec<PathBuf> {
     homes
 }
 
-/// 扫描本机已安装的 JDK。async + spawn_blocking（目录遍历是 IO，不占 Tauri 主线程）。
-#[tauri::command]
-pub async fn scan_jdks() -> Result<Vec<JdkEntry>, String> {
-    tokio::task::spawn_blocking(|| Ok(collect_jdks(candidate_jdk_homes())))
-        .await
-        .map_err(|e| format!("scan_jdks task panicked: {e}"))?
+/// 扫描 Host 上已安装的 JDK（目录遍历是 IO，离开异步线程）。
+async fn scan_jdks(_: Arc<Core>, _: NoArgs) -> Result<Vec<JdkEntry>, String> {
+    blocking(|| Ok(collect_jdks(candidate_jdk_homes()))).await
+}
+
+#[derive(Deserialize)]
+pub struct ResolveJdkArgs {
+    path: String,
 }
 
 /// 校验用户手动输入的路径是否为有效 JDK home 并自动取版本。
 /// 有效 → 返回 JdkEntry；无效（无 `release`/读不出版本）→ None。
-#[tauri::command]
-pub async fn resolve_jdk(path: String) -> Result<Option<JdkEntry>, String> {
-    tokio::task::spawn_blocking(move || {
+async fn resolve_jdk(_: Arc<Core>, a: ResolveJdkArgs) -> Result<Option<JdkEntry>, String> {
+    let path = a.path;
+    blocking(move || {
         let home = PathBuf::from(&path);
         if let Some(version) = read_release_version(&home) {
             let name = home
@@ -201,7 +213,6 @@ pub async fn resolve_jdk(path: String) -> Result<Option<JdkEntry>, String> {
         }
     })
     .await
-    .map_err(|e| format!("resolve_jdk task panicked: {e}"))?
 }
 
 #[cfg(test)]

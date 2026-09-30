@@ -13,64 +13,20 @@ pub enum SecretMutation {
     Clear,
 }
 
-const KEYRING_SERVICE: &str = "io.aide.desktop";
-const ACCOUNT_PREFIX: &str = "aide/settings/";
-
+/// 密钥存储端口。实现在前门：桌面 = OS 钥匙串（`src-tauri/src/settings.rs`，keyring 带 C
+/// 依赖，不能进本 crate）；远程 Host = [`MemorySecretStore`]。
 pub trait SecretStore: Send + Sync {
     fn get(&self, key: &str) -> Result<Option<String>, SettingsError>;
     fn set(&self, key: &str, value: &str) -> Result<(), SettingsError>;
     fn delete(&self, key: &str) -> Result<(), SettingsError>;
 }
 
-pub struct KeyringSecretStore;
-
-impl KeyringSecretStore {
-    pub fn new() -> Self {
-        Self
-    }
-
-    fn entry(key: &str) -> Result<keyring::Entry, SettingsError> {
-        keyring::Entry::new(KEYRING_SERVICE, &format!("{ACCOUNT_PREFIX}{key}"))
-            .map_err(|e| SettingsError::Secrets(format!("{key}: {e}")))
-    }
-}
-
-impl Default for KeyringSecretStore {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl SecretStore for KeyringSecretStore {
-    fn get(&self, key: &str) -> Result<Option<String>, SettingsError> {
-        match Self::entry(key)?.get_password() {
-            Ok(value) => Ok(Some(value)),
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(SettingsError::Secrets(format!("{key}: {e}"))),
-        }
-    }
-
-    fn set(&self, key: &str, value: &str) -> Result<(), SettingsError> {
-        Self::entry(key)?
-            .set_password(value)
-            .map_err(|e| SettingsError::Secrets(format!("{key}: {e}")))
-    }
-
-    fn delete(&self, key: &str) -> Result<(), SettingsError> {
-        match Self::entry(key)?.delete_credential() {
-            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(SettingsError::Secrets(format!("{key}: {e}"))),
-        }
-    }
-}
-
-#[cfg(test)]
+/// 进程内密钥存储：测试用；远程 Host 也用它（密钥由桌面钥匙串随连接下发，只在内存里）。
 #[derive(Default)]
 pub struct MemorySecretStore {
     values: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
 }
 
-#[cfg(test)]
 impl SecretStore for MemorySecretStore {
     fn get(&self, key: &str) -> Result<Option<String>, SettingsError> {
         Ok(self

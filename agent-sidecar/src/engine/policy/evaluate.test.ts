@@ -10,7 +10,7 @@ import { pathEqualsFile, pathWithinFolder } from "./matchers.js";
 
 // Load the shared fixture from the Rust side
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const fixturePath = path.resolve(__dirname, "../../../../src-tauri/src/policy/fixtures/permission-policy.json");
+const fixturePath = path.resolve(__dirname, "../../../../src-tauri/crates/aide-core/src/policy/fixtures/permission-policy.json");
 const cases: any[] = JSON.parse(fsSync.readFileSync(fixturePath, "utf-8"));
 
 describe("shared fixture parity", () => {

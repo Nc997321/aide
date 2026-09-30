@@ -42,7 +42,7 @@ pub fn retarget(core: &Core, root: Option<&Path>) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use crate::registry::lookup;
-    use crate::{Core, EventSink, WorkspaceState};
+    use crate::EventSink;
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};
     use std::time::Duration;
@@ -61,7 +61,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("aide-core-watch-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let rec = Arc::new(Recorder::default());
-        let core = Core::new(Arc::new(WorkspaceState::new()), rec.clone());
+        let core = crate::test_core(rec.clone());
         let run = lookup("file_tree_watch").unwrap();
         run(core.clone(), json!({ "root": dir })).await.unwrap();
         std::fs::write(dir.join("x.txt"), "x").unwrap();

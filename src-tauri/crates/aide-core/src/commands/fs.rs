@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use super::NoArgs;
 use crate::registry::{blocking, Command};
-use crate::workspace::user_home;
+use crate::paths::user_home;
 use crate::{command, Core};
 
 pub static COMMANDS: &[Command] = &[
@@ -263,12 +263,12 @@ async fn apply_replacements(_: Arc<Core>, a: ApplyArgs) -> Result<search::ApplyR
 #[cfg(test)]
 mod tests {
     use crate::registry::{lookup, Reply};
-    use crate::{Core, NullSink, WorkspaceState};
+    use crate::{Core, NullSink};
     use serde_json::{json, Value};
     use std::sync::Arc;
 
     fn core() -> Arc<Core> {
-        Core::new(Arc::new(WorkspaceState::new()), Arc::new(NullSink))
+        crate::test_core(Arc::new(NullSink))
     }
 
     async fn call(cmd: &str, args: Value) -> Result<Reply, String> {
