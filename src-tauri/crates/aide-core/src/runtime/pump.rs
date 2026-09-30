@@ -144,10 +144,13 @@ pub fn start(p: Pump) {
                             }
                         }
                     }
-                    // 旁路观察（诊断黑匣子计量与留痕、自动化运行终态）：GUI 宿主的事，经钩子。
+                    // 旁路观察（诊断黑匣子计量与留痕）：GUI 宿主的事，经钩子。
                     if let Some(hooks) = core.runtime.hooks() {
                         hooks.observe(&event, line.len());
                     }
+                    // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
+                    // 终态落盘在内部 spawn 出去做，不堵事件泵。
+                    core.automation.observe_chat_event(&event);
                     // 后台任务注册表：远程快照源（list_bg_tasks RPC）。桌面常驻
                     // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
                     // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。

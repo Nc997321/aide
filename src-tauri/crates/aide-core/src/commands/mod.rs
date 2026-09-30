@@ -1,6 +1,7 @@
 //! 按能力分的命令模块。每个模块导出 `COMMANDS` 分表，由 [`crate::registry`] 汇总。
 
 pub mod agent_status;
+pub mod automation;
 pub mod chat;
 pub mod codegraph;
 pub mod fs;

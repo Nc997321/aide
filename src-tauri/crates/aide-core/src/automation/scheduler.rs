@@ -9,11 +9,12 @@
 //! （消费掉它）——重启不重跑、tick 不重复触发。manual 运行不碰网格。
 
 use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use chrono::{Local, NaiveDateTime};
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
+
+use crate::Core;
 
 use super::schedule;
 use super::{
@@ -90,7 +91,8 @@ pub struct AutomationService {
     active_runs: Mutex<HashMap<String, ActiveRun>>,
     /// sessionId -> 路由（runtime 事件挂钩的路由表；含蒸馏轮）
     by_session: Mutex<HashMap<String, SessionRoute>>,
-    app: OnceLock<AppHandle>,
+    /// 所属 Host（弱引用：Core 持有本服务，反向强引用会成环）。`start` 时登记。
+    core: OnceLock<Weak<Core>>,
 }
 
 impl AutomationService {
@@ -103,18 +105,21 @@ impl AutomationService {
             tasks: Mutex::new(tasks),
             active_runs: Mutex::new(HashMap::new()),
             by_session: Mutex::new(HashMap::new()),
-            app: OnceLock::new(),
+            core: OnceLock::new(),
         }
     }
 
-    /// lib.rs setup 里调用：登记 AppHandle + 启动常驻 tick
-    /// （`tauri::async_runtime::spawn` 范式，与启动 Agent Runtime 同处）。
-    pub fn start(self: &Arc<Self>, app: AppHandle) {
-        let _ = self.app.set(app);
+    /// Host 启动时调用：登记所属 Core + 启动常驻 tick（须在 tokio runtime 上调用）。
+    pub fn start(self: &Arc<Self>, core: &Arc<Core>) {
+        let _ = self.core.set(Arc::downgrade(core));
         let svc = Arc::clone(self);
-        tauri::async_runtime::spawn(async move {
+        tokio::spawn(async move {
             svc.run_loop().await;
         });
+    }
+
+    fn core(&self) -> Option<Arc<Core>> {
+        self.core.get().and_then(Weak::upgrade)
     }
 
     async fn run_loop(self: Arc<Self>) {
@@ -221,8 +226,8 @@ impl AutomationService {
                     }
                 }
                 // 通知前端刷新（面板开着时立刻反映，否则等下次打开拉取）
-                if let Some(app) = self.app.get() {
-                    let _ = app.emit(
+                if let Some(core) = self.core() {
+                    core.emit(
                         "chat-event",
                         serde_json::json!({
                             "type": "automation_run_finished",
@@ -267,8 +272,8 @@ impl AutomationService {
                     // 应用内通知中心（warning，可落盘）：启动时 app 开着，通知中心
                     // 比 OS 通知更可行动（打开面板手动补跑）。前端 useAutomation 转推。
                     self.record_missed_skip(&id, fire, "missed-ask");
-                    if let Some(app) = self.app.get() {
-                        let _ = app.emit(
+                    if let Some(core) = self.core() {
+                        core.emit(
                             "chat-event",
                             serde_json::json!({
                                 "type": "automation_missed",
@@ -550,7 +555,7 @@ impl AutomationService {
                     "model": task_for_write.model,
                     "effort": task_for_write.effort,
                 });
-                let dir = crate::commands::our_sessions_dir();
+                let dir = crate::paths::our_sessions_dir();
                 std::fs::create_dir_all(&dir).map_err(|e| format!("create sessions dir: {e}"))?;
                 std::fs::write(
                     dir.join(format!("{}.json", sid)),
@@ -576,19 +581,13 @@ impl AutomationService {
 
         let cmd = Self::build_send_command(&task, &run_id, &prompt, &policy);
 
-        let app = self
-            .app
-            .get()
-            .ok_or("AutomationService 未启动（无 AppHandle）")?;
-        let core = app
-            .try_state::<Arc<aide_core::Core>>()
-            .ok_or("Host core 未注册")?;
+        let core = self.core().ok_or("AutomationService 未启动（无所属 Host）")?;
         let runtime = &core.runtime;
         if let Err(e) = runtime.send_to_runtime(&cmd).await {
             // 发送失败 = 运行从未开始：清掉预写的会话元数据（按 run_id 命名的那份），
             // 再按失败收尾
             let _ = std::fs::remove_file(
-                crate::commands::our_sessions_dir().join(format!("{}.json", session_id)),
+                crate::paths::our_sessions_dir().join(format!("{}.json", session_id)),
             );
             self.finalize_run(
                 &task.id,
@@ -839,7 +838,7 @@ impl AutomationService {
             }
         }
         // 元数据文件改名：run_id.json → <sdk>.json（id 字段同步）
-        let dir = crate::commands::our_sessions_dir();
+        let dir = crate::paths::our_sessions_dir();
         let old = dir.join(format!("{}.json", run_id));
         let new = dir.join(format!("{}.json", sdk_sid));
         if !old.exists() {
@@ -873,7 +872,7 @@ impl AutomationService {
             "model": task.model,
             "effort": task.effort,
         });
-        let dir = crate::commands::our_sessions_dir();
+        let dir = crate::paths::our_sessions_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!("[automation] 创建会话元数据目录失败: {}", e);
             return;
@@ -902,7 +901,7 @@ impl AutomationService {
             return;
         };
         let run = self.apply_outcome(task_id, &task, run, status, &outcome);
-        Self::notify_if_needed(&task, &run, status, &outcome);
+        self.notify_if_needed(&task, &run, status, &outcome);
         self.emit_finished(task_id, run_id, status);
         Self::maybe_distill(self, task, run, status);
     }
@@ -957,6 +956,7 @@ impl AutomationService {
 
     /// 成功/失败按任务开关发系统通知。
     fn notify_if_needed(
+        &self,
         task: &AutomationTask,
         run: &RunRecord,
         status: RunStatus,
@@ -991,13 +991,13 @@ impl AutomationService {
             }
             _ => outcome.error.clone().unwrap_or_else(|| "未知错误".into()),
         };
-        Self::notify(&title, &body);
+        self.notify(&title, &body);
     }
 
     /// 向前端广播终态（M3 面板刷新用；chat-event 通道，无 session_id 路由语义）。
     fn emit_finished(&self, task_id: &str, run_id: &str, status: RunStatus) {
-        if let Some(app) = self.app.get() {
-            let _ = app.emit(
+        if let Some(core) = self.core() {
+            core.emit(
                 "chat-event",
                 serde_json::json!({
                     "type": "automation_run_finished",
@@ -1067,10 +1067,7 @@ impl AutomationService {
             .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
         let cmd = Self::build_distill_command(&task, &run, &Self::path_policy(&cwd));
 
-        let app = self.app.get().ok_or("AutomationService 未启动")?;
-        let core = app
-            .try_state::<Arc<aide_core::Core>>()
-            .ok_or("Host core 未注册")?;
+        let core = self.core().ok_or("AutomationService 未启动")?;
         let runtime = &core.runtime;
         // 先注册路由再发（send 返回后事件才可能到达，顺序安全）
         self.by_session
@@ -1150,8 +1147,8 @@ impl AutomationService {
         }
 
         // 前端刷新（playbookState/蒸馏成本变化）
-        if let Some(app) = self.app.get() {
-            let _ = app.emit(
+        if let Some(core) = self.core() {
+            core.emit(
                 "chat-event",
                 serde_json::json!({
                     "type": "automation_run_finished",
@@ -1163,15 +1160,11 @@ impl AutomationService {
         }
     }
 
-    fn notify(title: &str, body: &str) {
-        let mut n = notify_rust::Notification::new();
-        n.app_id("com.aide.app");
-        n.auto_icon();
-        n.summary(title);
-        n.body(body);
-        tauri::async_runtime::spawn(async move {
-            let _ = n.show();
-        });
+    /// 系统通知是 GUI 的事：Host 只发事件，连着它的前门负责弹（见 [`Core::notify`]）。
+    fn notify(&self, title: &str, body: &str) {
+        if let Some(core) = self.core() {
+            core.notify(title, body);
+        }
     }
 
     /// 取运行结论摘要：转录（按 SDK 会话 id 全局定位）尾行文本，折叠空白。
@@ -1180,7 +1173,7 @@ impl AutomationService {
         if session_id.is_empty() {
             return None;
         }
-        let path = crate::commands::find_session_jsonl_globally(session_id)
+        let path = crate::session_store::find_session_jsonl_globally(session_id)
             .into_iter()
             .next()?;
         let text = crate::commands::session::last_jsonl_message(&path);
@@ -1501,11 +1494,11 @@ mod tests {
         let dir = super::super::session_dir(&t);
         assert_eq!(
             dir,
-            crate::commands::scoped_claude_home("automation", "aut_test")
+            crate::paths::scoped_claude_home("automation", "aut_test")
         );
         // 隔离性硬断言：绝不能落在被扫描的用户工作区根下
         assert!(
-            !dir.starts_with(crate::commands::claude_home()),
+            !dir.starts_with(crate::paths::claude_home()),
             "会话目录落进了全局 claude home，会被 list_workspaces 扫到：{}",
             dir.display()
         );
@@ -1524,7 +1517,7 @@ mod tests {
         t.session_dir = Some("   ".into());
         assert_eq!(
             super::super::session_dir(&t),
-            crate::commands::scoped_claude_home("automation", "aut_test")
+            crate::paths::scoped_claude_home("automation", "aut_test")
         );
     }
 
@@ -1626,7 +1619,7 @@ mod tests {
             tasks: Mutex::new(BTreeMap::new()),
             active_runs: Mutex::new(HashMap::new()),
             by_session: Mutex::new(HashMap::new()),
-            app: OnceLock::new(),
+            core: OnceLock::new(),
         })
     }
 

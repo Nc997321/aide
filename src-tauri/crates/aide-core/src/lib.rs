@@ -10,6 +10,7 @@
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
 pub mod app_settings;
+pub mod automation;
 pub mod lsp;
 pub mod codegraph;
 pub mod commands;
@@ -65,6 +66,8 @@ pub struct Core {
     pub lsp: Arc<lsp::LspState>,
     /// agent runtime（sidecar 进程、会话路由与存活表、事件泵）。
     pub runtime: runtime::AgentRuntimeManager,
+    /// 自动化任务调度（常驻 tick；运行与蒸馏写 `runtime`）。`start` 后才调度。
+    pub automation: Arc<automation::AutomationService>,
     /// 随包资源在哪（前门回答）。
     pub resources: Arc<dyn HostResources>,
     events: Arc<dyn EventSink>,
@@ -84,6 +87,7 @@ impl Core {
             )),
             lsp: Arc::new(lsp::LspState::new()),
             runtime: runtime::AgentRuntimeManager::new(),
+            automation: Arc::new(automation::AutomationService::new()),
             resources,
             workspace,
             settings,
@@ -95,6 +99,15 @@ impl Core {
 
     pub fn emit(&self, event: &str, payload: Value) {
         self.events.emit(event, payload);
+    }
+
+    /// 系统通知：Host 不弹窗（它可能跑在没有桌面的机器上），只发 `system-notification`
+    /// 事件，由连着它的 GUI 前门弹出（桌面 = `TauriSink` 就地转系统通知）。
+    pub fn notify(&self, title: &str, body: &str) {
+        self.emit(
+            "system-notification",
+            serde_json::json!({ "title": title, "body": body }),
+        );
     }
 
     /// 一个与本机真实数据隔离的 Host：设置落在 `root` 下、密钥只在内存（测试用）。

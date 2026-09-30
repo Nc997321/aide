@@ -13,14 +13,33 @@ use tauri::ipc::{Invoke, InvokeBody, InvokeError, InvokeResponseBody};
 use tauri::{AppHandle, Emitter, Manager, Wry};
 
 /// Core 的事件出口 → Tauri 全窗口广播（与既有 `app.emit` 同一语义）。
+///
+/// 例外：`system-notification`（`Core::notify`）不进 WebView，由本前门就地弹系统通知——
+/// Host 不弹窗，弹窗是 GUI 的事。
 pub struct TauriSink(pub AppHandle);
 
 impl EventSink for TauriSink {
     fn emit(&self, event: &str, payload: Value) {
+        if event == "system-notification" {
+            show_system_notification(&payload);
+            return;
+        }
         if let Err(e) = self.0.emit(event, payload) {
             tracing::warn!(event, "core event emit failed: {e}");
         }
     }
+}
+
+fn show_system_notification(payload: &Value) {
+    let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut n = notify_rust::Notification::new();
+    n.app_id("com.aide.app");
+    n.auto_icon();
+    n.summary(&text("title"));
+    n.body(&text("body"));
+    tauri::async_runtime::spawn(async move {
+        let _ = n.show();
+    });
 }
 
 /// Core 的资源端口 → 本机：release 读 Tauri 打包资源目录，dev 读源码树 / cargo target。

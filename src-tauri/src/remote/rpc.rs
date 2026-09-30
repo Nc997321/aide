@@ -140,6 +140,19 @@ static CORE_EXPOSED: &[&str] = &[
     // ── 模型/权限模式默认值 ──
     "get_default_models",
     "get_default_permission_modes",
+    // ── 自动化任务（ohos 端自动化五屏：列表/详情/表单/运行转录/手册。与桌面 UI 同一命令
+    // 实现，能力零漂移；CRUD 与立即运行均开放给已配对远程端——配对/信任边界与聊天控制同层）──
+    "list_automations",
+    "get_automation",
+    "create_automation",
+    "update_automation",
+    "delete_automation",
+    "set_automation_enabled",
+    "list_automation_runs",
+    "automation_run_stats",
+    "run_automation_now",
+    "get_automation_playbook",
+    "redistill_automation",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -148,26 +161,6 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("send_message", handlers::send_message),
     // ── 工作区 ──
     ("get_active_workspace", handlers::get_active_workspace),
-    // ── 自动化任务（ohos 端自动化五屏：列表/详情/表单/运行转录/手册。
-    // 与桌面 UI 同一命令实现，能力零漂移；CRUD 与立即运行均经此处开放给
-    // 已配对远程端——配对/信任边界与聊天控制命令同层）──
-    ("list_automations", handlers::list_automations),
-    ("get_automation", handlers::get_automation),
-    ("create_automation", handlers::create_automation),
-    ("update_automation", handlers::update_automation),
-    ("delete_automation", handlers::delete_automation),
-    (
-        "set_automation_enabled",
-        handlers::set_automation_enabled,
-    ),
-    ("list_automation_runs", handlers::list_automation_runs),
-    ("automation_run_stats", handlers::automation_run_stats),
-    ("run_automation_now", handlers::run_automation_now),
-    (
-        "get_automation_playbook",
-        handlers::get_automation_playbook,
-    ),
-    ("redistill_automation", handlers::redistill_automation),
 ];
 
 #[cfg(test)]

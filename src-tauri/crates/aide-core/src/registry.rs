@@ -57,6 +57,7 @@ static TABLES: &[&[Command]] = &[
     crate::commands::session_changes::COMMANDS,
     crate::commands::terminal::COMMANDS,
     crate::commands::agent_status::COMMANDS,
+    crate::commands::automation::COMMANDS,
     crate::commands::chat::COMMANDS,
     crate::commands::workspace_trust::COMMANDS,
     crate::commands::permissions::COMMANDS,

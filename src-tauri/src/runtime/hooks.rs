@@ -1,5 +1,5 @@
 //! aide-core agent runtime 的 GUI 侧钩子（`aide_core::runtime::ports::AgentHooks`）：
-//! 内嵌浏览器的 agent 工具查询、冻结诊断黑匣子、自动化运行终态观测——都是桌面进程的东西。
+//! 内嵌浏览器的 agent 工具查询、冻结诊断黑匣子——都是桌面进程的东西。
 
 use std::sync::Arc;
 
@@ -36,10 +36,6 @@ impl AgentHooks for DesktopAgentHooks {
             diag.record_chat_event(sid, event_type, raw_len as u64);
         }
         crate::diagnostics::trace::record("emit", event_type, "worker");
-        // 自动化运行终态观测：非活跃会话/非终态事件立即返回，终态落盘在内部 spawn 出去做。
-        if let Some(svc) = self.0.try_state::<Arc<crate::automation::AutomationService>>() {
-            svc.observe_chat_event(event);
-        }
     }
 
     fn runtime_dead(&self, reason: &str) {

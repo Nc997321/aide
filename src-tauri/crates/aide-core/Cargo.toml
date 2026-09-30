@@ -23,6 +23,8 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 # 终端 PTY：Unix 走 libc openpty（musl 自带），Windows 走 ConPTY——不引入系统 C 库。
 portable-pty = "0.8"
 which = "7"
+# 自动化调度的本地日历运算（NaiveDateTime 墙钟语义：「每天 18:30」跟随本地墙钟）
+chrono = "0.4"
 # LSP 协议类型（纯 Rust）
 lsp-types = "0.97.0"
 percent-encoding = "2"

@@ -15,7 +15,6 @@
 //!   scripts/      手册引用的确定性脚本
 //! ```
 
-pub mod commands;
 pub mod schedule;
 #[cfg(test)]
 mod schedule_test;
@@ -293,7 +292,7 @@ pub fn aggregate_runs(runs: &[RunRecord], since: chrono::NaiveDateTime) -> RunSt
 // ── 存储 ──
 
 pub fn automations_dir() -> PathBuf {
-    crate::commands::our_config_dir().join("automations")
+    crate::paths::our_config_dir().join("automations")
 }
 
 pub fn task_dir(id: &str) -> PathBuf {
@@ -305,12 +304,12 @@ pub fn task_dir(id: &str) -> PathBuf {
 /// 解析优先级：**任务显式指定 `session_dir`** > 默认（作用域隔离目录）。
 ///
 /// 本模块**不自己拼路径**——「隔离目录怎么落」是基础设施职责，下沉在
-/// [`crate::commands::scoped_claude_home`]，automation 只是它的上层调用方。
+/// [`crate::paths::scoped_claude_home`]，automation 只是它的上层调用方。
 /// 调用方想指定目录就设 [`AutomationTask::session_dir`]。
 pub fn session_dir(task: &AutomationTask) -> PathBuf {
     match task.session_dir.as_deref().map(str::trim) {
         Some(p) if !p.is_empty() => PathBuf::from(p),
-        _ => crate::commands::scoped_claude_home("automation", &task.id),
+        _ => crate::paths::scoped_claude_home("automation", &task.id),
     }
 }
 

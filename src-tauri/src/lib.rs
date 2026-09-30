@@ -1,4 +1,3 @@
-mod automation;
 // 内嵌浏览器子系统（骨架阶段：纯核心+领域类型+端口签名已落地并单测；adapter/命令待
 // 可视原型定 A/B 后填充）。私有模块，对外经 commands 暴露命令。
 mod browser;
@@ -166,7 +165,6 @@ pub fn run() {
                 }
             }
         })
-        .manage(std::sync::Arc::new(automation::AutomationService::new()))
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
         .manage(std::sync::Arc::new(browser::adapter::PlatformEngine::new()))
         .manage(browser::state::BrowserState::new())
@@ -269,11 +267,10 @@ pub fn run() {
                 }
             });
 
-            // 自动化调度器：常驻 tokio task（30s tick + 启动 missed-run 扫描）。
-            // M1 只观测日志；M2 接通 send_to_runtime 执行链。
+            // 自动化调度器（住 Host 核心）：常驻 tokio task（30s tick + 启动 missed-run 扫描）。
             {
-                let svc = app.state::<std::sync::Arc<automation::AutomationService>>();
-                svc.inner().clone().start(app.handle().clone());
+                let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
+                tauri::async_runtime::spawn(async move { core.automation.start(&core) });
             }
 
             // 内置插件：后台确保已安装/版本更新（git 网络 IO，必须 spawn_blocking +
@@ -338,17 +335,6 @@ pub fn run() {
             commands::file_assoc::unregister_open_with,
             commands::file_assoc::set_open_with_extensions,
             commands::filesystem::show_in_explorer,
-            automation::commands::list_automations,
-            automation::commands::get_automation,
-            automation::commands::create_automation,
-            automation::commands::update_automation,
-            automation::commands::delete_automation,
-            automation::commands::set_automation_enabled,
-            automation::commands::list_automation_runs,
-            automation::commands::automation_run_stats,
-            automation::commands::run_automation_now,
-            automation::commands::get_automation_playbook,
-            automation::commands::redistill_automation,
             // 工作区信任（Trusted Workspace）
             commands::settings::notify_send,
             commands::app::get_app_version,

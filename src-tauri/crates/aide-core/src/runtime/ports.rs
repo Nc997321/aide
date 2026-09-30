@@ -1,8 +1,8 @@
 //! agent runtime 的宿主端口。
 //!
-//! - [`AgentHooks`]：**GUI 侧能力**——内嵌浏览器的 agent 工具查询、桌面冻结诊断黑匣子、
-//!   自动化运行终态观测。Host 本身没有这些，由挂着 GUI 的前门（桌面）注入；不注入
-//!   （aide-host）= 浏览器查询当作普通事件转发给 GUI、观测为空。
+//! - [`AgentHooks`]：**GUI 侧能力**——内嵌浏览器的 agent 工具查询、桌面冻结诊断黑匣子。Host
+//!   本身没有这些，由挂着 GUI 的前门（桌面）注入；不注入（aide-host）= 浏览器查询当作普通
+//!   事件转发给 GUI、观测为空。
 //! - [`LaneRouter`] / [`LaneAdapter`]：**过渡端口（P1 前）**——旧模型「远程工作区」的会话跑在
 //!   目标机 sidecar 上（车道），命令按会话绑定路由、事件路径译回桌面形态。实现在桌面
 //!   `remote_workspace/lanes.rs`；P1（窗口连 Host）后 Host 只有本机车道，连同实现一起删除。
@@ -28,7 +28,7 @@ pub trait AgentHooks: Send + Sync + 'static {
     /// 事件不再转发 GUI。
     fn intercept(&self, event: &Value, stdin: &AgentStdin) -> bool;
 
-    /// 每条转发给 GUI 的事件的旁路观察（诊断计量 / 自动化终态）。`raw_len` = sidecar 原始
+    /// 每条转发给 GUI 的事件的旁路观察（诊断计量）。`raw_len` = sidecar 原始
     /// 行长（诊断按字节计量）。
     fn observe(&self, event: &Value, raw_len: usize);
 
