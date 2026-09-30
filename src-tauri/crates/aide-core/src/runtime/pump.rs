@@ -1,8 +1,9 @@
 //! sidecar stdout 泵：心跳看门狗 + 事件分发 + codegraph / LSP / 浏览器桥拦截。
 //!
-//! 从 `spawn_runtime` 抽出，按**车道**（lane）参数化：本机车道 = 原有行为逐字不变；
-//! 远程车道（WSL / SSH 上的 sidecar，经 `aide-host agent` 管道）复用同一条泵，只在
-//! 三处分叉——桥查询就地回错、事件路径译回桌面形态、进程死亡只波及本车道的会话。
+//! 从 `spawn_runtime` 抽出，按**车道**（lane）参数化：本机车道 = Host 的正常形态；
+//! 旧模型远程车道（WSL / SSH 上的 sidecar，经 `aide-host agent` 管道，过渡期）复用同一条泵，
+//! 只在 [`LaneAdapter`] 的几处分叉——桥查询就地回错、事件路径译回桌面形态、进程死亡只波及
+//! 本车道的会话。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -10,32 +11,33 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as TokioMutex;
 
-use super::{emit_runtime_dead, AgentRuntimeManager};
-use crate::remote_workspace::path::HostId;
+use super::emit_runtime_dead;
+use super::ports::LaneAdapter;
+use crate::Core;
 
 /// sidecar 进程跑在哪。
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub enum Lane {
     Local,
-    Remote(HostId),
+    /// 旧模型远程车道（过渡，见 [`super::ports`]）。
+    Remote(Arc<dyn LaneAdapter>),
 }
 
 impl Lane {
     fn tag(&self) -> String {
         match self {
             Lane::Local => String::new(),
-            Lane::Remote(h) => format!(" {h}"),
+            Lane::Remote(l) => format!(" {}", l.tag()),
         }
     }
 }
 
-pub(super) struct Pump {
-    pub app: AppHandle,
+pub struct Pump {
+    pub core: Arc<Core>,
     pub lane: Lane,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
@@ -46,9 +48,9 @@ pub(super) struct Pump {
     pub chat_events: tokio::sync::broadcast::Sender<Value>,
 }
 
-pub(super) fn start(p: Pump) {
+pub fn start(p: Pump) {
     let Pump {
-        app,
+        core,
         lane,
         stdout,
         stderr,
@@ -77,8 +79,8 @@ pub(super) fn start(p: Pump) {
                     // ——就地回错误结果（不回就是让 agent 白等 15s 超时）。LSP 桥照常走下面的
                     // 分派：语言服务器经 aide-host 跑在目标机上，查询在 lsp_agent 里做路径互译。浏览器桥照常
                     // 放行：内嵌浏览器就在桌面上，远程 agent 用它天经地义。
-                    if let Lane::Remote(host) = &lane {
-                        if super::remote_lane::answer_unsupported_bridge(&event, host, &stdin_for_agent).await {
+                    if let Lane::Remote(adapter) = &lane {
+                        if adapter.answer_locally(&event, &stdin_for_agent).await {
                             continue;
                         }
                     }
@@ -90,7 +92,7 @@ pub(super) fn start(p: Pump) {
                     if let Some(req) =
                         crate::codegraph::agent_bridge::parse_codegraph_query(&event)
                     {
-                        let core = app.state::<Arc<aide_core::Core>>().inner().clone();
+                        let core = core.clone();
                         let stdin2 = stdin_for_agent.clone();
                         tokio::spawn(async move {
                             let payload = crate::codegraph::agent_bridge::answer(&core, &req).await;
@@ -107,57 +109,27 @@ pub(super) fn start(p: Pump) {
                     // 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
                     // 「拦截 + 派发」，业务不内联（同 browser 的理由：本文件有 1000 行拆分线）。
                     if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
-                        let app2 = app.clone();
+                        let core2 = core.clone();
                         let stdin2 = stdin_for_agent.clone();
-                        let host = match &lane {
-                            Lane::Remote(h) => Some(h.clone()),
+                        let adapter = match &lane {
+                            Lane::Remote(a) => Some(a.clone()),
                             Lane::Local => None,
                         };
                         tokio::spawn(async move {
-                            crate::runtime::lsp_agent::handle(app2, stdin2, req, host).await;
+                            super::lsp_agent::handle(core2, stdin2, req, adapter).await;
                         });
                         continue;
                     }
-                    // 内嵌浏览器 agent 工具查询：同 codegraph，是 Rust ↔ Runtime 的内部
-                    // request/response，**不转发 Vue**。执行体在 `runtime/browser_agent.rs`
-                    // ——这里只做「拦截 + 派发」，业务不内联（也避免本文件撞 1000 行拆分线）。
-                    if let Some(req) = crate::browser::agent_bridge::parse_browser_query(&event)
-                    {
-                        let app_browser = app.clone();
-                        let stdin_browser = stdin_for_agent.clone();
-                        tokio::spawn(async move {
-                            crate::runtime::browser_agent::handle(
-                                app_browser,
-                                stdin_browser,
-                                req,
-                            )
-                            .await;
-                        });
-                        continue;
+                    // 宿主认领的工具查询（内嵌浏览器——GUI 能力，见 ports::AgentHooks）：
+                    // Rust ↔ Runtime 的内部 request/response，**不转发 Vue**。
+                    if let Some(hooks) = core.runtime.hooks() {
+                        if hooks.intercept(&event, &stdin_for_agent) {
+                            continue;
+                        }
                     }
                     // 心跳只喂看门狗，不转发前端
                     if event.get("type").and_then(|t| t.as_str()) == Some("heartbeat") {
                         continue;
-                    }
-                    // 诊断黑匣子：chat-event 出口按秒计量
-                    {
-                        use tauri::Manager;
-                        if let Some(diag) =
-                            app.try_state::<crate::diagnostics::DiagnosticsState>()
-                        {
-                            let event_type = event
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("unknown");
-                            // session_init 事件的 session_id 是 SDK 真实会话 ID，
-                            // 路由键在 _routing_id；其他事件的 session_id 即路由键。
-                            let sid = event
-                                .get("_routing_id")
-                                .or_else(|| event.get("session_id"))
-                                .and_then(|s| s.as_str())
-                                .unwrap_or("unknown");
-                            diag.record_chat_event(sid, event_type, line.len() as u64);
-                        }
                     }
                     // session_init 事件：SDK 的 session_id 是真实会话 ID，
                     // _routing_id 是 SessionManager 的路由键（临时 key）。
@@ -172,33 +144,19 @@ pub(super) fn start(p: Pump) {
                             }
                         }
                     }
-                    crate::diagnostics::trace::record(
-                        "emit",
-                        event
-                            .get("type")
-                            .and_then(|t| t.as_str())
-                            .unwrap_or("unknown"),
-                        "worker",
-                    );
-                    // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
-                    // 终态落盘在内部 spawn 出去做，不堵事件泵。
-                    if let Some(svc) =
-                        app.try_state::<std::sync::Arc<crate::automation::AutomationService>>()
-                    {
-                        svc.observe_chat_event(&event);
+                    // 旁路观察（诊断黑匣子计量与留痕、自动化运行终态）：GUI 宿主的事，经钩子。
+                    if let Some(hooks) = core.runtime.hooks() {
+                        hooks.observe(&event, line.len());
                     }
                     // 后台任务注册表：远程快照源（list_bg_tasks RPC）。桌面常驻
                     // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
                     // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。
-                    if let Some(reg) =
-                        app.try_state::<Arc<crate::runtime::bg_registry::BgTaskRegistry>>()
-                    {
-                        reg.feed(&event);
-                    }
+                    core.runtime.bg_tasks.feed(&event);
                     // 会话存活表：session_init 登记 / session_dead 移除。远程端
                     // 判断「跟随全局还是锁定会话供应商」的唯一权威来源（前端的
                     // useSessionState 在 Rust 侧拿不到）。
-                    if let Some(mgr) = app.try_state::<AgentRuntimeManager>() {
+                    {
+                        let mgr = &core.runtime;
                         let ety = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
                         if ety == "session_init" || ety == "session_dead" {
                             if let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
@@ -213,31 +171,32 @@ pub(super) fn start(p: Pump) {
                     }
                     // 远程车道：结构化字段里的目标机路径译回桌面形态（前端据此打开文件 /
                     // 算 diff，拿到的必须是能再交回 IPC 的路径）。
-                    if let Lane::Remote(host) = &lane {
-                        super::remote_lane::map_event_paths(host, &mut event);
+                    if let Lane::Remote(adapter) = &lane {
+                        adapter.map_event_paths(&mut event);
                     }
                     let _ = chat_events_tx.send(event.clone());
-                    let _ = app.emit("chat-event", event);
+                    core.emit("chat-event", event);
                 }
                 Ok(Ok(None)) | Ok(Err(_)) => break "exit",
                 Err(_) => break "heartbeat_timeout",
             }
         };
 
-        let report = |app: &AppHandle| match &lane {
-            Lane::Local => emit_runtime_dead(app, &stderr_tail, reason),
+        let report = |core: &Core| match &lane {
+            Lane::Local => emit_runtime_dead(core, &stderr_tail, reason),
             // 远程车道只波及绑在它上面的会话（WSL 关机 / 断网不该连累本机会话）
-            Lane::Remote(host) => {
-                super::remote_lane::on_lane_dead(app, host, &stderr_tail, reason)
+            Lane::Remote(adapter) => {
+                let tail: Vec<String> = stderr_tail.lock().unwrap().iter().cloned().collect();
+                adapter.on_dead(core, tail, reason)
             }
         };
         if reason == "heartbeat_timeout" {
-            report(&app);
+            report(&core);
             killed_clone.store(true, Ordering::Relaxed);
             let mut c = child_for_kill.lock().await;
             let _ = c.start_kill();
         } else if !killed_clone.load(Ordering::Relaxed) {
-            report(&app);
+            report(&core);
         }
     });
 

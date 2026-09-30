@@ -23,7 +23,7 @@
 
 - **传输层** `AideTransport { invoke, listen }`（`packages/aide-sdk/src/transport.ts`）：桌面默认 TauriTransport，远端 `main.ts` 早期 `setTransport(new RemoteTransport(...))`。api 门面与闭包永远只调 `getTransport()`，**禁止在共享代码里直接 import `@tauri-apps/*`**。
 - **api 门面**（`api.ts` + `api/*`）：所有命令调用的唯一入口；闭包需要的命令必须收进门面（含 DTO 对象化），不写散 invoke。
-- **远程协议 v2**（`src-tauri/src/remote/`）：`rpc.rs` 的 REGISTRY 静态表 = 白名单 = 可审计暴露面；**新增远程可用命令 = REGISTRY 加一行 + `rpc/handlers.rs` 加一个薄包装**。收录原则：共享闭包被动调用 + PWA UI 必需。
+- **远程协议 v2**（`src-tauri/src/remote/`）：`rpc.rs` 的 REGISTRY 静态表 = 白名单 = 可审计暴露面；**已在 aide-core 命令表里的命令：`CORE_EXPOSED` 登记名字即可（零包装）**；只有需要远程专属预处理的（如 send_message 的远程权限模式兜底）或尚未迁入 core 的，才 REGISTRY 加一行 + `rpc/handlers.rs` 薄包装。收录原则：共享闭包被动调用 + PWA UI 必需。
 - **RemoteTransport.listen 只支持 `chat-event`**（远程网关只透传这一种）；其他事件名 no-op + console.warn。
 - 共享代码搬动后桌面旧路径留 re-export 壳，测试 mock 边界一律指 `@aide/sdk/api`（不是 `@/api`——壳与包内模块实例不同，mock 壳会漏）。
 
@@ -95,7 +95,7 @@ GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 
 - **新增「按路径操作工作区文件」的命令（P1 前的过渡）**：写进 aide-core 命令表（aide-host 自动获得）→ `src-tauri/src/remote_workspace/routes.rs` 登记路径参数。缺后者，远程工作区里它就回落本机执行（跑错机器）。会在本机起进程操作工作区的命令（索引 / 运行配置）遇到远程路径必须**拒绝**，不许回落。**LSP 例外（已支持）**：服务器经 `aide-host lsp` 在目标机上起（登录 PATH 解析），stdio 套 `remote_workspace/lsp_pipe.rs` 做 URI 互译——aide-core 的 LSP 经过渡端口 `lsp::remote`（桌面实现 `remote_workspace/lsp_bridge.rs`，P1 删除）够到这些；LSP 代码碰工作区文件一律走 `lsp/workspace_access.rs`（本机直读 / 远程问 aide-host），**别在 LSP 代码里直接 `std::fs` 读工作区**。
 - **远程路径形态唯一真相源** `remote_workspace/path.rs`（`\\wsl.localhost\<distro>\…` / `\\aide-ssh.invalid\<alias>\…`）；前端 `@aide/sdk` 的 `parseRemotePath` 只做显示。
 - **「目录还在吗」一律 `remote_workspace::path::present`**：远程路径同步 stat 不了，按存在处理。对远程路径返回 false 会让会话 cwd 静默回落活动工作区——2026-09-18 事故的同一形态。
-- **agent 车道**：会话按工作区归属绑定车道（`runtime/remote_lane.rs`），事件泵与本机同一条（`runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
+- **agent 车道**：agent runtime 住 aide-core（`crates/aide-core/src/runtime/`）；远程工作区的会话经过渡端口 `runtime::ports::{LaneRouter, LaneAdapter}` 绑定车道（桌面实现 `remote_workspace/lanes.rs`，P1 删除），事件泵与本机同一条（aide-core `runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
 - **插件 / 用户扩展：桌面是唯一真相源**（`remote_workspace/mirror.rs`）：目标机只有按内容哈希命名的只读镜像 `~/.aide/host/ext/<hash>/`，路径随 send 的 `extensions` 字段下发（只有远程车道附，客户端从不发）；**不许在远程开第二个安装入口，也不许把目标机的 `~/.aide/claude` 当扩展来源**。远程用不了的扩展必须经 `notification` 如实上报，不静默消失。
 - **不同步 OAuth 凭据到目标机**（refresh token 轮换会互相顶掉；服务器可能多人共用）。官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`；API Key 类供应商随 send 下发，无需登录。
 - 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须是**不依赖任何系统 C 库的单个静态二进制**（一个二进制跑遍任意发行版、目标机零安装）：crate 自带源码的 C/汇编（如 rustls 的 ring）允许，静态编入；需要目标机装 `.so` / 头文件 / pkg-config 的依赖（libdbus、openssl-sys 动态链接等）一律禁止。（2026-09-30 由「纯 Rust 无 C」修订：Host 要发 HTTPS，rustls 经 ring 带 C；约束的目的——静态、零安装——不变。）
@@ -124,7 +124,7 @@ let mut cmd = Command::new("git");
 
 ## ⚠️ Windows 必读坑点：`resource_dir()` 的 `\\?\` verbatim 路径
 
-**Tauri `resource_dir()` 在 Windows 返回带 `\\?\` 前缀的 verbatim 路径。凡要把这种路径传给外部进程（尤其 `node`），必须先 `dunce::simplified()` 剥掉前缀**，否则 node 的 `realpathSync` 处理不了，会在引导阶段 `EISDIR` 崩溃。典型现象：dev 正常（走 `CARGO_MANIFEST_DIR`），**打包后一发消息就"会话进程已退出"**。Rust 自己 `fs::read` 不受影响——只有传给子进程的才要剥。涉及：`runtime.rs`（`resolve_runtime_path`、`AIDE_CLAUDE_EXE`）。
+**Tauri `resource_dir()` 在 Windows 返回带 `\\?\` 前缀的 verbatim 路径。凡要把这种路径传给外部进程（尤其 `node`），必须先 `dunce::simplified()` 剥掉前缀**，否则 node 的 `realpathSync` 处理不了，会在引导阶段 `EISDIR` 崩溃。典型现象：dev 正常（走 `CARGO_MANIFEST_DIR`），**打包后一发消息就"会话进程已退出"**。Rust 自己 `fs::read` 不受影响——只有传给子进程的才要剥。涉及：`src/host_door.rs` 的 `DesktopResources`（agent runtime / claude CLI / codegraph runner / LSP 资源路径都由它回答，aide-core 经 `HostResources` 端口取用）。
 
 ## 关键约定
 

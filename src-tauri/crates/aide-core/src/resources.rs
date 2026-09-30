@@ -15,6 +15,13 @@ pub trait HostResources: Send + Sync + 'static {
 
     /// 随包 LSP 目录（`<资源>/lsp`：捆绑的语言服务器、lombok.jar）；None = 没有随包 LSP。
     fn lsp_dir(&self) -> Option<PathBuf>;
+
+    /// agent runtime 的启动命令 `(程序, 首个参数)`：dev = `(node, runtime.js)`，release =
+    /// `(aide-agent, 空)`。首个参数为空就不传。路径已剥 verbatim 前缀（交给子进程的）。
+    fn agent_runtime(&self) -> Result<(String, PathBuf), String>;
+
+    /// 原生 claude CLI（经 `AIDE_CLAUDE_EXE` 递给 sidecar）；None = 不设。
+    fn claude_exe(&self) -> Option<PathBuf>;
 }
 
 /// 什么随包资源都没有的 Host（测试 / 尚未随套件分发该组件的远程 Host）。
@@ -31,6 +38,14 @@ impl HostResources for NoResources {
     }
 
     fn lsp_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn agent_runtime(&self) -> Result<(String, PathBuf), String> {
+        Err("agent runtime is not bundled with this host".into())
+    }
+
+    fn claude_exe(&self) -> Option<PathBuf> {
         None
     }
 }

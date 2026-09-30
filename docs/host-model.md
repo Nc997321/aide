@@ -54,7 +54,11 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 | P0-3a | 地基迁入：Host 数据目录布局（`paths`）、分层设置服务（`settings`，密钥端口 `SecretStore`：桌面 = OS 钥匙串，远程 = 内存）、`app_settings` + state.json、权限策略（`policy`）、JDK 扫描；`get_settings` / `set_settings` / `scan_jdks` / `resolve_jdk` 成为 core 命令；手机远程 RPC 白名单新增 `CORE_EXPOSED`（只登记名字，执行走 core 表） | ✅ 2026-09-30 |
 | P0-3b | 前端命令按模块迁入：会话档案 / 会话域（18）/ 会话变更 / 最近 / 通知 / 迁移 / 知识库配置 / 引导 / 定制项（32）/ 工作区（14）/ 记忆观测 / 运行配置 / 插件市场（9）。「工作区还在吗」统一为进程级注入判定 `aide_core::workspace::present`；key 解码补 Unix 形态。旧模型的远程会话分支集中到 `remote_workspace::sessions`（两个前门共用 `route`）。手机远程 RPC 的对应包装全部改为 `CORE_EXPOSED` 登记 | ✅ 2026-09-30 |
 | P0-3c | 供应商层迁入 `aide_core::provider`（HTTPS = ureq + rustls，ring 静态编入——2026-09-30 定：约束改为「不依赖系统 C 库」）；12 条供应商命令 + `detect_available_proxy` 成为 core 命令；provider catalog **编译进二进制**（删除资源目录注入）；扩展 trait `ProviderSettings` 删除 | ✅ 2026-09-30 |
-| P0-4 | 长寿状态迁入 Core：agent runtime（会话进程 / 事件泵 / 车道）→ chat（12）/ 权限（6，要广播给运行中会话）/ 信任（2）/ session_alive / MCP 探活；PTY（6）+ 运行进程（2）；LSP manager（21）；CodeGraph（6）；automation（11）。Core 需要：Host 资源路径（sidecar / LSP 捆绑）、事件泵经 `EventSink`。剩下留桌面的只有 GUI 能力（内嵌浏览器 / 诊断 / 配对网关 / 文件关联 / 应用 / 本机打开 / 远程连接管理 / 系统通知，共 35 条） | |
+| P0-4a | 终端（PTY 6 + 运行进程 2）+ 技能扫描迁入，`Core::pty`；远程工作区终端改为过渡钩子 `terminal::set_remote_shell` | ✅ 2026-09-30 |
+| P0-4b | CodeGraph 迁入 `Core::codegraph`；Core 增**资源端口** `HostResources`（随包二进制 / 目录由前门回答：桌面 = Tauri 资源目录 / dev 源码树，aide-host 暂 `NoResources`，如实报错） | ✅ 2026-09-30 |
+| P0-4c | LSP 迁入 `Core::lsp`（20 条编辑器命令 + workspace_symbol）；事件经 `EventSink`、捆绑 server 经 `HostResources::lsp_dir`；旧模型远程 LSP 经过渡端口 `lsp::remote`（桌面 `remote_workspace/lsp_bridge.rs`） | ✅ 2026-09-30 |
+| P0-4d | agent runtime 迁入 `Core::runtime`（sidecar 进程 / 事件泵 / 会话表 / 后台任务表 / Windows Job Object）；chat（12）/ 权限（6）/ 信任（2）/ session_alive / 通知上下文 / 后台任务快照 / MCP 探活成为 core 命令。宿主端口：`runtime::ports::AgentHooks`（GUI 侧：内嵌浏览器查询 / 冻结诊断 / 自动化观测，桌面注入）与过渡端口 `LaneRouter` / `LaneAdapter`（旧模型远程车道，桌面 `remote_workspace/lanes.rs`）。权限模式默认表编译进二进制。手机 RPC 对应包装改为 `CORE_EXPOSED`（send_message 保留远程权限模式兜底的薄预处理） | ✅ 2026-09-30 |
+| P0-4e | automation（11）迁入：调度器常驻 Host，运行 / 蒸馏直接写 `Core::runtime`；`AgentHooks::observe` 里的自动化观测随之回到 core 内部 | |
 | P1 | 窗口连 WSL Host：GUI 泛化转发全部 invoke + 事件，Host 原生路径直出前端；删除 `routes.rs` 与路径翻译 | |
 | P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |
 | P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |

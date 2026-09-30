@@ -1,32 +1,36 @@
 //! 远程车道：跑在目标机（WSL / SSH）上的 sidecar，经 `aide-host agent` 管道接入。
 //!
+//! **过渡实现（P1 前）**：aide-core 的 agent runtime 经端口 `runtime::ports::{LaneRouter,
+//! LaneAdapter}` 够到这里。P1（窗口连 Host）后 Host 只有本机车道，本文件随之删除。
+//!
 //! 会话按工作区归属选车道：`send_message` 解析出的 cwd 是远程路径 → 该会话绑定到那台
-//! 主机的车道（[`AgentRuntimeManager::bind_session_lane`]），此后同会话的所有命令
-//! （permission_response / interrupt / set_model …）由 `send_to_runtime` 按绑定路由。
-//! 事件泵与本机车道是同一条（见 `pump.rs`），前端看到的 chat-event 形状完全一致。
+//! 主机的车道（`LaneRouter::prepare_send`），此后同会话的所有命令
+//! （permission_response / interrupt / set_model …）由 core 的 `send_to_runtime` 按绑定路由。
+//! 事件泵与本机车道是同一条（aide-core `runtime/pump.rs`），前端看到的 chat-event 形状完全一致。
 //!
 //! 路径两个方向：发出去的命令里桌面形态 → 目标机路径（[`translate_send_command`]）；
 //! 回来的事件里目标机路径 → 桌面形态（[`map_event_paths`]）。**只动结构化字段**，
 //! 不改模型输出的正文——正文里的路径由前端按会话工作区解析（见 fileMentions）。
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 
+use aide_core::lsp::agent_bridge::LspQueryRequest;
+use aide_core::runtime::ports::{AgentStdin, BoxFuture, LaneAdapter, LaneRouter};
+use aide_core::runtime::pump::{self, Lane};
+use aide_core::Core;
 use aide_host::protocol::AgentInit;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 
-use super::pump::{self, Lane};
-use super::AgentRuntimeManager;
 use crate::remote_workspace::path::{self, HostId};
 use crate::remote_workspace::{install, launcher, RemoteWorkspaces};
 
 /// 一条远程车道的进程句柄（`aide-host agent` 子进程 = wsl.exe / ssh）。
-pub(super) struct RemoteLane {
+struct RemoteLane {
     pub stdin: Arc<TokioMutex<ChildStdin>>,
     pub child: Arc<TokioMutex<Child>>,
     pub killed: Arc<AtomicBool>,
@@ -154,7 +158,7 @@ pub fn map_event_paths(host: &HostId, v: &mut Value) {
 
 /// codegraph 桥查询：远程工作区不支持，就地回错误结果。返回 true = 已处理。
 /// （LSP 桥**支持**：语言服务器经 `aide-host lsp` 跑在目标机上，见 `runtime::lsp_agent`。）
-pub(super) async fn answer_unsupported_bridge(
+async fn answer_unsupported_bridge(
     event: &Value,
     host: &HostId,
     stdin: &Arc<TokioMutex<ChildStdin>>,
@@ -177,67 +181,66 @@ pub(super) async fn answer_unsupported_bridge(
     true
 }
 
-/// 车道进程死亡：只给绑在这条车道上的会话发 `session_dead`（前端据此把会话置为
-/// 可重发；下一条 send 会重建车道）。本机车道与其它主机的会话不受影响。
-pub(super) fn on_lane_dead(
-    app: &AppHandle,
-    host: &HostId,
-    tail: &Arc<Mutex<VecDeque<String>>>,
-    reason: &str,
-) {
-    let detail: Vec<String> = tail.lock().unwrap().iter().cloned().collect();
-    let detail = (!detail.is_empty()).then(|| detail.join("\n"));
-    tracing::warn!(host = %host, reason, ?detail, "remote agent lane died");
-    let Some(mgr) = app.try_state::<AgentRuntimeManager>() else {
-        return;
-    };
-    let sessions = mgr.drop_lane(host);
-    for sid in sessions {
-        mgr.mark_session_dead(&sid);
-        let _ = app.emit(
-            "chat-event",
-            serde_json::json!({
-                "type": "session_dead",
-                "session_id": sid,
-                "reason": if reason == "heartbeat_timeout" { "heartbeat_timeout" } else { "exit" },
-                "detail": detail.clone().unwrap_or_else(|| format!("与 {} 的 agent 连接已断开", host.label())),
-            }),
-        );
-    }
+/// 旧模型远程车道的全部状态：按主机一条车道 + 会话 → 车道绑定。
+pub struct RemoteLanes {
+    svc: Arc<RemoteWorkspaces>,
+    lanes: Mutex<HashMap<HostId, RemoteLane>>,
+    /// 会话 → 远程车道绑定（send 登记）。不在表里 = 本机车道。
+    sessions: Mutex<HashMap<String, HostId>>,
+    /// 串行化车道冷启动（同一主机不起两条）。
+    spawn_lock: TokioMutex<()>,
 }
 
-impl AgentRuntimeManager {
-    /// 会话绑定到远程车道（`send_message` 在发出前调用）。
-    pub fn bind_session_lane(&self, session_id: &str, host: &HostId) {
-        self.session_lanes
+/// core 持有的路由器（[`LaneRouter`]）：共享同一份 [`RemoteLanes`]。
+pub struct Router(pub Arc<RemoteLanes>);
+
+/// 一条车道在事件泵里的分叉点（[`LaneAdapter`]）。
+struct HostLane {
+    host: HostId,
+    lanes: Arc<RemoteLanes>,
+}
+
+impl RemoteLanes {
+    pub fn new(svc: Arc<RemoteWorkspaces>) -> Arc<Self> {
+        Arc::new(Self {
+            svc,
+            lanes: Mutex::new(HashMap::new()),
+            sessions: Mutex::new(HashMap::new()),
+            spawn_lock: TokioMutex::new(()),
+        })
+    }
+
+    /// 会话当前绑定的远程车道（None = 本机车道或尚未 send 过）。
+    pub fn lane_of(&self, session_id: &str) -> Option<HostId> {
+        self.sessions.lock().unwrap().get(session_id).cloned()
+    }
+
+    fn bind_session(&self, session_id: &str, host: &HostId) {
+        self.sessions
             .lock()
             .unwrap()
             .insert(session_id.to_string(), host.clone());
     }
 
-    pub fn lane_of(&self, session_id: &str) -> Option<HostId> {
-        self.session_lanes.lock().unwrap().get(session_id).cloned()
-    }
-
     /// 摘掉一条车道，返回曾绑在它上面的会话。
-    pub(super) fn drop_lane(&self, host: &HostId) -> Vec<String> {
-        self.remote_lanes.lock().unwrap().remove(host);
-        let mut lanes = self.session_lanes.lock().unwrap();
-        let sids: Vec<String> = lanes
+    fn drop_lane(&self, host: &HostId) -> Vec<String> {
+        self.lanes.lock().unwrap().remove(host);
+        let mut sessions = self.sessions.lock().unwrap();
+        let sids: Vec<String> = sessions
             .iter()
             .filter(|(_, h)| *h == host)
             .map(|(s, _)| s.clone())
             .collect();
         for s in &sids {
-            lanes.remove(s);
+            sessions.remove(s);
         }
         sids
     }
 
     /// 翻译一条发往远程车道的 send（路径 + 代理改写，见 [`translate_send_command`]）。
-    pub fn translate_for_lane(&self, host: &HostId, cmd: &mut Value) {
+    fn translate_for_lane(&self, host: &HostId, cmd: &mut Value) {
         let loopback = self
-            .remote_lanes
+            .lanes
             .lock()
             .unwrap()
             .get(host)
@@ -245,32 +248,17 @@ impl AgentRuntimeManager {
         translate_send_command(host, cmd, loopback.as_deref());
     }
 
-    pub(super) fn remote_lane_stdin(&self, host: &HostId) -> Option<Arc<TokioMutex<ChildStdin>>> {
-        self.remote_lanes
-            .lock()
-            .unwrap()
-            .get(host)
-            .map(|l| Arc::clone(&l.stdin))
-    }
-
     /// 幂等地拉起一台主机的 agent 车道（必要时先安装远程套件）。
-    pub async fn ensure_remote_lane(&self, app: &AppHandle, host: &HostId) -> Result<(), String> {
-        if self.remote_lanes.lock().unwrap().contains_key(host) {
+    async fn ensure_lane(self: &Arc<Self>, core: &Arc<Core>, host: &HostId) -> Result<(), String> {
+        if self.lanes.lock().unwrap().contains_key(host) {
             return Ok(());
         }
-        // 安装（首次可能几十秒）在拿启动锁**之前**：锁与本机 Runtime 冷启动共用，
-        // 不能让一次远程安装卡住本机会话的启动。安装自身由 RemoteWorkspaces 单飞。
-        let svc = app
-            .try_state::<Arc<RemoteWorkspaces>>()
-            .ok_or("remote workspaces not initialised")?
-            .inner()
-            .clone();
-        let installed = svc.installed(host).await?;
+        // 安装（首次可能几十秒）在拿启动锁**之前**：安装自身由 RemoteWorkspaces 单飞。
+        let installed = self.svc.installed(host).await?;
         let _spawn_guard = self.spawn_lock.lock().await;
-        if self.remote_lanes.lock().unwrap().contains_key(host) {
+        if self.lanes.lock().unwrap().contains_key(host) {
             return Ok(());
         }
-
         let script = format!("exec {} agent", launcher::sh_quote(&installed.host_bin));
         let mut cmd = launcher::command(host, &script)?;
         let mut child = cmd
@@ -287,7 +275,7 @@ impl AgentRuntimeManager {
         env.extend(tool_switches(|k| std::env::var(k).ok()));
         // 代理：桌面探测到的代理（设置 → 环境 → git → 常见本地端口）作**兜底**下发——目标机
         // 登录环境里已有代理就用它自己的。回环地址按目标机网络改写（见 loopback_host_for）。
-        let desktop_proxy = tokio::task::spawn_blocking(crate::commands::proxy::detect_proxy)
+        let desktop_proxy = tokio::task::spawn_blocking(aide_core::proxy::detect_proxy)
             .await
             .ok()
             .flatten();
@@ -329,25 +317,134 @@ impl AgentRuntimeManager {
             loopback_host,
         };
         pump::start(pump::Pump {
-            app: app.clone(),
-            lane: Lane::Remote(host.clone()),
+            core: Arc::clone(core),
+            lane: Lane::Remote(Arc::new(HostLane {
+                host: host.clone(),
+                lanes: Arc::clone(self),
+            })),
             stdout,
             stderr,
             stdin: Arc::clone(&lane.stdin),
             child: Arc::clone(&lane.child),
             killed: Arc::clone(&lane.killed),
-            chat_events: self.chat_events.clone(),
+            chat_events: core.runtime.chat_events_sender(),
         });
-        self.remote_lanes.lock().unwrap().insert(host.clone(), lane);
+        self.lanes.lock().unwrap().insert(host.clone(), lane);
         Ok(())
+    }
+}
+
+impl LaneRouter for Router {
+    fn stdin_for(&self, session_id: &str) -> Option<Result<AgentStdin, String>> {
+        let host = self.0.sessions.lock().unwrap().get(session_id).cloned()?;
+        let stdin = self.0.lanes.lock().unwrap().get(&host).map(|l| Arc::clone(&l.stdin));
+        Some(stdin.ok_or_else(|| {
+            format!("{} 上的 agent 未运行（连接已断开？重新发送即可重连）", host.label())
+        }))
+    }
+
+    /// 远程工作区：会话跑在目标机的 sidecar 上（车道）。先确保车道在（首次会安装远程
+    /// 套件），再绑定会话、把命令里的桌面路径译成目标机路径。
+    fn prepare_send<'a>(
+        &'a self,
+        core: &'a Arc<Core>,
+        session_id: &'a str,
+        cwd: &'a str,
+        cmd: &'a mut Value,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let Some((host, _)) = path::parse(cwd) else {
+                return Ok(());
+            };
+            self.0.ensure_lane(core, &host).await?;
+            self.0.bind_session(session_id, &host);
+            self.0.translate_for_lane(&host, cmd);
+            // 插件 / 用户扩展：桌面是唯一真相源，按需投到目标机的哈希缓存里，路径随 send 下发
+            //（每条 send 都带：桌面上启用/停用插件后，下一次 query 装配就看得到）。
+            cmd["extensions"] = self.0.svc.extensions(&host).await;
+            Ok(())
+        })
     }
 
     /// 杀掉全部远程车道（app 退出）。
-    pub(super) async fn kill_remote_lanes(&self) {
-        let lanes: Vec<RemoteLane> = self.remote_lanes.lock().unwrap().drain().map(|(_, l)| l).collect();
-        for l in lanes {
-            l.killed.store(true, std::sync::atomic::Ordering::Relaxed);
-            let _ = l.child.lock().await.start_kill();
+    fn kill_all(&self) -> BoxFuture<'_, ()> {
+        Box::pin(async move {
+            let lanes: Vec<RemoteLane> =
+                self.0.lanes.lock().unwrap().drain().map(|(_, l)| l).collect();
+            for l in lanes {
+                l.killed.store(true, std::sync::atomic::Ordering::Relaxed);
+                let _ = l.child.lock().await.start_kill();
+            }
+        })
+    }
+}
+
+impl LaneAdapter for HostLane {
+    fn tag(&self) -> String {
+        self.host.to_string()
+    }
+
+    fn answer_locally<'a>(&'a self, event: &'a Value, stdin: &'a AgentStdin) -> BoxFuture<'a, bool> {
+        Box::pin(answer_unsupported_bridge(event, &self.host, stdin))
+    }
+
+    fn lsp_request_in(&self, req: &mut LspQueryRequest) {
+        to_desktop_request(&self.host, req);
+    }
+
+    fn lsp_result_out(&self, body: &mut Value) {
+        to_posix_result(body);
+    }
+
+    fn map_event_paths(&self, event: &mut Value) {
+        map_event_paths(&self.host, event);
+    }
+
+    /// 车道进程死亡：只给绑在这条车道上的会话发 `session_dead`（前端据此把会话置为
+    /// 可重发；下一条 send 会重建车道）。本机车道与其它主机的会话不受影响。
+    fn on_dead(&self, core: &Core, stderr_tail: Vec<String>, reason: &str) {
+        let detail = (!stderr_tail.is_empty()).then(|| stderr_tail.join("\n"));
+        tracing::warn!(host = %self.host, reason, ?detail, "remote agent lane died");
+        for sid in self.lanes.drop_lane(&self.host) {
+            core.runtime.mark_session_dead(&sid);
+            core.emit(
+                "chat-event",
+                serde_json::json!({
+                    "type": "session_dead",
+                    "session_id": sid,
+                    "reason": if reason == "heartbeat_timeout" { "heartbeat_timeout" } else { "exit" },
+                    "detail": detail.clone().unwrap_or_else(|| format!("与 {} 的 agent 连接已断开", self.host.label())),
+                }),
+            );
+        }
+    }
+}
+
+/// 远程车道：请求里的目标机路径 → 桌面形态。
+fn to_desktop_request(host: &HostId, req: &mut LspQueryRequest) {
+    use crate::remote_workspace::path::to_desktop;
+    req.workspace_root = to_desktop(host, &req.workspace_root);
+    if let Some(f) = req.args.get("file").and_then(Value::as_str).map(str::to_string) {
+        req.args["file"] = Value::String(to_desktop(host, &f));
+    }
+}
+
+/// 远程车道：结果里的桌面形态绝对路径 → 目标机路径（`symbol.file` / 候选的 `file_path`）。
+/// 文本兜底的 `matches[].file` 是相对路径，两端同形，不动。
+fn to_posix_result(v: &mut Value) {
+    let posix = |s: &str| crate::remote_workspace::path::parse(s).map(|(_, p)| p);
+    if let Some(results) = v.get_mut("results").and_then(Value::as_array_mut) {
+        for r in results {
+            if let Some(f) = r.pointer("/symbol/file").and_then(Value::as_str).and_then(posix) {
+                r["symbol"]["file"] = Value::String(f);
+            }
+        }
+    }
+    if let Some(cands) = v.get_mut("candidates").and_then(Value::as_array_mut) {
+        for c in cands {
+            if let Some(f) = c.get("file_path").and_then(Value::as_str).and_then(posix) {
+                c["file_path"] = Value::String(f);
+            }
         }
     }
 }
@@ -454,5 +551,31 @@ mod tests {
         let mut ev = json!({"input": {"path": "src"}});
         map_event_paths(&host(), &mut ev);
         assert_eq!(ev["input"]["path"], "src");
+    }
+
+    #[test]
+    fn remote_request_and_result_paths_round_trip() {
+        let host = HostId::Wsl("Debian".into());
+        let mut req = LspQueryRequest {
+            request_id: "r".into(),
+            tool: "references".into(),
+            args: json!({"file": "/home/u/p/src/a.ts", "line": 3, "character": 5}),
+            workspace_root: "/home/u/p".into(),
+        };
+        to_desktop_request(&host, &mut req);
+        assert_eq!(req.workspace_root, "\\\\wsl.localhost\\Debian\\home\\u\\p");
+        assert_eq!(req.args["file"], "\\\\wsl.localhost\\Debian\\home\\u\\p\\src\\a.ts");
+
+        // LspManager 回的是 URI 解出来的正斜杠 UNC
+        let mut body = json!({
+            "ok": true, "status": "ready",
+            "results": [{"symbol": {"file": "//wsl.localhost/Debian/home/u/p/src/b.ts", "line": 1}}],
+            "candidates": [{"file_path": "//wsl.localhost/Debian/home/u/p/c.ts"}],
+            "matches": [{"file": "src/d.ts"}],
+        });
+        to_posix_result(&mut body);
+        assert_eq!(body["results"][0]["symbol"]["file"], "/home/u/p/src/b.ts");
+        assert_eq!(body["candidates"][0]["file_path"], "/home/u/p/c.ts");
+        assert_eq!(body["matches"][0]["file"], "src/d.ts");
     }
 }

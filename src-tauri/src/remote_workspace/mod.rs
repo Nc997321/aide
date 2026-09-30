@@ -18,6 +18,7 @@
 
 pub mod connection;
 pub mod install;
+pub mod lanes;
 pub mod launcher;
 pub mod lsp_bridge;
 pub mod lsp_pipe;
@@ -328,5 +329,10 @@ pub fn manage(app: &tauri::App) {
     svc.attach(app.handle().clone());
     // aide-core 的 LSP 碰到远程工作区路径时经这座桥（过渡端口，P1 删除）。
     aide_core::lsp::remote::set_remote(Box::new(lsp_bridge::LspBridge(Arc::clone(&svc))));
+    // aide-core 的 agent runtime 碰到远程工作区的会话时经车道路由（过渡端口，P1 删除）。
+    let lanes = lanes::RemoteLanes::new(Arc::clone(&svc));
+    let core = app.state::<Arc<aide_core::Core>>();
+    core.runtime.set_lane_router(Box::new(lanes::Router(Arc::clone(&lanes))));
+    app.manage(lanes);
     app.manage(svc);
 }

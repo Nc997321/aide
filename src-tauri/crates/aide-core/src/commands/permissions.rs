@@ -13,19 +13,28 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use tauri::{AppHandle, Emitter, State};
 
-use crate::commands::WorkspaceState;
 use crate::policy::{
     self, ChainEntry, PermissionMatcher, PermissionRule, PermissionSource, ToolInvocation,
 };
+use crate::registry::Command as HostCommand;
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::{
     PermissionEffect, SettingsError, SettingsScope, SettingsService, StoredPermissionRule,
 };
+use crate::{command, Core, WorkspaceState};
 
 /// 信任工作区自动写入的安全只读命令白名单（trust/untrust 命令调用）。
-pub(crate) use aide_core::policy::safe_rules::{ensure_safe_rules, remove_safe_rules};
+pub use crate::policy::safe_rules::{ensure_safe_rules, remove_safe_rules};
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("get_permission_settings", get_permission_settings),
+    command!("create_permission_rule", create_permission_rule),
+    command!("create_permission_rules", create_permission_rules),
+    command!("update_permission_rule", update_permission_rule),
+    command!("delete_permission_rule", delete_permission_rule),
+    command!("explain_permission_decision", explain_permission_decision),
+];
 
 // ---- DTOs ----
 
@@ -395,15 +404,21 @@ pub fn explain_permission_decision_impl(
     })
 }
 
-// ---- Tauri command wrappers ----
+// ---- 命令 ----
 
-#[tauri::command]
-pub async fn get_permission_settings(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetPermissionSettingsArgs {
+    #[serde(default)]
     project: Option<String>,
-    settings: State<'_, Arc<SettingsService>>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionSettingsView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn get_permission_settings(core: Arc<Core>, a: GetPermissionSettingsArgs) -> Result<PermissionSettingsView, String> {
+    let GetPermissionSettingsArgs { project } = a;
+    let settings = core.settings.clone();
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     tokio::task::spawn_blocking(move || {
         build_permission_settings_view(&service, project.as_deref())
@@ -411,99 +426,134 @@ pub async fn get_permission_settings(
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
 /// 写入成功后通知前端权限面板刷新。带新 revision（单调递增），前端按
 /// `payload > revision` 判断是否需要重拉，自己写入后的回环（payload 相等）跳过。
 /// 与 sidecar 广播（update_permission_policy）是两条独立通道：那条更新 agent
 /// 运行中策略，这条刷新右侧 tab 面板展示。
-fn emit_permissions_changed(app: &AppHandle, view: &PermissionSettingsView) {
-    let _ = app.emit("permissions-changed", view.revision);
+fn emit_permissions_changed(core: &Core, view: &PermissionSettingsView) {
+    core.emit("permissions-changed", serde_json::json!(view.revision));
 }
 
-#[tauri::command]
-pub async fn create_permission_rule(
-    app: AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePermissionRuleArgs {
     scope: SettingsScope,
     rule: PermissionRuleDraft,
+    #[serde(default)]
     project: Option<String>,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionSettingsView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn create_permission_rule(core: Arc<Core>, a: CreatePermissionRuleArgs) -> Result<PermissionSettingsView, String> {
+    let CreatePermissionRuleArgs { scope, rule, project } = a;
+    let app = core.clone();
+    let settings = core.settings.clone();
+    let runtime = &core.runtime;
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
-    let view = create_permission_rule_impl(service, runtime.inner(), scope, rule, project).await?;
+    let view = create_permission_rule_impl(service, runtime, scope, rule, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
+}
 
-#[tauri::command]
-pub async fn create_permission_rules(
-    app: AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePermissionRulesArgs {
     scope: SettingsScope,
     rules: Vec<PermissionRuleDraft>,
+    #[serde(default)]
     project: Option<String>,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionSettingsView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn create_permission_rules(core: Arc<Core>, a: CreatePermissionRulesArgs) -> Result<PermissionSettingsView, String> {
+    let CreatePermissionRulesArgs { scope, rules, project } = a;
+    let app = core.clone();
+    let settings = core.settings.clone();
+    let runtime = &core.runtime;
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view =
-        create_permission_rules_impl(service, runtime.inner(), scope, rules, project).await?;
+        create_permission_rules_impl(service, runtime, scope, rules, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
+}
 
-#[tauri::command]
-pub async fn update_permission_rule(
-    app: AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePermissionRuleArgs {
     scope: SettingsScope,
     id: String,
     rule: PermissionRuleDraft,
+    #[serde(default)]
     project: Option<String>,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionSettingsView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn update_permission_rule(core: Arc<Core>, a: UpdatePermissionRuleArgs) -> Result<PermissionSettingsView, String> {
+    let UpdatePermissionRuleArgs { scope, id, rule, project } = a;
+    let app = core.clone();
+    let settings = core.settings.clone();
+    let runtime = &core.runtime;
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view =
-        update_permission_rule_impl(service, runtime.inner(), scope, id, rule, project).await?;
+        update_permission_rule_impl(service, runtime, scope, id, rule, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
+}
 
-#[tauri::command]
-pub async fn delete_permission_rule(
-    app: AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletePermissionRuleArgs {
     scope: SettingsScope,
     id: String,
+    #[serde(default)]
     project: Option<String>,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionSettingsView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn delete_permission_rule(core: Arc<Core>, a: DeletePermissionRuleArgs) -> Result<PermissionSettingsView, String> {
+    let DeletePermissionRuleArgs { scope, id, project } = a;
+    let app = core.clone();
+    let settings = core.settings.clone();
+    let runtime = &core.runtime;
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
-    let view = delete_permission_rule_impl(service, runtime.inner(), scope, id, project).await?;
+    let view = delete_permission_rule_impl(service, runtime, scope, id, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
 }
+}
 
-#[tauri::command]
-pub async fn explain_permission_decision(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExplainPermissionDecisionArgs {
     invocation: PermissionExplanationRequest,
-    settings: State<'_, Arc<SettingsService>>,
-    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<PermissionExplanationView, String> {
-    let service = settings.inner().clone();
+}
+
+async fn explain_permission_decision(core: Arc<Core>, a: ExplainPermissionDecisionArgs) -> Result<PermissionExplanationView, String> {
+    let ExplainPermissionDecisionArgs { invocation } = a;
+    let settings = core.settings.clone();
+    let workspace = core.workspace.clone();
+    {
+    let service = settings.clone();
     let project = current_project_root(&workspace);
     tokio::task::spawn_blocking(move || {
         explain_permission_decision_impl(&service, &invocation, project.as_deref())
     })
     .await
     .map_err(|e| e.to_string())?
+}
 }
 
 #[cfg(test)]

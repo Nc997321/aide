@@ -580,9 +580,10 @@ impl AutomationService {
             .app
             .get()
             .ok_or("AutomationService 未启动（无 AppHandle）")?;
-        let runtime = app
-            .try_state::<crate::runtime::AgentRuntimeManager>()
-            .ok_or("AgentRuntimeManager 未注册")?;
+        let core = app
+            .try_state::<Arc<aide_core::Core>>()
+            .ok_or("Host core 未注册")?;
+        let runtime = &core.runtime;
         if let Err(e) = runtime.send_to_runtime(&cmd).await {
             // 发送失败 = 运行从未开始：清掉预写的会话元数据（按 run_id 命名的那份），
             // 再按失败收尾
@@ -1067,9 +1068,10 @@ impl AutomationService {
         let cmd = Self::build_distill_command(&task, &run, &Self::path_policy(&cwd));
 
         let app = self.app.get().ok_or("AutomationService 未启动")?;
-        let runtime = app
-            .try_state::<crate::runtime::AgentRuntimeManager>()
-            .ok_or("AgentRuntimeManager 未注册")?;
+        let core = app
+            .try_state::<Arc<aide_core::Core>>()
+            .ok_or("Host core 未注册")?;
+        let runtime = &core.runtime;
         // 先注册路由再发（send 返回后事件才可能到达，顺序安全）
         self.by_session
             .lock()

@@ -20,8 +20,8 @@ pub fn host_of_session(app: &AppHandle, session_id: &str) -> Option<HostId> {
             return Some(h);
         }
     }
-    app.try_state::<crate::runtime::AgentRuntimeManager>()
-        .and_then(|m| m.lane_of(session_id))
+    app.try_state::<std::sync::Arc<super::lanes::RemoteLanes>>()
+        .and_then(|l| l.lane_of(session_id))
 }
 
 /// 向主机取一份转录原料（`aide_host::commands::TRANSCRIPT_COMMANDS`）。

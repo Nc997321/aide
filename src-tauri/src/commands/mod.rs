@@ -1,19 +1,14 @@
 pub mod app;
 pub mod browser;
-pub mod chat;
 pub mod clipboard;
 pub mod file_assoc;
 pub mod lsp_guide;
-pub mod mcp_probe;
-pub mod session_runtime;
-pub mod workspace_trust;
 pub mod filesystem;
-pub mod permissions;
 /// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
 pub use aide_core::proxy;
 /// 已迁入 aide-core 的命令模块；保留 `crate::commands::<模块>` 路径。
 pub use aide_core::commands::{
-    customizations, knowledge, marketplace, memory_observatory, migration, notifications, onboarding, recent,
+    chat, customizations, knowledge, marketplace, memory_observatory, migration, notifications, onboarding, permissions, recent,
     run_configs, session, workspace,
 };
 pub use aide_core::commands::session::Session;

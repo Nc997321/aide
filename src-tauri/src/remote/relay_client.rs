@@ -73,8 +73,8 @@ async fn connect_once(gateway: &Arc<RemoteGateway>) -> Result<(), String> {
     let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<String>(256);
     let mut rx = gateway
         .app_handle
-        .state::<crate::runtime::AgentRuntimeManager>()
-        .inner()
+        .state::<std::sync::Arc<aide_core::Core>>()
+        .runtime
         .subscribe_chat_events();
     let fwd = tokio::spawn(async move {
         while let Ok(event) = rx.recv().await {

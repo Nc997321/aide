@@ -1,16 +1,36 @@
-use crate::commands::settings::{public_settings, DEFAULT_OUTPUT_STYLE};
-use crate::commands::{project_root_for_commands, WorkspaceState};
+//! 聊天命令：发消息（cwd / provider / 权限快照 / 工具闸门装配）与会话控制（权限应答、
+//! 中断、切模型…）。全部写进 agent runtime（`Core::runtime`）的 stdin；UI 状态只认 sidecar
+//! 广播的事件（CLAUDE.md 双通道契约）。
+
+use crate::app_settings::{public_settings, DEFAULT_OUTPUT_STYLE};
 use crate::runtime::env::build_runtime_env_vars;
-use crate::runtime::AgentRuntimeManager;
+use crate::registry::{blocking, Command as HostCommand};
+use crate::{command, Core, WorkspaceState};
+use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
-use tauri::State;
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("send_message", send_message),
+    command!("permission_response", permission_response),
+    command!("interrupt_session", interrupt_session),
+    command!("stop_bg_task", stop_bg_task),
+    command!("set_model", set_model),
+    command!("model_switch_confirm_decision", model_switch_confirm_decision),
+    command!("set_effort", set_effort),
+    command!("set_permission_mode", set_permission_mode),
+    command!("stop_chat_session", stop_chat_session),
+    command!("btw_ask", btw_ask),
+    command!("get_default_models", get_default_models),
+    command!("get_default_permission_modes", get_default_permission_modes),
+];
+
 
 async fn resolve_active_provider(
     service: std::sync::Arc<crate::settings::SettingsService>,
-) -> Result<crate::runtime::provider::ProviderConfig, String> {
+) -> Result<crate::provider::ProviderConfig, String> {
     tokio::task::spawn_blocking(move || {
         service
             .resolve_active_runtime_provider()
@@ -23,7 +43,7 @@ async fn resolve_active_provider(
 async fn resolve_provider_by_id(
     service: &std::sync::Arc<crate::settings::SettingsService>,
     id: &str,
-) -> Result<crate::runtime::provider::ProviderConfig, String> {
+) -> Result<crate::provider::ProviderConfig, String> {
     let service = service.clone();
     let id = id.to_string();
     tokio::task::spawn_blocking(move || {
@@ -45,10 +65,10 @@ async fn resolve_send_provider(
     service: std::sync::Arc<crate::settings::SettingsService>,
     session_id: &str,
     explicit_provider: Option<String>,
-) -> Result<crate::runtime::provider::ProviderConfig, String> {
+) -> Result<crate::provider::ProviderConfig, String> {
     let sid = session_id.to_string();
     let metadata_provider =
-        tokio::task::spawn_blocking(move || crate::commands::our_session_provider_field(&sid))
+        tokio::task::spawn_blocking(move || crate::session_store::our_session_provider_field(&sid))
             .await
             .map_err(|error| error.to_string())?;
     let preferred = explicit_provider.or(metadata_provider);
@@ -239,7 +259,7 @@ fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
 /// JoinError → 空表（退化成「不挂 LSP 工具」，与「探不到语言」走同一条路径）。
 /// 远程（WSL / SSH）：在目标机上探测，「配得上」= 目标机登录 PATH 上真有该语言的服务器
 /// （`aide-host lsp_detect`）；连不上 → 空表，同样退化成不挂。
-async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) -> Vec<String> {
+async fn lsp_languages_for_send(core: &std::sync::Arc<crate::Core>, workspace_root: &str) -> Vec<String> {
     let access = crate::lsp::workspace_access::WorkspaceAccess::of(workspace_root);
     if access.is_remote() {
         return match access.remote_detect(workspace_root).await {
@@ -254,8 +274,7 @@ async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) ->
             }
         };
     }
-    use tauri::Manager;
-    let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
+    let core = core.clone();
     let root = workspace_root.to_string();
     tokio::task::spawn_blocking(move || {
         crate::lsp::workspace_langs::lsp_languages_for_path(&core, &root)
@@ -264,32 +283,59 @@ async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) ->
     .unwrap_or_default()
 }
 
-#[tauri::command]
-pub async fn send_message(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SendMessageArgs {
     session_id: String,
     prompt: String,
+    #[serde(default)]
     images: Option<Vec<serde_json::Value>>,
-    // 发起方附带的渲染描述（见 SendOptions.display）；None = 按纯文本气泡渲染。
+    /// 发起方附带的渲染描述（见 SendOptions.display）；None = 按纯文本气泡渲染。
+    #[serde(default)]
     display: Option<serde_json::Value>,
+    #[serde(default)]
     resume_id: Option<String>,
+    #[serde(default)]
     initial_model: Option<String>,
+    #[serde(default)]
     initial_effort: Option<String>,
+    #[serde(default)]
     permission_mode: Option<String>,
+    #[serde(default)]
     jump_queue: Option<bool>,
+    #[serde(default)]
     workspace_root: Option<String>,
-    // @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
-    // workspace/attach.rs 裁定（只认已注册工作区）。缺席/空 = 不动会话账本。
+    /// @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
+    /// workspace/attach.rs 裁定（只认已注册工作区）。缺席/空 = 不动会话账本。
+    #[serde(default)]
     additional_dirs: Option<Vec<String>>,
-    // 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
-    // None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
+    /// 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
+    /// None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
+    #[serde(default)]
     provider: Option<String>,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
-    settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-    // Tauri 注入（不是 IPC 参数）：lsp_languages_for_path 需要它解析捆绑 server 的
-    // 资源路径（registry::resolve）。同 lsp_ensure_server 的取用方式。
-    app: tauri::AppHandle,
-) -> Result<(), String> {
+}
+
+async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String> {
+    let SendMessageArgs {
+        session_id,
+        prompt,
+        images,
+        display,
+        resume_id,
+        initial_model,
+        initial_effort,
+        permission_mode,
+        jump_queue,
+        workspace_root,
+        additional_dirs,
+        provider,
+    } = a;
+    let runtime_mgr = &core.runtime;
+    let workspace_state = core.workspace.clone();
+    let settings_service = core.settings.clone();
+    // lsp_languages_for_path 需要资源端口解析捆绑 server（registry::resolve）。
+    let app = core.clone();
+    {
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     let cwd_str = cwd.to_string_lossy().to_string();
 
@@ -301,12 +347,12 @@ pub async fn send_message(
     }
 
     let active =
-        resolve_send_provider(settings_service.inner().clone(), &session_id, provider).await?;
-    let snapshot_service = settings_service.inner().clone();
+        resolve_send_provider(settings_service.clone(), &session_id, provider).await?;
+    let snapshot_service = settings_service.clone();
     // 读设置失败不阻塞发送（proxy / thinking / output_style 各有兜底），但不能无声：
     // 用户选了非默认输出样式却读不到设置时，这条日志是唯一线索（同上方登记工作区的
     // 「失败不阻塞但不静默」处理）。
-    let read_service = settings_service.inner().clone();
+    let read_service = settings_service.clone();
     let settings = match tokio::task::spawn_blocking(move || public_settings(&read_service))
         .await
         .map_err(|e| e.to_string())
@@ -384,7 +430,6 @@ pub async fn send_message(
     // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
     // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
-    let remote_host = crate::remote_workspace::path::parse(&cwd_str).map(|(h, _)| h);
     cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
@@ -403,41 +448,44 @@ pub async fn send_message(
     // saves can broadcast `update_permission_policy` to this session.
     runtime_mgr.register_session_route(&session_id, Some(&cwd));
 
-    // 远程工作区：会话跑在目标机的 sidecar 上（车道）。先确保车道在（首次会安装远程
-    // 套件），再绑定会话、把命令里的桌面路径译成目标机路径。此后同会话的其它命令
-    // 由 send_to_runtime 按绑定自动路由。
-    if let Some(host) = remote_host {
-        runtime_mgr.ensure_remote_lane(&app, &host).await?;
-        runtime_mgr.bind_session_lane(&session_id, &host);
-        runtime_mgr.translate_for_lane(&host, &mut cmd);
-        // 插件 / 用户扩展：桌面是唯一真相源，按需投到目标机的哈希缓存里，路径随 send 下发
-        //（每条 send 都带：桌面上启用/停用插件后，下一次 query 装配就看得到）。
-        use tauri::Manager;
-        if let Some(svc) = app.try_state::<std::sync::Arc<crate::remote_workspace::RemoteWorkspaces>>() {
-            cmd["extensions"] = svc.extensions(&host).await;
-        }
+    // 旧模型远程工作区（过渡，P1 删除）：会话跑在目标机的 sidecar 上（车道）。路由器确保
+    // 车道在、绑定会话、把命令里的桌面路径译成目标机路径；此后同会话的其它命令由
+    // send_to_runtime 按绑定自动路由。本机工作区原样通过。
+    if let Some(router) = runtime_mgr.lane_router() {
+        router.prepare_send(&app, &session_id, &cwd_str, &mut cmd).await?;
     }
 
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
-#[tauri::command]
-pub async fn permission_response(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PermissionResponseArgs {
     session_id: String,
     id: String,
     approved: bool,
+    #[serde(default)]
     always: Option<bool>,
+    #[serde(default)]
     answers: Option<HashMap<String, String>>,
+    #[serde(default)]
     next_mode: Option<String>,
-    // 拒绝理由：仅 approved=false 时生效，sidecar 交给 CLI 当 user feedback
-    // （CLI 用官方模板包装后反馈给模型）。它不是工具结果正文——裸传会让模型
-    // 把用户的话读成命令输出（2026-09-08 事故）。
+    /// 拒绝理由：仅 approved=false 时生效，sidecar 交给 CLI 当 user feedback
+    /// （CLI 用官方模板包装后反馈给模型）。它不是工具结果正文——裸传会让模型
+    /// 把用户的话读成命令输出（2026-09-08 事故）。
+    #[serde(default)]
     message: Option<String>,
-    // 会话级规则草稿（前端在「允许」文件工具时推导，如「本会话内同文件不再询问」）：
-    // 不透明透传给 sidecar 入库（PermissionRuleDraft 形状，Rust 不校验内容）。
+    /// 会话级规则草稿（前端在「允许」文件工具时推导，如「本会话内同文件不再询问」）：
+    /// 不透明透传给 sidecar 入库（PermissionRuleDraft 形状，Rust 不校验内容）。
+    #[serde(default)]
     session_rules: Option<Vec<serde_json::Value>>,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Result<(), String> {
+    let PermissionResponseArgs { session_id, id, approved, always, answers, next_mode, message, session_rules } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let mut cmd = json!({
         "cmd": "permission_response",
         "session_id": session_id,
@@ -459,46 +507,70 @@ pub async fn permission_response(
     }
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
-#[tauri::command]
-pub async fn interrupt_session(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InterruptSessionArgs {
     session_id: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn interrupt_session(core: Arc<Core>, a: InterruptSessionArgs) -> Result<(), String> {
+    let InterruptSessionArgs { session_id } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "interrupt", "session_id": session_id });
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
-#[tauri::command]
-pub async fn stop_bg_task(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopBgTaskArgs {
     session_id: String,
     task_id: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn stop_bg_task(core: Arc<Core>, a: StopBgTaskArgs) -> Result<(), String> {
+    let StopBgTaskArgs { session_id, task_id } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "stop_bg_task", "session_id": session_id, "task_id": task_id });
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
-#[tauri::command]
-pub async fn set_model(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetModelArgs {
     session_id: String,
     model: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<bool, String> {
+}
+
+async fn set_model(core: Arc<Core>, a: SetModelArgs) -> Result<bool, String> {
+    let SetModelArgs { session_id, model } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "set_model", "session_id": session_id, "model": model });
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
+}
 }
 
 /// 模型切换成本确认（model_switch_confirm 弹窗）的用户决定：转发 sidecar 裁决挂起的
 /// PreModelSwitch hook。confirm_id 对不上（过期弹窗晚到）由 sidecar 静默忽略；
 /// 挂起超时 sidecar 自行按 deny 收尾——本命令只负责送达，不承载裁决语义。
-#[tauri::command]
-pub async fn model_switch_confirm_decision(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelSwitchConfirmDecisionArgs {
     session_id: String,
     confirm_id: String,
     approve: bool,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn model_switch_confirm_decision(core: Arc<Core>, a: ModelSwitchConfirmDecisionArgs) -> Result<(), String> {
+    let ModelSwitchConfirmDecisionArgs { session_id, confirm_id, approve } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({
         "cmd": "model_switch_confirm_decision",
         "session_id": session_id,
@@ -507,41 +579,60 @@ pub async fn model_switch_confirm_decision(
     });
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
 /// 会话级 effort 切换（provider-agnostic 字符串档位，Claude sidecar 解释为
 /// low/medium/high/xhigh/max）。镜像 set_model：Runtime 不在时返回 false，
 /// 前端按 deferred 处理（值会随下一条 send 的 env 通道带上）。
-#[tauri::command]
-pub async fn set_effort(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetEffortArgs {
     session_id: String,
     effort: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<bool, String> {
+}
+
+async fn set_effort(core: Arc<Core>, a: SetEffortArgs) -> Result<bool, String> {
+    let SetEffortArgs { session_id, effort } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "set_effort", "session_id": session_id, "effort": effort });
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
 }
+}
 
-#[tauri::command]
-pub async fn set_permission_mode(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPermissionModeArgs {
     session_id: String,
     mode: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn set_permission_mode(core: Arc<Core>, a: SetPermissionModeArgs) -> Result<(), String> {
+    let SetPermissionModeArgs { session_id, mode } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "set_permission_mode", "session_id": session_id, "mode": mode });
     runtime_mgr.send_to_runtime(&cmd).await
 }
+}
 
-#[tauri::command]
-pub async fn stop_chat_session(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StopChatSessionArgs {
     session_id: String,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn stop_chat_session(core: Arc<Core>, a: StopChatSessionArgs) -> Result<(), String> {
+    let StopChatSessionArgs { session_id } = a;
+    let runtime_mgr = &core.runtime;
+    {
     let cmd = json!({ "cmd": "session_stop", "session_id": session_id });
     let out = runtime_mgr.send_to_runtime(&cmd).await;
     // 不等 session_dead 事件就先落存活表：手机端点了停止就该立刻能换供应商，
     // 事件到达有 RTT（且进程已死时可能根本不来）。
     runtime_mgr.mark_session_dead(&session_id);
     out
+}
 }
 
 /// btw 侧问：走**存活的**主会话进程内的官方 side_question 控制通道，不起新进程
@@ -554,13 +645,19 @@ pub async fn stop_chat_session(
 ///
 /// 全程 fire-and-forget：正文与错误一律经 btw_answer 事件回来（UI 状态只认事件
 /// 通道），本命令的 Result 只表示"命令写进 sidecar stdin 成没成"。
-#[tauri::command]
-pub async fn btw_ask(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BtwAskArgs {
     session_id: String,
     question: String,
+    #[serde(default)]
     history: Option<Vec<serde_json::Value>>,
-    runtime_mgr: State<'_, AgentRuntimeManager>,
-) -> Result<(), String> {
+}
+
+async fn btw_ask(core: Arc<Core>, a: BtwAskArgs) -> Result<(), String> {
+    let BtwAskArgs { session_id, question, history } = a;
+    let runtime_mgr = &core.runtime;
+    {
     // session_id 是**主会话**路由键（btw 不再有独立会话 id）。
     let mut cmd = json!({
         "cmd": "btw_ask",
@@ -574,6 +671,7 @@ pub async fn btw_ask(
         }
     }
     runtime_mgr.send_to_runtime(&cmd).await
+}
 }
 
 /// cwd 的取值来源（只服务两件事：回落留痕，以及纯核可单测）。
@@ -618,10 +716,10 @@ fn explicit_root(workspace_root: &Option<String>) -> Option<PathBuf> {
 
 /// 档案里的归属路径。目录不存在（换了机器 / 已删）等同没记——回落链继续往下走。
 fn recorded_root(session_id: &str) -> Option<PathBuf> {
-    let p = PathBuf::from(crate::commands::our_session_workspace(session_id).path?);
-    // 远程工作区（WSL / SSH）无法同步 stat，按存在处理——否则会静默回落活动工作区
-    let remote = crate::remote_workspace::path::is_remote(&p.to_string_lossy());
-    (remote || p.is_dir()).then_some(p)
+    let p = PathBuf::from(crate::session_store::our_session_workspace(session_id).path?);
+    // 「目录还在吗」走 Host 口径（远程工作区无法同步 stat，按存在处理——否则会静默回落
+    // 活动工作区，2026-09-18 事故的同一形态）；本机再排除「是个文件」。
+    (crate::workspace::present(&p) && !p.is_file()).then_some(p)
 }
 
 /// 会话工作目录：显式 workspace_root → 档案 wsPath → 当前活动工作区。
@@ -633,12 +731,12 @@ fn recorded_root(session_id: &str) -> Option<PathBuf> {
 fn session_cwd(
     session_id: &str,
     workspace_root: &Option<String>,
-    workspace_state: &State<'_, std::sync::Arc<WorkspaceState>>,
+    workspace_state: &WorkspaceState,
 ) -> PathBuf {
     let (cwd, source) = pick_cwd(CwdCandidates {
         explicit: explicit_root(workspace_root),
         recorded: recorded_root(session_id),
-        active: project_root_for_commands(workspace_state),
+        active: workspace_state.root_for(None),
     });
     if source == CwdSource::ActiveWorkspace {
         tracing::warn!(
@@ -652,55 +750,22 @@ fn session_cwd(
 
 // ---- 静态数据（模型列表、权限模式） ----
 
-fn resolve_sidecar_data_path(app: &tauri::AppHandle, file_name: &str) -> Result<PathBuf, String> {
-    #[cfg(debug_assertions)]
-    {
-        let _ = app;
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let path = manifest
-            .parent()
-            .unwrap()
-            .join("agent-sidecar")
-            .join(file_name);
-        if path.exists() {
-            return Ok(path);
-        }
-        Err(format!("{} not found at {:?}", file_name, path))
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        use tauri::Manager;
-        let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-        let path = resource_dir.join("agent-runtime").join(file_name);
-        if path.exists() {
-            return Ok(path);
-        }
-        // fallback
-        let fallback = resource_dir.join("agent-sidecar").join(file_name);
-        if fallback.exists() {
-            return Ok(fallback);
-        }
-        Err(format!("{} resource missing: {:?}", file_name, path))
-    }
+/// 权限模式默认表：编译进二进制（本机与远程 Host 带同一份，不依赖资源目录）。
+const DEFAULT_PERMISSION_MODES: &str = include_str!("default-permission-modes.json");
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDefaultModelsArgs {
 }
 
-fn read_sidecar_data_json(
-    app: &tauri::AppHandle,
-    file_name: &str,
-) -> Result<serde_json::Value, String> {
-    let path = resolve_sidecar_data_path(app, file_name)?;
-    let content =
-        fs::read_to_string(&path).map_err(|e| format!("Failed to read {}: {}", file_name, e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Failed to parse {}: {}", file_name, e))
-}
-
-#[tauri::command]
-pub fn get_default_models() -> Result<serde_json::Value, String> {
+async fn get_default_models(_core: Arc<Core>, a: GetDefaultModelsArgs) -> Result<serde_json::Value, String> {
+    let _ = a;
+    blocking(move || -> Result<serde_json::Value, String> {
     // 单一真源：catalog 预设里 system_default 的 models 字段。
     // 此前是读 agent-sidecar/default-models.json 兜底——SDK 协议翻译层需要别名
     // 与真名两种形态，但现在下拉/比对/展示已统一用真名（详见 sonnet 越界修复），
     // 这条数据是前端唯一的"系统默认供应商"模型列表入口，删冗余文件后归位。
-    use crate::runtime::provider::{catalog, ProviderKind};
+    use crate::provider::{catalog, ProviderKind};
     let models = catalog::catalog_find(ProviderKind::SystemDefault)
         .map(|p| p.models.clone())
         .unwrap_or_default();
@@ -709,13 +774,20 @@ pub fn get_default_models() -> Result<serde_json::Value, String> {
         .map(|m| serde_json::json!({ "value": m, "displayName": m }))
         .collect();
     Ok(serde_json::Value::Array(arr))
+}).await
 }
 
-#[tauri::command]
-pub fn get_default_permission_modes(
-    app_handle: tauri::AppHandle,
-) -> Result<serde_json::Value, String> {
-    read_sidecar_data_json(&app_handle, "default-permission-modes.json")
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetDefaultPermissionModesArgs {
+}
+
+async fn get_default_permission_modes(_core: Arc<Core>, a: GetDefaultPermissionModesArgs) -> Result<serde_json::Value, String> {
+    let _ = a;
+    blocking(move || -> Result<serde_json::Value, String> {
+    serde_json::from_str(DEFAULT_PERMISSION_MODES)
+        .map_err(|e| format!("Failed to parse default-permission-modes.json: {e}"))
+}).await
 }
 
 #[cfg(test)]

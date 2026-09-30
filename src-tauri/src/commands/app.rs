@@ -25,11 +25,9 @@ pub async fn quit_app(app: AppHandle) {
 /// 退出前清理常驻子进程。best-effort：任一环未初始化或失败都不阻塞退出。
 pub(crate) async fn shutdown_children(app: &AppHandle) {
     // 1) Agent Runtime（node 常驻进程，所有会话共享那一个）
-    if let Some(rt) = app.try_state::<crate::runtime::AgentRuntimeManager>() {
-        rt.kill_runtime().await;
-    }
-    // 2) LSP server（按 工作区×语言 拉起，java / go / ts 各一个进程）
+    // 2) LSP server（按 工作区×语言 拉起，java / go / ts 各一个进程）——两者都住 Host 核心
     if let Some(core) = app.try_state::<std::sync::Arc<aide_core::Core>>() {
+        core.runtime.kill_runtime().await;
         core.lsp.kill_all().await;
     }
     // 3) codegraph runner 不在此列：proxy 内有 idle_reaper 空闲自动回收兜底，

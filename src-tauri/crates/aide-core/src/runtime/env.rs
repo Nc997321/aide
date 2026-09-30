@@ -4,13 +4,13 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::ProviderConfig;
+use crate::provider::ProviderConfig;
 
 /// 组 spawn env：active provider 直映；
 /// 再补公共 fallback（CLAUDE_CONFIG_DIR + 代理），最后 proxy 覆盖。
 /// 纯函数——无 I/O，可单测。
 pub fn build_runtime_env_vars(active: &ProviderConfig, proxy: &str) -> HashMap<String, String> {
-    use crate::runtime::provider::strategy::strategy_for;
+    use crate::provider::strategy::strategy_for;
     let strat = strategy_for(active.kind);
     let mut env_vars = strat.env_vars(active);
 
@@ -65,7 +65,7 @@ fn is_cargo_target_segment(seg: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderKind, ProviderModelMappings};
+    use crate::provider::{ProviderKind, ProviderModelMappings};
 
     #[test]
     fn strip_removes_cargo_injected_segments() {

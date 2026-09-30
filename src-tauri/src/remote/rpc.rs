@@ -53,19 +53,23 @@ pub fn dispatch(app: AppHandle, command: &str, params: Value) -> Option<BoxFutur
     if let Some(route) = crate::remote_workspace::sessions::route(&app, command, &params) {
         return Some(Box::pin(crate::remote_workspace::sessions::run(app, route)));
     }
-    let run = aide_core::lookup(command)?;
-    Some(Box::pin(async move {
-        use tauri::Manager;
-        let core = app
-            .try_state::<std::sync::Arc<aide_core::Core>>()
-            .ok_or("host core not initialised")?
-            .inner()
-            .clone();
-        match run(core, params).await? {
-            aide_core::Reply::Json(v) => Ok(v),
-            aide_core::Reply::Bytes(_) => Err("远程通道不支持二进制结果".to_string()),
-        }
-    }))
+    aide_core::lookup(command)?;
+    Some(Box::pin(call_core(app, command.to_string(), params)))
+}
+
+/// 直调 Host 命令表（手写包装做完远程专属的参数预处理后也走这里）。
+pub async fn call_core(app: AppHandle, command: String, params: Value) -> Result<Value, String> {
+    use tauri::Manager;
+    let run = aide_core::lookup(&command).ok_or_else(|| format!("unknown core command: {command}"))?;
+    let core = app
+        .try_state::<std::sync::Arc<aide_core::Core>>()
+        .ok_or("host core not initialised")?
+        .inner()
+        .clone();
+    match run(core, params).await? {
+        aide_core::Reply::Json(v) => Ok(v),
+        aide_core::Reply::Bytes(_) => Err("远程通道不支持二进制结果".to_string()),
+    }
 }
 
 /// 已迁入 aide-core 的远程可用命令（**只登记名字**：白名单仍是这里，实现是 core 命令表）。
@@ -84,7 +88,7 @@ static CORE_EXPOSED: &[&str] = &[
     // ── 通知中心持久化 ──
     "load_notifications",
     "save_notifications",
-    // ── 工作区（只读身份 + 信任查询；信任写入要广播给 live 会话，仍走 REGISTRY 包装）──
+    // ── 工作区（只读身份 + 信任查询）──
     "list_workspaces",
     // 日常模式归属：工作区列表把它滤掉了，远程端要进「日常」只能单独问这条（只读）。
     "daily_workspace",
@@ -113,38 +117,37 @@ static CORE_EXPOSED: &[&str] = &[
     "codegraph_close",
     "codegraph_reindex_file",
     "codegraph_rescan",
+    // ── 聊天控制（闭包直调路径；send_message 在 REGISTRY，有远程专属预处理）──
+    "permission_response",
+    "interrupt_session",
+    "stop_chat_session",
+    "stop_bg_task",
+    // 已知缺口：PWA 经本条目能发起 set_model，但无成本确认弹窗 UI、白名单也无
+    // model_switch_confirm_decision 回传通道——热缓存+大上下文切换时 PreModelSwitch
+    // 挂起 10s 超时按 deny 收尾（与桌面 2026-09-11 补转发层前的失效模式同形）。
+    // PWA 补弹窗时须连同决策命令一起收录。
+    "set_model",
+    "set_effort",
+    "set_permission_mode",
+    "btw_ask",
+    // ── 后台任务快照（远程对账：打开会话/重连时回填 bgTasks）──
+    "list_bg_tasks",
+    // ── 会话存活（远程端决定模型下拉口径）──
+    "session_alive",
+    // ── 信任写入（广播给 live 会话，core 命令内完成）──
+    "trust_workspace",
+    "untrust_workspace",
+    // ── 模型/权限模式默认值 ──
+    "get_default_models",
+    "get_default_permission_modes",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
 static REGISTRY: &[(&str, Handler)] = &[
-    // ── 聊天控制（闭包直调路径）──
+    // ── 聊天控制：send 有远程专属的权限模式兜底（见包装），其余聊天控制在 CORE_EXPOSED ──
     ("send_message", handlers::send_message),
-    ("permission_response", handlers::permission_response),
-    ("interrupt_session", handlers::interrupt_session),
-    ("stop_chat_session", handlers::stop_chat_session),
-    ("stop_bg_task", handlers::stop_bg_task),
-    // 已知缺口：PWA 经本条目能发起 set_model，但无成本确认弹窗 UI、REGISTRY 也无
-    // model_switch_confirm_decision 回传通道——热缓存+大上下文切换时 PreModelSwitch
-    // 挂起 10s 超时按 deny 收尾（与桌面 2026-09-11 补转发层前的失效模式同形）。
-    // PWA 补弹窗时须连同决策命令一起收录本表。
-    ("set_model", handlers::set_model),
-    ("set_effort", handlers::set_effort),
-    ("set_permission_mode", handlers::set_permission_mode),
-    ("btw_ask", handlers::btw_ask),
-    // ── 后台任务快照（远程对账：打开会话/重连时回填 bgTasks）──
-    ("list_bg_tasks", handlers::list_bg_tasks),
-    // ── 会话管理与元数据 ──
-    ("session_alive", handlers::session_alive),
-    // ── 工作区与信任 ──
+    // ── 工作区 ──
     ("get_active_workspace", handlers::get_active_workspace),
-    ("trust_workspace", handlers::trust_workspace),
-    ("untrust_workspace", handlers::untrust_workspace),
-    // ── 模型/权限模式默认值 ──
-    ("get_default_models", handlers::get_default_models),
-    (
-        "get_default_permission_modes",
-        handlers::get_default_permission_modes,
-    ),
     // ── 自动化任务（ohos 端自动化五屏：列表/详情/表单/运行转录/手册。
     // 与桌面 UI 同一命令实现，能力零漂移；CRUD 与立即运行均经此处开放给
     // 已配对远程端——配对/信任边界与聊天控制命令同层）──

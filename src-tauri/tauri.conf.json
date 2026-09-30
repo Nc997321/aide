@@ -20,7 +20,6 @@
     "targets": "all",
     "resources": {
       "../agent-sidecar/dist/aide-agent*": "agent-runtime/",
-      "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json",
       "remote-kit/*": "remote-kit/",
       "codegraph-dist/*": "codegraph/",
     "resources/codegraph-model/model.onnx": "codegraph-model/model.onnx",

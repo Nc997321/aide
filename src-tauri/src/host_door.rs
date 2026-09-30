@@ -77,6 +77,70 @@ impl aide_core::resources::HostResources for DesktopResources {
         }
     }
 
+    /// dev：node 跑 esbuild bundle（`agent-sidecar/dist/runtime.js`，`AIDE_NODE_PATH` 可换 node）；
+    /// release：打包资源目录 `agent-runtime/` 下的独立可执行文件（旧路径 `agent-sidecar/` 兜底）。
+    fn agent_runtime(&self) -> Result<(String, std::path::PathBuf), String> {
+        #[cfg(debug_assertions)]
+        {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("agent-sidecar")
+                .join("dist")
+                .join("runtime.js");
+            if !path.exists() {
+                return Err(format!(
+                    "Runtime not found at {:?}. Run: cd agent-sidecar && pnpm build",
+                    path
+                ));
+            }
+            let node = std::env::var("AIDE_NODE_PATH").unwrap_or_else(|_| "node".to_string());
+            Ok((node, dunce::simplified(&path).to_path_buf()))
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let resource_dir = self.0.path().resource_dir().map_err(|e| e.to_string())?;
+            let bin_name = exe("aide-agent");
+            let path = resource_dir.join("agent-runtime").join(&bin_name);
+            if path.exists() {
+                return Ok((dunce::simplified(&path).to_string_lossy().to_string(), Default::default()));
+            }
+            let fallback = resource_dir.join("agent-sidecar").join(&bin_name);
+            if fallback.exists() {
+                return Ok((dunce::simplified(&fallback).to_string_lossy().to_string(), Default::default()));
+            }
+            Err(format!("Runtime exe missing: {:?}", path))
+        }
+    }
+
+    /// release：随 app 分发的原生 CLI（`agent-runtime/claude[.exe]`）。dev：agent-sidecar 的
+    /// node_modules 里 SDK 平台包带的 claude（CARGO_MANIFEST_DIR 是 src-tauri/，向上一层到项目根）。
+    fn claude_exe(&self) -> Option<std::path::PathBuf> {
+        #[cfg(not(debug_assertions))]
+        {
+            let res_dir = self.0.path().resource_dir().ok()?;
+            let claude = res_dir.join("agent-runtime").join(exe("claude"));
+            claude.exists().then(|| dunce::simplified(&claude).to_path_buf())
+        }
+        #[cfg(debug_assertions)]
+        {
+            let pkg = if cfg!(target_os = "windows") {
+                "@anthropic-ai/claude-agent-sdk-win32-x64"
+            } else if cfg!(target_os = "macos") {
+                "@anthropic-ai/claude-agent-sdk-darwin-arm64"
+            } else {
+                "@anthropic-ai/claude-agent-sdk-linux-x64"
+            };
+            let candidate = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("agent-sidecar")
+                .join("node_modules")
+                .join(pkg)
+                .join(exe("claude"));
+            candidate.exists().then(|| dunce::simplified(&candidate).to_path_buf())
+        }
+    }
+
     /// `<resource_dir>/lsp`（dev 与 release 同一口径：捆绑 server 与 lombok.jar 只在打包后存在）。
     fn lsp_dir(&self) -> Option<std::path::PathBuf> {
         let res_dir = self.0.path().resource_dir().ok()?;

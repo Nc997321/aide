@@ -20,6 +20,7 @@ pub mod proxy;
 pub mod pty;
 pub mod registry;
 pub mod resources;
+pub mod runtime;
 pub mod session_store;
 pub mod settings;
 pub mod skills;
@@ -62,6 +63,8 @@ pub struct Core {
     pub codegraph: Arc<codegraph::CodeGraphService>,
     /// 语言服务器（按 工作区 × 语言 各一台）。
     pub lsp: Arc<lsp::LspState>,
+    /// agent runtime（sidecar 进程、会话路由与存活表、事件泵）。
+    pub runtime: runtime::AgentRuntimeManager,
     /// 随包资源在哪（前门回答）。
     pub resources: Arc<dyn HostResources>,
     events: Arc<dyn EventSink>,
@@ -80,6 +83,7 @@ impl Core {
                 settings.clone(),
             )),
             lsp: Arc::new(lsp::LspState::new()),
+            runtime: runtime::AgentRuntimeManager::new(),
             resources,
             workspace,
             settings,

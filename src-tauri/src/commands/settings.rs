@@ -1,9 +1,5 @@
 //! 设置命令的桌面侧：设置本体与 state.json 住在 aide-core（`aide_core::app_settings`，
-//! 这里整体 re-export 保持既有调用路径）；本文件只剩 GUI 能力（系统通知）与尚未迁入
-//! core 的 codegraph / 会话路由查询。
-
-use serde::Serialize;
-use tauri::State;
+//! 这里整体 re-export 保持既有调用路径）；本文件只剩 GUI 能力（系统通知）。
 
 pub use aide_core::app_settings::*;
 
@@ -53,31 +49,3 @@ pub fn notify_send(app: tauri::AppHandle, title: String, body: String, session_i
         });
     }
 }
-
-/// 桌面通知的会话上下文：按 session_id 查它**真实所属的工作区**（send_message
-/// 注册的进程内路由表）+ 会话显示名。会话是内存形态——进程死了 claude cli 也
-/// 随之关闭，不存在重启后还要通知的会话，因此路由表即权威、无需落盘兜底。
-/// 查不到路由（如新会话 finalize 换 key 后尚未再 send）返回 None，前端回退
-/// 当前工作区名。
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SessionNotificationInfo {
-    /// 会话所属工作区根路径
-    pub workspace: String,
-    /// 会话显示名（our_session_name 权威源，缺失回退 session id）
-    pub name: String,
-}
-
-#[tauri::command]
-pub fn session_notification_info(
-    session_id: String,
-    runtime_mgr: State<'_, crate::runtime::AgentRuntimeManager>,
-) -> Option<SessionNotificationInfo> {
-    let workspace = runtime_mgr.session_workspace_root(&session_id)?;
-    let name = super::our_session_name(&session_id).unwrap_or(session_id);
-    Some(SessionNotificationInfo {
-        workspace: workspace.to_string_lossy().to_string(),
-        name,
-    })
-}
-

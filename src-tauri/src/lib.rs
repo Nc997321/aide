@@ -8,8 +8,8 @@ pub mod commands;
 mod conversation;
 mod diagnostics;
 mod host_door;
-/// 权限策略住在 aide-core（Host 自持）；保留 `crate::policy` 路径。
-use aide_core::{codegraph, lsp, policy};
+/// Host 自持的能力住在 aide-core；保留 `crate::codegraph` / `crate::lsp` 路径。
+use aide_core::{codegraph, lsp};
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
 pub(crate) mod remote_workspace;
@@ -147,11 +147,6 @@ pub fn run() {
         )
         .manage(diagnostics::DiagnosticsState::new())
         .manage(std::sync::Arc::clone(&settings_service))
-        .manage(runtime::AgentRuntimeManager::new())
-        // 后台任务快照注册表：事件泵喂入（runtime/mod.rs），list_bg_tasks RPC 读
-        .manage(std::sync::Arc::new(
-            runtime::bg_registry::BgTaskRegistry::default(),
-        ))
         .manage(std::sync::Arc::clone(&workspace_state))
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
@@ -246,15 +241,14 @@ pub fn run() {
             // 启动持久 Agent Runtime（single persistent process，所有会话共享）
             // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
             // setup 闭包是同步的，不能直接调 spawn_runtime。
-            let handle1 = app.handle().clone();
-            let handle2 = app.handle().clone();
+            // Runtime 住 aide-core；GUI 侧钩子（内嵌浏览器 / 冻结诊断 / 自动化观测）先挂上。
+            let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
+            core.runtime
+                .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
             tauri::async_runtime::spawn(async move {
-                if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
+                {
                     use crate::runtime::env::build_runtime_env_vars;
-                    let settings_service = handle1
-                        .state::<std::sync::Arc<settings::SettingsService>>()
-                        .inner()
-                        .clone();
+                    let settings_service = core.settings.clone();
                     let resolved = tokio::task::spawn_blocking(move || {
                         let active = settings_service
                             .resolve_active_runtime_provider()
@@ -269,7 +263,7 @@ pub fn run() {
                         return;
                     };
                     let env_vars = build_runtime_env_vars(&active, &proxy);
-                    if let Err(e) = rt.ensure_runtime(handle2, env_vars).await {
+                    if let Err(e) = core.runtime.ensure_runtime(&core, env_vars).await {
                         eprintln!("[aide] Agent Runtime 启动失败: {e}");
                     }
                 }
@@ -355,24 +349,13 @@ pub fn run() {
             automation::commands::run_automation_now,
             automation::commands::get_automation_playbook,
             automation::commands::redistill_automation,
-            commands::session_runtime::session_alive,
             // 工作区信任（Trusted Workspace）
-            commands::workspace_trust::trust_workspace,
-            commands::workspace_trust::untrust_workspace,
             commands::settings::notify_send,
-            commands::settings::session_notification_info,
-            commands::permissions::get_permission_settings,
-            commands::permissions::create_permission_rule,
-            commands::permissions::create_permission_rules,
-            commands::permissions::update_permission_rule,
-            commands::permissions::delete_permission_rule,
-            commands::permissions::explain_permission_decision,
             commands::app::get_app_version,
             // 托盘菜单「退出 Aide」的出口。刻意不进 remote RPC 白名单——远端
             // PWA 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
             // Customization commands
-            commands::mcp_probe::test_mcp_connection,
             // Provider commands
             // Marketplace commands
             // Run configuration commands
@@ -388,18 +371,6 @@ pub fn run() {
             commands::clipboard::stage_dropped_file,
             // Recent access
             // Chat (Agent SDK)
-            commands::chat::send_message,
-            commands::chat::permission_response,
-            commands::chat::interrupt_session,
-            commands::chat::stop_bg_task,
-            commands::chat::set_model,
-            commands::chat::model_switch_confirm_decision,
-            commands::chat::set_effort,
-            commands::chat::set_permission_mode,
-            commands::chat::get_default_models,
-            commands::chat::get_default_permission_modes,
-            commands::chat::stop_chat_session,
-            commands::chat::btw_ask,
             // Knowledge base runtime credentials
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
             // Plugin skills scanning
