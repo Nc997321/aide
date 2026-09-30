@@ -143,6 +143,9 @@ export class ChatModel {
     ttsModel.stop(); // 切走即停：不念旧会话（对照原型 pickSession）
     readerModel.stop(); // 听书同理：面板播放列表是旧会话快照，切走即收
     this.store.resetForOpen(sid, name);
+    // 归属范围 = 打开瞬间的浏览范围（日常会话的档位默认判定；finalize 归属
+    // 核对不读它——pendingSpawn 恒 false，见 ChatEvents.finalizeSpawn）
+    this.store.spawnWsKey = sessionsModel.wsKey;
     attachmentsModel.reset();
     void hydrateStore(this.store);
     void this.syncBgTasks();
@@ -335,8 +338,10 @@ export class ChatModel {
    *    「供应商 chip 是全局的、模型 chip 却是这条会话上次用的」口径打架。
    *  - 模型当前值：存活 → 会话记忆（session_model，不在选项集内回落默认——
    *    供应商已切换/模型下架的场景）；未存活 → 默认（选项集首位，store 记 ''）
-   *  - effort 当前值：恒读会话记忆（session_effort）→ 供应商 effortLevel → 'high'。
-   *    effort 不参与「冷缓存 / respawn」语义，没有跟随全局的必要，不受存活影响。
+   *  - effort 当前值：恒读会话记忆（session_effort）→ 日常范围默认 low（见
+   *    scopeEffortDefault）→ 供应商 effortLevel → 'high'。记忆优先：日常
+   *    默认只在记忆缺失时兜底（会话内手动升档仍被记住）。effort 不参与
+   *    「冷缓存 / respawn」语义，没有跟随全局的必要，不受存活影响。
    *  - 空会话（未 spawn）跳过记忆读取——会话 id 尚不存在，选择随首条消息带出
    */
   async syncModelEffort(): Promise<void> {
@@ -402,10 +407,25 @@ export class ChatModel {
           // 记忆读失败静默——回落供应商默认
         }
       }
-      this.store.effort = effort !== '' ? effort : normalizeEffort(p.effortLevel);
+      this.store.effort = effort !== '' ? effort : this.scopeEffortDefault(sid, p);
     } catch (e) {
       // 选项集拉取失败静默——chip 留占位，点击重开浮层即重同步
     }
+  }
+
+  /**
+   * 范围默认思考档（记忆缺失时的兜底，链位在供应商默认之前）：日常 → low
+   * 快速（对照桌面日常模式定档；原型 DAILY_REPLY_SCRIPT 的 effort low 同源），
+   * 其余 → 供应商 effortLevel（归一化，空/非法回 high 均衡）。
+   * 范围取归属键：新会话（sid 空）= 当前浏览范围；已开会话 = 打开/spawn
+   * 瞬间的范围（store.spawnWsKey）——不用 session_workspace 比对，按需过筛。
+   */
+  private scopeEffortDefault(sid: string, p: ProviderConfigView): string {
+    const key: string = sid === '' ? workspaceModel.selectedKey : this.store.spawnWsKey;
+    if (workspaceModel.isDaily(key)) {
+      return 'low';
+    }
+    return normalizeEffort(p.effortLevel);
   }
 
   /**

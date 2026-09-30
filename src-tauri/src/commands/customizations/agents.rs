@@ -1,4 +1,4 @@
-// agents 子域：~/.claude/agents/*.md 的列表 / 读取 / 增删改 / 启停，
+// agents 子域：~/.aide/claude/agents/*.md 的列表 / 读取 / 增删改 / 启停，
 // 与 settings.json 的 disabled 清单联动。
 use super::{agents_dir, extract_frontmatter_field, update_frontmatter_field, CustomizationItem};
 use std::fs;

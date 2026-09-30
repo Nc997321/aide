@@ -711,7 +711,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           <ul class="trust-list">
             <li><span class="dot"></span>代码索引（CodeGraph 向量检索）</li>
             <li><span class="dot"></span>项目 <code>CLAUDE.md</code> 指令</li>
-            <li><span class="dot"></span>项目 <code>.claude/skills/</code> 与 <code>.mcp.json</code></li>
+            <li><span class="dot"></span>项目 <code>.aide/claude/</code>（技能与子代理）与 <code>.mcp.json</code></li>
           </ul>
           <p class="trust-note">Claude 对话本身不受影响。</p>
           <div class="trust-actions">

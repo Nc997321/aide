@@ -1,7 +1,8 @@
 /**
  * 抽屉组件（v3：聊天升主屏，会话列表收进左侧抽屉）——对照 design/remote/
  * app.html 的 .dr-panel 结构：设备卡（logo + 连接状态点 + 供应商徽标 + ⏻
- * 断开）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 + 切换）/ 自动化区
+ * 断开）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 + 切换；日常态 =
+ * 气泡头像 + 定位副标题占掉路径行）/ 自动化区
  * 段（呼吸点 + 折叠 + ＋ 新建；任务行两行制 + 行内启停小开关）/ 历史会话
  *（＋ 新会话 + ↻ 刷新 + 三态状态点列表）/ 底部搜索框，外加供应商、工作区
  * 两个半模态弹层。
@@ -23,9 +24,13 @@
  *    观察 conn 状态落回连接页（原 SessionsPage 顶栏断开入口随任务 5 迁入）
  *  - 半模态自绘（遮罩 + 底部面板 + transition），不依赖 bindSheet——与原型
  *    像素对齐，且选中描边/脚注/呼吸点均可用现有资源表达
- *  - 弹层计数快照来自 WorkspaceModel.loadMetas（'' 槽位 + 各工作区并行拉取）；
- *    工作区切换只改浏览范围与 spawn 去向，不改桌面活动工作区（协议无写 RPC；
- *    读走 get_active_workspace，跟随槽位解析真名）
+ *  - 弹层计数快照来自 WorkspaceModel.loadMetas（'' 槽位 + 日常 + 各工作区
+ *    并行拉取）；工作区切换只改浏览范围与 spawn 去向，不改桌面活动工作区
+ *    （协议无写 RPC；读走 get_active_workspace，跟随槽位解析真名）
+ *  - 「日常」行置顶弹层首行（design/daily/app.html 原型）：气泡头像 +
+ *    「默认」角标 + 定位副标题，无路径行——日常路径是内部概念永不展示
+ *    （桌面 spec：docs/superpowers/specs/2026-09-20-daily-mode-design.md）；
+ *    旧桌面无 daily_workspace RPC 时整个日常层不存在，列表与升级前一致
  *  - 主机名固定「桌面 aide」：PairOk 只有 device_id + token，协议无主机名来源
  */
 import { ConnModel, connModel } from '../conn/ConnModel';
@@ -46,6 +51,13 @@ const MASK_COLOR: ResourceColor = '#661D2129';
 const WS_COLORS: string[] = ['#0A59F7', '#0FA3A3', '#F77234', '#00B42A', '#722ED1', '#F53F3F'];
 const WS_TINTS: string[] = ['#140A59F7', '#140FA3A3', '#14F77234', '#1400B42A', '#14722ED1', '#14F53F3F'];
 
+/** 日常行专用视觉：固定暖橙（不进哈希取色），对齐桌面侧栏「日常」分区与
+ *  原型 design/daily/app.html 的 DAILY_FAKE 配色；DESC 为定位副标题
+ *  （占掉路径行——内部目录永不展示）。 */
+const DAILY_COLOR: string = '#F77234';
+const DAILY_TINT: string = '#14F77234';
+const DAILY_DESC: string = '随手问答的默认去处 · 与桌面共用';
+
 function wsColorIdx(key: string): number {
   let h: number = 0;
   for (let i = 0; i < key.length; i++) {
@@ -54,8 +66,12 @@ function wsColorIdx(key: string): number {
   return h % WS_COLORS.length;
 }
 
-/** 工作区强调色（顶栏副标题色点 / 空态文案用；与抽屉头像同源同色）。 */
+/** 工作区强调色（顶栏副标题色点 / 空态文案用；与抽屉头像同源同色）；
+ *  日常键固定暖橙（其余 key 哈希取色）。 */
 export function wsAccentColor(key: string): string {
+  if (workspaceModel.isDaily(key)) {
+    return DAILY_COLOR;
+  }
   return WS_COLORS[wsColorIdx(key)];
 }
 
@@ -177,7 +193,7 @@ export class ToastModel {
 
 export const toastModel: ToastModel = new ToastModel();
 
-/** 工作区弹层选项行（'' 槽位 = 跟随桌面）。 */
+/** 工作区弹层选项行（'' 槽位 = 跟随桌面；日常行由 wsOptions 置顶首插）。 */
 class WsOpt {
   readonly key: string;
   readonly name: string;
@@ -293,7 +309,12 @@ export struct ChatDrawer {
   }
 
   private wsOptions(): WsOpt[] {
-    const out: WsOpt[] = [new WsOpt('', '当前工作区', '', false)];
+    const out: WsOpt[] = [];
+    // 日常行置顶（新桌面才有：daily 为 null 的旧桌面无此行，列表与升级前一致）
+    if (this.ws.daily !== null) {
+      out.push(new WsOpt(this.ws.daily.key, '日常', '', false));
+    }
+    out.push(new WsOpt('', '当前工作区', '', false));
     for (let i = 0; i < this.ws.workspaces.length; i++) {
       const w: WorkspaceInfo = this.ws.workspaces[i];
       out.push(new WsOpt(w.key, baseName(w.name), w.name, w.missing));
@@ -490,7 +511,13 @@ export struct ChatDrawer {
   @Builder
   wsAvatar(key: string, label: string, size: number, radius: number, font: number) {
     Row() {
-      if (key === '') {
+      if (this.ws.isDaily(key)) {
+        // 日常：对话气泡图标（对齐桌面侧栏「日常」分区语汇），固定暖橙
+        Image($r('app.media.ic_daily_bubble'))
+          .width(font + 3)
+          .height(font + 3)
+          .fillColor(DAILY_COLOR)
+      } else if (key === '') {
         Text('a')
           .fontSize(font)
           .fontWeight(FontWeight.Bold)
@@ -505,7 +532,9 @@ export struct ChatDrawer {
     .width(size)
     .height(size)
     .borderRadius(radius)
-    .backgroundColor(key === '' ? WS_TINTS[0] : WS_TINTS[wsColorIdx(key)])
+    .backgroundColor(this.ws.isDaily(key)
+      ? DAILY_TINT
+      : key === '' ? WS_TINTS[0] : WS_TINTS[wsColorIdx(key)])
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
   }
@@ -542,7 +571,14 @@ export struct ChatDrawer {
           .fontColor($r('app.color.text_primary'))
           .maxLines(1)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.ws.selectedPath() !== '') {
+        if (this.ws.isDaily(this.ws.selectedKey)) {
+          // 日常态：定位副标题占掉路径行——内部目录永不展示
+          Text(DAILY_DESC)
+            .fontSize(10.5)
+            .fontColor($r('app.color.text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        } else if (this.ws.selectedPath() !== '') {
           Text(this.ws.selectedPath())
             .fontSize(10.5)
             .fontColor($r('app.color.text_secondary'))
@@ -1173,13 +1209,33 @@ export struct ChatDrawer {
             Row({ space: 11 }) {
               this.wsAvatar(o.key, o.name, 36, 10, 16)
               Column({ space: 1 }) {
-                Text(o.name)
-                  .fontSize(14)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor($r('app.color.text_primary'))
-                  .maxLines(1)
-                  .textOverflow({ overflow: TextOverflow.Ellipsis })
-                if (o.key === '') {
+                Row({ space: 6 }) {
+                  Text(o.name)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor($r('app.color.text_primary'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  if (this.ws.isDaily(o.key)) {
+                    // 「默认」角标：手机默认范围即日常（暖橙弱底，区别于选中态 accent）
+                    Text('默认')
+                      .fontSize(9.5)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor(DAILY_COLOR)
+                      .backgroundColor(DAILY_TINT)
+                      .borderRadius(8)
+                      .padding({ left: 6, right: 6, top: 1, bottom: 1.5 })
+                  }
+                }
+                .alignItems(VerticalAlign.Center)
+                if (this.ws.isDaily(o.key)) {
+                  // 定位副标题占掉路径行——日常路径是内部概念，永不展示
+                  Text(DAILY_DESC)
+                    .fontSize(11)
+                    .fontColor($r('app.color.text_secondary'))
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis })
+                } else if (o.key === '') {
                   // 已解析出活动工作区时点名展示，跟随语义落到实处
                   Text(this.ws.activeDisplayName() !== ''
                     ? `桌面 aide 正在打开 · ${this.ws.activeDisplayName()}`

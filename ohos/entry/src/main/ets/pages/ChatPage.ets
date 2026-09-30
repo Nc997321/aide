@@ -6,7 +6,8 @@
  *    （常驻：闲态置灰点击 toast 提示；回复中转红，点击 interrupt——残段冻结
  *    后落「已停止会话」系统分隔线，见 ChatModel.interrupt）
  *  - 新会话空态（store.sid 为空）：logo + 「新会话」+「发消息即创建 · 发往
- *    工作区 X」——首条消息即 spawn（ChatModel.send 空态分支）
+ *    工作区 X」——首条消息即 spawn（ChatModel.send 空态分支）；日常默认
+ *    范围变体「发消息即创建 · 日常对话」（暖橙，design/daily/app.html）
  *  - toast 宿主：toastModel 全局单例（抽屉切换供应商/工作区/会话等轻提示）
  *  - 输入区工具行（原型 .ch-bar）：模型/思考程度两 chip，弹层为自绘小面板
  *    （.md-pop/.ef-pop：全屏遮罩 + 锚输入栏上方，返回键经 store.handlePopups 收）
@@ -292,12 +293,19 @@ export struct ChatPage {
     this.getUIContext().getFocusController().clearFocus();
   }
 
-  /** 输入框占位：有附件提示可只发附件 / 忙碌排队 / 常规。 */
+  /** 输入框占位：有附件提示可只发附件 / 忙碌排队 / 日常空会话轻引导 / 常规。 */
   private inputPlaceholder(): string {
     if (this.att.items.length > 0) {
       return '问问这些内容…（可只发附件）';
     }
-    return this.store.isBusy ? '回复中，发送将排队等候' : '发送消息';
+    if (this.store.isBusy) {
+      return '回复中，发送将排队等候';
+    }
+    // 日常默认范围的新会话：轻量引导语（原型 updateInputState 同款）
+    if (this.store.sid === '' && this.ws.isDaily(this.ws.selectedKey)) {
+      return '今天帮你做些什么？';
+    }
+    return '发送消息';
   }
 
   // ── 图片灯箱（单图直显，无滑动切换）──
@@ -499,10 +507,16 @@ export struct ChatPage {
         .fontColor($r('app.color.text_primary'))
 
       Text() {
-        Span('发消息即创建')
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
-        if (this.ws.selectedKey === '' && this.ws.activeDisplayName() === '') {
+        if (this.ws.isDaily(this.ws.selectedKey)) {
+          // 日常默认范围：定位文案替代工作区点名，强调色随日常暖橙
+          Span('发消息即创建')
+            .fontSize(12)
+            .fontColor($r('app.color.text_secondary'))
+          Span(' · 日常对话')
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(wsAccentColor(this.ws.selectedKey))
+        } else if (this.ws.selectedKey === '' && this.ws.activeDisplayName() === '') {
           // 跟随桌面且未解析出真名——保持占位文案
           Span(' · 发往桌面当前工作区')
             .fontSize(12)

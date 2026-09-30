@@ -42,7 +42,12 @@ export class ChatStore {
   @Trace pendingSpawn: boolean = false;
   /** spawn 定名缓冲（session_title 可能早于 session_init 到达；对照 PWA 暂存标题）。 */
   @Trace pendingSpawnTitle: string = '';
-  /** spawn 发起时手机侧浏览的工作区 key：finalize 头插列表的归属核对（防切换竞态）。 */
+  /**
+   * 会话归属的工作区范围 key：spawn 时 = 发起瞬间的浏览范围（finalize 头插
+   * 列表的归属核对，防切换竞态）；open 已有会话时 = 打开瞬间的浏览范围
+   * （日常会话的默认思考档判定用，见 ChatModel.scopeEffortDefault）。
+   * '' = 跟随桌面槽位（随 open/spawn 重置，resetForOpen 清空）。
+   */
   @Trace spawnWsKey: string = '';
   /** 挂起的权限请求队列（FIFO，弹层永远显示队头；并行工具会同时发多条）。 */
   @Trace pendingPermissions: PermissionRequest[] = [];
