@@ -129,7 +129,7 @@ let mut cmd = Command::new("git");
 ## 关键约定
 
 - **同步 command 禁止重 IO / 重 CPU**：一律 `async fn` + `spawn_blocking`。两个坑：(1) 带 `State<'_,T>` 引用参数的 async 命令必须返回 `Result`（E0277）；(2) `State<T>` 不能跨 `spawn_blocking`，state 注册成 `Arc<T>` 后 clone 进闭包。
-- **`trace_command` 兜底**：保留同步但做 IO/子进程/外部调用的命令，第一行埋 `let _trace = crate::diagnostics::trace_command("函数名");`（在任何 IO/spawn 之前，cfg 分支之前）。**只对同步命令有意义，禁止给 async 命令埋**（guard 在 dispatch 后立刻 drop）。已埋 46 条。决策：重 IO/CPU → async；轻 → 不动；介于之间且保留同步 → 埋。**这条规则由构建期守卫强制**：`pnpm check:sync-io`（已挂进 `pnpm build`）扫描所有同步 Tauri 命令，做 IO/子进程却没埋点的直接报错——未埋点的同步命令卡死时冻结报告 `stuckCommand` 恒为 `None`，肇事者定不到（2026-07 一整轮误判就死在这个盲区）。豁免在 `scripts/check-sync-io-commands.mjs` 登记并写明理由。
+- **`trace_command` 兜底**：保留同步但做 IO/子进程/外部调用的命令，第一行埋 `let _trace = crate::diagnostics::trace_command("函数名");`（在任何 IO/spawn 之前，cfg 分支之前）。**只对同步命令有意义，禁止给 async 命令埋**（guard 在 dispatch 后立刻 drop）。已埋 20 条（迁入 aide-core 的命令一律 async + blocking，不再需要埋点）。决策：重 IO/CPU → async；轻 → 不动；介于之间且保留同步 → 埋。**这条规则由构建期守卫强制**：`pnpm check:sync-io`（已挂进 `pnpm build`）扫描所有同步 Tauri 命令，做 IO/子进程却没埋点的直接报错——未埋点的同步命令卡死时冻结报告 `stuckCommand` 恒为 `None`，肇事者定不到（2026-07 一整轮误判就死在这个盲区）。豁免在 `scripts/check-sync-io-commands.mjs` 登记并写明理由。
 - **主题系统是配色的唯一来源**：所有颜色/背景/边框/阴影/圆角/间距必须走 `src/themes/` 语义 token 的 `var(--aide-*)`，禁止硬编码 hex；`tailwind.config.js` 的 `theme.extend` 为空。新增语义色 → `ThemeTokens` 加槽位 + 每个主题文件给值；新增主题 → 新增实现 `ThemeTokens` 的文件 + `themes/index.ts` 注册。`colorScheme` 是例外（浏览器原生 `color-scheme` 属性）。
 - **VC++ Redistributable 随包分发**（NSIS POSTINSTALL 静默装 vc_redist）：aide.exe 依赖 `MSVCP140.dll`/`VCRUNTIME140.dll`，缺/旧 → 「双击无反应」（C++ 运行库加载阶段崩溃，早于任何 Rust 代码）。
 

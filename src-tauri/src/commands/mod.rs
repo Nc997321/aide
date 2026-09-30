@@ -2,9 +2,9 @@ pub mod app;
 pub mod browser;
 pub mod chat;
 pub mod clipboard;
-pub mod customizations;
 pub mod detectors;
 pub mod file_assoc;
+pub mod mcp_probe;
 pub mod filesystem;
 pub mod marketplace;
 pub mod memory_observatory;
@@ -12,7 +12,9 @@ pub mod permissions;
 /// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
 pub use aide_core::proxy;
 /// 已迁入 aide-core 的命令模块；保留 `crate::commands::<模块>` 路径。
-pub use aide_core::commands::{knowledge, migration, notifications, onboarding, recent};
+pub use aide_core::commands::{
+    customizations, knowledge, migration, notifications, onboarding, recent,
+};
 pub mod remote;
 pub mod run_configs;
 pub mod run_process;
@@ -96,18 +98,10 @@ pub use aide_core::WorkspaceState;
 
 // ── Shared Helpers ──
 
+/// 进程 cwd 类消费者的根：活动工作区 → 家目录（= `WorkspaceState::root_for(None)`；
+/// 远程工作区的「存在」判定由启动时注入，见 lib.rs）。
 pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
-    if let Ok(path_guard) = ws.path.lock() {
-        if let Some(path) = path_guard.as_ref() {
-            // 远程工作区按存在处理（见 remote_workspace::path::present）
-            if crate::remote_workspace::path::present(path) {
-                return path.clone();
-            }
-        }
-    }
-    // No workspace explicitly set — fall back to user's home directory.
-    // Using the install directory (cwd) is never useful.
-    user_home().unwrap_or_else(|| PathBuf::from("."))
+    ws.root_for(None)
 }
 
 /// 带可选工作区覆写的根解析：调用方显式给了 cwd 就用它，否则回落全局活动工作区。
@@ -118,10 +112,7 @@ pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
 /// 当前正看着的那个工作区 —— 这正是变更面板窜数据的根因。调用方拿得到会话工作区时
 /// **必须**传 cwd；传 None 仅用于确实只关心当前工作区的场景。
 pub fn project_root_for(ws: &WorkspaceState, cwd: Option<&str>) -> PathBuf {
-    match cwd {
-        Some(c) if !c.trim().is_empty() => PathBuf::from(c),
-        _ => project_root_for_commands(ws),
-    }
+    ws.root_for(cwd)
 }
 
 

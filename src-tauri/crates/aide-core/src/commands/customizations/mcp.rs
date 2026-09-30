@@ -1,11 +1,33 @@
 // mcp 子域：settings.json mcpServers 清单增删改启停 + 探活（test_mcp_connection）。
 // 内置项的 UI 展示另有 useCustomizations.ts 静态镜像（sidecar 侧登记，两处同步）。
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_mcp_servers", list_mcp_servers),
+    command!("create_mcp_server", create_mcp_server),
+    command!("update_mcp_server", update_mcp_server),
+    command!("delete_mcp_server", delete_mcp_server),
+    command!("toggle_mcp_server", toggle_mcp_server),
+];
+
 use super::{load_settings, save_settings, settings_path, CustomizationItem};
 // ── MCP Server Commands ──
 
-#[tauri::command]
-pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
-    let _trace = crate::diagnostics::trace_command("list_mcp_servers");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMcpServersArgs {
+}
+
+async fn list_mcp_servers(_core: Arc<Core>, a: ListMcpServersArgs) -> Result<Vec<CustomizationItem>, String> {
+    let _ = a;
+    blocking(move || -> Result<Vec<CustomizationItem>, String> {
     let settings = load_settings();
     let mcp_servers = settings
         .get("mcpServers")
@@ -42,6 +64,7 @@ pub fn list_mcp_servers() -> Result<Vec<CustomizationItem>, String> {
         }
     }
     Ok(items)
+}).await
 }
 
 /// 从前端 data 构造写入 settings.json 的 mcpServer config。
@@ -103,8 +126,15 @@ fn describe_mcp(cfg: &serde_json::Value) -> String {
     }
 }
 
-#[tauri::command]
-pub async fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationItem, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMcpServerArgs {
+    data: serde_json::Value,
+}
+
+async fn create_mcp_server(_core: Arc<Core>, a: CreateMcpServerArgs) -> Result<CustomizationItem, String> {
+    let CreateMcpServerArgs { data } = a;
+    {
     let name = data["name"].as_str().unwrap_or("unnamed").to_string();
     let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
@@ -126,9 +156,18 @@ pub async fn create_mcp_server(data: serde_json::Value) -> Result<CustomizationI
         metadata: Some(cfg),
     })
 }
+}
 
-#[tauri::command]
-pub async fn update_mcp_server(id: String, data: serde_json::Value) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMcpServerArgs {
+    id: String,
+    data: serde_json::Value,
+}
+
+async fn update_mcp_server(_core: Arc<Core>, a: UpdateMcpServerArgs) -> Result<(), String> {
+    let UpdateMcpServerArgs { id, data } = a;
+    {
     let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
     if let Some(servers) = settings
@@ -147,10 +186,17 @@ pub async fn update_mcp_server(id: String, data: serde_json::Value) -> Result<()
     }
     save_settings(&settings)
 }
+}
 
-#[tauri::command]
-pub fn delete_mcp_server(id: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("delete_mcp_server");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteMcpServerArgs {
+    id: String,
+}
+
+async fn delete_mcp_server(_core: Arc<Core>, a: DeleteMcpServerArgs) -> Result<(), String> {
+    let DeleteMcpServerArgs { id } = a;
+    blocking(move || -> Result<(), String> {
     let mut settings = load_settings();
     if let Some(mcp_servers) = settings.get_mut("mcpServers") {
         if let Some(obj) = mcp_servers.as_object_mut() {
@@ -158,11 +204,19 @@ pub fn delete_mcp_server(id: String) -> Result<(), String> {
         }
     }
     save_settings(&settings)
+}).await
 }
 
-#[tauri::command]
-pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("toggle_mcp_server");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleMcpServerArgs {
+    id: String,
+    enabled: bool,
+}
+
+async fn toggle_mcp_server(_core: Arc<Core>, a: ToggleMcpServerArgs) -> Result<(), String> {
+    let ToggleMcpServerArgs { id, enabled } = a;
+    blocking(move || -> Result<(), String> {
     let mut settings = load_settings();
     if let Some(mcp_servers) = settings.get_mut("mcpServers") {
         if let Some(config) = mcp_servers.get_mut(&id) {
@@ -181,93 +235,7 @@ pub fn toggle_mcp_server(id: String, enabled: bool) -> Result<(), String> {
     }
 
     save_settings(&settings)
-}
-
-// ── MCP 探活 ──
-
-#[derive(Debug, serde::Serialize)]
-pub struct TestResult {
-    pub status: String,
-    pub tools: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    pub duration_ms: u64,
-}
-
-/// 探活一个 MCP server：spawn agent-runtime 跑 test-mcp 子命令，收集 stdout JSON。
-/// config = { transport, command?, args?, env?, url?, headers? }。
-/// Windows 加 CREATE_NO_WINDOW；路径经 resolve_runtime_command 走 dev/release 分支。
-#[tauri::command]
-pub async fn test_mcp_connection(
-    app: tauri::AppHandle,
-    config: serde_json::Value,
-) -> Result<TestResult, String> {
-    #[cfg(windows)]
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
-
-    let (bin, runtime_arg) = crate::runtime::AgentRuntimeManager::resolve_runtime_command(&app)?;
-    let config_str = serde_json::to_string(&config).map_err(|e| e.to_string())?;
-    let start = std::time::Instant::now();
-
-    let mut cmd = Command::new(&bin);
-    if !runtime_arg.as_os_str().is_empty() {
-        cmd.arg(&runtime_arg);
-    }
-    cmd.arg("test-mcp").arg(&config_str);
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-    }
-    cmd.stdin(std::process::Stdio::null());
-    cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::piped());
-
-    let out = tokio::task::spawn_blocking(move || cmd.output())
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
-    let duration_ms = start.elapsed().as_millis() as u64;
-
-    if !out.status.success() {
-        return Ok(TestResult {
-            status: "spawn_error".into(),
-            tools: vec![],
-            error: Some(String::from_utf8_lossy(&out.stderr).to_string()),
-            duration_ms,
-        });
-    }
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    // stdout 最后一行非空是 test-mcp 的 JSON（前面无 server stderr 转发——server stderr 进本进程 stderr pipe）。
-    let json_line = stdout
-        .lines()
-        .rev()
-        .find(|l| !l.trim().is_empty())
-        .unwrap_or("");
-    match serde_json::from_str::<serde_json::Value>(json_line) {
-        Ok(v) => Ok(TestResult {
-            status: v["status"]
-                .as_str()
-                .unwrap_or("handshake_error")
-                .to_string(),
-            tools: v["tools"]
-                .as_array()
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|t| t.as_str().map(String::from))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            error: v["error"].as_str().map(String::from),
-            duration_ms,
-        }),
-        Err(e) => Ok(TestResult {
-            status: "handshake_error".into(),
-            tools: vec![],
-            error: Some(format!("{}: {}", e, stdout)),
-            duration_ms,
-        }),
-    }
+}).await
 }
 
 #[cfg(test)]
@@ -321,25 +289,5 @@ mod tests {
             serde_json::json!({ "url": "http://x/mcp", "headers": { "Authorization": "k" } });
         assert_eq!(describe_mcp(&http), "http http://x/mcp");
         assert_eq!(describe_mcp(&serde_json::json!({})), "");
-    }
-}
-
-#[cfg(test)]
-mod result_tests {
-    use super::*;
-
-    #[test]
-    fn testresult_serializes() {
-        let r = TestResult {
-            status: "ok".into(),
-            tools: vec!["a".into(), "b".into()],
-            error: None,
-            duration_ms: 42,
-        };
-        let j = serde_json::to_value(&r).unwrap();
-        assert_eq!(j["status"], "ok");
-        assert_eq!(j["tools"][0], "a");
-        assert_eq!(j["duration_ms"], 42);
-        assert!(j.as_object().unwrap().get("error").is_none()); // skip_serializing_if
     }
 }

@@ -1,12 +1,39 @@
 // skills 子域：~/.aide/claude/skills/ 的插件技能清单与脚本子文件
 // （read/write/delete script，文件名过 sanitize_script_filename 白名单）。
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_skills", list_skills),
+    command!("get_skill", get_skill),
+    command!("get_skill_content", get_skill_content),
+    command!("create_skill", create_skill),
+    command!("update_skill", update_skill),
+    command!("delete_skill", delete_skill),
+    command!("toggle_skill", toggle_skill),
+    command!("read_skill_script", read_skill_script),
+    command!("write_skill_script", write_skill_script),
+    command!("delete_skill_script", delete_skill_script),
+];
+
 use super::{extract_frontmatter_field, skills_dir, update_frontmatter_field, CustomizationItem};
 use std::fs;
 // ── Skill Commands ──
 
-#[tauri::command]
-pub fn list_skills() -> Result<Vec<CustomizationItem>, String> {
-    let _trace = crate::diagnostics::trace_command("list_skills");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSkillsArgs {
+}
+
+async fn list_skills(_core: Arc<Core>, a: ListSkillsArgs) -> Result<Vec<CustomizationItem>, String> {
+    let _ = a;
+    blocking(move || -> Result<Vec<CustomizationItem>, String> {
     let dir = skills_dir();
     if !dir.exists() {
         return Ok(vec![]);
@@ -65,11 +92,18 @@ pub fn list_skills() -> Result<Vec<CustomizationItem>, String> {
         }
     }
     Ok(items)
+}).await
 }
 
-#[tauri::command]
-pub fn get_skill(id: String) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("get_skill");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSkillArgs {
+    id: String,
+}
+
+async fn get_skill(_core: Arc<Core>, a: GetSkillArgs) -> Result<CustomizationItem, String> {
+    let GetSkillArgs { id } = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let path = skills_dir().join(&id);
     let skill_md = path.join("SKILL.md");
     if !skill_md.exists() {
@@ -106,21 +140,36 @@ pub fn get_skill(id: String) -> Result<CustomizationItem, String> {
         description,
         metadata: Some(serde_json::json!({ "scripts": scripts })),
     })
+}).await
 }
 
 /// 读取 skill 的 SKILL.md 全文（frontmatter + 正文）。
-#[tauri::command]
-pub async fn get_skill_content(id: String) -> Result<String, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetSkillContentArgs {
+    id: String,
+}
+
+async fn get_skill_content(_core: Arc<Core>, a: GetSkillContentArgs) -> Result<String, String> {
+    let GetSkillContentArgs { id } = a;
+    {
     let path = skills_dir().join(&id).join("SKILL.md");
     if !path.exists() {
         return Err(format!("Skill '{}' not found", id));
     }
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
+}
 
-#[tauri::command]
-pub fn create_skill(data: serde_json::Value) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("create_skill");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSkillArgs {
+    data: serde_json::Value,
+}
+
+async fn create_skill(_core: Arc<Core>, a: CreateSkillArgs) -> Result<CustomizationItem, String> {
+    let CreateSkillArgs { data } = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let name = data["name"].as_str().unwrap_or("unnamed");
     let description = data["description"].as_str().unwrap_or("");
 
@@ -146,11 +195,19 @@ pub fn create_skill(data: serde_json::Value) -> Result<CustomizationItem, String
         description: Some(description.to_string()),
         metadata: Some(serde_json::json!({ "scripts": [] })),
     })
+}).await
 }
 
-#[tauri::command]
-pub fn update_skill(id: String, data: serde_json::Value) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("update_skill");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateSkillArgs {
+    id: String,
+    data: serde_json::Value,
+}
+
+async fn update_skill(_core: Arc<Core>, a: UpdateSkillArgs) -> Result<(), String> {
+    let UpdateSkillArgs { id, data } = a;
+    blocking(move || -> Result<(), String> {
     let dir = skills_dir().join(&id);
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
@@ -173,21 +230,36 @@ pub fn update_skill(id: String, data: serde_json::Value) -> Result<(), String> {
     }
 
     fs::write(&skill_md, content).map_err(|e| format!("Failed to update skill: {}", e))
+}).await
 }
 
-#[tauri::command]
-pub fn delete_skill(id: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("delete_skill");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSkillArgs {
+    id: String,
+}
+
+async fn delete_skill(_core: Arc<Core>, a: DeleteSkillArgs) -> Result<(), String> {
+    let DeleteSkillArgs { id } = a;
+    blocking(move || -> Result<(), String> {
     let dir = skills_dir().join(&id);
     if !dir.exists() {
         return Err(format!("Skill '{}' not found", id));
     }
     fs::remove_dir_all(&dir).map_err(|e| format!("Failed to delete skill: {}", e))
+}).await
 }
 
-#[tauri::command]
-pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("toggle_skill");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleSkillArgs {
+    id: String,
+    enabled: bool,
+}
+
+async fn toggle_skill(_core: Arc<Core>, a: ToggleSkillArgs) -> Result<(), String> {
+    let ToggleSkillArgs { id, enabled } = a;
+    blocking(move || -> Result<(), String> {
     let dir = skills_dir().join(&id);
     let enabled_path = dir.join("SKILL.md");
     let disabled_path = dir.join("SKILL.md.disabled");
@@ -206,6 +278,7 @@ pub fn toggle_skill(id: String, enabled: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}).await
 }
 
 /// 校验脚本文件名：单段、非空、非隐藏、无路径分隔/越界，仅字母数字下划点连。
@@ -236,34 +309,58 @@ fn script_path(skill_id: &str, filename: &str) -> Result<std::path::PathBuf, Str
 }
 
 /// 读取 skill 的脚本文件内容。
-#[tauri::command]
-pub async fn read_skill_script(skill_id: String, filename: String) -> Result<String, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSkillScriptArgs {
+    skill_id: String,
+    filename: String,
+}
+
+async fn read_skill_script(_core: Arc<Core>, a: ReadSkillScriptArgs) -> Result<String, String> {
+    let ReadSkillScriptArgs { skill_id, filename } = a;
+    {
     let p = script_path(&skill_id, &filename)?;
     fs::read_to_string(&p).map_err(|e| e.to_string())
 }
+}
 
 /// 写入（或覆盖）skill 的脚本文件；scripts 目录不存在时自动创建。
-#[tauri::command]
-pub async fn write_skill_script(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WriteSkillScriptArgs {
     skill_id: String,
     filename: String,
     content: String,
-) -> Result<(), String> {
+}
+
+async fn write_skill_script(_core: Arc<Core>, a: WriteSkillScriptArgs) -> Result<(), String> {
+    let WriteSkillScriptArgs { skill_id, filename, content } = a;
+    {
     let p = script_path(&skill_id, &filename)?;
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&p, content).map_err(|e| e.to_string())
 }
+}
 
 /// 删除 skill 的脚本文件；不存在视为成功。
-#[tauri::command]
-pub async fn delete_skill_script(skill_id: String, filename: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSkillScriptArgs {
+    skill_id: String,
+    filename: String,
+}
+
+async fn delete_skill_script(_core: Arc<Core>, a: DeleteSkillScriptArgs) -> Result<(), String> {
+    let DeleteSkillScriptArgs { skill_id, filename } = a;
+    {
     let p = script_path(&skill_id, &filename)?;
     if p.exists() {
         fs::remove_file(&p).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
 }
 
 #[cfg(test)]

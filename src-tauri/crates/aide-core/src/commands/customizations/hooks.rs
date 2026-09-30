@@ -1,10 +1,32 @@
 // hooks 子域：settings.json 里的 hooks 清单增删改启停（无独立文件系统存储）。
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_hooks", list_hooks),
+    command!("create_hook", create_hook),
+    command!("update_hook", update_hook),
+    command!("delete_hook", delete_hook),
+    command!("toggle_hook", toggle_hook),
+];
+
 use super::{load_settings, save_settings, settings_path, CustomizationItem};
 // ── Hook Commands ──
 
-#[tauri::command]
-pub fn list_hooks() -> Result<Vec<CustomizationItem>, String> {
-    let _trace = crate::diagnostics::trace_command("list_hooks");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListHooksArgs {
+}
+
+async fn list_hooks(_core: Arc<Core>, a: ListHooksArgs) -> Result<Vec<CustomizationItem>, String> {
+    let _ = a;
+    blocking(move || -> Result<Vec<CustomizationItem>, String> {
     let settings = load_settings();
     let hooks = settings
         .get("hooks")
@@ -44,11 +66,18 @@ pub fn list_hooks() -> Result<Vec<CustomizationItem>, String> {
         }
     }
     Ok(items)
+}).await
 }
 
-#[tauri::command]
-pub fn create_hook(data: serde_json::Value) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("create_hook");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateHookArgs {
+    data: serde_json::Value,
+}
+
+async fn create_hook(_core: Arc<Core>, a: CreateHookArgs) -> Result<CustomizationItem, String> {
+    let CreateHookArgs { data } = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let event = data["event"].as_str().unwrap_or("PostToolUse");
     let matcher = data["matcher"].as_str().unwrap_or("");
     let command = data["command"].as_str().unwrap_or("");
@@ -100,11 +129,19 @@ pub fn create_hook(data: serde_json::Value) -> Result<CustomizationItem, String>
             "asyncRewake": async_rewake
         })),
     })
+}).await
 }
 
-#[tauri::command]
-pub fn update_hook(id: String, data: serde_json::Value) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("update_hook");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateHookArgs {
+    id: String,
+    data: serde_json::Value,
+}
+
+async fn update_hook(_core: Arc<Core>, a: UpdateHookArgs) -> Result<(), String> {
+    let UpdateHookArgs { id, data } = a;
+    blocking(move || -> Result<(), String> {
     // Parse event and index from id (format: "event_index")
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
@@ -138,11 +175,18 @@ pub fn update_hook(id: String, data: serde_json::Value) -> Result<(), String> {
     }
 
     save_settings(&settings)
+}).await
 }
 
-#[tauri::command]
-pub fn delete_hook(id: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("delete_hook");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteHookArgs {
+    id: String,
+}
+
+async fn delete_hook(_core: Arc<Core>, a: DeleteHookArgs) -> Result<(), String> {
+    let DeleteHookArgs { id } = a;
+    blocking(move || -> Result<(), String> {
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
         return Err(format!("Invalid hook id: {}", id));
@@ -164,11 +208,19 @@ pub fn delete_hook(id: String) -> Result<(), String> {
     }
 
     save_settings(&settings)
+}).await
 }
 
-#[tauri::command]
-pub fn toggle_hook(id: String, enabled: bool) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("toggle_hook");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleHookArgs {
+    id: String,
+    enabled: bool,
+}
+
+async fn toggle_hook(_core: Arc<Core>, a: ToggleHookArgs) -> Result<(), String> {
+    let ToggleHookArgs { id, enabled } = a;
+    blocking(move || -> Result<(), String> {
     let parts: Vec<&str> = id.splitn(2, '_').collect();
     if parts.len() != 2 {
         return Err(format!("Invalid hook id: {}", id));
@@ -205,4 +257,5 @@ pub fn toggle_hook(id: String, enabled: bool) -> Result<(), String> {
     }
 
     save_settings(&settings)
+}).await
 }

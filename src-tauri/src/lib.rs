@@ -86,7 +86,11 @@ pub fn run() {
         eprintln!("[aide] daily workspace bootstrap failed: {e}");
     }
     let saved_key = commands::load_workspace_state();
-    let workspace_state = std::sync::Arc::new(WorkspaceState::new());
+    // 「工作区还在吗」注入远程感知判定：远程路径同步 stat 不了，按存在处理（Host 核心的
+    // 根解析、桌面的会话 cwd 兜底共用这一判定）。
+    let workspace_state = std::sync::Arc::new(WorkspaceState::with_presence(
+        remote_workspace::path::present,
+    ));
     // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
     let settings_service = std::sync::Arc::new(settings::SettingsService::new(
         settings::SettingsPaths::new().expect("settings paths"),
@@ -426,39 +430,7 @@ pub fn run() {
             // PWA 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
             // Customization commands
-            commands::customizations::list_agents,
-            commands::customizations::get_agent,
-            commands::customizations::create_agent,
-            commands::customizations::update_agent,
-            commands::customizations::delete_agent,
-            commands::customizations::toggle_agent,
-            commands::customizations::list_skills,
-            commands::customizations::get_skill,
-            commands::customizations::create_skill,
-            commands::customizations::update_skill,
-            commands::customizations::delete_skill,
-            commands::customizations::toggle_skill,
-            commands::customizations::get_skill_content,
-            commands::customizations::get_agent_content,
-            commands::customizations::list_instructions,
-            commands::customizations::get_global_instructions,
-            commands::customizations::save_global_instructions,
-            commands::customizations::get_project_instructions,
-            commands::customizations::save_project_instructions,
-            commands::customizations::list_hooks,
-            commands::customizations::create_hook,
-            commands::customizations::update_hook,
-            commands::customizations::delete_hook,
-            commands::customizations::toggle_hook,
-            commands::customizations::list_mcp_servers,
-            commands::customizations::create_mcp_server,
-            commands::customizations::update_mcp_server,
-            commands::customizations::delete_mcp_server,
-            commands::customizations::toggle_mcp_server,
-            commands::customizations::read_skill_script,
-            commands::customizations::write_skill_script,
-            commands::customizations::delete_skill_script,
-            commands::customizations::test_mcp_connection,
+            commands::mcp_probe::test_mcp_connection,
             // Provider commands
             // Marketplace commands
             commands::marketplace::install::fetch_marketplace,

@@ -1,12 +1,36 @@
 // agents 子域：~/.aide/claude/agents/*.md 的列表 / 读取 / 增删改 / 启停，
 // 与 settings.json 的 disabled 清单联动。
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_agents", list_agents),
+    command!("get_agent", get_agent),
+    command!("get_agent_content", get_agent_content),
+    command!("create_agent", create_agent),
+    command!("update_agent", update_agent),
+    command!("delete_agent", delete_agent),
+    command!("toggle_agent", toggle_agent),
+];
+
 use super::{agents_dir, extract_frontmatter_field, update_frontmatter_field, CustomizationItem};
 use std::fs;
 // ── Agent Commands ──
 
-#[tauri::command]
-pub fn list_agents() -> Result<Vec<CustomizationItem>, String> {
-    let _trace = crate::diagnostics::trace_command("list_agents");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListAgentsArgs {
+}
+
+async fn list_agents(_core: Arc<Core>, a: ListAgentsArgs) -> Result<Vec<CustomizationItem>, String> {
+    let _ = a;
+    blocking(move || -> Result<Vec<CustomizationItem>, String> {
     let dir = agents_dir();
     if !dir.exists() {
         return Ok(vec![]);
@@ -49,11 +73,18 @@ pub fn list_agents() -> Result<Vec<CustomizationItem>, String> {
         }
     }
     Ok(items)
+}).await
 }
 
-#[tauri::command]
-pub fn get_agent(id: String) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("get_agent");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAgentArgs {
+    id: String,
+}
+
+async fn get_agent(_core: Arc<Core>, a: GetAgentArgs) -> Result<CustomizationItem, String> {
+    let GetAgentArgs { id } = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
@@ -71,21 +102,36 @@ pub fn get_agent(id: String) -> Result<CustomizationItem, String> {
         description,
         metadata: None,
     })
+}).await
 }
 
 /// 读取 agent 的 .md 全文（frontmatter + 正文）。
-#[tauri::command]
-pub async fn get_agent_content(id: String) -> Result<String, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetAgentContentArgs {
+    id: String,
+}
+
+async fn get_agent_content(_core: Arc<Core>, a: GetAgentContentArgs) -> Result<String, String> {
+    let GetAgentContentArgs { id } = a;
+    {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
     }
     fs::read_to_string(&path).map_err(|e| e.to_string())
 }
+}
 
-#[tauri::command]
-pub fn create_agent(data: serde_json::Value) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("create_agent");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateAgentArgs {
+    data: serde_json::Value,
+}
+
+async fn create_agent(_core: Arc<Core>, a: CreateAgentArgs) -> Result<CustomizationItem, String> {
+    let CreateAgentArgs { data } = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let name = data["name"].as_str().unwrap_or("unnamed");
     let description = data["description"].as_str().unwrap_or("");
     let model = data["model"].as_str().unwrap_or("haiku");
@@ -110,11 +156,19 @@ pub fn create_agent(data: serde_json::Value) -> Result<CustomizationItem, String
         description: Some(description.to_string()),
         metadata: None,
     })
+}).await
 }
 
-#[tauri::command]
-pub fn update_agent(id: String, data: serde_json::Value) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("update_agent");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateAgentArgs {
+    id: String,
+    data: serde_json::Value,
+}
+
+async fn update_agent(_core: Arc<Core>, a: UpdateAgentArgs) -> Result<(), String> {
+    let UpdateAgentArgs { id, data } = a;
+    blocking(move || -> Result<(), String> {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
@@ -142,21 +196,36 @@ pub fn update_agent(id: String, data: serde_json::Value) -> Result<(), String> {
     }
 
     fs::write(&path, content).map_err(|e| format!("Failed to update agent: {}", e))
+}).await
 }
 
-#[tauri::command]
-pub fn delete_agent(id: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("delete_agent");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteAgentArgs {
+    id: String,
+}
+
+async fn delete_agent(_core: Arc<Core>, a: DeleteAgentArgs) -> Result<(), String> {
+    let DeleteAgentArgs { id } = a;
+    blocking(move || -> Result<(), String> {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
     }
     fs::remove_file(&path).map_err(|e| format!("Failed to delete agent: {}", e))
+}).await
 }
 
-#[tauri::command]
-pub fn toggle_agent(id: String, enabled: bool) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("toggle_agent");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToggleAgentArgs {
+    id: String,
+    enabled: bool,
+}
+
+async fn toggle_agent(_core: Arc<Core>, a: ToggleAgentArgs) -> Result<(), String> {
+    let ToggleAgentArgs { id, enabled } = a;
+    blocking(move || -> Result<(), String> {
     let dir = agents_dir();
     let enabled_path = dir.join(format!("{}.md", id));
     let disabled_path = dir.join(format!("{}.md.disabled", id));
@@ -175,4 +244,5 @@ pub fn toggle_agent(id: String, enabled: bool) -> Result<(), String> {
         }
     }
     Ok(())
+}).await
 }

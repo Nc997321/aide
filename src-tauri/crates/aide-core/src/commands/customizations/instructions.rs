@@ -1,11 +1,33 @@
 // instructions 子域：全局 CLAUDE.md 与项目 CLAUDE.md 的读写。
-use super::{global_claude_md_path, project_claude_md_path, CustomizationItem, WorkspaceState};
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("get_global_instructions", get_global_instructions),
+    command!("list_instructions", list_instructions),
+    command!("save_global_instructions", save_global_instructions),
+    command!("get_project_instructions", get_project_instructions),
+    command!("save_project_instructions", save_project_instructions),
+];
+
+use super::{global_claude_md_path, project_claude_md_path, CustomizationItem};
 use std::fs;
 // ── Instruction Commands ──
 
-#[tauri::command]
-pub fn get_global_instructions() -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("get_global_instructions");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetGlobalInstructionsArgs {
+}
+
+async fn get_global_instructions(_core: Arc<Core>, a: GetGlobalInstructionsArgs) -> Result<CustomizationItem, String> {
+    let _ = a;
+    blocking(move || -> Result<CustomizationItem, String> {
     let path = global_claude_md_path();
     let content = if path.exists() {
         fs::read_to_string(&path).unwrap_or_default()
@@ -22,13 +44,18 @@ pub fn get_global_instructions() -> Result<CustomizationItem, String> {
         description: Some("全局 CLAUDE.md 指令".to_string()),
         metadata: Some(serde_json::json!({ "content": content, "is_global": true })),
     })
+}).await
 }
 
-#[tauri::command]
-pub fn list_instructions(
-    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<Vec<CustomizationItem>, String> {
-    let _trace = crate::diagnostics::trace_command("list_instructions");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListInstructionsArgs {
+}
+
+async fn list_instructions(core: Arc<Core>, a: ListInstructionsArgs) -> Result<Vec<CustomizationItem>, String> {
+    let _ = a;
+    let ws = core.workspace.clone();
+    blocking(move || -> Result<Vec<CustomizationItem>, String> {
     let mut items = Vec::new();
 
     let global_path = global_claude_md_path();
@@ -64,22 +91,34 @@ pub fn list_instructions(
     });
 
     Ok(items)
+}).await
 }
 
-#[tauri::command]
-pub fn save_global_instructions(content: String) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("save_global_instructions");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveGlobalInstructionsArgs {
+    content: String,
+}
+
+async fn save_global_instructions(_core: Arc<Core>, a: SaveGlobalInstructionsArgs) -> Result<(), String> {
+    let SaveGlobalInstructionsArgs { content } = a;
+    blocking(move || -> Result<(), String> {
     let path = global_claude_md_path();
     let dir = path.parent().unwrap();
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create directory: {}", e))?;
     fs::write(&path, content).map_err(|e| format!("Failed to write global instructions: {}", e))
+}).await
 }
 
-#[tauri::command]
-pub fn get_project_instructions(
-    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<CustomizationItem, String> {
-    let _trace = crate::diagnostics::trace_command("get_project_instructions");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetProjectInstructionsArgs {
+}
+
+async fn get_project_instructions(core: Arc<Core>, a: GetProjectInstructionsArgs) -> Result<CustomizationItem, String> {
+    let _ = a;
+    let ws = core.workspace.clone();
+    blocking(move || -> Result<CustomizationItem, String> {
     let path = project_claude_md_path(&ws);
     let content = if path.exists() {
         fs::read_to_string(&path).unwrap_or_default()
@@ -96,14 +135,20 @@ pub fn get_project_instructions(
         description: Some("项目 CLAUDE.md 指令".to_string()),
         metadata: Some(serde_json::json!({ "content": content, "is_global": false })),
     })
+}).await
 }
 
-#[tauri::command]
-pub fn save_project_instructions(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveProjectInstructionsArgs {
     content: String,
-    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
-) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("save_project_instructions");
+}
+
+async fn save_project_instructions(core: Arc<Core>, a: SaveProjectInstructionsArgs) -> Result<(), String> {
+    let SaveProjectInstructionsArgs { content } = a;
+    let ws = core.workspace.clone();
+    blocking(move || -> Result<(), String> {
     let path = project_claude_md_path(&ws);
     fs::write(&path, content).map_err(|e| format!("Failed to write project instructions: {}", e))
+}).await
 }

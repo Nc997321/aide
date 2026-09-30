@@ -1,11 +1,7 @@
-// Claude 自定义配置域总入口：agents / skills / instructions / hooks / mcp
-// 五个子域 + 共享底座（CustomizationItem、目录与 settings.json 读写助手、
-// frontmatter 编辑助手）。子文件经 `super::{helpers}` 取共享项；
-// lib.rs 的 `commands::customizations::X` 注册路径经下方 pub use 保持不变。
-//
-// tauri 的 __cmd__ / __tauri_command_name_ 宏是 pub item，随 glob 一起转发——
-// 前提是子模块保持 `pub mod`。（私有子模块 + 显式 pub use 的结构必须逐个转发，
-// 见 commands/session/mod.rs。）
+//! Claude 自定义配置域：agents / skills / instructions / hooks / mcp 五个子域 + 共享底座
+//! （CustomizationItem、目录与 settings.json 读写助手、frontmatter 编辑助手）。全部落在
+//! Host 的 claude home（`~/.aide/claude`）与项目根——Host 能力。子文件经 `super::{helpers}`
+//! 取共享项；各子模块导出自己的 `COMMANDS` 分表。
 
 pub mod agents;
 pub mod hooks;
@@ -13,17 +9,13 @@ pub mod instructions;
 pub mod mcp;
 pub mod skills;
 
-pub use agents::*;
-pub use hooks::*;
-pub use instructions::*;
-pub use mcp::*;
-pub use skills::*;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
-use super::{claude_home, project_root_for_commands, WorkspaceState};
+use crate::paths::claude_home;
+use crate::WorkspaceState;
 // ── Common Types ──
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -58,7 +50,7 @@ fn global_claude_md_path() -> PathBuf {
 }
 
 fn project_claude_md_path(ws: &WorkspaceState) -> PathBuf {
-    project_root_for_commands(ws).join("CLAUDE.md")
+    ws.root_for(None).join("CLAUDE.md")
 }
 
 // ── Settings File Helpers ──
