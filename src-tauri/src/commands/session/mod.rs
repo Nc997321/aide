@@ -45,7 +45,7 @@ pub(crate) use jsonl::{
 /// 同步 command 跑在主线程上会卡窗口，这里主线程只取工作区快照，扫描进 blocking 线程。
 #[tauri::command]
 pub async fn list_sessions(
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     app: tauri::AppHandle,
 ) -> Result<Vec<Session>, String> {
     let active_root = project_root_for_commands(&workspace_state);
@@ -846,7 +846,7 @@ fn normalize_path_for_compare(p: &str) -> String {
 /// first ID that isn't already mapped to an active PTY.
 #[tauri::command]
 pub async fn find_sessions_since(
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     since_ms: u64,
 ) -> Result<Vec<String>, String> {
     // 工作区根路径在主线程上取好（锁内一次 exists() stat，够轻），

@@ -19,7 +19,7 @@ use aide_workspace::transcripts::history::load_messages_at;
 ///   与前端 useMessageWindow 的字节预算窗口对齐；页首裁到真实 user 行保证回合完整。
 #[tauri::command]
 pub async fn load_messages(
-    _workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     app: tauri::AppHandle,
     session_id: String,
     offset_bytes: Option<u64>,

@@ -6,7 +6,6 @@ pub mod customizations;
 pub mod detectors;
 pub mod file_assoc;
 pub mod filesystem;
-pub mod git;
 pub mod jdk;
 pub mod knowledge;
 pub mod marketplace;
@@ -21,7 +20,6 @@ pub mod recent;
 pub mod remote;
 pub mod run_configs;
 pub mod run_process;
-pub mod search;
 pub mod session;
 pub mod settings;
 pub mod shell;
@@ -30,7 +28,6 @@ pub mod workspace;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 // ── Shared Types ──
 
@@ -58,12 +55,6 @@ pub struct WorkspaceInfo {
     pub missing: bool,
 }
 
-#[derive(Debug, Serialize)]
-pub struct ProjectInfo {
-    pub root: String,
-    pub name: String,
-    pub branch: String,
-}
 
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -104,21 +95,9 @@ pub struct ChangeRoundData {
     pub base_rev: Option<String>,
 }
 
-// ── WorkspaceState ──
+// ── WorkspaceState（Host 自持状态，住在 aide-core；Tauri 以 `Arc` 共享同一实例） ──
 
-pub struct WorkspaceState {
-    pub key: Mutex<Option<String>>,
-    pub path: Mutex<Option<PathBuf>>,
-}
-
-impl WorkspaceState {
-    pub fn new() -> Self {
-        Self {
-            key: Mutex::new(None),
-            path: Mutex::new(None),
-        }
-    }
-}
+pub use aide_core::WorkspaceState;
 
 // ── Shared Helpers ──
 

@@ -11,6 +11,7 @@ use aide_host::protocol::{
     HelloInfo, InvokeParams, Notification, Request, Response, WatchParams, METHOD_HELLO,
     METHOD_INVOKE, METHOD_WATCH, PROTOCOL_VERSION,
 };
+use aide_core::{Core, NullSink, WorkspaceState};
 use aide_workspace::watch::{FileWatchService, WatchSink, EVENT_NAME};
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -32,6 +33,8 @@ pub async fn run() -> i32 {
     });
 
     let watch = Arc::new(FileWatchService::default());
+    // 本进程的 Host 核心。文件监听暂仍走 `watch` 方法（迁进 core 前的过渡），故事件出口为空。
+    let core = Core::new(Arc::new(WorkspaceState::new()), Arc::new(NullSink));
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
@@ -46,8 +49,9 @@ pub async fn run() -> i32 {
         };
         let tx = tx.clone();
         let watch = Arc::clone(&watch);
+        let core = Arc::clone(&core);
         tokio::spawn(async move {
-            let result = handle(req.method.as_str(), req.params, &tx, watch).await;
+            let result = handle(req.method.as_str(), req.params, &tx, watch, core).await;
             let resp = match result {
                 Ok(v) => Response {
                     id: req.id,
@@ -75,13 +79,14 @@ async fn handle(
     params: Value,
     tx: &UnboundedSender<String>,
     watch: Arc<FileWatchService>,
+    core: Arc<Core>,
 ) -> Result<Value, String> {
     match method {
         METHOD_HELLO => serde_json::to_value(hello()).map_err(|e| e.to_string()),
         METHOD_INVOKE => {
             let p: InvokeParams =
                 serde_json::from_value(params).map_err(|e| format!("invalid invoke: {e}"))?;
-            dispatch::invoke(p).await
+            dispatch::invoke(core, p).await
         }
         METHOD_WATCH => {
             let p: WatchParams =

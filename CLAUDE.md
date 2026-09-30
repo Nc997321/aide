@@ -78,12 +78,21 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 
 **relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
+## 架构红线：Host 模型——一张命令表，多个前门（迁移中）
+
+**一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
+
+- **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层），远程由 `aide-host serve` 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令/迁移按 docs/host-model.md §4。**禁止再开平行分派**（Tauri 薄包装 + aide-host 手写分派那种两份）。
+- **Host 自持状态住 `aide_core::Core`**（`WorkspaceState` 已迁入，Tauri 以 `Arc` 共享同一实例）；Core 需要的宿主能力（发事件、资源路径…）一律经 Core 字段注入，**aide-core 禁止依赖 Tauri**，且与 aide-host 同守纯 Rust 无 C 依赖。
+- **只有一套模型**：P1（窗口连 WSL Host）落地时删除下面「远程工作区」的逐命令路由与路径翻译，不许两种「远程」并存。
+
+
 ## 架构红线：远程工作区（WSL / SSH）——一份实现，两处运行
 
 GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 / SSH 服务器）。设计全文见 [docs/remote-workspaces.md](docs/remote-workspaces.md)。与上面的「远程控制」（手机遥控桌面）无关。
 
-- **工作区操作只有一份实现**：fs / 搜索 / git / 文件监听 / 会话转录读取在 Tauri 无关的 `src-tauri/crates/aide-workspace`；桌面 `#[tauri::command]` 是一行转调，目标机上的 `crates/aide-host` 分派到同一批函数。**禁止为远程再写第二份**；新代码需要工作区根就显式收 `root`，别在 crate 里认「活动工作区」。
-- **新增「按路径操作工作区文件」的命令 = 三处**：aide-workspace 实现 → `aide-host/src/commands.rs` 登记 + 分派 → `src-tauri/src/remote_workspace/routes.rs` 登记路径参数。缺一处，远程工作区里它就回落本机执行（跑错机器）。会在本机起进程操作工作区的命令（索引 / 运行配置）遇到远程路径必须**拒绝**，不许回落。**LSP 例外（已支持）**：服务器经 `aide-host lsp` 在目标机上起（登录 PATH 解析），stdio 套 `remote_workspace/lsp_pipe.rs` 做 URI 互译；LSP 代码碰工作区文件一律走 `lsp/workspace_access.rs`（本机直读 / 远程问 aide-host），**别在 LSP 代码里直接 `std::fs` 读工作区**。
+- **工作区操作只有一份实现**：fs / 搜索 / git / 文件监听 / 会话转录读取在 Tauri 无关的 `src-tauri/crates/aide-workspace`；fs / 搜索 / git 的命令层已是 aide-core 命令表（桌面与 aide-host 共用），其余仍是桌面一行转调 + aide-host 分派。**禁止为远程再写第二份**；新代码需要工作区根就显式收 `root`，别在 crate 里认「活动工作区」。
+- **新增「按路径操作工作区文件」的命令（P1 前的过渡）**：写进 aide-core 命令表（aide-host 自动获得）→ `src-tauri/src/remote_workspace/routes.rs` 登记路径参数。缺后者，远程工作区里它就回落本机执行（跑错机器）。会在本机起进程操作工作区的命令（索引 / 运行配置）遇到远程路径必须**拒绝**，不许回落。**LSP 例外（已支持）**：服务器经 `aide-host lsp` 在目标机上起（登录 PATH 解析），stdio 套 `remote_workspace/lsp_pipe.rs` 做 URI 互译；LSP 代码碰工作区文件一律走 `lsp/workspace_access.rs`（本机直读 / 远程问 aide-host），**别在 LSP 代码里直接 `std::fs` 读工作区**。
 - **远程路径形态唯一真相源** `remote_workspace/path.rs`（`\\wsl.localhost\<distro>\…` / `\\aide-ssh.invalid\<alias>\…`）；前端 `@aide/sdk` 的 `parseRemotePath` 只做显示。
 - **「目录还在吗」一律 `remote_workspace::path::present`**：远程路径同步 stat 不了，按存在处理。对远程路径返回 false 会让会话 cwd 静默回落活动工作区——2026-09-18 事故的同一形态。
 - **agent 车道**：会话按工作区归属绑定车道（`runtime/remote_lane.rs`），事件泵与本机同一条（`runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
@@ -120,7 +129,7 @@ let mut cmd = Command::new("git");
 ## 关键约定
 
 - **同步 command 禁止重 IO / 重 CPU**：一律 `async fn` + `spawn_blocking`。两个坑：(1) 带 `State<'_,T>` 引用参数的 async 命令必须返回 `Result`（E0277）；(2) `State<T>` 不能跨 `spawn_blocking`，state 注册成 `Arc<T>` 后 clone 进闭包。
-- **`trace_command` 兜底**：保留同步但做 IO/子进程/外部调用的命令，第一行埋 `let _trace = crate::diagnostics::trace_command("函数名");`（在任何 IO/spawn 之前，cfg 分支之前）。**只对同步命令有意义，禁止给 async 命令埋**（guard 在 dispatch 后立刻 drop）。已埋 52 条。决策：重 IO/CPU → async；轻 → 不动；介于之间且保留同步 → 埋。**这条规则由构建期守卫强制**：`pnpm check:sync-io`（已挂进 `pnpm build`）扫描所有同步 Tauri 命令，做 IO/子进程却没埋点的直接报错——未埋点的同步命令卡死时冻结报告 `stuckCommand` 恒为 `None`，肇事者定不到（2026-07 一整轮误判就死在这个盲区）。豁免在 `scripts/check-sync-io-commands.mjs` 登记并写明理由。
+- **`trace_command` 兜底**：保留同步但做 IO/子进程/外部调用的命令，第一行埋 `let _trace = crate::diagnostics::trace_command("函数名");`（在任何 IO/spawn 之前，cfg 分支之前）。**只对同步命令有意义，禁止给 async 命令埋**（guard 在 dispatch 后立刻 drop）。已埋 46 条。决策：重 IO/CPU → async；轻 → 不动；介于之间且保留同步 → 埋。**这条规则由构建期守卫强制**：`pnpm check:sync-io`（已挂进 `pnpm build`）扫描所有同步 Tauri 命令，做 IO/子进程却没埋点的直接报错——未埋点的同步命令卡死时冻结报告 `stuckCommand` 恒为 `None`，肇事者定不到（2026-07 一整轮误判就死在这个盲区）。豁免在 `scripts/check-sync-io-commands.mjs` 登记并写明理由。
 - **主题系统是配色的唯一来源**：所有颜色/背景/边框/阴影/圆角/间距必须走 `src/themes/` 语义 token 的 `var(--aide-*)`，禁止硬编码 hex；`tailwind.config.js` 的 `theme.extend` 为空。新增语义色 → `ThemeTokens` 加槽位 + 每个主题文件给值；新增主题 → 新增实现 `ThemeTokens` 的文件 + `themes/index.ts` 注册。`colorScheme` 是例外（浏览器原生 `color-scheme` 属性）。
 - **VC++ Redistributable 随包分发**（NSIS POSTINSTALL 静默装 vc_redist）：aide.exe 依赖 `MSVCP140.dll`/`VCRUNTIME140.dll`，缺/旧 → 「双击无反应」（C++ 运行库加载阶段崩溃，早于任何 Rust 代码）。
 

@@ -402,7 +402,7 @@ pub fn explain_permission_decision_impl(
 pub async fn get_permission_settings(
     project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
@@ -429,7 +429,7 @@ pub async fn create_permission_rule(
     project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
@@ -446,7 +446,7 @@ pub async fn create_permission_rules(
     project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
@@ -465,7 +465,7 @@ pub async fn update_permission_rule(
     project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
@@ -483,7 +483,7 @@ pub async fn delete_permission_rule(
     project: Option<String>,
     settings: State<'_, Arc<SettingsService>>,
     runtime: State<'_, AgentRuntimeManager>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionSettingsView, String> {
     let service = settings.inner().clone();
     let project = resolve_project_root(project, &workspace);
@@ -496,7 +496,7 @@ pub async fn delete_permission_rule(
 pub async fn explain_permission_decision(
     invocation: PermissionExplanationRequest,
     settings: State<'_, Arc<SettingsService>>,
-    workspace: State<'_, WorkspaceState>,
+    workspace: State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<PermissionExplanationView, String> {
     let service = settings.inner().clone();
     let project = current_project_root(&workspace);

@@ -26,7 +26,7 @@ pub fn get_global_instructions() -> Result<CustomizationItem, String> {
 
 #[tauri::command]
 pub fn list_instructions(
-    ws: tauri::State<'_, WorkspaceState>,
+    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<Vec<CustomizationItem>, String> {
     let _trace = crate::diagnostics::trace_command("list_instructions");
     let mut items = Vec::new();
@@ -77,7 +77,7 @@ pub fn save_global_instructions(content: String) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_project_instructions(
-    ws: tauri::State<'_, WorkspaceState>,
+    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<CustomizationItem, String> {
     let _trace = crate::diagnostics::trace_command("get_project_instructions");
     let path = project_claude_md_path(&ws);
@@ -101,7 +101,7 @@ pub fn get_project_instructions(
 #[tauri::command]
 pub fn save_project_instructions(
     content: String,
-    ws: tauri::State<'_, WorkspaceState>,
+    ws: tauri::State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("save_project_instructions");
     let path = project_claude_md_path(&ws);

@@ -283,7 +283,7 @@ pub async fn send_message(
     // None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
     provider: Option<String>,
     runtime_mgr: State<'_, AgentRuntimeManager>,
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     settings_service: State<'_, std::sync::Arc<crate::settings::SettingsService>>,
     // Tauri 注入（不是 IPC 参数）：lsp_languages_for_path 需要它解析捆绑 server 的
     // 资源路径（registry::resolve）。同 lsp_ensure_server 的取用方式。
@@ -630,7 +630,7 @@ fn recorded_root(session_id: &str) -> Option<PathBuf> {
 fn session_cwd(
     session_id: &str,
     workspace_root: &Option<String>,
-    workspace_state: &State<'_, WorkspaceState>,
+    workspace_state: &State<'_, std::sync::Arc<WorkspaceState>>,
 ) -> PathBuf {
     let (cwd, source) = pick_cwd(CwdCandidates {
         explicit: explicit_root(workspace_root),

@@ -400,7 +400,7 @@ pub struct DailyWorkspace {
 
 #[tauri::command]
 pub fn set_workspace(
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     key: String,
     path: String,
 ) -> Result<(), String> {
@@ -422,7 +422,7 @@ pub fn set_workspace(
 /// sessions 扫描对缺失目录已有容错（计划 D7）。
 #[tauri::command]
 pub fn create_workspace(
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     path: String,
 ) -> Result<WorkspaceInfo, String> {
     // normalize 先行：注册表条目、激活 key、返回的 WorkspaceInfo 三者同源
@@ -483,7 +483,7 @@ fn save_workspace_state(path: &str) -> Result<(), String> {
 /// 工作区，清空激活态。
 #[tauri::command]
 pub async fn remove_workspace(
-    workspace_state: State<'_, WorkspaceState>,
+    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     key: String,
     mode: String,
 ) -> Result<(), String> {

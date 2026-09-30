@@ -23,7 +23,7 @@ async fn blocking<T: Send + 'static>(
 /// 同 load_messages：整读 .jsonl 再反向扫描，转 blocking 线程。
 #[tauri::command]
 pub async fn session_last_event(
-    _workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<LastEventInfo, String> {
@@ -47,7 +47,7 @@ pub async fn session_last_event(
 /// command 禁止重 IO」）。
 #[tauri::command]
 pub async fn session_jsonl_size(
-    _workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     app: tauri::AppHandle,
     session_id: String,
 ) -> Result<u64, String> {
@@ -66,7 +66,7 @@ pub async fn session_jsonl_size(
 
 #[tauri::command]
 pub async fn session_truncate_jsonl(
-    _workspace_state: State<'_, WorkspaceState>,
+    _workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
     app: tauri::AppHandle,
     session_id: String,
     byte_pos: u64,

@@ -9,6 +9,7 @@ pub mod commands;
 mod conversation;
 mod diagnostics;
 mod filewatch;
+mod host_door;
 mod lsp;
 mod policy;
 pub mod remote;
@@ -85,7 +86,7 @@ pub fn run() {
         eprintln!("[aide] daily workspace bootstrap failed: {e}");
     }
     let saved_key = commands::load_workspace_state();
-    let workspace_state = WorkspaceState::new();
+    let workspace_state = std::sync::Arc::new(WorkspaceState::new());
     if let Some(key) = saved_key {
         // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
         // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
@@ -152,7 +153,7 @@ pub fn run() {
             runtime::bg_registry::BgTaskRegistry::default(),
         ))
         .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
-        .manage(workspace_state)
+        .manage(std::sync::Arc::clone(&workspace_state))
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
         // （node 常驻）、remote 网关都需要 aide.exe 活着。真正退出的唯一出口是
@@ -183,7 +184,12 @@ pub fn run() {
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
         .manage(std::sync::Arc::new(browser::adapter::PlatformEngine::new()))
         .manage(browser::state::BrowserState::new())
-        .setup(|app| {
+        .setup(move |app| {
+            // 本机 Host 核心：与 Tauri 共享同一个活动工作区实例；事件经 Tauri 广播。
+            app.manage(aide_core::Core::new(
+                std::sync::Arc::clone(&workspace_state),
+                std::sync::Arc::new(host_door::TauriSink(app.handle().clone())),
+            ));
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
@@ -366,32 +372,13 @@ pub fn run() {
             commands::shell::pty_spawn_shell,
             commands::onboarding::claude_credentials_exist,
             commands::onboarding::claude_start_login,
-            commands::filesystem::get_project_info,
-            commands::filesystem::list_directory,
-            commands::filesystem::list_fs_roots,
             commands::filesystem::file_open,
-            commands::filesystem::read_file_content,
-            commands::filesystem::read_file_base64,
-            commands::filesystem::read_file_binary,
-            commands::filesystem::write_file_content,
             commands::file_assoc::consume_pending_open_file,
             commands::file_assoc::register_open_with,
             commands::file_assoc::unregister_open_with,
             commands::file_assoc::set_open_with_extensions,
-            commands::filesystem::delete_file,
-            commands::filesystem::create_file,
-            commands::filesystem::create_dir,
             commands::filesystem::show_in_explorer,
             commands::filesystem::detect_run_command,
-            commands::filesystem::grep_symbol,
-            commands::filesystem::file_exists,
-            commands::filesystem::path_types,
-            commands::filesystem::find_files_by_name,
-            commands::search::search_in_files,
-            commands::search::replace_in_files_preview,
-            commands::search::apply_replacements,
-            commands::filesystem::copy_file,
-            commands::filesystem::move_file,
             commands::session::list_sessions,
             automation::commands::list_automations,
             automation::commands::get_automation,
@@ -453,42 +440,10 @@ pub fn run() {
             commands::permissions::update_permission_rule,
             commands::permissions::delete_permission_rule,
             commands::permissions::explain_permission_decision,
-            commands::git::git_diff_files,
-            commands::git::git_stage_all,
-            commands::git::git_stage_file,
-            commands::git::git_unstage_file,
-            commands::git::git_revert_file,
             commands::app::get_app_version,
             // 托盘菜单「退出 Aide」的出口。刻意不进 remote RPC 白名单——远端
             // PWA 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
-            commands::git::git_remote_url,
-            commands::git::git_log,
-            commands::git::git_show,
-            commands::git::git_branches,
-            commands::git::git_checkout,
-            commands::git::git_stash,
-            commands::git::git_stash_pop,
-            commands::git::git_stash_list,
-            commands::git::git_stash_apply,
-            commands::git::git_stash_drop,
-            commands::git::git_fetch,
-            commands::git::git_ahead_behind,
-            commands::git::git_discard_all,
-            commands::git::git_unstage_all,
-            commands::git::git_create_branch,
-            commands::git::git_pull,
-            commands::git::git_delete_branch,
-            commands::git::git_diff_pair,
-            commands::git::git_head_rev,
-            commands::git::git_status,
-            commands::git::git_unpushed_commits,
-            commands::git::git_push,
-            commands::git::git_fingerprint,
-            commands::git::git_commit,
-            commands::git::git_compare_branches,
-            commands::git::git_diff_pair_refs,
-            commands::git::git_tags,
             // Customization commands
             commands::customizations::list_agents,
             commands::customizations::get_agent,
@@ -650,9 +605,12 @@ pub fn run() {
             remote_workspace::remote_ws_statuses,
             remote_workspace::remote_ws_host_of,
             ]);
-            move |invoke: tauri::ipc::Invoke<tauri::Wry>| match remote_workspace::routes::intercept(invoke) {
-                Some(invoke) => commands(invoke),
-                None => true,
+            // 远程工作区拦截 → 本机 Host 命令表（aide-core）→ 其余 Tauri 命令。
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                match remote_workspace::routes::intercept(invoke).and_then(host_door::dispatch) {
+                    Some(invoke) => commands(invoke),
+                    None => true,
+                }
             }
         })
         .run(tauri::generate_context!())

@@ -209,7 +209,7 @@ fn plan_rooted(app: &AppHandle, cmd: &str, args: &Value) -> Plan {
         .filter(|c| !c.trim().is_empty())
         .map(String::from);
     let root = explicit.or_else(|| {
-        app.try_state::<WorkspaceState>().and_then(|ws| {
+        app.try_state::<std::sync::Arc<WorkspaceState>>().and_then(|ws| {
             ws.path
                 .lock()
                 .ok()

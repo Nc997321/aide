@@ -56,6 +56,7 @@ dependencies = [
 name = "aide"
 version = "0.8.0"
 dependencies = [
+ "aide-core",
  "aide-host",
  "aide-workspace",
  "arboard",
@@ -107,9 +108,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "aide-core"
+version = "0.8.0"
+dependencies = [
+ "aide-workspace",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "aide-host"
 version = "0.8.0"
 dependencies = [
+ "aide-core",
  "aide-workspace",
  "base64 0.22.1",
  "serde",

@@ -70,7 +70,7 @@ pub fn send_message(app: AppHandle, params: Value) -> BoxFuture<'static, Result<
             }
         }));
         let runtime = app.state::<AgentRuntimeManager>();
-        let ws_state = app.state::<WorkspaceState>();
+        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
         let settings = app.state::<Arc<SettingsService>>();
         to_json(
             crate::commands::chat::send_message(
@@ -261,7 +261,7 @@ pub fn btw_ask(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value
 
 pub fn list_sessions(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
-        let ws_state = app.state::<WorkspaceState>();
+        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
         to_json(crate::commands::session::list_sessions(ws_state, app.clone()).await)
     })
 }
@@ -339,7 +339,7 @@ struct LoadMessagesArgs {
 pub fn load_messages(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: LoadMessagesArgs = parse(params)?;
-        let ws_state = app.state::<WorkspaceState>();
+        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
         to_json(
             crate::commands::session::load_messages(
                 ws_state,
@@ -359,7 +359,7 @@ pub fn session_last_event(
 ) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
-        let ws_state = app.state::<WorkspaceState>();
+        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
         to_json(crate::commands::session::session_last_event(ws_state, app.clone(), a.session_id).await)
     })
 }
@@ -498,7 +498,7 @@ pub fn get_active_workspace(
     _params: Value,
 ) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
-        let ws_state = app.state::<WorkspaceState>();
+        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
         let key = ws_state.key.lock().map_err(|e| e.to_string())?.clone();
         let path = ws_state.path.lock().map_err(|e| e.to_string())?.clone();
         match (key, path) {
