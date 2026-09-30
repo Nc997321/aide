@@ -1,6 +1,6 @@
 // 守门检查：前端 LSP 服务 id 表必须与 Rust 权威表逐条一致。
 //
-// 事实源：`src-tauri/src/lsp/detector.rs` 的 `LanguageId::from_ext`（扩展名 → 服务归属）
+// 事实源：`src-tauri/crates/aide-workspace/src/detect/languages.rs` 的 `LanguageId::from_ext`（扩展名 → 服务归属）
 // 与 `id_str`（服务归属 → 服务 id）。前端 `src/utils/lspLang.ts` 的 `LSP_LANG_BY_EXT`
 // 是它的**影子表**——跨语言没法共享常量，只能靠对账。
 //
@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
-const RUST_PATH = "src-tauri/src/lsp/detector.rs";
+const RUST_PATH = "src-tauri/crates/aide-workspace/src/detect/languages.rs";
 const TS_PATH = "src/utils/lspLang.ts";
 const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
 /** 两张表都应有这么多条；少于此数说明解析规则跟代码脱节了（守卫失效，必须报错）。 */
@@ -110,7 +110,7 @@ for (const ext of ts.keys()) {
 }
 
 if (diffs.length) {
-  console.error("✗ LSP 服务 id 表不一致（权威表：src-tauri/src/lsp/detector.rs 的 from_ext + id_str）：");
+  console.error("✗ LSP 服务 id 表不一致（权威表：src-tauri/crates/aide-workspace/src/detect/languages.rs 的 from_ext + id_str）：");
   for (const d of diffs) console.error("  - " + d);
   console.error(`\n处理方式：改 ${TS_PATH} 的 LSP_LANG_BY_EXT 与 Rust 对齐（方向只有一个：Rust 是权威）。`);
   process.exit(1);

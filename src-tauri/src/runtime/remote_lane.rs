@@ -80,9 +80,9 @@ pub fn translate_send_command(host: &HostId, cmd: &mut Value, loopback_host: Opt
         }
     }
     rewrite_loopback_proxies(host, cmd, loopback_host);
-    // 代码索引与 LSP 在桌面进程里，看不到目标机的文件：远程会话不挂这两组工具
+    // 代码索引在桌面进程里，看不到目标机的文件：远程会话不挂它。LSP 不同——语言服务器经
+    // `aide-host lsp` 跑在目标机上，`lsp_languages` 由 send 路径按目标机探测结果给出，原样放行。
     cmd["codegraph_enabled"] = Value::Bool(false);
-    cmd["lsp_languages"] = Value::Array(Vec::new());
 }
 
 const PROXY_KEYS: &[&str] = &[
@@ -152,7 +152,8 @@ pub fn map_event_paths(host: &HostId, v: &mut Value) {
     }
 }
 
-/// codegraph / LSP 桥查询：远程工作区不支持，就地回错误结果。返回 true = 已处理。
+/// codegraph 桥查询：远程工作区不支持，就地回错误结果。返回 true = 已处理。
+/// （LSP 桥**支持**：语言服务器经 `aide-host lsp` 跑在目标机上，见 `runtime::lsp_agent`。）
 pub(super) async fn answer_unsupported_bridge(
     event: &Value,
     host: &HostId,
@@ -164,14 +165,6 @@ pub(super) async fn answer_unsupported_bridge(
             serde_json::json!({
                 "ok": false, "status": "error",
                 "error": format!("代码索引暂不支持远程工作区（{}）", host.label()),
-            }),
-        )
-    } else if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(event) {
-        crate::lsp::agent_bridge::build_result_command(
-            &req.request_id,
-            serde_json::json!({
-                "ok": false, "status": "error",
-                "error": format!("LSP 暂不支持远程工作区（{}）", host.label()),
             }),
         )
     } else {
@@ -385,7 +378,7 @@ mod tests {
         // display 保持桌面形态（渲染描述原样回灌各端）
         assert_eq!(cmd["display"]["blocks"][0]["path"], "\\\\wsl.localhost\\Debian\\home\\u\\p\\src\\a.rs");
         assert_eq!(cmd["codegraph_enabled"], false);
-        assert_eq!(cmd["lsp_languages"], json!([]));
+        assert!(cmd.get("lsp_languages").is_none(), "LSP 语言表由 send 路径给，车道不改写");
     }
 
     #[test]

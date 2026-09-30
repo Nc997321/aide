@@ -8,7 +8,7 @@ import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
-import { type LspGate } from "../../extensions/lspGate.js";
+import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
@@ -102,6 +102,8 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     cwd: deps.cwd,
     env: deps.processEnv,
     session: deps.session,
+    // grep 顺带作答与 aide-lsp 工具**同一道闸**（lspGate）：工具不在，附注里指向的工具也不存在。
+    lsp: { mounted: lspToolsMounted(lspGate), emit: deps.emit },
   });
   // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与 codegraph 按
   // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。

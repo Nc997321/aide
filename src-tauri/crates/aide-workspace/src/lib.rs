@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
+pub mod detect;
 pub mod fs_ops;
 pub mod git;
 pub mod search;

@@ -234,10 +234,26 @@ fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
 }
 
 /// 该工作区配得上 LSP 的语言（sidecar 据此决定挂不挂 aide-lsp 工具）。
-/// 探测要遍历工作区（有界，但仍是文件系统 IO）——放 `spawn_blocking`，不占 tokio worker
-/// （与 `lsp::agent_query::first_source_files` 同一条纪律）。JoinError（任务取消/线程池关闭）
-/// → 空表：退化成「不挂 LSP 工具」，与「探不到语言」走同一条路径。
+///
+/// 本机：探测要遍历工作区（有界，但仍是文件系统 IO）——放 `spawn_blocking`，不占 tokio worker；
+/// JoinError → 空表（退化成「不挂 LSP 工具」，与「探不到语言」走同一条路径）。
+/// 远程（WSL / SSH）：在目标机上探测，「配得上」= 目标机登录 PATH 上真有该语言的服务器
+/// （`aide-host lsp_detect`）；连不上 → 空表，同样退化成不挂。
 async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) -> Vec<String> {
+    let access = crate::lsp::workspace_access::WorkspaceAccess::of(app, workspace_root);
+    if access.is_remote() {
+        return match access.remote_detect(workspace_root).await {
+            Ok((_, available)) => available
+                .into_iter()
+                .filter(|l| crate::lsp::manager::remote_supported(*l))
+                .map(|l| l.id_str().to_string())
+                .collect(),
+            Err(e) => {
+                tracing::info!(root = workspace_root, error = %e, "remote lsp detection failed");
+                vec![]
+            }
+        };
+    }
     let app = app.clone();
     let root = workspace_root.to_string();
     tokio::task::spawn_blocking(move || {
@@ -363,14 +379,9 @@ pub async fn send_message(
     // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
     // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
-    // 远程工作区（WSL / SSH）：LSP 探测会经 UNC 扫目标机目录（慢且无意义——远程会话不挂
-    // LSP 工具，见 remote_lane::translate_send_command），直接跳过。
+    // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
     let remote_host = crate::remote_workspace::path::parse(&cwd_str).map(|(h, _)| h);
-    cmd["lsp_languages"] = if remote_host.is_some() {
-        json!([])
-    } else {
-        json!(lsp_languages_for_send(&app, &cwd_str).await)
-    };
+    cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the

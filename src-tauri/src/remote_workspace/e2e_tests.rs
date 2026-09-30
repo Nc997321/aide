@@ -168,3 +168,132 @@ async fn wsl_install_connect_workspace_ops_and_agent() {
     assert!(tool_output.contains("Linux"), "Bash did not run on the WSL target: {tool_output}");
     assert!(tool_output.contains(&cwd), "cwd not honoured on target: {tool_output}");
 }
+
+/// 远程 LSP：`aide-host lsp` 在目标机上按登录 PATH 起 rust-analyzer，桌面经 `lsp_pipe`
+/// 以**桌面形态 URI** 与它对话——验证①服务器在目标机上被找到并跑起来 ②出站 URI 被译成
+/// 目标机路径（否则 RA 找不到文件，documentSymbol 恒空）③回来的 URI 被译回桌面形态。
+///
+/// 需要目标机 `rust-analyzer` 在登录 PATH 上（`rustup component add rust-analyzer`）。
+#[tokio::test]
+#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）、pnpm build:remote-kit 与目标机 rust-analyzer"]
+async fn wsl_remote_language_server_speaks_desktop_uris() {
+    use crate::lsp::transport::{format_frame, Framer};
+    use tokio::io::AsyncReadExt;
+
+    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
+    let host = HostId::Wsl(distro);
+    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let conn = HostConnection::start(
+        host.clone(),
+        launcher::command(&host, &format!("exec {} serve", launcher::sh_quote(&inst.host_bin))).unwrap(),
+        Arc::new(|_h: &HostId, _n: Notification| {}),
+    )
+    .await
+    .expect("connect");
+
+    // 目标机上一个最小 cargo 工程
+    let dir = format!("{}/.aide-e2e-lsp-{}", conn.info.home, std::process::id());
+    for (path, content) in [
+        (format!("{dir}/Cargo.toml"), "[package]\nname = \"e2e\"\nversion = \"0.1.0\"\nedition = \"2021\"\n"),
+        (format!("{dir}/src/main.rs"), "fn helper() -> u32 { 7 }\n\nfn main() {\n    let _ = helper();\n}\n"),
+    ] {
+        let parent = path.rsplit_once('/').unwrap().0.to_string();
+        let _ = conn.invoke("create_dir", json!({"parentPath": parent.rsplit_once('/').unwrap().0, "name": parent.rsplit('/').next().unwrap()}), None).await;
+        conn.invoke("write_file_content", json!({"path": path, "content": content}), None).await.expect("write");
+    }
+
+    // 语言服务器：与 manager::spawn_remote 同一条路
+    let mut cmd = launcher::command(&host, &format!("exec {} lsp", launcher::sh_quote(&inst.host_bin))).unwrap();
+    let mut child = cmd.spawn().expect("spawn aide-host lsp");
+    let mut stdin = child.stdin.take().unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let init = aide_host::protocol::LspInit { candidates: vec![vec!["rust-analyzer".into()]], cwd: dir.clone() };
+    stdin.write_all(format!("{}\n", serde_json::to_string(&init).unwrap()).as_bytes()).await.unwrap();
+    let (mut to_server, mut from_server) = super::lsp_pipe::translate(host.clone(), stdin, stdout);
+
+    let desktop_root = super::path::to_desktop(&host, &dir);
+    let root_uri = crate::lsp::protocol::path_to_uri(&desktop_root);
+    let main_uri = format!("{root_uri}/src/main.rs");
+    let mut framer = Framer::new();
+    let mut buf = vec![0u8; 1 << 16];
+    let mut next_id = 0u64;
+
+    macro_rules! send {
+        ($v:expr) => {
+            to_server.write_all(&format_frame(&$v)).await.unwrap()
+        };
+    }
+    // 读到指定 id 的响应为止（服务器请求一律回 null，通知丢弃）
+    macro_rules! response {
+        ($id:expr) => {{
+            let want = $id;
+            tokio::time::timeout(Duration::from_secs(120), async {
+                let mut pending: Vec<Value> = Vec::new();
+                loop {
+                    if let Some(pos) = pending.iter().position(|m| m.get("id") == Some(&json!(want)) && m.get("method").is_none()) {
+                        return pending.remove(pos);
+                    }
+                    let n = from_server.read(&mut buf).await.expect("read");
+                    assert!(n > 0, "language server exited");
+                    for m in framer.feed(&buf[..n]) {
+                        if m.get("method").is_some() && m.get("id").is_some() {
+                            send!(json!({"jsonrpc":"2.0","id":m["id"],"result":null}));
+                        } else {
+                            pending.push(m);
+                        }
+                    }
+                }
+            })
+            .await
+            .expect("lsp response timed out")
+        }};
+    }
+
+    next_id += 1;
+    send!(json!({"jsonrpc":"2.0","id":next_id,"method":"initialize","params":{
+        "processId": null, "rootUri": root_uri,
+        "workspaceFolders": [{"uri": root_uri, "name": "e2e"}],
+        "capabilities": {"textDocument": {"documentSymbol": {"hierarchicalDocumentSymbolSupport": true}}}
+    }}));
+    let init_resp = response!(next_id);
+    assert!(init_resp.get("result").is_some(), "initialize failed: {init_resp}");
+    send!(json!({"jsonrpc":"2.0","method":"initialized","params":{}}));
+    send!(json!({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{
+        "uri": main_uri, "languageId": "rust", "version": 1,
+        "text": "fn helper() -> u32 { 7 }\n\nfn main() {\n    let _ = helper();\n}\n"
+    }}}));
+
+    // 索引要一会儿：documentSymbol 轮询到非空；再对 main 里的 `helper()` 调用跳定义
+    let mut symbols = Value::Null;
+    for _ in 0..60 {
+        next_id += 1;
+        send!(json!({"jsonrpc":"2.0","id":next_id,"method":"textDocument/documentSymbol","params":{"textDocument":{"uri": main_uri}}}));
+        symbols = response!(next_id)["result"].clone();
+        if symbols.as_array().is_some_and(|a| !a.is_empty()) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    println!("symbols: {symbols}");
+    assert!(symbols.to_string().contains("helper"), "no symbols — URI translation or server broken: {symbols}");
+
+    // documentSymbol 是语法层（立刻有），definition 要等 RA 载入 crate 图（cargo metadata）
+    let mut def = Value::Null;
+    for _ in 0..90 {
+        next_id += 1;
+        send!(json!({"jsonrpc":"2.0","id":next_id,"method":"textDocument/definition","params":{
+            "textDocument":{"uri": main_uri}, "position": {"line": 3, "character": 13}
+        }}));
+        def = response!(next_id)["result"].clone();
+        if def.as_array().is_some_and(|a| !a.is_empty()) || def.is_object() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+    println!("definition: {def}");
+    let def_uri = def.to_string();
+    assert!(def_uri.contains(&main_uri), "definition URI not translated back to desktop form: {def}");
+
+    let _ = child.start_kill();
+    conn.invoke("delete_file", json!({"path": dir}), None).await.expect("cleanup");
+}

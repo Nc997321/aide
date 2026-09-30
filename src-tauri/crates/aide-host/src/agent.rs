@@ -41,11 +41,11 @@ pub async fn run() -> i32 {
 
     // 用户登录环境（PATH 里的 nvm / cargo / pyenv…）：agent 的 Bash 工具要看到与用户
     // 自己终端一致的工具链。拿不到就沿用当前环境（wsl/ssh 的非登录环境），只留痕。
-    let login = login_env().await;
+    let login = crate::login::login_env().await;
     if login.is_none() {
         eprintln!("[aide-host agent] login shell env unavailable; using inherited env");
     }
-    let node = resolve_node(&node, login.as_ref());
+    let node = crate::login::which(&node, login.as_ref()).unwrap_or(node);
 
     let mut cmd = tokio::process::Command::new(&node);
     if let Some(env) = &login {
@@ -107,80 +107,4 @@ pub async fn run() -> i32 {
     let _ = downstream.await;
     upstream.abort();
     status.ok().and_then(|s| s.code()).unwrap_or(1)
-}
-
-const ENV_MARKER: &str = "__AIDE_LOGIN_ENV__";
-
-/// 以交互式登录 shell 取环境（`-lic`：Debian/Ubuntu 的 .bashrc 对非交互 shell 直接
-/// return，nvm 之类只装在那里）。rc 文件往 stdout 打的任何东西都在标记之前，被丢弃。
-async fn login_env() -> Option<std::collections::HashMap<String, String>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    for flags in ["-lic", "-lc"] {
-        let script = format!("printf '\\n{ENV_MARKER}\\n'; env -0");
-        let fut = tokio::process::Command::new(&shell)
-            .arg(flags)
-            .arg(&script)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .output();
-        let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(15), fut).await else {
-            continue;
-        };
-        if let Some(env) = parse_env_dump(&out.stdout) {
-            return Some(env);
-        }
-    }
-    None
-}
-
-fn parse_env_dump(bytes: &[u8]) -> Option<std::collections::HashMap<String, String>> {
-    let text = String::from_utf8_lossy(bytes);
-    let marker = format!("\n{ENV_MARKER}\n");
-    let (_, dump) = text.split_once(&marker)?;
-    let env: std::collections::HashMap<String, String> = dump
-        .split('\0')
-        .filter_map(|kv| kv.split_once('='))
-        .filter(|(k, _)| !k.is_empty() && !k.contains('\n'))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    env.contains_key("PATH").then_some(env)
-}
-
-/// 裸名 `node` 按登录环境的 PATH 解析成绝对路径（spawn 用的是本进程的 PATH，不是子进程 env）。
-fn resolve_node(node: &str, env: Option<&std::collections::HashMap<String, String>>) -> String {
-    if node.contains('/') {
-        return node.to_string();
-    }
-    let path = env
-        .and_then(|e| e.get("PATH").cloned())
-        .or_else(|| std::env::var("PATH").ok())
-        .unwrap_or_default();
-    for dir in path.split(':').filter(|d| !d.is_empty()) {
-        let cand = PathBuf::from(dir).join(node);
-        if cand.is_file() {
-            return cand.to_string_lossy().into_owned();
-        }
-    }
-    node.to_string()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn env_dump_skips_rc_noise() {
-        let mut dump = b"Welcome to box!\nfortune cookie\n\n__AIDE_LOGIN_ENV__\n".to_vec();
-        dump.extend_from_slice(b"PATH=/home/u/.nvm/bin:/usr/bin\0HOME=/home/u\0MULTI=a\nb\0");
-        let env = parse_env_dump(&dump).unwrap();
-        assert_eq!(env["PATH"], "/home/u/.nvm/bin:/usr/bin");
-        assert_eq!(env["MULTI"], "a\nb");
-    }
-
-    #[test]
-    fn env_dump_without_marker_is_rejected() {
-        assert!(parse_env_dump(b"PATH=/x\0").is_none());
-    }
 }

@@ -208,8 +208,19 @@ impl LspManager {
                 }
             }
         }
-        // dead 或不存在 → spawn 新的
-        let src = registry::resolve(lang, settings, app).ok_or(EnsureError::ServerNotFound)?;
+        // dead 或不存在 → spawn 新的。
+        // 远程工作区：服务器在**目标机**上解析（aide-host lsp 按登录 PATH 找），桌面的覆盖 /
+        // 捆绑 / PATH 发现都是本机的东西，不适用。
+        let src = if crate::remote_workspace::path::is_remote(workspace) {
+            if !remote_supported(lang) {
+                return Err(EnsureError::ServerNotFound);
+            }
+            ServerSource::Which {
+                binary: lang.server_binary().ok_or(EnsureError::ServerNotFound)?.to_string(),
+            }
+        } else {
+            registry::resolve(lang, settings, app).ok_or(EnsureError::ServerNotFound)?
+        };
         let handle = spawn_and_init(workspace, lang, &src, app, settings).await?;
         self.handles
             .lock()
@@ -284,6 +295,14 @@ impl LspManager {
             .filter(|h| h.is_alive())
             .cloned()
     }
+}
+
+/// 远程工作区（WSL / SSH）支持哪些语言的服务器。
+///
+/// Java 不在：jdtls 要桌面侧的数据目录与捆绑的 lombok（`profiles/java.rs`），搬上目标机是
+/// 另一件事。其余语言的服务器都是「PATH 上一个可执行文件 + stdio」，经 `aide-host lsp` 就能跑。
+pub fn remote_supported(lang: LanguageId) -> bool {
+    !matches!(lang, LanguageId::Java)
 }
 
 // ── 排除集 ──
@@ -366,9 +385,12 @@ async fn spawn_and_init(
     .exclude_dirs;
     let exclude_globs = build_exclude_globs(&exclude_dirs);
 
-    // —— 生产 spawn ——
+    // —— 生产 spawn ——（远程工作区：服务器经 aide-host 跑在目标机上）
     #[cfg(not(test))]
-    let (transport, child, stderr_lines) = spawn_real(workspace, lang, src, app).await?;
+    let (transport, child, stderr_lines) = match crate::remote_workspace::path::parse(workspace) {
+        Some((host, posix_root)) => spawn_remote(lang, src, host, posix_root, app).await?,
+        None => spawn_real(workspace, lang, src, app).await?,
+    };
     #[cfg(test)]
     let (transport, child, stderr_lines) = spawn_test(workspace, lang, src).await;
 
@@ -550,27 +572,100 @@ async fn spawn_real(
         .stdout
         .take()
         .ok_or(EnsureError::SpawnFailed("no stdout".into()))?;
-    // stderr 尾部缓冲：读行 → tracing 进日志 + 环形缓冲（握手失败时回读），防 pipe buffer 阻塞
     if let Some(stderr) = child.stderr.take() {
-        let stderr_buf = Arc::clone(&stderr_lines);
-        let lang_id = lang.id_str();
-        tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt;
-            use tokio::io::BufReader;
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                tracing::info!("[lsp stderr] [{}] {}", lang_id, line);
-                let mut buf = stderr_buf.lock().await;
-                buf.push(line);
-                if buf.len() > 20 {
-                    buf.remove(0);
-                }
-            }
-        });
+        collect_stderr(stderr, lang, Arc::clone(&stderr_lines));
     }
     let child = Arc::new(TokioMutex::new(child));
     let transport = LspTransport::with_reader_source(Box::new(stdin), Box::new(stdout));
     Ok((transport, Some(child), stderr_lines))
+}
+
+/// stderr 尾部缓冲：读行 → tracing 进日志 + 环形缓冲（握手失败时回读），防 pipe buffer 阻塞。
+#[cfg(not(test))]
+fn collect_stderr(
+    stderr: tokio::process::ChildStderr,
+    lang: LanguageId,
+    stderr_buf: Arc<TokioMutex<Vec<String>>>,
+) {
+    let lang_id = lang.id_str();
+    tokio::spawn(async move {
+        use tokio::io::AsyncBufReadExt;
+        use tokio::io::BufReader;
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::info!("[lsp stderr] [{}] {}", lang_id, line);
+            let mut buf = stderr_buf.lock().await;
+            buf.push(line);
+            if buf.len() > 20 {
+                buf.remove(0);
+            }
+        }
+    });
+}
+
+/// 远程工作区：经 `aide-host lsp` 在目标机上起服务器（登录 PATH 上找），stdio 套一层
+/// URI 翻译（`remote_workspace::lsp_pipe`）——之后对 LspManager 就是又一个 stdio 进程。
+///
+/// 目标机上没装该语言的服务器 → aide-host 退出码 127、stderr 说明试了什么；那几行随
+/// 握手失败的原因回到面板（与本机「找不到 server」同一条可见路径）。
+#[cfg(not(test))]
+async fn spawn_remote(
+    lang: LanguageId,
+    src: &ServerSource,
+    host: crate::remote_workspace::path::HostId,
+    posix_root: String,
+    app: &tauri::AppHandle,
+) -> Result<
+    (
+        LspTransport,
+        Option<Arc<TokioMutex<tokio::process::Child>>>,
+        Arc<TokioMutex<Vec<String>>>,
+    ),
+    EnsureError,
+> {
+    use tauri::Manager;
+    use tokio::io::AsyncWriteExt;
+    let svc = app
+        .try_state::<Arc<crate::remote_workspace::RemoteWorkspaces>>()
+        .ok_or_else(|| EnsureError::SpawnFailed("remote workspaces unavailable".into()))?;
+    let inst = svc.installed(&host).await.map_err(EnsureError::SpawnFailed)?;
+    let (program, args) = registry::to_command(lang, src, None);
+    let mut argv = vec![program];
+    argv.extend(args);
+    let init = aide_host::protocol::LspInit {
+        candidates: vec![argv],
+        cwd: posix_root,
+    };
+    let script = format!(
+        "exec {} lsp",
+        crate::remote_workspace::launcher::sh_quote(&inst.host_bin)
+    );
+    let mut cmd = crate::remote_workspace::launcher::command(&host, &script)
+        .map_err(EnsureError::SpawnFailed)?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| EnsureError::SpawnFailed(format!("{}: {e}", host.label())))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or(EnsureError::SpawnFailed("no stdin".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or(EnsureError::SpawnFailed("no stdout".into()))?;
+    let mut line = serde_json::to_string(&init).map_err(|e| EnsureError::SpawnFailed(e.to_string()))?;
+    line.push('\n');
+    stdin
+        .write_all(line.as_bytes())
+        .await
+        .map_err(|e| EnsureError::SpawnFailed(format!("send lsp init: {e}")))?;
+    let stderr_lines: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
+    if let Some(stderr) = child.stderr.take() {
+        collect_stderr(stderr, lang, Arc::clone(&stderr_lines));
+    }
+    let (to_server, from_server) = crate::remote_workspace::lsp_pipe::translate(host, stdin, stdout);
+    let transport = LspTransport::with_reader_source(Box::new(to_server), Box::new(from_server));
+    Ok((transport, Some(Arc::new(TokioMutex::new(child))), stderr_lines))
 }
 
 // ── spawn_test（mock）──
@@ -787,6 +882,13 @@ async fn init_handshake(
     exclude_globs: &[String],
 ) -> Result<(), EnsureError> {
     let root_uri = crate::lsp::protocol::path_to_uri(workspace);
+    // 远程工作区的服务器跑在目标机上：桌面的 PID 在那边不存在，而 LSP 规定「父进程不在了
+    // server 就该退出」——TLS 等会按 processId 轮询、看不到就自杀。远程一律发 null。
+    let process_id = if crate::remote_workspace::path::is_remote(workspace) {
+        serde_json::Value::Null
+    } else {
+        serde_json::json!(std::process::id())
+    };
     // 初始化选项按语言档案注入（Rust excludeGlobs / Go directoryFilters /
     // TS 按工作区挂 Vue 插件 / 其余默认）。
     let init_options = crate::lsp::profiles::profile(lang).init_options(
@@ -800,7 +902,7 @@ async fn init_handshake(
     // 故意不声明 definition.linkSupport（返回 DefinitionLink 会破坏 parse_locations
     // 的 Location 解析）与 codeAction/rename（前端暂不消费，声明无收益）。
     let params = serde_json::json!({
-        "processId": std::process::id(),
+        "processId": process_id,
         "rootUri": root_uri,
         "capabilities": {
             "textDocument": {

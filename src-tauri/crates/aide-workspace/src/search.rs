@@ -26,7 +26,7 @@ impl Default for SearchOptions {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchMatch {
     pub file: String,
@@ -37,14 +37,14 @@ pub struct SearchMatch {
     pub match_end: u32,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchFileGroup {
     pub file: String,
     pub matches: Vec<SearchMatch>,
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResponse {
     pub files: Vec<SearchFileGroup>,

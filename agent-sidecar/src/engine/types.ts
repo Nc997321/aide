@@ -588,7 +588,7 @@ export type SidecarCommand =
       error?: string;
     }
   // LSP 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
-  // `status` 是八态状态词（见 lspStatusText 的 LSP_STATUS_WORDS，与 Rust 侧
+  // `status` 是八态状态词（见 lspFormat 的 LSP_STATUS_WORDS，与 Rust 侧
   // agent_status.rs 的 as_str() 逐字一致）——**模型据此判断空结果可不可信**。
   | {
       cmd: "lsp_result";
@@ -601,6 +601,8 @@ export type SidecarCommand =
       ambiguous?: boolean;
       candidates?: unknown[];
       error?: string;
+      /** 各工具的其余载荷键（symbols / matches / languages / truncated），lspClient 整包透传。 */
+      [key: string]: unknown;
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // data 刻意用 unknown 而非扁平字段：载荷随 op 而变（视图列表 / 脚本返回值 / CDP 返回值），

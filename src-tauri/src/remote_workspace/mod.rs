@@ -18,6 +18,7 @@
 pub mod connection;
 pub mod install;
 pub mod launcher;
+pub mod lsp_pipe;
 pub mod path;
 pub mod routes;
 pub mod sessions;

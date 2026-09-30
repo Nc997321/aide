@@ -11,6 +11,7 @@ use crate::lsp::agent_readiness::{await_ready, ReadinessBudget};
 use crate::lsp::agent_status::AgentLspStatus;
 use crate::lsp::jump;
 use crate::lsp::manager::{RequestOutcome, ServerHandle};
+use crate::lsp::workspace_access::WorkspaceAccess;
 use crate::lsp::workspace_symbol::SymbolCandidate;
 use crate::lsp::LspState;
 use serde_json::{json, Value};
@@ -88,12 +89,44 @@ fn fail(status: AgentLspStatus, msg: &str) -> AgentQueryOutcome {
 /// 本次查询该为哪些语言准备 server：显式坐标 → 该文件的扩展名；只给名字 →
 /// 该工作区探测到的全部语言（agent 只拿得到一个名字，没有扩展名可据以分派）。
 /// 探测本身是文件系统遍历，走 async 外壳（不占 tokio worker——与 `first_source_files` 同一条纪律）。
-async fn target_languages(args: &Value, workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
+async fn target_languages(
+    access: &WorkspaceAccess,
+    args: &Value,
+    workspace_root: &str,
+) -> Vec<crate::lsp::detector::LanguageId> {
     if let Some(p) = resolve_position(args) {
         return crate::lsp::lang_from_ext_of(&p.file).into_iter().collect();
     }
-    crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await
+    // `outline` 只给文件不给坐标：同样按该文件的扩展名定语言。
+    if let Some(file) = outline_file(args) {
+        return crate::lsp::lang_from_ext_of(file).into_iter().collect();
+    }
+    access.detect_languages(workspace_root).await
 }
+
+/// 调用方给的时间预算（`budget_ms`），封顶于该步骤自己的默认预算。
+///
+/// 为什么要它：模型那头有耐心上限。真机转录里一发 LSP 等 20–60s 换回「没答上」，
+/// 几次之后 agent 就再也不碰这组工具了（09-20 之后 84 个会话调用 1 次）。sidecar 给每发
+/// 查询定预算，超了就用文本兜底**当场**回答；这里让后端的等待也跟着收口，别在没人等的
+/// 请求上空转。
+fn budget(args: &Value, default: std::time::Duration) -> std::time::Duration {
+    args.get("budget_ms")
+        .and_then(|v| v.as_u64())
+        .map(std::time::Duration::from_millis)
+        .map_or(default, |b| b.min(default))
+}
+
+/// `outline` 的目标文件（只有 `file`，没有坐标）。
+fn outline_file(args: &Value) -> Option<&str> {
+    args.get("file").and_then(|v| v.as_str())
+}
+
+/// 一个文件的结构最多等这么久（tsserver 工程加载中会先回空，见 `agent_nav::outline`）。
+const OUTLINE_BUDGET: std::time::Duration = std::time::Duration::from_secs(15);
+
+/// 就绪探针的默认预算（空结果时才用，见 `probe_ready`）。
+const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// agent 语义查询入口。
 pub async fn run_agent_query(
@@ -102,15 +135,33 @@ pub async fn run_agent_query(
     args: &Value,
     workspace_root: &str,
 ) -> AgentQueryOutcome {
+    // 纯文本兜底不需要语言服务器（语义层没答上时 sidecar 用它补位），最先分派。
+    if tool == "text" {
+        let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
+            return fail(AgentLspStatus::Error, "missing `name`");
+        };
+        let access = WorkspaceAccess::of(app, workspace_root);
+        return crate::lsp::agent_nav::text_search(&access, workspace_root, symbol_query_name(name)).await;
+    }
     let Some(state) = app.try_state::<Arc<LspState>>() else {
         return fail(AgentLspStatus::NoServer, "lsp state unavailable");
     };
     let state = state.inner();
     // 1. **确保 server 起来**。agent 查询可能先于编辑器到达（用户没打开过该语言的
     //    文件）——只 `mgr.get()` 会直接报 no_server，而正确行为是把它拉起来。
-    let langs = target_languages(args, workspace_root).await;
+    // 工作区文件的读法（本机直读 / 远程问 aide-host）只在这里定一次，往下一路带着。
+    let access = WorkspaceAccess::of(app, workspace_root);
+    let access = &access;
+    let langs = target_languages(access, args, workspace_root).await;
     if langs.is_empty() {
         return fail(AgentLspStatus::NoServer, "no language detected for this query");
+    }
+    // 预热：**每一种**语言都拉起来并探到就绪，**不执行查询**。sidecar 在会话早期
+    // fire-and-forget 调用它，把 46–73s 的冷启动挪出 agent 的关键路径。
+    // （曾经跟查询共用下面那个「第一个可用语言就 break」的循环——结果只热了一种语言，
+    // 另一种的第一次真查询照样撞冷启动。）
+    if tool == "warm" {
+        return warm_all(access, state, app, workspace_root, &langs).await;
     }
     let mut warmed = AgentLspStatus::NoServer;
     for lang_id in &langs {
@@ -129,11 +180,18 @@ pub async fn run_agent_query(
     if !matches!(warmed, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
         return fail(warmed, "no usable language server for this workspace");
     }
-    // 预热：只确保 server 起来并等到就绪，**不执行查询**。sidecar 在会话早期
-    // fire-and-forget 调用它，把 46–73s 的冷启动挪出 agent 的关键路径——否则
-    // agent 第一次真查询会撞上 probe_ready 的 30s 预算而只能拿到 indexing。
-    if tool == "warm" {
-        return warm_only(state, workspace_root, &langs).await;
+    if tool == "outline" {
+        let Some(file) = outline_file(args) else {
+            return fail(AgentLspStatus::Error, "missing `file`");
+        };
+        let Some((lang_id, h)) = server_for(state, workspace_root, file).await else {
+            return fail(AgentLspStatus::NoServer, "no language server for this file");
+        };
+        if let Err(e) = ensure_doc_open(access, &h, workspace_root, file, lang_id).await {
+            tracing::debug!(file, error = %e, "agent lsp: outline 前 didOpen 失败，继续");
+        }
+        let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file);
+        return crate::lsp::agent_nav::outline(&h, &uri, budget(args, OUTLINE_BUDGET)).await;
     }
     // 2. 坐标
     let pos = match resolve_position(args) {
@@ -146,7 +204,17 @@ pub async fn run_agent_query(
                     "missing `name` or `{file,line,character}`",
                 );
             };
-            match lookup_symbol(state, app, symbol_query_name(name), workspace_root).await {
+            let deadline = std::time::Instant::now()
+                + budget(args, crate::lsp::manager::SYMBOL_SEARCH_TIMEOUT);
+            match lookup_symbol(access, state, app, symbol_query_name(name), workspace_root, deadline)
+                .await
+            {
+                // `symbols` 问的就是「这个名字在哪声明」——命中本身就是答案。曾经还要拿它
+                // 再发一次 definition：tsserver 在声明处的 definition 常回空，空再被探针认证成
+                // 「确认没有」（2026-09-29 复现，见 agent_nav::refine_to_name）。
+                Ok(SymbolLookup::Found(c)) if tool == "symbols" => {
+                    return ok_with(AgentLspStatus::Ready, vec![candidate_result(&c)]);
+                }
                 Ok(SymbolLookup::Found(c)) => Position {
                     file: c.file_path,
                     line: c.line,
@@ -164,32 +232,60 @@ pub async fn run_agent_query(
             }
         }
     };
-    run_jump(state, tool, &pos, workspace_root).await
+    run_jump(access, state, tool, &pos, workspace_root, budget(args, PROBE_BUDGET)).await
 }
 
-/// 预热：逐个语言探测就绪，**不做任何查询**。
+/// 预热：并发地把每种语言拉起来、递一个代表文件（把工程加载出来）、探到就绪。
 ///
-/// 返回 `ready` 表示至少一种语言的语义层可用；`indexing` 表示进程在但还没好
-/// （调用方不关心——预热是 fire-and-forget，失败不影响对话）。
-async fn warm_only(
+/// 返回 `ready` = 至少一种语言的语义层可用（sidecar 据此打开「grep 顺带给语义答案」的
+/// 快路径）；逐语言明细在 `languages` 里。**锁只圈住取句柄**：探测可能花掉几十秒，
+/// 曾经整段持锁，预热期间编辑器的所有 LSP 请求都被挡住。
+async fn warm_all(
+    access: &WorkspaceAccess,
     state: &LspState,
+    app: &AppHandle,
     workspace_root: &str,
     langs: &[crate::lsp::detector::LanguageId],
 ) -> AgentQueryOutcome {
-    let mgr = state.0.lock().await;
-    for lang_id in langs {
-        let Some(h) = mgr.get(workspace_root, *lang_id).await else {
-            continue;
+    let one = |lang_id: crate::lsp::detector::LanguageId| async move {
+        let status = match crate::lsp::ensure_lang(state, app, workspace_root, lang_id).await {
+            Ok(o) => AgentLspStatus::from_ensure(&o),
+            Err(_) => AgentLspStatus::Error,
         };
-        let Some(probe_file) = first_source_file(workspace_root, *lang_id).await else {
-            continue;
-        };
-        if probe_ready(&h, &probe_file, workspace_root).await {
-            return ok_with(AgentLspStatus::Ready, vec![]);
+        if !matches!(status, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
+            return (lang_id, status);
         }
-    }
-    ok_with(AgentLspStatus::Indexing, vec![])
+        let handle = {
+            let mgr = state.0.lock().await;
+            mgr.get(workspace_root, lang_id).await
+        };
+        let Some(h) = handle else {
+            return (lang_id, AgentLspStatus::Gone);
+        };
+        prime_project(access, &h, workspace_root, lang_id).await;
+        let Some(probe_file) = first_source_file(access, workspace_root, lang_id).await else {
+            return (lang_id, AgentLspStatus::Indexing);
+        };
+        let ready = probe_ready(access, &h, &probe_file, workspace_root, WARM_PROBE_BUDGET).await;
+        (lang_id, if ready { AgentLspStatus::Ready } else { AgentLspStatus::Indexing })
+    };
+    let results = futures_util::future::join_all(langs.iter().map(|l| one(*l))).await;
+    let any_ready = results.iter().any(|(_, s)| *s == AgentLspStatus::Ready);
+    let languages: Vec<Value> = results
+        .iter()
+        .map(|(l, s)| json!({ "lang": l.id_str(), "status": s.as_str() }))
+        .collect();
+    json!({
+        "ok": any_ready,
+        "status": if any_ready { AgentLspStatus::Ready } else { AgentLspStatus::Indexing }.as_str(),
+        "count": 0,
+        "results": [],
+        "languages": languages,
+    })
 }
+
+/// 预热的就绪探测预算：比查询路径宽——没人在等它，而冷启动实测 46–73s。
+const WARM_PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(120);
 
 /// 按名字解析坐标：逐个候选语言去问，再裁决。
 ///
@@ -197,19 +293,20 @@ async fn warm_only(
 /// 「某个语言没答上」是 `Unverified` 而不是 Err：它必须带着「谁答了、谁没答、为什么」
 /// 进文案，否则模型只能看到一句无差别的「查不到」。
 async fn lookup_symbol(
+    access: &WorkspaceAccess,
     state: &LspState,
     app: &AppHandle,
     name: &str,
     workspace_root: &str,
+    deadline: std::time::Instant,
 ) -> Result<SymbolLookup, AgentLspStatus> {
     let langs =
-        crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await;
+        access.detect_languages(workspace_root).await;
     if langs.is_empty() {
         return Err(AgentLspStatus::NoServer);
     }
     let mut silent = Vec::new();
-    // 共享 deadline：这次查询总共只等这么久（**不是每个语言各等一份**）。
-    let deadline = std::time::Instant::now() + crate::lsp::manager::SYMBOL_SEARCH_TIMEOUT;
+    // 共享 deadline（调用方按预算算好）：这次查询总共只等这么久（**不是每个语言各等一份**）。
     // **并发问所有语言**：串行时总耗时 = Σ 每个语言的预算，本仓库三台 server（rust /
     // typescript / javascript）就是三倍上限。并发后总耗时 ≈ 一个 deadline。
     // 代价：某个语言卡住时会等到它（≤deadline）才定案，不会因为后面的语言先答上来而提前返回
@@ -217,7 +314,7 @@ async fn lookup_symbol(
     let answers = futures_util::future::join_all(
         langs
             .iter()
-            .map(|lang_id| consult_language(state, app, workspace_root, *lang_id, name, deadline)),
+            .map(|lang_id| consult_language(access, state, app, workspace_root, *lang_id, name, deadline)),
     )
     .await;
     for (lang_id, answer) in langs.iter().zip(answers) {
@@ -249,6 +346,7 @@ async fn lookup_symbol(
 /// RA 这类不需要它的 server 递了也无害——与 `run_jump` 的「先递文件再提问」同一条
 /// 纪律，差别只是这里没有现成的查询目标文件。
 async fn consult_language(
+    access: &WorkspaceAccess,
     state: &LspState,
     app: &AppHandle,
     workspace_root: &str,
@@ -271,7 +369,7 @@ async fn consult_language(
         )),
         // ready 与 indexing 都值得问：索引还没好的 server 也可能直接命中。
         AgentLspStatus::Ready | AgentLspStatus::Indexing => {
-            ask_language(state, workspace_root, lang_id, name, deadline).await
+            ask_language(access, state, workspace_root, lang_id, name, deadline).await
         }
         AgentLspStatus::NoSymbol | AgentLspStatus::Timeout | AgentLspStatus::Gone => Ok(
             Consulted::Silent("its language server is not usable".into()),
@@ -311,6 +409,7 @@ fn names_the_symbol(candidate: &str, query: &str) -> bool {
 /// 「空」只有在**探针通过**（该语言的索引确实可用）时才降级成 `Empty`；探针不过就是
 /// `Silent`——这正是「空 ≠ 没有」在按名查询这一侧的落点。
 async fn ask_language(
+    access: &WorkspaceAccess,
     state: &LspState,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
@@ -335,9 +434,32 @@ async fn ask_language(
             return Ok(Consulted::Silent("does not implement symbol search".into()));
         }
     }
-    prime_project(&h, workspace_root, lang_id).await;
-    match search_symbol(&h, lang_id, name, deadline, RETRY_INTERVAL).await {
-        Ok(hits) if !hits.is_empty() => Ok(Consulted::Hits(hits)),
+    prime_project(access, &h, workspace_root, lang_id).await;
+    // 两段式：先快问一次；没命中就**按文本递文件**（名字出现在哪，就把那里的工程加载出来）
+    // 再问到 deadline。多工程仓库里只递一个代表文件时，别的工程从不加载——实测
+    // `resolveLspResult`（在 agent-sidecar 工程里）按名永远 0 命中，见 agent_nav::files_mentioning。
+    // 第一段只给**总预算的三分之一**（且不超过 QUICK_SEARCH）：短预算的调用方（grep 顺带作答
+    // 给 ~3s）若被第一段吃光，递文件那一段就永远轮不到——真机评测里正是这样漏掉了
+    // agent-sidecar 工程里的符号。
+    let now = std::time::Instant::now();
+    let quick = deadline.min(now + QUICK_SEARCH.min(deadline.saturating_duration_since(now) / 3));
+    let first = search_symbol(&h, lang_id, name, quick, RETRY_INTERVAL).await;
+    let answer = match first {
+        Ok(hits) if !hits.is_empty() => Ok(hits),
+        _ => {
+            let files =
+                crate::lsp::agent_nav::files_mentioning(access, workspace_root, name, lang_id, MAX_TEXT_PRIMED)
+                    .await;
+            for file in files {
+                if let Err(e) = ensure_doc_open(access, &h, workspace_root, &file, lang_id).await {
+                    tracing::debug!(file = %file, error = %e, "agent lsp: 按文本递文件失败，继续");
+                }
+            }
+            search_symbol(&h, lang_id, name, deadline, RETRY_INTERVAL).await
+        }
+    };
+    match answer {
+        Ok(hits) if !hits.is_empty() => Ok(Consulted::Hits(refine_candidates(access, hits, name).await)),
         // 空到底：**也不许说「没有」**——证明不了符号索引覆盖了整个工作区（就绪探针探的是
         // 「已递过的那个文件」，工程没加载它照样过，见 `SymbolLookup` 的实测记录）。
         Ok(_) => Ok(Consulted::Silent(
@@ -432,14 +554,62 @@ const RETRY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 /// 时 navto 对同一个名字**回 1 → 1 → 0 → 1** —— 多工程并发加载时，答案随"那一刻谁加载好了"
 /// 抖动；只递 `src/api.ts` 一个则四次运行四次命中。少即是多。
 async fn prime_project(
+    access: &WorkspaceAccess,
     h: &Arc<ServerHandle>,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
 ) {
-    for file in &first_source_files(workspace_root, lang_id, MAX_PRIMED).await {
-        if let Err(e) = ensure_doc_open(h, workspace_root, file, lang_id).await {
+    for file in &first_source_files(access, workspace_root, lang_id, MAX_PRIMED).await {
+        if let Err(e) = ensure_doc_open(access, h, workspace_root, file, lang_id).await {
             tracing::debug!(file = %file, error = %e, "agent lsp: 预热 didOpen 失败，继续查询");
         }
+    }
+}
+
+/// 两段式按名查询的第一段预算：工程已加载时 navto 百毫秒内就答，给足余量即可。
+const QUICK_SEARCH: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// 按文本递文件的个数上限（每个文件可能拖起一个工程加载）。
+const MAX_TEXT_PRIMED: usize = 3;
+
+/// 把命中挪到名字本身上（见 `agent_nav::refine_to_name`）。读盘放 spawn_blocking。
+async fn refine_candidates(
+    access: &WorkspaceAccess,
+    hits: Vec<SymbolCandidate>,
+    name: &str,
+) -> Vec<SymbolCandidate> {
+    let mut out = Vec::with_capacity(hits.len());
+    for mut c in hits {
+        // 读不到就保留原位置——**别把命中丢掉**（丢 = 另一种结论）。
+        if let Ok(text) = access.read_text(&c.file_path).await {
+            if let Some((line, column)) =
+                crate::lsp::agent_nav::refine_to_name(&text, c.line, c.column, name)
+            {
+                c.line = line;
+                c.column = column;
+            }
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// 命中（名字位置）→ 与跳转结果同形的一条结果（绝对路径，与 `map_outcome_absolute` 一致）。
+fn candidate_result(c: &SymbolCandidate) -> crate::codegraph::types::QueryResult {
+    use crate::codegraph::types::{Confidence, QueryResult, SymbolDef, SymbolKind};
+    QueryResult {
+        symbol: SymbolDef {
+            name: c.name.clone(),
+            kind: SymbolKind::Function, // 占位：与 location_to_query_result 同（sidecar 从结构里取种类）
+            file: c.file_path.clone(),
+            line: c.line,
+            column: c.column,
+            parent: None,
+            end_line: 0,
+        },
+        confidence: Confidence::Structure,
+        score: None,
+        snippet: None,
     }
 }
 
@@ -484,10 +654,11 @@ fn ambiguous_outcome(name: &str, cands: Vec<SymbolCandidate>) -> AgentQueryOutco
 
 /// 找一个该语言的源文件，用作就绪探测的靶子（`probe_ready` 要一个磁盘上真实存在的文件）。
 async fn first_source_file(
+    access: &WorkspaceAccess,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
 ) -> Option<String> {
-    first_source_files(workspace_root, lang_id, 1)
+    first_source_files(access, workspace_root, lang_id, 1)
         .await
         .into_iter()
         .next()
@@ -496,22 +667,15 @@ async fn first_source_file(
 /// 该语言的代表文件（每个顶层目录一个，最多 `max` 个）。
 ///
 /// 遍历本体在 `detector::representative_sources`（有界；TS profile 判「这工作区有没有 .vue」
-/// 用的是 `find_source_with_ext`——同一套边界纪律只留一份）。**放 spawn_blocking**：遍历文件系统
-/// 属重 IO，不许占 tokio worker（CLAUDE.md 的同步命令红线同理）。
+/// 用的是 `find_source_with_ext`——同一套边界纪律只留一份）；本机走 spawn_blocking，
+/// 远程工作区在目标机上算（`WorkspaceAccess`）。
 async fn first_source_files(
+    access: &WorkspaceAccess,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
     max: usize,
 ) -> Vec<String> {
-    let root = std::path::PathBuf::from(workspace_root);
-    tokio::task::spawn_blocking(move || {
-        crate::lsp::detector::representative_sources(&root, lang_id, max)
-            .into_iter()
-            .map(|p| p.to_string_lossy().replace('\\', "/"))
-            .collect()
-    })
-    .await
-    .unwrap_or_default()
+    access.representative_sources(workspace_root, lang_id, max).await
 }
 
 /// 工具名 → (LSP 方法, 参数)。**纯函数**，值得有自己的测试而不是埋在 `run_jump` 里：
@@ -546,10 +710,12 @@ fn method_for(
 /// 执行跳转类查询。先按当前状态直接发；**只有结果为空时才回头探测就绪**
 /// ——非空结果本身就是「server 可用」的铁证，探测一次都不必花。
 async fn run_jump(
+    access: &WorkspaceAccess,
     state: &LspState,
     tool: &str,
     pos: &Position,
     workspace_root: &str,
+    probe_budget: std::time::Duration,
 ) -> AgentQueryOutcome {
     let Some((lang_id, h)) = server_for(state, workspace_root, &pos.file).await else {
         // 语言认不出、或 server 没能 ensure 起来——都是「这条路径没有 server」，
@@ -558,7 +724,7 @@ async fn run_jump(
     };
     // **先递文件再提问**。失败不判死：RA 这类不需要 didOpen 的 server 照常能答；
     // 真答不了的会被空结果 + probe 定性成 indexing（宁可说「没答上来」，不说「没有」）。
-    if let Err(e) = ensure_doc_open(&h, workspace_root, &pos.file, lang_id).await {
+    if let Err(e) = ensure_doc_open(access, &h, workspace_root, &pos.file, lang_id).await {
         tracing::debug!(file = %pos.file, error = %e, "agent lsp: didOpen 失败，继续查询");
     }
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, &pos.file);
@@ -590,7 +756,7 @@ async fn run_jump(
         return ok_with(agent_status, results);
     }
     // 空且 Ok —— 唯一需要探测的岔路：到底是「真没有」还是「还没索引好」。
-    let confirmed = probe_ready(&h, &pos.file, workspace_root).await;
+    let confirmed = probe_ready(access, &h, &pos.file, workspace_root, probe_budget).await;
     ok_with(
         if confirmed {
             AgentLspStatus::Ready
@@ -618,11 +784,17 @@ fn ok_with(
 
 /// 就绪判定：对一个**已知存在于磁盘的文件**做 `documentSymbol`。
 /// 返回 true = 语义层可用（空结果可信）；false = 还没好（空结果不可信）。
-async fn probe_ready(h: &Arc<ServerHandle>, file: &str, workspace_root: &str) -> bool {
+async fn probe_ready(
+    access: &WorkspaceAccess,
+    h: &Arc<ServerHandle>,
+    file: &str,
+    workspace_root: &str,
+    total: std::time::Duration,
+) -> bool {
     // 探测靶子也要先打开：tsserver 对没打开的文档一律回空，那会把 probe 变成**恒失败**，
     // 于是 references 的空被定性成 indexing——「面板说就绪、工具说在索引」那个坑的另一半。
     if let Some(lang) = crate::lsp::lang_from_ext_of(file) {
-        let _ = ensure_doc_open(h, workspace_root, file, lang).await;
+        let _ = ensure_doc_open(access, h, workspace_root, file, lang).await;
     }
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file);
     let probe = || async {
@@ -640,7 +812,7 @@ async fn probe_ready(h: &Arc<ServerHandle>, file: &str, workspace_root: &str) ->
         AgentLspStatus::Ready,
         probe,
         ReadinessBudget {
-            total: std::time::Duration::from_secs(30),
+            total,
             interval: std::time::Duration::from_secs(2),
         },
     )
@@ -672,6 +844,7 @@ async fn server_for(
 /// 标 `Agent` 是因为这些文档用户多半没打开过：它们的诊断由推送侧挡在 UI 之外
 /// （见 manager 的 `EmitDiagnostics` 分支）。
 async fn ensure_doc_open(
+    access: &WorkspaceAccess,
     h: &Arc<ServerHandle>,
     workspace_root: &str,
     file_path: &str,
@@ -680,12 +853,8 @@ async fn ensure_doc_open(
     if crate::lsp::manager::is_excluded(file_path, &h.exclude_globs) {
         return Err("path is in the workspace exclude list".to_string());
     }
-    // 读盘放 spawn_blocking：文件 IO 不占 tokio worker（与同步命令红线同一条纪律）。
-    let path = file_path.to_string();
-    let text = tokio::task::spawn_blocking(move || std::fs::read_to_string(path))
-        .await
-        .map_err(|e| e.to_string())?
-        .map_err(|e| e.to_string())?;
+    // 读盘经 `WorkspaceAccess`：本机走 spawn_blocking（不占 tokio worker），远程向 aide-host 要。
+    let text = access.read_text(file_path).await?;
     let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file_path);
     // 文档 languageId 与编辑器路径**同一个出口**（`document_lang_id`）：`.vue` 发 "vue"
     // 才被 TS 服务器的 Vue 插件覆盖，发服务 id（"typescript"）会按 TS 解析整个 SFC。
@@ -709,6 +878,15 @@ mod tests {
         assert_eq!(p.file, "/a/b.rs");
         assert_eq!(p.line, 216);
         assert_eq!(p.character, 19);
+    }
+
+    /// 预算只能收紧、不能放宽：调用方给的比默认大，按默认算（别让一个参数把后端拖成无限等）。
+    #[test]
+    fn budget_is_capped_by_the_default() {
+        let d = std::time::Duration::from_secs(20);
+        assert_eq!(budget(&json!({}), d), d);
+        assert_eq!(budget(&json!({"budget_ms": 3000}), d), std::time::Duration::from_secs(3));
+        assert_eq!(budget(&json!({"budget_ms": 90_000}), d), d);
     }
 
     #[test]
@@ -1045,10 +1223,11 @@ mod tests {
 
         // 与 `ask_language` 同序：先递一个该语言的真实文件（顺带触发工程加载），再按名查。
         let primed =
-            first_source_files(&root, crate::lsp::detector::LanguageId::TypeScript, MAX_PRIMED).await;
+            first_source_files(&WorkspaceAccess::Local, &root, crate::lsp::detector::LanguageId::TypeScript, MAX_PRIMED)
+                .await;
         assert!(!primed.is_empty(), "工作区里应当找得到 .ts 代表文件");
         eprintln!("primed = {primed:?}");
-        prime_project(&h, &root, crate::lsp::detector::LanguageId::TypeScript).await;
+        prime_project(&WorkspaceAccess::Local, &h, &root, crate::lsp::detector::LanguageId::TypeScript).await;
 
         let hits = search_symbol(
             &h,

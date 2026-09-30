@@ -12,6 +12,9 @@
 //! （`\\wsl.localhost\<distro>\…` / `\\aide-ssh\<alias>\…`）只存在于桌面，翻译在
 //! 桌面做——host 不认识桌面的路径形态。
 //!
+//! 语言服务器同理：`aide-host lsp` 首行读 [`LspInit`]，之后 stdin/stdout 是 LSP 原生帧
+//! （Content-Length 分帧），逐字节透传；URI 的桌面 ↔ 目标机翻译在桌面做。
+//!
 //! agent 通道**不走本协议**：`aide-host agent` 是独立进程（独立一条 wsl/ssh 管道），
 //! 首行读 [`AgentInit`]，之后 stdin/stdout 就是 sidecar 原生协议，逐字节透传。
 
@@ -100,3 +103,19 @@ pub struct AgentInit {
     #[serde(default)]
     pub runtime: Option<String>,
 }
+
+/// `aide-host lsp` 的首行：在目标机上起哪个语言服务器。
+///
+/// 服务器**在目标机上解析**（登录环境的 PATH）：桌面看不到目标机装了什么，SSH 工作区更是
+/// 连文件都摸不到。桌面只给候选（与本机 PATH 发现同一份二进制名，见桌面 `LanguageId::server_binary`）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct LspInit {
+    /// 候选命令（argv），按序取第一个 `argv[0]` 在目标机登录 PATH 上找得到的。
+    pub candidates: Vec<Vec<String>>,
+    /// 工作目录（目标机路径，通常是工作区根）。
+    pub cwd: String,
+}
+
+/// `invoke` 里的 LSP 探测命令（**不是** Tauri 命令名——桌面 LSP 层按工作区是否远程选择
+/// 本机实现或向 host 要，见桌面 `lsp::workspace_access`）。
+pub const LSP_COMMANDS: &[&str] = &["lsp_detect", "lsp_representatives"];

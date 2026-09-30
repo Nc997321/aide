@@ -2,6 +2,9 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../../engine/subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
 import { makeMemoryEventsHook } from "./memoryEvents";
+import { makeLspGlanceHook } from "../lspGlance";
+import { isLspWarm, queryLsp } from "../lspClient";
+import type { ChatEvent } from "../../engine/types.js";
 import type { ModelSwitchGuard } from "../../engine/modelSwitchGuard";
 import type { SessionMetadata } from "../../engine/sessionMetadata";
 
@@ -15,6 +18,8 @@ export interface HookBuildContext {
                *  读活值——每条 send 刷新后 hook 下次调用即可见。
                *  ⚠️ 只在进程内暴露：不得写进子进程 env / 日志（值可能含凭据，N5）。 */
               metadata(): SessionMetadata };
+  /** aide-lsp 通道（闸门已算好，见 lspGate.ts）。缺省 = 不挂 grep 顺带作答。 */
+  lsp?: { mounted: boolean; emit: (e: ChatEvent) => void };
 }
 
 export interface BuiltinHookEntry {
@@ -43,6 +48,18 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$",
     purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）", alwaysMounted: true,
     build: (ctx) => makeMemoryEventsHook(ctx.env, ctx.cwd) },
+  { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$",
+    purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数（语言服务器热了才附，不改工具结果）", alwaysMounted: false,
+    build: (ctx) => {
+      if (!ctx.lsp?.mounted || !ctx.cwd) return null;
+      const { emit } = ctx.lsp;
+      const cwd = ctx.cwd;
+      return makeLspGlanceHook({
+        cwd,
+        isWarm: () => isLspWarm(cwd),
+        query: (tool, args, timeoutMs) => queryLsp(tool, args, cwd, emit, { timeoutMs }),
+      });
+    } },
   { id: "stopEffort", event: "Stop", matcher: "",
     purpose: "读本轮 effort 盖到 message_stop", alwaysMounted: true,
     build: (ctx) => ctx.session.makeStopEffortHook() },

@@ -514,7 +514,13 @@ pub fn resolve_file_uri(workspace_root: &str, file_path: &str) -> String {
 }
 
 /// file:// URI → 本地路径（用 `/`，前端与 codegraph 都用正斜杠）。
+///
+/// **先解百分号编码**：tsserver 回的是 `file:///c%3A/Users/...`（冒号被编码），不解码
+/// 就会漏过盘符判定，产出 `/c%3A/Users/...`——真机上 agent 拿到的引用路径全是这个形状，
+/// 既 Read 不了，也相对化不了（与工作区根比对前缀失败）。
 pub fn uri_to_path(uri: &str) -> String {
+    let decoded = percent_encoding::percent_decode_str(uri).decode_utf8_lossy();
+    let uri = decoded.as_ref();
     if let Some(rest) = uri.strip_prefix("file:///") {
         // Windows: "C:/foo/bar" (drive letter + colon)
         // Unix:   "/home/x/foo/bar" — strip "file:///" removed the leading /
@@ -551,6 +557,20 @@ pub fn uri_to_rel_path(uri: &str, workspace_root: &str) -> String {
 mod tests {
     use super::*;
     use lsp_types::Location;
+
+    /// tsserver 的 URI 把盘符冒号编码成 `%3A`：必须解出来，否则产出 `/c%3A/...`（真机实录）。
+    #[test]
+    fn uri_to_path_decodes_percent_escapes() {
+        assert_eq!(
+            uri_to_path("file:///c%3A/Users/h/aide/src/App.vue"),
+            "c:/Users/h/aide/src/App.vue"
+        );
+        assert_eq!(uri_to_path("file:///home/h/my%20dir/a.rs"), "/home/h/my dir/a.rs");
+        assert_eq!(
+            uri_to_rel_path("file:///c%3A/Users/h/aide/src/App.vue", "C:/Users/h/aide"),
+            "src/App.vue"
+        );
+    }
 
     /// 用 serde_json::from_value 构造 Location，避免 lsp-types 0.97 Uri 构造问题。
     fn make_location(uri: &str, line: u32, character: u32) -> Location {

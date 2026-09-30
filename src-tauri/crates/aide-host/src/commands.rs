@@ -79,6 +79,7 @@ pub fn is_supported(cmd: &str) -> bool {
         || ROOT_COMMANDS.contains(&cmd)
         || GIT_COMMANDS.contains(&cmd)
         || TRANSCRIPT_COMMANDS.contains(&cmd)
+        || crate::protocol::LSP_COMMANDS.contains(&cmd)
 }
 
 /// 需要桌面解析并下发工作区根的命令。

@@ -54,6 +54,9 @@ pub async fn invoke(p: InvokeParams) -> Result<Value, String> {
     if let Some(r) = invoke_transcript(&cmd, args.clone()).await {
         return r;
     }
+    if let Some(r) = invoke_lsp(&cmd, args.clone()).await {
+        return r;
+    }
     if cmd.starts_with("git_") {
         let root = root.ok_or_else(|| format!("{cmd}: missing root"))?;
         if let Some(r) = git_dispatch::dispatch(&cmd, args, root).await {
@@ -353,6 +356,64 @@ fn fs_roots() -> Vec<FileEntry> {
     roots
 }
 
+/// LSP 探测（`protocol::LSP_COMMANDS`）：远程工作区的语言探测与代表文件在**目标机**上算
+/// （同一份 `aide_workspace::detect`），桌面 LSP 层据此决定起哪些服务器、递哪个文件。
+async fn invoke_lsp(cmd: &str, args: Value) -> Option<Result<Value, String>> {
+    use aide_workspace::detect::languages::{detect_languages, lang_from_id_str, representative_sources};
+    match cmd {
+        // 探到的语言 + 其中哪些在目标机登录 PATH 上真有服务器（= 桌面 `lsp_languages_for_path`
+        // 的「配得上」判据：没有服务器的语言不挂 agent 工具，免得诱导它调一个注定 no_server 的工具）。
+        "lsp_detect" => {
+            #[derive(Deserialize)]
+            struct A {
+                root: String,
+            }
+            let a = match parse_args::<A>(args) {
+                Ok(a) => a,
+                Err(e) => return Some(Err(e)),
+            };
+            let root = PathBuf::from(&a.root);
+            let langs = match tokio::task::spawn_blocking(move || detect_languages(&root)).await {
+                Ok(l) => l,
+                Err(e) => return Some(Err(format!("task panicked: {e}"))),
+            };
+            let login = crate::login::cached_login_env().await;
+            let available: Vec<&str> = langs
+                .iter()
+                .filter(|l| l.server_binary().is_some_and(|b| crate::login::which(b, login).is_some()))
+                .map(|l| l.id_str())
+                .collect();
+            let languages: Vec<&str> = langs.iter().map(|l| l.id_str()).collect();
+            Some(Ok(json!({ "languages": languages, "available": available })))
+        }
+        "lsp_representatives" => {
+            #[derive(Deserialize)]
+            struct A {
+                root: String,
+                lang: String,
+                max: usize,
+            }
+            let a = match parse_args::<A>(args) {
+                Ok(a) => a,
+                Err(e) => return Some(Err(e)),
+            };
+            let Some(lang) = lang_from_id_str(&a.lang) else {
+                return Some(Err(format!("unknown language `{}`", a.lang)));
+            };
+            Some(
+                blocking(move || {
+                    Ok(representative_sources(std::path::Path::new(&a.root), lang, a.max)
+                        .into_iter()
+                        .map(|p| p.to_string_lossy().into_owned())
+                        .collect::<Vec<_>>())
+                })
+                .await,
+            )
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -381,6 +442,32 @@ mod tests {
         for cmd in TRANSCRIPT_COMMANDS {
             assert!(invoke_transcript(cmd, json!({})).await.is_some(), "{cmd} listed but not dispatched");
         }
+    }
+
+    #[tokio::test]
+    async fn every_listed_lsp_command_dispatches() {
+        for cmd in aide_host::protocol::LSP_COMMANDS {
+            assert!(invoke_lsp(cmd, json!({})).await.is_some(), "{cmd} listed but not dispatched");
+        }
+    }
+
+    #[tokio::test]
+    async fn lsp_detect_and_representatives_run_on_this_machine() {
+        let dir = std::env::temp_dir().join(format!("aide-host-lsp-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("Cargo.toml"), "[package]\nname = \"x\"\n").unwrap();
+        std::fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+        std::fs::write(dir.join("src/lib.rs"), "pub fn f() {}\n").unwrap();
+        let root = dir.to_string_lossy().to_string();
+        let v = invoke_lsp("lsp_detect", json!({ "root": root })).await.unwrap().unwrap();
+        assert!(v["languages"].as_array().unwrap().contains(&json!("rust")), "{v}");
+        assert!(v["available"].is_array());
+        let reps = invoke_lsp("lsp_representatives", json!({ "root": root, "lang": "rust", "max": 1 }))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(reps.as_array().unwrap().len(), 1, "{reps}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[tokio::test]

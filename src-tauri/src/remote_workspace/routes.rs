@@ -61,7 +61,9 @@ const FS_ROUTES: &[FsRoute] = &[
 ];
 
 /// 会在本机起进程/建索引去操作工作区的命令：远程路径一律拒绝（规则 2）。
-const DENY_PREFIXES: &[&str] = &["lsp_", "codegraph_", "run_process_", "memory_observatory_", "memory_index_"];
+/// `lsp_` 不在此列：LspManager 对远程工作区经 `aide-host lsp` 在**目标机**上起服务器
+/// （`lsp::manager::spawn_remote`），文件访问走 `lsp::workspace_access`——不会回落本机。
+const DENY_PREFIXES: &[&str] = &["codegraph_", "run_process_", "memory_observatory_", "memory_index_"];
 const DENY_EXACT: &[&str] = &[
     "detect_run_command",
     "detect_run_targets",

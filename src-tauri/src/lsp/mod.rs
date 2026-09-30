@@ -2,6 +2,7 @@
 //! 子模块逐 task 填充。每个 task 创建对应子模块文件后，在此取消注释其 pub mod 行。
 
 pub mod agent_bridge;
+pub mod agent_nav;
 pub mod agent_query;
 pub mod agent_readiness;
 pub mod agent_status;
@@ -15,6 +16,7 @@ pub mod registry;
 pub mod rpc;
 pub mod transport;
 pub mod vue_plugin;
+pub mod workspace_access;
 pub mod workspace_symbol;
 
 #[cfg(test)]
@@ -77,11 +79,14 @@ fn lang_from_id_str(s: &str) -> Option<crate::lsp::detector::LanguageId> {
 }
 
 #[tauri::command]
-pub async fn lsp_detect_languages(workspace_root: String) -> Result<Vec<String>, String> {
-    // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：走 async 外壳，
-    // 不占 tokio worker（与 agent 查询路径同一条纪律）。
-    let langs =
-        crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root)).await;
+pub async fn lsp_detect_languages(
+    workspace_root: String,
+    app: tauri::AppHandle,
+) -> Result<Vec<String>, String> {
+    // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：本机走 async 外壳不占
+    // tokio worker；远程工作区在目标机上探测（WorkspaceAccess）。
+    let access = crate::lsp::workspace_access::WorkspaceAccess::of(&app, &workspace_root);
+    let langs = access.detect_languages(&workspace_root).await;
     Ok(langs.iter().map(|l| l.id_str().to_string()).collect())
 }
 

@@ -73,8 +73,9 @@ pub(super) fn start(p: Pump) {
                     let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
                         continue;
                     };
-                    // 远程车道：codegraph / LSP 桥查询由本机服务执行，而工作区在目标机上
-                    // ——就地回错误结果（不回就是让 agent 白等 15s 超时）。浏览器桥照常
+                    // 远程车道：codegraph 桥查询由本机服务执行，而工作区在目标机上
+                    // ——就地回错误结果（不回就是让 agent 白等 15s 超时）。LSP 桥照常走下面的
+                    // 分派：语言服务器经 aide-host 跑在目标机上，查询在 lsp_agent 里做路径互译。浏览器桥照常
                     // 放行：内嵌浏览器就在桌面上，远程 agent 用它天经地义。
                     if let Lane::Remote(host) = &lane {
                         if super::remote_lane::answer_unsupported_bridge(&event, host, &stdin_for_agent).await {
@@ -159,8 +160,12 @@ pub(super) fn start(p: Pump) {
                     if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
                         let app2 = app.clone();
                         let stdin2 = stdin_for_agent.clone();
+                        let host = match &lane {
+                            Lane::Remote(h) => Some(h.clone()),
+                            Lane::Local => None,
+                        };
                         tokio::spawn(async move {
-                            crate::runtime::lsp_agent::handle(app2, stdin2, req).await;
+                            crate::runtime::lsp_agent::handle(app2, stdin2, req, host).await;
                         });
                         continue;
                     }

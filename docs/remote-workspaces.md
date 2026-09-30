@@ -54,7 +54,7 @@ Tauri v2 的 `invoke_handler` 是闭包——在命令表外包一层，所有�
 
 1. **转发**：参数里的路径 / 工作区根属于远程主机 → 译成目标机路径交给 aide-host，结果里的绝对
    路径译回桌面形态（`read_file_binary` 的字节原样还原）。
-2. **拒绝**：会在本机起进程操作工作区的命令（LSP / 代码索引 / 运行配置 / 记忆观测）遇到远程路径
+2. **拒绝**：会在本机起进程操作工作区的命令（代码索引 / 运行配置 / 记忆观测）遇到远程路径
    → 明确报错。回落本机 = 用本机工具链跑目标机的项目，跑错机器且不报错。
 3. **放行**：把路径当数据存的（注册表 / 信任 / 会话元数据）本来就在桌面执行。
 
@@ -75,6 +75,18 @@ Tauri v2 的 `invoke_handler` 是闭包——在命令表外包一层，所有�
 - `aide-host agent` 以**交互式登录 shell**（`-lic`，退 `-lc`）取用户环境：Debian/Ubuntu 的
   `.bashrc` 对非交互 shell 直接 return，nvm 之类只装在那里；agent 的 Bash 工具要看到与用户终端
   一致的工具链。rc 文件的 stdout 噪音被标记行隔离。
+
+### LSP（语言服务器在目标机上）
+
+- 探测：`aide_workspace::detect`（语言 / marker 链 / 代表文件，从桌面迁入，两端同一份）；远程经
+  `aide-host` 的 `lsp_detect`（含「目标机登录 PATH 上有没有该语言的服务器」）/ `lsp_representatives`。
+- 进程：`LspManager` 对远程工作区走 `manager::spawn_remote` → `aide-host lsp`（首行 `LspInit`：候选
+  argv + cwd，按登录 PATH 解析，找不到退出 127 并在 stderr 说明试了什么，随握手失败原因回到面板）。
+- 协议：stdio 套 `remote_workspace/lsp_pipe.rs`——出站桌面 URI（`file:////wsl.localhost/<D>/…`）与
+  桌面形态路径 → 目标机形态，入站 `file:///…` → 桌面形态；**文本字段（文档正文、hover、诊断消息）
+  不改**。`initialize.processId` 远程发 null（桌面 PID 在目标机上不存在，TLS 等会据此自杀）。
+- 文件访问：LSP 代码读文件 / 搜索 / 探测一律经 `lsp/workspace_access.rs`。
+- 验收：`e2e_tests::wsl_remote_language_server_speaks_desktop_uris`（真 WSL + rust-analyzer）。
 
 ### 会话转录
 
@@ -105,16 +117,15 @@ Tauri v2 的 `invoke_handler` 是闭包——在命令表外包一层，所有�
 
 ## 已知边界（v1）
 
-- **LSP / 代码索引 / 运行配置 / 记忆观测台**：远程工作区里明确拒绝（界面降级为空）。实现路径：
-  LSP server 经 aide-host 在目标机上起、stdio 经 RPC 流式转发（`lsp/` 公共层已语言无关，差的是
-  进程传输端口化）。
+- **代码索引 / 运行配置 / 记忆观测台**：远程工作区里明确拒绝（界面降级为空）。
+- **LSP 限制**：Java（jdtls 要桌面侧数据目录与捆绑 lombok）不支持；TS 的 SDK 由目标机上的 TLS 自己找，Vue 插件 v1 不挂；服务器须在目标机**登录 shell 的 PATH** 上（`rustup component add rust-analyzer`、`npm i -g typescript-language-server typescript` 等）。
 - **代理**（目标机要能访问模型 API）：优先级 ① Aide 设置里的代理（随 send 下发）→ ② 目标机
   登录环境里自己的代理 → ③ 桌面自动探测到的代理（设置 / 环境 / git / 常见本地端口）作兜底
   （`AgentInit.default_env`，不覆盖②）。桌面的**回环**代理（`127.0.0.1:7890`）在目标机上按网络
   改写：WSL 先试目标机回环（mirrored 模式与 Windows 共享回环）、不通则换成默认网关（NAT 模式即
   Windows 主机——代理需开「允许局域网连接」）；SSH 丢弃（服务器到不了桌面回环，后续可 `ssh -R`）。
 - **SSH 需免密**；WSL 仅 Windows 桌面可用。
-- 远程车道的 agent 不挂 codegraph / LSP 工具（`translate_send_command` 置空），浏览器工具照常可用
+- 远程车道的 agent 不挂 codegraph 工具（`translate_send_command` 置空）；aide-lsp 工具照挂（语言表按目标机探测，查询在 `runtime/lsp_agent.rs` 做路径互译）；浏览器工具照常可用
   （内嵌浏览器在桌面，远程 agent 用它天经地义）。
 
 ## 验收

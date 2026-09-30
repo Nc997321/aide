@@ -3,6 +3,8 @@ import {
   queryLsp,
   resolveLspResult,
   cancelAllLspQueries,
+  isLspWarm,
+  _resetLspWarmForTest,
   LSP_QUERY_TIMEOUT_MS,
 } from "./lspClient.js";
 import type { ChatEvent } from "../engine/types.js";
@@ -49,5 +51,39 @@ describe("lspClient", () => {
   /// 正好复现本设计要消灭的失败模式。
   it("超时预算显著高于冷启动上界 73s", () => {
     expect(LSP_QUERY_TIMEOUT_MS).toBeGreaterThan(73_000);
+  });
+
+  /// 各工具载荷键不同（outline 的 symbols、text 的 matches、warm 的 languages）：
+  /// 逐键抄写会漏，整包透传。
+  it("回包整包透传（不止 results）", async () => {
+    const events: ChatEvent[] = [];
+    const p = queryLsp("outline", { file: "/a.rs" }, "/proj", (e) => events.push(e));
+    const id = (events[0] as unknown as { request_id: string }).request_id;
+    resolveLspResult({ cmd: "lsp_result", request_id: id, ok: true, status: "ready", symbols: [{ name: "x" }] });
+    const r = await p;
+    expect(r.symbols).toEqual([{ name: "x" }]);
+    expect((r as unknown as Record<string, unknown>).cmd).toBeUndefined();
+  });
+
+  /// 给模型的查询带预算：本端超时，同时把 budget_ms 递给主进程让后端也收口。
+  it("timeoutMs：本端按时结算，并把略短的 budget_ms 递下去", async () => {
+    const events: ChatEvent[] = [];
+    const p = queryLsp("references", { name: "get" }, "/proj", (e) => events.push(e), { timeoutMs: 20 });
+    const ev = events[0] as unknown as { args: Record<string, unknown> };
+    expect(ev.args.name).toBe("get");
+    expect(ev.args.budget_ms).toBe(500);
+    await expect(p).resolves.toMatchObject({ ok: false, status: "timeout", timedOut: true });
+  });
+
+  it("答过 ready 的工作区记为已热（grep 顺带作答的开关），按根区分", async () => {
+    _resetLspWarmForTest();
+    const events: ChatEvent[] = [];
+    const p = queryLsp("warm", {}, "/proj", (e) => events.push(e));
+    expect(isLspWarm("/proj")).toBe(false);
+    const id = (events[0] as unknown as { request_id: string }).request_id;
+    resolveLspResult({ request_id: id, ok: true, status: "ready" });
+    await p;
+    expect(isLspWarm("/proj")).toBe(true);
+    expect(isLspWarm("/other")).toBe(false);
   });
 });
