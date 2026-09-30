@@ -14,6 +14,7 @@ import KbLogin from "./KbLogin.vue";
 import KbDocumentView from "./KbDocumentView.vue";
 import { kb } from "./kbClient";
 import { GUIDE_MD } from "./guideText";
+import { MIN_SERVER_VERSION, UPGRADE_COMMAND } from "./serverVersion";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
 import KbSpaceList from "./KbSpaceList.vue";
@@ -149,6 +150,18 @@ async function onUpload(parentId: string | null, file: File): Promise<void> {
   await openDoc(id);
 }
 
+/** 复制升级命令。剪贴板不可用（权限/安全上下文）时不假装成功——命令就在旁边，能自己选。 */
+const copiedUpgrade = ref(false);
+async function copyUpgrade(): Promise<void> {
+  try {
+    await navigator.clipboard.writeText(UPGRADE_COMMAND);
+    copiedUpgrade.value = true;
+    setTimeout(() => (copiedUpgrade.value = false), 1500);
+  } catch {
+    copiedUpgrade.value = false;
+  }
+}
+
 /** 保存/回滚后刷新正文与侧栏（侧栏要反映新的 versionNo 与 updatedAt）。
  *  保存请求进行期间用户可能已切走文档——那时只刷列表，不把用户拉回来。 */
 async function refreshDoc(id: string): Promise<void> {
@@ -263,6 +276,18 @@ onMounted(() => {
         <Icon name="close" :size="13" :stroke-width="1.4" />
       </button>
     </header>
+
+    <!-- 服务端太旧：**说清怎么办，不挡用**。位置在分流之前——登录页也要看得到。
+         命令是一辈子的那一条（compose 跟的是移动标签 :stable，见 serverVersion.ts）。 -->
+    <div v-if="k.needsUpgrade.value" class="kb-upgrade">
+      <span class="kb-upgrade-text">
+        知识库服务是 <b>{{ k.serverVersion.value ?? "旧版本" }}</b>，这个客户端需要
+        {{ MIN_SERVER_VERSION }} 以上（网页产物、免登录都是新版本才有的）。
+        在你放 docker-compose.yml 的目录里跑：
+      </span>
+      <code class="kb-upgrade-cmd">{{ UPGRADE_COMMAND }}</code>
+      <button class="kb-link" @click="copyUpgrade()">{{ copiedUpgrade ? "已复制" : "复制命令" }}</button>
+    </div>
 
     <!-- 探测中：先不出登录框，否则每次开面板都会闪一下表单再切换 -->
     <div v-if="!k.ready.value" class="kb-empty">
@@ -664,6 +689,31 @@ onMounted(() => {
   color: var(--aide-danger);
   background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
   flex: none;
+}
+
+/* 服务端该升级了：一条说明 + 一条命令 + 复制。不挡用（它是提示，不是错误），
+   但要说清"为什么现在能用不了新东西"——不然用户只会看到按钮点了没反应。 */
+.kb-upgrade {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 20px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--aide-text-secondary);
+  background: var(--aide-accent-subtle);
+  flex: none;
+}
+.kb-upgrade-text b { font-weight: 600; color: var(--aide-text-primary); }
+.kb-upgrade-cmd {
+  padding: 2px 8px;
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-surface-default);
+  font-family: var(--aide-font-mono);
+  font-size: 11.5px;
+  color: var(--aide-text-primary);
+  user-select: all; /* 复制按钮失效时，点一下能全选带走 */
 }
 
 /* 非失败提示（解析器的降级信息）：不是错误，所以不是红的 */

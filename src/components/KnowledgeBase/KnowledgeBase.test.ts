@@ -8,6 +8,7 @@ import { mount, enableAutoUnmount, flushPromises } from "@vue/test-utils";
 
 const mocks = vi.hoisted(() => ({
   status: vi.fn(),
+  health: vi.fn(),
   me: vi.fn(),
   listSpaces: vi.fn(),
   listDocuments: vi.fn(),
@@ -21,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("./kbClient", () => ({
   kb: {
     status: mocks.status,
+    health: mocks.health,
     me: mocks.me,
     listSpaces: mocks.listSpaces,
     listDocuments: mocks.listDocuments,
@@ -89,6 +91,13 @@ async function settle(): Promise<void> {
 
 beforeEach(() => {
   mocks.status.mockResolvedValue({ initialized: true });
+  mocks.health.mockResolvedValue({
+    status: "ok",
+    service: "aide-knowledge",
+    version: "0.5.0",
+    parsers: [],
+    tokenizer: "jieba-rs",
+  });
   mocks.me.mockResolvedValue(USER);
   mocks.listSpaces.mockResolvedValue([SPACE]);
   mocks.listDocuments.mockResolvedValue([summary("d1", "数据说明.md")]);
@@ -155,6 +164,36 @@ describe("上传", () => {
     expect(w.find(".kb-progress").exists()).toBe(false);
     expect(mocks.getDocument).toHaveBeenCalledWith("d2");
     expect(w.text()).toContain("这是一份网页产物");
+  });
+});
+
+describe("服务端太旧", () => {
+  it("说清版本、给出那条固定命令，并可以复制", async () => {
+    mocks.health.mockResolvedValue({ status: "ok", service: "aide-knowledge", parsers: [], tokenizer: "jieba-rs" });
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+
+    const w = mountPanel();
+    await settle();
+
+    const strip = w.find(".kb-upgrade");
+    expect(strip.exists()).toBe(true);
+    expect(strip.text()).toContain("旧版本");
+    // 命令是**一辈子的那一条**：里面不出现具体版本号
+    const cmd = w.find(".kb-upgrade-cmd").text();
+    expect(cmd).toBe("docker compose pull knowledge && docker compose up -d knowledge");
+    expect(cmd).not.toMatch(/\d+\.\d+\.\d+/);
+
+    await w.findAll("button").find((b) => b.text().includes("复制命令"))?.trigger("click");
+    await flushPromises();
+    expect(writeText).toHaveBeenCalledWith(cmd);
+    expect(w.text()).toContain("已复制");
+  });
+
+  it("版本够新时不出现", async () => {
+    const w = mountPanel();
+    await settle();
+    expect(w.find(".kb-upgrade").exists()).toBe(false);
   });
 });
 

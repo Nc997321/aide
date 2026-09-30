@@ -7,6 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   status: vi.fn(),
+  health: vi.fn(),
   me: vi.fn(),
   listSpaces: vi.fn(),
   listDocuments: vi.fn(),
@@ -19,6 +20,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@/components/KnowledgeBase/kbClient", () => ({
   kb: {
     status: mocks.status,
+    health: mocks.health,
     me: mocks.me,
     listSpaces: mocks.listSpaces,
     listDocuments: mocks.listDocuments,
@@ -91,6 +93,13 @@ class KbErrorStub extends Error {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.status.mockResolvedValue({ initialized: true });
+  mocks.health.mockResolvedValue({
+    status: "ok",
+    service: "aide-knowledge",
+    version: "0.5.0",
+    parsers: [],
+    tokenizer: "jieba-rs",
+  });
   mocks.me.mockResolvedValue(USER);
   mocks.listSpaces.mockResolvedValue([]);
   mocks.listDocuments.mockResolvedValue([]);
@@ -148,6 +157,42 @@ describe("免登录：凭据由 Aide 自动带（spec §4.3）", () => {
     expect(k.user.value).toBeNull();
     expect(mocks.setToken).not.toHaveBeenCalledWith(null);
     expect(k.error.value).toContain("连不上");
+  });
+});
+
+describe("服务端版本：该升级时说得清，不该催时不打扰", () => {
+  it("服务端没报版本（0.5.0 之前的老服务端）→ 提示升级", async () => {
+    mocks.health.mockResolvedValue({ status: "ok", service: "aide-knowledge", parsers: [], tokenizer: "jieba-rs" });
+
+    const k = useKnowledgeBase();
+    await k.init();
+
+    expect(k.needsUpgrade.value).toBe(true);
+  });
+
+  it("版本够新 → 不提示", async () => {
+    mocks.health.mockResolvedValue({
+      status: "ok",
+      service: "aide-knowledge",
+      version: "0.5.0",
+      parsers: [],
+      tokenizer: "jieba-rs",
+    });
+
+    const k = useKnowledgeBase();
+    await k.init();
+
+    expect(k.needsUpgrade.value).toBe(false);
+    expect(k.serverVersion.value).toBe("0.5.0");
+  });
+
+  it("连不上服务时**不**判版本——那时候该说的是「连不上」", async () => {
+    mocks.health.mockRejectedValue(new KbErrorStub("network", 0));
+
+    const k = useKnowledgeBase();
+    await k.init();
+
+    expect(k.needsUpgrade.value).toBe(false);
   });
 });
 

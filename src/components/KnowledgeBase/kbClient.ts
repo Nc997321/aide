@@ -149,6 +149,9 @@ export interface KbSearchResult {
 export interface KbHealth {
   status: string;
   service: string;
+  /** 服务端版本（镜像标签）。**0.5.0 之前的服务端没有这个字段**——见 serverVersion.ts，
+   *  「没有字段」本身就是"该升级了"的判据。 */
+  version?: string;
   parsers: string[];
   tokenizer: string;
 }

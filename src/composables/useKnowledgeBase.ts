@@ -4,7 +4,7 @@
 //
 // 数据通道见 components/KnowledgeBase/kbClient.ts：直连 knowledge-server 的 REST，
 // **不走 aide-sdk 的 transport**，因为知识库是独立进程而非 aide 的 Rust 命令。
-import { ref } from "vue";
+import { computed, ref } from "vue";
 import {
   kb,
   getBaseUrl,
@@ -21,6 +21,10 @@ import {
 } from "@/components/KnowledgeBase/kbClient";
 import { pushKnowledgeRuntime } from "@/components/KnowledgeBase/kbRuntime";
 import { ancestorIds } from "@/components/KnowledgeBase/docTree";
+import {
+  needsUpgrade as serverNeedsUpgrade,
+  MIN_SERVER_VERSION,
+} from "@/components/KnowledgeBase/serverVersion";
 
 /** 未见过的空间 = 没折叠过任何东西 = 全展开。共享同一个空集，避免每次渲染新建对象。 */
 const NO_COLLAPSE: ReadonlySet<string> = new Set();
@@ -61,6 +65,15 @@ export function useKnowledgeBase() {
   /** 正在上传的文件与**字节**进度（0..100）。null = 没有上传在跑。
    *  99% 之后字节已发完，剩的是服务端解析 + 落库——界面据此改口叫「正在处理」。 */
   const uploading = ref<{ name: string; pct: number } | null>(null);
+
+  /** 服务端自报的版本（`/api/health` 的 version）。null = 没探到（连不上 / 老服务端没这字段）。 */
+  const serverVersion = ref<string | null>(null);
+  /** 探过服务端了没有。**没探到版本也算探过**——老服务端没有 version 字段，
+   *  那正是最需要提示的一档，不能因为"没拿到值"就不提示。 */
+  const versionProbed = ref(false);
+
+  /** 服务端太旧：界面据此说清怎么办（不挡用）。判据在 serverVersion.ts。 */
+  const needsUpgrade = computed(() => versionProbed.value && serverNeedsUpgrade(serverVersion.value));
 
   const query = ref("");
   const searching = ref(false);
@@ -117,6 +130,9 @@ export function useKnowledgeBase() {
     ready.value = false;
     error.value = null;
     initialized.value = null;
+    // 每次都重探：改服务地址（KbLogin 的 retry）之后要跟着换判断
+    serverVersion.value = null;
+    versionProbed.value = false;
 
     try {
       initialized.value = (await kb.status()).initialized;
@@ -127,6 +143,16 @@ export function useKnowledgeBase() {
       fail(e, "连接知识库服务失败");
       ready.value = true;
       return;
+    }
+
+    // 服务端版本（够不够新，见 serverVersion.ts）。**探不到就不判**：这时候用户
+    // 面对的是「连不上」，不是「该升级」，两条提示不该同时冒出来。
+    // 放在 status 之后、登录判断之前——登录页也要能看到「你的服务该升级了」。
+    try {
+      serverVersion.value = (await kb.health()).version ?? null;
+      versionProbed.value = true;
+    } catch {
+      versionProbed.value = false;
     }
 
     if (initialized.value === false || !getToken()) {
@@ -622,6 +648,8 @@ export function useKnowledgeBase() {
     loadFormats,
     uploading,
     uploadFile,
+    serverVersion,
+    needsUpgrade,
     query,
     searching,
     searchResult,
