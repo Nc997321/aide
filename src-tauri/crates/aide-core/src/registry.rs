@@ -42,6 +42,8 @@ static TABLES: &[&[Command]] = &[
     crate::commands::git::COMMANDS,
     crate::commands::jdk::COMMANDS,
     crate::commands::knowledge::COMMANDS,
+    crate::commands::marketplace::COMMANDS,
+    crate::commands::marketplace::install::COMMANDS,
     crate::commands::memory_observatory::COMMANDS,
     crate::commands::migration::COMMANDS,
     crate::commands::notifications::COMMANDS,

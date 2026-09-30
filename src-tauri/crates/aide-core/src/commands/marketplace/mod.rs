@@ -1,8 +1,21 @@
+
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize as _;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("set_plugin_enabled", set_plugin_enabled),
+    command!("list_marketplace_sources", list_marketplace_sources),
+    command!("set_marketplace_enabled", set_marketplace_enabled),
+];
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tauri::State;
 
 use crate::settings::{SettingsError, SettingsScope, SettingsService};
 
@@ -82,7 +95,7 @@ pub struct InstalledPlugin {
 /// 桥接清单路径：sidecar 经 env `AIDE_ENABLED_PLUGINS_FILE` 读它。
 /// `~/.aide/claude/plugins/enabled-plugins.json`
 pub fn enabled_plugins_manifest_path() -> PathBuf {
-    super::claude_home()
+    crate::paths::claude_home()
         .join("plugins")
         .join("enabled-plugins.json")
 }
@@ -91,13 +104,13 @@ pub fn enabled_plugins_manifest_path() -> PathBuf {
 /// 与迁移目标 `~/.claude/plugins/` 对齐，Aide 经 `AIDE_ENABLED_PLUGINS_FILE`
 /// 显式控制加载，不与 CLI 的 `installed_plugins.json` 混用账本。
 pub fn plugins_dir() -> PathBuf {
-    super::claude_home().join("plugins")
+    crate::paths::claude_home().join("plugins")
 }
 
 /// 市场源仓库克隆目录（marketplace.json 来源）：
 /// `~/.aide/claude/plugins/marketplace-cache/`
 pub fn marketplace_cache_dir() -> PathBuf {
-    super::claude_home()
+    crate::paths::claude_home()
         .join("plugins")
         .join("marketplace-cache")
 }
@@ -169,7 +182,7 @@ pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), S
 }
 
 /// 目录是不是一个已安装的插件（有 `.claude-plugin/plugin.json`）。
-pub(crate) fn is_plugin_dir(dir: &std::path::Path) -> bool {
+pub fn is_plugin_dir(dir: &std::path::Path) -> bool {
     dir.join(".claude-plugin").join("plugin.json").is_file()
 }
 
@@ -215,15 +228,20 @@ where
     Ok(())
 }
 
-#[tauri::command]
-pub async fn set_plugin_enabled(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetPluginEnabledArgs {
     marketplace: String,
     plugin: String,
     enabled: bool,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<(), String> {
+}
+
+async fn set_plugin_enabled(core: Arc<Core>, a: SetPluginEnabledArgs) -> Result<(), String> {
+    let SetPluginEnabledArgs { marketplace, plugin, enabled } = a;
+    let service = core.settings.clone();
+    {
     // 重 IO（settings 读写 + cache 目录扫描 + 清单落盘）→ spawn_blocking，不占主线程
-    let service = service.inner().clone();
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let key = format!("{plugin}@{marketplace}");
         mutate_user_settings(&service, |s| {
@@ -237,6 +255,7 @@ pub async fn set_plugin_enabled(
     })
     .await
     .map_err(|e| e.to_string())?
+}
 }
 
 // ── Commands ──
@@ -261,12 +280,17 @@ fn resolve_source_states(configured: bool, explicit: &[String]) -> Vec<bool> {
         .collect()
 }
 
-#[tauri::command]
-pub async fn list_marketplace_sources(
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<Vec<sources::SourceInfo>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListMarketplaceSourcesArgs {
+}
+
+async fn list_marketplace_sources(core: Arc<Core>, a: ListMarketplaceSourcesArgs) -> Result<Vec<sources::SourceInfo>, String> {
+    let _ = a;
+    let service = core.settings.clone();
+    {
     // 读 settings.json → spawn_blocking，不占主线程
-    let service = service.inner().clone();
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<Vec<sources::SourceInfo>, String> {
         let settings = read_user_settings(&service)?;
         // 键存在 = 已配置（按字面量，空=全关）；键不存在 = 从未配置（取默认）
@@ -299,15 +323,21 @@ pub async fn list_marketplace_sources(
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
-#[tauri::command]
-pub async fn set_marketplace_enabled(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetMarketplaceEnabledArgs {
     source_id: String,
     enabled: bool,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<(), String> {
+}
+
+async fn set_marketplace_enabled(core: Arc<Core>, a: SetMarketplaceEnabledArgs) -> Result<(), String> {
+    let SetMarketplaceEnabledArgs { source_id, enabled } = a;
+    let service = core.settings.clone();
+    {
     // settings 读写 → spawn_blocking，不占主线程
-    let service = service.inner().clone();
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         mutate_user_settings(&service, |s| {
             // 首次配置（键此前不存在）→ 先用默认启用源播种，再应用本次显式选择。
@@ -337,6 +367,7 @@ pub async fn set_marketplace_enabled(
     })
     .await
     .map_err(|e| e.to_string())?
+}
 }
 
 #[cfg(test)]

@@ -38,7 +38,7 @@ pub struct BundledPlugin {
 macro_rules! icon {
     ($file:literal) => {
         Some(include_bytes!(concat!(
-            "../../../resources/builtin-icons/",
+            "icons/",
             $file
         )))
     };
@@ -216,7 +216,7 @@ fn is_tombstoned(service: &SettingsService, name: &str, market: &str) -> bool {
 }
 
 /// 卸载内置插件时记墓碑（仅 auto_install 的插件需要；非自动安装的卸载无需拦截）。
-pub(crate) fn mark_uninstalled_if_bundled(service: &SettingsService, name: &str, market: &str) {
+pub fn mark_uninstalled_if_bundled(service: &SettingsService, name: &str, market: &str) {
     let is_bundled = BUNDLED.iter().any(|b| {
         b.auto_install
             && b.name == name
@@ -233,7 +233,7 @@ pub(crate) fn mark_uninstalled_if_bundled(service: &SettingsService, name: &str,
 }
 
 /// 安装（手动或自动）时清除墓碑——用户重新安装 = 撤销卸载意图。
-pub(crate) fn clear_tombstone(service: &SettingsService, name: &str, market: &str) {
+pub fn clear_tombstone(service: &SettingsService, name: &str, market: &str) {
     let key = format!("{name}@{market}");
     let _ = super::mutate_user_settings(service, |s| {
         tombstone_remove(s, &key);

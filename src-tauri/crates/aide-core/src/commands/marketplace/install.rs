@@ -1,10 +1,26 @@
+
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("fetch_marketplace", fetch_marketplace),
+    command!("install_plugin", install_plugin),
+    command!("uninstall_plugin", uninstall_plugin),
+    command!("refresh_marketplace", refresh_marketplace),
+    command!("update_plugin", update_plugin),
+    command!("list_installed_plugins", list_installed_plugins),
+];
+
 use std::process::Command;
 use std::sync::Arc;
 
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use tauri::State;
 
 use crate::commands::marketplace::sources::{parse_marketplace_json, RawSource};
 use crate::commands::marketplace::{bundled, manifest, source_cache_dir, sources, PluginEntry};
@@ -12,8 +28,15 @@ use crate::settings::SettingsService;
 
 // ── fetch_marketplace (async, source-aware) ──
 
-#[tauri::command]
-pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchMarketplaceArgs {
+    source_id: String,
+}
+
+async fn fetch_marketplace(_core: Arc<Core>, a: FetchMarketplaceArgs) -> Result<Vec<PluginEntry>, String> {
+    let FetchMarketplaceArgs { source_id } = a;
+    {
     // async 命令不埋 trace_command（CLAUDE.md：async 的 spawn_blocking 任务不在主线程）
     tokio::task::spawn_blocking(move || -> Result<Vec<PluginEntry>, String> {
         let market_name = sources::default_market_name(&source_id)
@@ -68,6 +91,7 @@ pub async fn fetch_marketplace(source_id: String) -> Result<Vec<PluginEntry>, St
     })
     .await
     .map_err(|e| e.to_string())?
+}
 }
 
 /// 确保市场源仓库已克隆到缓存目录（缺失则浅克隆）。启动期内置插件安装与
@@ -140,7 +164,7 @@ pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<(), Strin
         cmd.creation_flags(0x08000000);
     }
     // 代理作为 git 全局 -c 选项，必须置于子命令之前
-    crate::commands::proxy::apply_git_proxy(&mut cmd);
+    crate::proxy::apply_git_proxy(&mut cmd);
     cmd.args(NO_EOL_CONVERSION);
     cmd.args(["clone", "--depth", "1"]).arg(url).arg(target);
 
@@ -175,7 +199,7 @@ pub(super) fn plugins_cache_root() -> std::path::PathBuf {
 }
 
 /// 从已缓存的源 marketplace.json 里按 plugin 名查条目
-pub(crate) fn lookup_entry(
+pub fn lookup_entry(
     source_id: &str,
     plugin_name: &str,
 ) -> Result<
@@ -242,7 +266,7 @@ fn run_git(args: &[String], cwd: &std::path::Path) -> Result<(), String> {
     }
     // 代理作为 git 全局 -c 选项，必须置于子命令之前；否则插件克隆/拉取直连
     // github 会挂死（spawn_blocking 阻塞 → 前端「点击更新没反应」）。
-    crate::commands::proxy::apply_git_proxy(&mut cmd);
+    crate::proxy::apply_git_proxy(&mut cmd);
     cmd.args(NO_EOL_CONVERSION);
     cmd.args(args);
     let out = cmd.output().map_err(|e| e.to_string())?;
@@ -581,7 +605,7 @@ fn read_manifest(path: &std::path::PathBuf) -> Option<(String, String, String, S
 /// Pick the newest-by-mtime version directory under a plugin's cache root,
 /// skipping `.__tmp__`. (Not semver-aware; mtime is correct because install
 /// always creates a fresh dir, so newest mtime == most-recently-installed.)
-pub(crate) fn latest_version_dir(plugin_root: &std::path::Path) -> Option<std::path::PathBuf> {
+pub fn latest_version_dir(plugin_root: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut best: Option<(std::path::PathBuf, std::time::SystemTime)> = None;
     let Ok(entries) = std::fs::read_dir(plugin_root) else {
         return None;
@@ -634,24 +658,30 @@ fn gc_old_versions(market: &str, plugin: &str) {
 
 // ── Async commands ──
 
-#[tauri::command]
-pub async fn install_plugin(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallPluginArgs {
     source_id: String,
     plugin_name: String,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+}
+
+async fn install_plugin(core: Arc<Core>, a: InstallPluginArgs) -> Result<(), String> {
+    let InstallPluginArgs { source_id, plugin_name } = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         install_plugin_blocking(&service, &source_id, &plugin_name, None)
     })
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
 /// 安装插件（阻塞实现，UI 命令与启动期内置插件安装共用）。
 /// `default_enabled_override`：内置清单首次安装时覆盖 marketplace.json 的
 /// defaultEnabled；None = 按 marketplace 条目（无 → 默认启用）。
-pub(crate) fn install_plugin_blocking(
+pub fn install_plugin_blocking(
     service: &SettingsService,
     source_id: &str,
     plugin_name: &str,
@@ -685,13 +715,18 @@ pub(crate) fn install_plugin_blocking(
     Ok(())
 }
 
-#[tauri::command]
-pub async fn uninstall_plugin(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UninstallPluginArgs {
     marketplace: String,
     plugin_name: String,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+}
+
+async fn uninstall_plugin(core: Arc<Core>, a: UninstallPluginArgs) -> Result<(), String> {
+    let UninstallPluginArgs { marketplace, plugin_name } = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let root = plugins_cache_root().join(&marketplace).join(&plugin_name);
         if !root.exists() {
@@ -707,9 +742,17 @@ pub async fn uninstall_plugin(
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
-#[tauri::command]
-pub async fn refresh_marketplace(source_id: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshMarketplaceArgs {
+    source_id: String,
+}
+
+async fn refresh_marketplace(_core: Arc<Core>, a: RefreshMarketplaceArgs) -> Result<(), String> {
+    let RefreshMarketplaceArgs { source_id } = a;
+    {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let repo = crate::commands::marketplace::sources::fixed_repo(&source_id).ok_or("未知源")?;
         let cache = crate::commands::marketplace::source_cache_dir(&source_id);
@@ -725,15 +768,21 @@ pub async fn refresh_marketplace(source_id: String) -> Result<(), String> {
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
-#[tauri::command]
-pub async fn update_plugin(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePluginArgs {
     source_id: String,
     plugin_name: String,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<(), String> {
+}
+
+async fn update_plugin(core: Arc<Core>, a: UpdatePluginArgs) -> Result<(), String> {
+    let UpdatePluginArgs { source_id, plugin_name } = a;
+    let service = core.settings.clone();
+    {
     // 更新 = 用最新条目重装到新版本目录；旧版本目录保留 7 天 GC
-    let service = service.inner().clone();
+    let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let (market, entry) = lookup_entry(&source_id, &plugin_name)?;
         let plugin_root = read_marketplace_plugin_root(&source_id);
@@ -751,12 +800,18 @@ pub async fn update_plugin(
     .await
     .map_err(|e| e.to_string())?
 }
+}
 
-#[tauri::command]
-pub async fn list_installed_plugins(
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListInstalledPluginsArgs {
+}
+
+async fn list_installed_plugins(core: Arc<Core>, a: ListInstalledPluginsArgs) -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
+    let _ = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(
         move || -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
             let settings = crate::commands::marketplace::read_user_settings(&service)?
@@ -827,6 +882,7 @@ pub async fn list_installed_plugins(
     )
     .await
     .map_err(|e| e.to_string())?
+}
 }
 
 #[cfg(test)]

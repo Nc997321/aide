@@ -6,13 +6,12 @@ pub mod file_assoc;
 pub mod mcp_probe;
 pub mod workspace_trust;
 pub mod filesystem;
-pub mod marketplace;
 pub mod permissions;
 /// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
 pub use aide_core::proxy;
 /// 已迁入 aide-core 的命令模块；保留 `crate::commands::<模块>` 路径。
 pub use aide_core::commands::{
-    customizations, knowledge, memory_observatory, migration, notifications, onboarding, recent,
+    customizations, knowledge, marketplace, memory_observatory, migration, notifications, onboarding, recent,
     run_configs, workspace,
 };
 pub mod remote;

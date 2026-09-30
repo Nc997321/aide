@@ -414,15 +414,6 @@ pub fn run() {
             commands::mcp_probe::test_mcp_connection,
             // Provider commands
             // Marketplace commands
-            commands::marketplace::install::fetch_marketplace,
-            commands::marketplace::install::install_plugin,
-            commands::marketplace::install::uninstall_plugin,
-            commands::marketplace::install::list_installed_plugins,
-            commands::marketplace::install::refresh_marketplace,
-            commands::marketplace::install::update_plugin,
-            commands::marketplace::list_marketplace_sources,
-            commands::marketplace::set_marketplace_enabled,
-            commands::marketplace::set_plugin_enabled,
             // Run configuration commands
             // JDK registry (scan / resolve) — per-project JDK injection
             // Run process lifecycle commands
