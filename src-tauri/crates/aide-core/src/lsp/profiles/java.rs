@@ -153,9 +153,7 @@ impl ServerProfile for JavaProfile {
 /// 解析内置 lombok jar：resource_dir/lsp/lombok.jar。失败（开发期未放/打包漏）
 /// 返回 None → 不注入，jdtls 仍可起（只是没 lombok，@Getter 等仍报红）。
 fn resolve_lombok_jar(ctx: &LaunchCtx) -> Option<PathBuf> {
-    use tauri::Manager;
-    let res_dir = ctx.app.path().resource_dir().ok()?;
-    let jar = res_dir.join("lsp").join("lombok.jar");
+    let jar = ctx.resources.lsp_dir()?.join("lombok.jar");
     if jar.exists() {
         Some(jar)
     } else {

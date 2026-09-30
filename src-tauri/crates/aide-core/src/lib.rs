@@ -10,6 +10,7 @@
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
 pub mod app_settings;
+pub mod lsp;
 pub mod codegraph;
 pub mod commands;
 pub mod paths;
@@ -59,6 +60,8 @@ pub struct Core {
     pub pty: pty::ShellManager,
     /// 代码索引（runner 进程的代理：惰性拉起 / 空闲回收）。
     pub codegraph: Arc<codegraph::CodeGraphService>,
+    /// 语言服务器（按 工作区 × 语言 各一台）。
+    pub lsp: Arc<lsp::LspState>,
     /// 随包资源在哪（前门回答）。
     pub resources: Arc<dyn HostResources>,
     events: Arc<dyn EventSink>,
@@ -76,6 +79,7 @@ impl Core {
                 resources.clone(),
                 settings.clone(),
             )),
+            lsp: Arc::new(lsp::LspState::new()),
             resources,
             workspace,
             settings,

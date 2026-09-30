@@ -3,6 +3,7 @@ pub mod browser;
 pub mod chat;
 pub mod clipboard;
 pub mod file_assoc;
+pub mod lsp_guide;
 pub mod mcp_probe;
 pub mod session_runtime;
 pub mod workspace_trust;

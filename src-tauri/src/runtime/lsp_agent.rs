@@ -59,10 +59,11 @@ pub async fn handle(
     }
 }
 
-/// 取 state → 执行。state 缺失（不该发生：lib.rs 无条件 manage）也要回一个
-/// 可读的 no_server，而不是让 sidecar 干等超时。
+/// 执行：LSP 状态住 aide-core 的 Core（setup 里无条件 manage）。
 async fn run(app: &AppHandle, req: &LspQueryRequest) -> Value {
-    crate::lsp::agent_query::run_agent_query(app, &req.tool, &req.args, &req.workspace_root).await
+    use tauri::Manager;
+    let core = app.state::<Arc<aide_core::Core>>().inner().clone();
+    crate::lsp::agent_query::run_agent_query(&core, &req.tool, &req.args, &req.workspace_root).await
 }
 
 /// 远程车道：请求里的目标机路径 → 桌面形态。

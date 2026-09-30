@@ -12,6 +12,9 @@ pub trait HostResources: Send + Sync + 'static {
     /// runner 本地 ONNX 模型目录（经 `AIDE_CODEGRAPH_MODEL_DIR` 递给 runner）；
     /// None = 不设，runner 自己回退（dev 源码树）。
     fn codegraph_model_dir(&self) -> Option<PathBuf>;
+
+    /// 随包 LSP 目录（`<资源>/lsp`：捆绑的语言服务器、lombok.jar）；None = 没有随包 LSP。
+    fn lsp_dir(&self) -> Option<PathBuf>;
 }
 
 /// 什么随包资源都没有的 Host（测试 / 尚未随套件分发该组件的远程 Host）。
@@ -24,6 +27,10 @@ impl HostResources for NoResources {
     }
 
     fn codegraph_model_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn lsp_dir(&self) -> Option<PathBuf> {
         None
     }
 }

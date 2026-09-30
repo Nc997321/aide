@@ -57,6 +57,8 @@ static TABLES: &[&[Command]] = &[
     crate::commands::session_changes::COMMANDS,
     crate::commands::terminal::COMMANDS,
     crate::commands::codegraph::COMMANDS,
+    crate::lsp::COMMANDS,
+    crate::lsp::workspace_symbol::COMMANDS,
     crate::commands::workspace::COMMANDS,
     crate::proxy::COMMANDS,
     crate::commands::watch::COMMANDS,

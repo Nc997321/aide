@@ -29,8 +29,8 @@ pub(crate) async fn shutdown_children(app: &AppHandle) {
         rt.kill_runtime().await;
     }
     // 2) LSP server（按 工作区×语言 拉起，java / go / ts 各一个进程）
-    if let Some(lsp) = app.try_state::<std::sync::Arc<crate::lsp::LspState>>() {
-        lsp.kill_all().await;
+    if let Some(core) = app.try_state::<std::sync::Arc<aide_core::Core>>() {
+        core.lsp.kill_all().await;
     }
     // 3) codegraph runner 不在此列：proxy 内有 idle_reaper 空闲自动回收兜底，
     //    且 CodeGraphService 尚未暴露 kill_runner 接口。

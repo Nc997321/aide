@@ -76,6 +76,12 @@ impl aide_core::resources::HostResources for DesktopResources {
             Some(dunce::simplified(&res_dir).to_path_buf())
         }
     }
+
+    /// `<resource_dir>/lsp`（dev 与 release 同一口径：捆绑 server 与 lombok.jar 只在打包后存在）。
+    fn lsp_dir(&self) -> Option<std::path::PathBuf> {
+        let res_dir = self.0.path().resource_dir().ok()?;
+        Some(res_dir.join("lsp"))
+    }
 }
 
 /// 返回 `Some(invoke)` = 不是 core 命令，交给 Tauri 命令表；`None` = 已接管并应答。

@@ -240,7 +240,7 @@ fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
 /// 远程（WSL / SSH）：在目标机上探测，「配得上」= 目标机登录 PATH 上真有该语言的服务器
 /// （`aide-host lsp_detect`）；连不上 → 空表，同样退化成不挂。
 async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) -> Vec<String> {
-    let access = crate::lsp::workspace_access::WorkspaceAccess::of(app, workspace_root);
+    let access = crate::lsp::workspace_access::WorkspaceAccess::of(workspace_root);
     if access.is_remote() {
         return match access.remote_detect(workspace_root).await {
             Ok((_, available)) => available
@@ -254,10 +254,11 @@ async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) ->
             }
         };
     }
-    let app = app.clone();
+    use tauri::Manager;
+    let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
     let root = workspace_root.to_string();
     tokio::task::spawn_blocking(move || {
-        crate::lsp::workspace_langs::lsp_languages_for_path(&app, &root)
+        crate::lsp::workspace_langs::lsp_languages_for_path(&core, &root)
     })
     .await
     .unwrap_or_default()

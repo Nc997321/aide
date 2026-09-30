@@ -23,6 +23,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", 
 # 终端 PTY：Unix 走 libc openpty（musl 自带），Windows 走 ConPTY——不引入系统 C 库。
 portable-pty = "0.8"
 which = "7"
+# LSP 协议类型（纯 Rust）
+lsp-types = "0.97.0"
+percent-encoding = "2"
+futures-util = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

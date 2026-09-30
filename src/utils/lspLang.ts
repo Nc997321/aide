@@ -8,7 +8,7 @@
  * `.vue` 报 `typescript`：它由 `typescript-language-server` 的 `@vue/typescript-plugin`
  * 覆盖，没有独立的 vue server（`vue-language-server` 是需要客户端桥接的 proxy，驱动不了）。
  *
- * ⚠️ 权威表在 Rust：`LanguageId::from_ext`（src-tauri/src/lsp/detector.rs）。两张表必须
+ * ⚠️ 权威表在 Rust：`LanguageId::from_ext`（src-tauri/crates/aide-workspace/src/detect/languages.rs，经 aide-core `lsp::detector` 使用）。两张表必须
  * 一致，漏登记 = 该扩展名在 Aide 里完全没有 LSP（`.tsx`/`.jsx` 就这么漏了很久）；
  * 一致性由构建期守卫 `pnpm check:lsp-parity` 兜。
  */

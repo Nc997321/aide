@@ -52,7 +52,7 @@ impl ServerProfile for TsProfile {
         // 远程工作区（WSL / SSH）：SDK 与 Vue 插件的探测都是**桌面文件系统**上的遍历——
         // 全局候选指向桌面的 npm 目录（在目标机上不存在），工作区候选要经 9P / 根本摸不到。
         // 交给 TLS 在目标机上自己找 SDK（工作区根的 node_modules / 它自带的）；Vue 插件 v1 不挂。
-        if crate::remote_workspace::path::is_remote(ctx.workspace) {
+        if crate::lsp::remote::is_remote(ctx.workspace) {
             return Value::Object(opts);
         }
         let mut tsserver = serde_json::Map::new();

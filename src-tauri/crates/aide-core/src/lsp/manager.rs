@@ -203,8 +203,8 @@ impl LspManager {
         &self,
         workspace: &str,
         lang: LanguageId,
-        app: &tauri::AppHandle,
-        settings: &crate::commands::settings::AppSettings,
+        core: &crate::Core,
+        settings: &crate::app_settings::AppSettings,
     ) -> Result<Arc<ServerHandle>, EnsureError> {
         let key = (workspace.to_string(), lang);
         // 快路径：活着的 server 不排 spawn_lock 的队（锁只为「同一时刻只 spawn 一台」，
@@ -235,18 +235,18 @@ impl LspManager {
         // dead 或不存在 → spawn 新的。
         // 远程工作区：服务器在**目标机**上解析（aide-host lsp 按登录 PATH 找），桌面的覆盖 /
         // 捆绑 / PATH 发现都是本机的东西，不适用。
-        let src = if crate::remote_workspace::path::is_remote(workspace) {
+        let src = if crate::lsp::remote::is_remote(workspace) {
             match lang.server_binary().filter(|_| remote_supported(lang)) {
                 Some(binary) => ServerSource::Which { binary: binary.to_string() },
                 None => return Err(EnsureError::ServerNotFound),
             }
         } else {
-            match registry::resolve(lang, settings, app) {
+            match registry::resolve(lang, settings, core.resources.as_ref()) {
                 Some(src) => src,
                 None => return Err(EnsureError::ServerNotFound),
             }
         };
-        match spawn_and_init(workspace, lang, &src, app, settings).await {
+        match spawn_and_init(workspace, lang, &src, core, settings).await {
             Ok(handle) => {
                 self.failures.lock().await.remove(&key);
                 self.handles.lock().await.insert(key, Arc::clone(&handle));
@@ -326,8 +326,8 @@ impl LspManager {
     pub async fn restart_workspace(
         &self,
         workspace: &str,
-        _app: &tauri::AppHandle,
-        _settings: &crate::commands::settings::AppSettings,
+        _core: &crate::Core,
+        _settings: &crate::app_settings::AppSettings,
     ) -> Result<(), EnsureError> {
         self.kill_workspace(workspace).await;
         // 重新 ensure 各 lang（调用方已知该工作区活跃 lang；这里由 mod.rs 逐个 did_open 时自然重拉）
@@ -423,8 +423,8 @@ async fn spawn_and_init(
     workspace: &str,
     lang: LanguageId,
     src: &ServerSource,
-    app: &tauri::AppHandle,
-    settings: &crate::commands::settings::AppSettings,
+    core: &crate::Core,
+    settings: &crate::app_settings::AppSettings,
 ) -> Result<Arc<ServerHandle>, EnsureError> {
     let exclude_dirs = crate::commands::workspace::lsp_workspace_config(
         &crate::commands::workspace::path_to_key(workspace),
@@ -434,9 +434,11 @@ async fn spawn_and_init(
 
     // —— 生产 spawn ——（远程工作区：服务器经 aide-host 跑在目标机上）
     #[cfg(not(test))]
-    let (transport, child, stderr_lines) = match crate::remote_workspace::path::parse(workspace) {
-        Some((host, posix_root)) => spawn_remote(lang, src, host, posix_root, app).await?,
-        None => spawn_real(workspace, lang, src, app).await?,
+    let (transport, child, stderr_lines) = match crate::lsp::remote::bridge()
+        .filter(|b| b.to_posix(workspace).is_some())
+    {
+        Some(bridge) => spawn_remote(workspace, lang, src, bridge).await?,
+        None => spawn_real(workspace, lang, src, core).await?,
     };
     #[cfg(test)]
     let (transport, child, stderr_lines) = spawn_test(workspace, lang, src).await;
@@ -462,7 +464,7 @@ async fn spawn_and_init(
     });
 
     // —— reader 任务 ——
-    start_reader(handle.clone(), lang, workspace.to_string(), app.clone());
+    start_reader(handle.clone(), lang, workspace.to_string(), core.events());
 
     // —— initialize 握手 ——
     if let Err(e) = init_handshake(&handle, workspace, lang, &exclude_globs).await {
@@ -546,7 +548,7 @@ async fn spawn_real(
     workspace: &str,
     lang: LanguageId,
     src: &ServerSource,
-    app: &tauri::AppHandle,
+    core: &crate::Core,
 ) -> Result<
     (
         LspTransport,
@@ -555,8 +557,6 @@ async fn spawn_real(
     ),
     EnsureError,
 > {
-    use tauri::Manager;
-
     // stderr 环形缓冲（上限 20 行）：reader 任务写入，握手失败时回读拼进错误消息。
     // 解决"server 启动失败但用户看不到原因"——stderr 走 tracing 进日志，同时留最近若干行
     // 供 spawn_and_init 在 channel closed 时拼出"rustup proxy 报 Unknown binary..."这类关键线索。
@@ -564,23 +564,23 @@ async fn spawn_real(
 
     // 隔离数据目录由 profile.data_dir_path 自决位置（默认 <workspace>/.aide/<name>，
     // jdtls 覆写移到工作区外），manager 只负责按此路径建目录。
-    let config_dir = crate::commands::our_config_dir();
+    let config_dir = crate::paths::our_config_dir();
     let data_dir = match crate::lsp::profiles::profile(lang).data_dir_path(workspace, &config_dir) {
         Some(path) => Some(ensure_data_dir(path).await?),
         None => None,
     };
     let (program, mut args) = registry::to_command(lang, src, data_dir.as_deref());
     // profile 额外参数（需 app/resource_dir 的语言用，默认空；Java 注入 lombok javaagent）
-    let ctx = registry::LaunchCtx { app, src };
+    let ctx = registry::LaunchCtx { resources: core.resources.as_ref(), src };
     args.extend(crate::lsp::profiles::profile(lang).extra_args(&ctx));
     // Bundled：拼完整资源路径 + dunce 剥前缀
     let program_path = match src {
         ServerSource::Bundled { subdir, binary } => {
-            let res_dir = app
-                .path()
-                .resource_dir()
-                .map_err(|e| EnsureError::SpawnFailed(e.to_string()))?;
-            let p = res_dir.join("lsp").join(subdir).join(binary);
+            let lsp_dir = core
+                .resources
+                .lsp_dir()
+                .ok_or_else(|| EnsureError::SpawnFailed("no bundled lsp directory on this host".into()))?;
+            let p = lsp_dir.join(subdir).join(binary);
             dunce::simplified(&p).to_path_buf()
         }
         _ => std::path::PathBuf::from(&program),
@@ -657,11 +657,10 @@ fn collect_stderr(
 /// 握手失败的原因回到面板（与本机「找不到 server」同一条可见路径）。
 #[cfg(not(test))]
 async fn spawn_remote(
+    workspace: &str,
     lang: LanguageId,
     src: &ServerSource,
-    host: crate::remote_workspace::path::HostId,
-    posix_root: String,
-    app: &tauri::AppHandle,
+    bridge: &'static dyn crate::lsp::remote::RemoteLsp,
 ) -> Result<
     (
         LspTransport,
@@ -670,49 +669,19 @@ async fn spawn_remote(
     ),
     EnsureError,
 > {
-    use tauri::Manager;
-    use tokio::io::AsyncWriteExt;
-    let svc = app
-        .try_state::<Arc<crate::remote_workspace::RemoteWorkspaces>>()
-        .ok_or_else(|| EnsureError::SpawnFailed("remote workspaces unavailable".into()))?;
-    let inst = svc.installed(&host).await.map_err(EnsureError::SpawnFailed)?;
     let (program, args) = registry::to_command(lang, src, None);
     let mut argv = vec![program];
     argv.extend(args);
-    let init = aide_host::protocol::LspInit {
-        candidates: vec![argv],
-        cwd: posix_root,
-    };
-    let script = format!(
-        "exec {} lsp",
-        crate::remote_workspace::launcher::sh_quote(&inst.host_bin)
-    );
-    let mut cmd = crate::remote_workspace::launcher::command(&host, &script)
-        .map_err(EnsureError::SpawnFailed)?;
-    let mut child = cmd
-        .spawn()
-        .map_err(|e| EnsureError::SpawnFailed(format!("{}: {e}", host.label())))?;
-    let mut stdin = child
-        .stdin
-        .take()
-        .ok_or(EnsureError::SpawnFailed("no stdin".into()))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or(EnsureError::SpawnFailed("no stdout".into()))?;
-    let mut line = serde_json::to_string(&init).map_err(|e| EnsureError::SpawnFailed(e.to_string()))?;
-    line.push('\n');
-    stdin
-        .write_all(line.as_bytes())
+    let mut server = bridge
+        .spawn_server(workspace, argv)
         .await
-        .map_err(|e| EnsureError::SpawnFailed(format!("send lsp init: {e}")))?;
+        .map_err(EnsureError::SpawnFailed)?;
     let stderr_lines: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = server.stderr.take() {
         collect_stderr(stderr, lang, Arc::clone(&stderr_lines));
     }
-    let (to_server, from_server) = crate::remote_workspace::lsp_pipe::translate(host, stdin, stdout);
-    let transport = LspTransport::with_reader_source(Box::new(to_server), Box::new(from_server));
-    Ok((transport, Some(Arc::new(TokioMutex::new(child))), stderr_lines))
+    let transport = LspTransport::with_reader_source(server.to_server, server.from_server);
+    Ok((transport, Some(Arc::new(TokioMutex::new(server.child))), stderr_lines))
 }
 
 // ── spawn_test（mock）──
@@ -781,13 +750,12 @@ pub(crate) fn did_change_notif(uri: &str, version: i64, text: &str) -> serde_jso
     })
 }
 
-fn start_reader<R: tauri::Runtime>(
+fn start_reader(
     handle: Arc<ServerHandle>,
     lang: LanguageId,
     workspace: String,
-    app: tauri::AppHandle<R>,
+    events: Arc<dyn crate::EventSink>,
 ) {
-    use tauri::Emitter;
     use tokio::io::{AsyncReadExt, BufReader};
 
     let table = handle.transport.table_handle();
@@ -820,7 +788,7 @@ fn start_reader<R: tauri::Runtime>(
                         // 多半从没打开过的）产生的诊断不进编辑器 UI——否则界面上会冒出
                         // 「没打开过的文件在报错」。判据见 diagnostics_visible。
                         if diagnostics_visible(handle.docs.lock().await.origin_of(&uri)) {
-                            let _ = app.emit(
+                            events.emit(
                                 "lsp-diagnostics",
                                 serde_json::json!({
                                     "workspaceRoot": "",
@@ -833,7 +801,7 @@ fn start_reader<R: tauri::Runtime>(
                     }
                     Action::Log(s) => tracing::info!("[lsp] {}", s),
                     Action::ShowMessage(s) => {
-                        let _ = app.emit("lsp-show-message", s);
+                        events.emit("lsp-show-message", serde_json::Value::String(s));
                     }
                     Action::ServerRequest { id, method, params } => {
                         // 协议要求 server→client 请求必须回 response。此前直接忽略 →
@@ -858,7 +826,7 @@ fn start_reader<R: tauri::Runtime>(
                         let p = crate::lsp::profiles::profile(lang);
                         if p.handles_status() && p.is_ready_status(&status_type, &message) {
                             handle.ready.store(true, Ordering::Relaxed);
-                            let _ = app.emit(
+                            events.emit(
                                 "lsp-server-ready",
                                 serde_json::json!({"workspaceRoot": workspace, "lang": lang.id_str()}),
                             );
@@ -873,7 +841,7 @@ fn start_reader<R: tauri::Runtime>(
         table.lock().await.reject_all();
         dead.store(true, Ordering::Relaxed);
         if !stopping.load(Ordering::Relaxed) {
-            let _ = app.emit("lsp-server-dead", ());
+            events.emit("lsp-server-dead", serde_json::Value::Null);
         }
     });
 }
@@ -931,7 +899,7 @@ async fn init_handshake(
     let root_uri = crate::lsp::protocol::path_to_uri(workspace);
     // 远程工作区的服务器跑在目标机上：桌面的 PID 在那边不存在，而 LSP 规定「父进程不在了
     // server 就该退出」——TLS 等会按 processId 轮询、看不到就自杀。远程一律发 null。
-    let process_id = if crate::remote_workspace::path::is_remote(workspace) {
+    let process_id = if crate::lsp::remote::is_remote(workspace) {
         serde_json::Value::Null
     } else {
         serde_json::json!(std::process::id())
@@ -1390,19 +1358,20 @@ pub(crate) mod tests {
 
     // ── reader EOF 分类：主动关停静默 / 异常死亡播报 ──
 
-    /// 带 lsp-server-dead 计数监听的 mock app（计数器即「播报次数」断言面）。
-    fn dead_spy_app() -> (
-        tauri::App<tauri::test::MockRuntime>,
-        Arc<std::sync::atomic::AtomicUsize>,
-    ) {
-        use tauri::Listener;
-        let app = tauri::test::mock_app();
+    /// 数 lsp-server-dead 播报次数的事件出口（计数器即「播报次数」断言面）。
+    struct DeadSpy(Arc<std::sync::atomic::AtomicUsize>);
+
+    impl crate::EventSink for DeadSpy {
+        fn emit(&self, event: &str, _payload: serde_json::Value) {
+            if event == "lsp-server-dead" {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+    }
+
+    fn dead_spy() -> (Arc<dyn crate::EventSink>, Arc<std::sync::atomic::AtomicUsize>) {
         let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let counter = Arc::clone(&hits);
-        app.listen("lsp-server-dead", move |_| {
-            counter.fetch_add(1, Ordering::SeqCst);
-        });
-        (app, hits)
+        (Arc::new(DeadSpy(Arc::clone(&hits))), hits)
     }
 
     /// 等 reader 观察到 EOF（dead 置位）；2s 未到视为失败。
@@ -1418,7 +1387,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn reader_eof_intentional_shutdown_stays_silent() {
-        let (app, hits) = dead_spy_app();
+        let (events, hits) = dead_spy();
         let mock = mock_server::spawn_mock_lsp();
         let transport =
             LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
@@ -1428,7 +1397,7 @@ pub(crate) mod tests {
             h.clone(),
             LanguageId::Rust,
             "/w".into(),
-            app.handle().clone(),
+            events,
         );
         // 主动关停：shutdown_handle 先置 stopping，mock 答 shutdown 后退出 → EOF。
         // 注意：不能用 wait_reader_eof 等收尾——shutdown_handle 自己也置 dead，
@@ -1450,7 +1419,7 @@ pub(crate) mod tests {
 
     #[tokio::test]
     async fn reader_eof_unexpected_death_announces() {
-        let (app, hits) = dead_spy_app();
+        let (events, hits) = dead_spy();
         let mock = mock_server::spawn_mock_lsp_die();
         let transport =
             LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
@@ -1459,7 +1428,7 @@ pub(crate) mod tests {
             h.clone(),
             LanguageId::Rust,
             "/w".into(),
-            app.handle().clone(),
+            events,
         );
         // 异常死亡：die mock 读到一帧即退出（无任何关停意图）→ EOF
         h.transport

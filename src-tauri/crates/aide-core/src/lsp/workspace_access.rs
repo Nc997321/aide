@@ -7,40 +7,34 @@
 //! 远程工作区红线是「一份实现，两处运行，不许回落本机」。
 //!
 //! 路径约定：进出本模块的路径**一律是桌面形态**（远程 = `\\wsl.localhost\…` 那种）；与
-//! 目标机 POSIX 路径的互译只在这里做（真相源仍是 `remote_workspace::path`）。
-
-use std::sync::Arc;
+//! 目标机 POSIX 路径的互译经过渡端口 [`crate::lsp::remote`]（真相源仍是桌面的
+//! `remote_workspace::path`）。P1 后只剩 Local。
 
 use aide_workspace::search::{SearchOptions, SearchResponse};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
 
 use crate::lsp::detector::LanguageId;
-use crate::remote_workspace::path::{self as rpath, HostId};
-use crate::remote_workspace::RemoteWorkspaces;
+use crate::lsp::remote::{self, RemoteLsp};
 
 /// 一个工作区根的访问方式。
 pub enum WorkspaceAccess {
     Local,
     Remote {
-        host: HostId,
-        svc: Arc<RemoteWorkspaces>,
+        /// 工作区根（桌面形态）——定位它住在哪台目标机。
+        root: String,
+        bridge: &'static dyn RemoteLsp,
     },
 }
 
 impl WorkspaceAccess {
-    /// 按路径形态选实现。远程路径但远程服务不在（不该发生：lib.rs 无条件 manage）→ 报错式的
-    /// Remote 不可得，退回 Local 只会去读一个本机不存在的路径——结果是「探不到」而不是跑错机器。
-    pub fn of(app: &AppHandle, root: &str) -> Self {
-        match rpath::parse(root) {
-            Some((host, _)) => match app.try_state::<Arc<RemoteWorkspaces>>() {
-                Some(svc) => WorkspaceAccess::Remote {
-                    host,
-                    svc: Arc::clone(svc.inner()),
-                },
-                None => WorkspaceAccess::Local,
+    /// 按路径形态选实现。
+    pub fn of(root: &str) -> Self {
+        match remote::bridge() {
+            Some(bridge) if bridge.to_posix(root).is_some() => WorkspaceAccess::Remote {
+                root: root.to_string(),
+                bridge,
             },
-            None => WorkspaceAccess::Local,
+            _ => WorkspaceAccess::Local,
         }
     }
 
@@ -49,10 +43,10 @@ impl WorkspaceAccess {
     }
 
     async fn call(&self, cmd: &str, args: Value) -> Result<Value, String> {
-        let WorkspaceAccess::Remote { host, svc } = self else {
+        let WorkspaceAccess::Remote { root, bridge } = self else {
             return Err("not a remote workspace".into());
         };
-        svc.connection(host).await?.invoke(cmd, args, None).await
+        bridge.call(root, cmd, args).await
     }
 
     /// 该工作区涉及的语言。
@@ -103,7 +97,7 @@ impl WorkspaceAccess {
 
     /// 远程：探到的语言 + 其中目标机上真有服务器的（`lsp_detect`）。失败 → Err（调用方降级成空）。
     pub async fn remote_detect(&self, root: &str) -> Result<(Vec<LanguageId>, Vec<LanguageId>), String> {
-        let posix = posix_of(root)?;
+        let posix = self.posix_of(root)?;
         let v = self.call("lsp_detect", json!({ "root": posix })).await?;
         let ids = |key: &str| -> Vec<LanguageId> {
             v.get(key)
@@ -133,18 +127,19 @@ impl WorkspaceAccess {
                 .await
                 .unwrap_or_default()
             }
-            WorkspaceAccess::Remote { host, .. } => {
-                let Ok(posix) = posix_of(root) else { return vec![] };
+            WorkspaceAccess::Remote { root: ws_root, bridge } => {
+                let Ok(posix) = self.posix_of(root) else { return vec![] };
                 let args = json!({ "root": posix, "lang": lang.id_str(), "max": max });
                 match self.call("lsp_representatives", args).await {
                     Ok(Value::Array(a)) => a
                         .iter()
                         .filter_map(Value::as_str)
-                        .map(|p| rpath::to_desktop(host, p).replace('\\', "/"))
+                        .filter_map(|p| bridge.to_desktop(ws_root, p))
+                        .map(|p| p.replace('\\', "/"))
                         .collect(),
                     Ok(_) => vec![],
                     Err(e) => {
-                        tracing::info!(host = %host, error = %e, "lsp: remote representative sources failed");
+                        tracing::info!(root = %ws_root, error = %e, "lsp: remote representative sources failed");
                         vec![]
                     }
                 }
@@ -163,7 +158,7 @@ impl WorkspaceAccess {
                     .map_err(|e| e.to_string())
             }
             WorkspaceAccess::Remote { .. } => {
-                let posix = posix_of(path)?;
+                let posix = self.posix_of(path)?;
                 match self.call("read_file_content", json!({ "path": posix })).await? {
                     Value::String(s) => Ok(s),
                     other => Err(format!("unexpected read_file_content result: {other}")),
@@ -185,7 +180,7 @@ impl WorkspaceAccess {
                 .map_err(|e| e.to_string())?
             }
             WorkspaceAccess::Remote { .. } => {
-                let posix = posix_of(root)?;
+                let posix = self.posix_of(root)?;
                 let v = self
                     .call(
                         "search_in_files",
@@ -198,8 +193,12 @@ impl WorkspaceAccess {
     }
 }
 
-fn posix_of(desktop: &str) -> Result<String, String> {
-    rpath::parse(desktop)
-        .map(|(_, p)| p)
+impl WorkspaceAccess {
+    fn posix_of(&self, desktop: &str) -> Result<String, String> {
+        match self {
+            WorkspaceAccess::Remote { bridge, .. } => bridge.to_posix(desktop),
+            WorkspaceAccess::Local => None,
+        }
         .ok_or_else(|| format!("not a remote path: {desktop}"))
+    }
 }

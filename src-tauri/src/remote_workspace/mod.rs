@@ -19,6 +19,7 @@
 pub mod connection;
 pub mod install;
 pub mod launcher;
+pub mod lsp_bridge;
 pub mod lsp_pipe;
 pub mod mirror;
 pub mod path;
@@ -325,5 +326,7 @@ pub fn remote_ws_host_of(path: String) -> Option<HostStatus> {
 pub fn manage(app: &tauri::App) {
     let svc = Arc::new(RemoteWorkspaces::default());
     svc.attach(app.handle().clone());
+    // aide-core 的 LSP 碰到远程工作区路径时经这座桥（过渡端口，P1 删除）。
+    aide_core::lsp::remote::set_remote(Box::new(lsp_bridge::LspBridge(Arc::clone(&svc))));
     app.manage(svc);
 }

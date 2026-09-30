@@ -16,7 +16,6 @@ use crate::lsp::workspace_symbol::SymbolCandidate;
 use crate::lsp::LspState;
 use serde_json::{json, Value};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
 
 /// 已解析出的查询位置（1-based，与命令行/前端一致）。
 pub struct Position {
@@ -130,7 +129,7 @@ const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// agent 语义查询入口。
 pub async fn run_agent_query(
-    app: &AppHandle,
+    core: &crate::Core,
     tool: &str,
     args: &Value,
     workspace_root: &str,
@@ -140,17 +139,14 @@ pub async fn run_agent_query(
         let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
             return fail(AgentLspStatus::Error, "missing `name`");
         };
-        let access = WorkspaceAccess::of(app, workspace_root);
+        let access = WorkspaceAccess::of(workspace_root);
         return crate::lsp::agent_nav::text_search(&access, workspace_root, symbol_query_name(name)).await;
     }
-    let Some(state) = app.try_state::<Arc<LspState>>() else {
-        return fail(AgentLspStatus::NoServer, "lsp state unavailable");
-    };
-    let state = state.inner();
+    let state: &LspState = &core.lsp;
     // 1. **确保 server 起来**。agent 查询可能先于编辑器到达（用户没打开过该语言的
     //    文件）——只 `mgr.get()` 会直接报 no_server，而正确行为是把它拉起来。
     // 工作区文件的读法（本机直读 / 远程问 aide-host）只在这里定一次，往下一路带着。
-    let access = WorkspaceAccess::of(app, workspace_root);
+    let access = WorkspaceAccess::of(workspace_root);
     let access = &access;
     let langs = target_languages(access, args, workspace_root).await;
     if langs.is_empty() {
@@ -161,11 +157,11 @@ pub async fn run_agent_query(
     // （曾经跟查询共用下面那个「第一个可用语言就 break」的循环——结果只热了一种语言，
     // 另一种的第一次真查询照样撞冷启动。）
     if tool == "warm" {
-        return warm_all(access, state, app, workspace_root, &langs).await;
+        return warm_all(access, state, core, workspace_root, &langs).await;
     }
     let mut warmed = AgentLspStatus::NoServer;
     for lang_id in &langs {
-        match crate::lsp::ensure_lang(state, app, workspace_root, *lang_id).await {
+        match crate::lsp::ensure_lang(core, workspace_root, *lang_id).await {
             Ok(o) => {
                 let s = AgentLspStatus::from_ensure(&o);
                 if matches!(s, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
@@ -206,7 +202,7 @@ pub async fn run_agent_query(
             };
             let deadline = std::time::Instant::now()
                 + budget(args, crate::lsp::manager::SYMBOL_SEARCH_TIMEOUT);
-            match lookup_symbol(access, state, app, symbol_query_name(name), workspace_root, deadline)
+            match lookup_symbol(access, state, core, symbol_query_name(name), workspace_root, deadline)
                 .await
             {
                 // `symbols` 问的就是「这个名字在哪声明」——命中本身就是答案。曾经还要拿它
@@ -243,12 +239,12 @@ pub async fn run_agent_query(
 async fn warm_all(
     access: &WorkspaceAccess,
     state: &LspState,
-    app: &AppHandle,
+    core: &crate::Core,
     workspace_root: &str,
     langs: &[crate::lsp::detector::LanguageId],
 ) -> AgentQueryOutcome {
     let one = |lang_id: crate::lsp::detector::LanguageId| async move {
-        let status = match crate::lsp::ensure_lang(state, app, workspace_root, lang_id).await {
+        let status = match crate::lsp::ensure_lang(core, workspace_root, lang_id).await {
             Ok(o) => AgentLspStatus::from_ensure(&o),
             Err(_) => AgentLspStatus::Error,
         };
@@ -295,7 +291,7 @@ const WARM_PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(12
 async fn lookup_symbol(
     access: &WorkspaceAccess,
     state: &LspState,
-    app: &AppHandle,
+    core: &crate::Core,
     name: &str,
     workspace_root: &str,
     deadline: std::time::Instant,
@@ -314,7 +310,7 @@ async fn lookup_symbol(
     let answers = futures_util::future::join_all(
         langs
             .iter()
-            .map(|lang_id| consult_language(access, state, app, workspace_root, *lang_id, name, deadline)),
+            .map(|lang_id| consult_language(access, state, core, workspace_root, *lang_id, name, deadline)),
     )
     .await;
     for (lang_id, answer) in langs.iter().zip(answers) {
@@ -348,13 +344,13 @@ async fn lookup_symbol(
 async fn consult_language(
     access: &WorkspaceAccess,
     state: &LspState,
-    app: &AppHandle,
+    core: &crate::Core,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
     name: &str,
     deadline: std::time::Instant,
 ) -> Result<Consulted, AgentLspStatus> {
-    let status = match crate::lsp::ensure_lang(state, app, workspace_root, lang_id).await {
+    let status = match crate::lsp::ensure_lang(core, workspace_root, lang_id).await {
         Ok(o) => AgentLspStatus::from_ensure(&o),
         Err(_) => return Err(AgentLspStatus::Error),
     };

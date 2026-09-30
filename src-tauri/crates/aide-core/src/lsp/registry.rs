@@ -1,4 +1,4 @@
-use crate::commands::settings::{AppSettings, ServerOverride};
+use crate::app_settings::{AppSettings, ServerOverride};
 use crate::lsp::detector::LanguageId;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -104,11 +104,11 @@ pub enum ServerSource {
     Explicit { program: String, args: Vec<String> },
 }
 
-/// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：app 拿 resource_dir、
+/// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：resources 拿随包 lsp 目录、
 /// src 判来源）。默认 profile 不用；Java 用它注入内置 lombok 的 -javaagent
 /// （见 profiles/java.rs）。纯 additive，无语言概念，不强制其他 profile 改。
 pub struct LaunchCtx<'a> {
-    pub app: &'a tauri::AppHandle,
+    pub resources: &'a dyn crate::resources::HostResources,
     pub src: &'a ServerSource,
 }
 
@@ -134,24 +134,22 @@ pub fn pick_source(
 pub fn resolve(
     lang: LanguageId,
     settings: &AppSettings,
-    app: &tauri::AppHandle,
+    resources: &dyn crate::resources::HostResources,
 ) -> Option<ServerSource> {
     let override_cfg = settings.lsp.servers.get(lang.id_str());
-    let bundled = bundled_source(lang, app);
+    let bundled = bundled_source(lang, resources);
     let which = which_source(lang);
     pick_source(override_cfg, bundled, which)
 }
 
-fn bundled_source(lang: LanguageId, app: &tauri::AppHandle) -> Option<ServerSource> {
-    use tauri::Manager;
+fn bundled_source(lang: LanguageId, resources: &dyn crate::resources::HostResources) -> Option<ServerSource> {
     let (subdir, binary) = crate::lsp::profiles::profile(lang).bundled()?;
     let binary = if cfg!(windows) {
         format!("{binary}.exe")
     } else {
         binary.to_string()
     };
-    let res_dir = app.path().resource_dir().ok()?;
-    let path = res_dir.join("lsp").join(subdir).join(&binary);
+    let path = resources.lsp_dir()?.join(subdir).join(&binary);
     if path.exists() {
         Some(ServerSource::Bundled {
             subdir: subdir.to_string(),
@@ -198,7 +196,7 @@ pub fn to_command(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::settings::{LspSettings, ServerOverride};
+    use crate::app_settings::{LspSettings, ServerOverride};
     use std::collections::HashMap;
 
     fn override_for(lang: &str, program: &str) -> AppSettings {

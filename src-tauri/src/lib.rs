@@ -8,9 +8,8 @@ pub mod commands;
 mod conversation;
 mod diagnostics;
 mod host_door;
-mod lsp;
 /// 权限策略住在 aide-core（Host 自持）；保留 `crate::policy` 路径。
-use aide_core::{codegraph, policy};
+use aide_core::{codegraph, lsp, policy};
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
 pub(crate) mod remote_workspace;
@@ -172,7 +171,6 @@ pub fn run() {
                 }
             }
         })
-        .manage(std::sync::Arc::new(lsp::LspState::new()))
         .manage(std::sync::Arc::new(automation::AutomationService::new()))
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
         .manage(std::sync::Arc::new(browser::adapter::PlatformEngine::new()))
@@ -417,27 +415,7 @@ pub fn run() {
             // LSP built-in
             // 工作区级代码索引开关（每工作区默认关，右侧栏面板读写）
             // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
-            lsp::lsp_detect_languages,
-            lsp::lsp_ensure_server,
-            lsp::lsp_did_open,
-            lsp::lsp_did_change,
-            lsp::lsp_did_close,
-            lsp::lsp_definition,
-            lsp::lsp_references,
-            lsp::lsp_call_hierarchy,
-            lsp::lsp_inlay_hints,
-            lsp::lsp_completion,
-            lsp::lsp_completion_resolve,
-            lsp::lsp_signature_help,
-            lsp::lsp_semantic_tokens,
-            lsp::lsp_did_save,
-            lsp::lsp_hover,
-            lsp::lsp_implementation,
-            lsp::lsp_document_symbol,
-            lsp::workspace_symbol::lsp_workspace_symbol,
-            lsp::lsp_capabilities,
-            lsp::lsp_shutdown_workspace,
-            lsp::open_lsp_install_guide,
+            commands::lsp_guide::open_lsp_install_guide,
             commands::remote::remote_get_status,
             commands::remote::remote_set_enabled,
             commands::remote::remote_refresh_pairing_code,
