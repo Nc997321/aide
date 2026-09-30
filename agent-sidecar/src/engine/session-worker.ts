@@ -67,12 +67,6 @@ import {
 import { ModelRoster } from "./modelRoster.js";
 import { emitContextUsage, RateLimitReporter } from "./queryTelemetry.js";
 import type { PermissionRuleDraft } from "./types.js";
-import {
-  parseSendExtensions,
-  preflightExtensions,
-  unavailableNotice,
-  type SendExtensions,
-} from "../extensions/remoteExtensions.js";
 
 // ---- 进程级常量已归位各自域模块（拆分迁出） ----
 // buildPluginsOption → extensions/dispatchPlugins.ts（插件域，批 1）
@@ -201,12 +195,6 @@ export class SessionWorker {
   // ---- Provider env 覆盖（per-session） ----
   private envOverrides: Record<string, string>;
 
-  /** 远程车道：桌面扩展在本机（目标机）上的投影，每条 send 刷新（缺席 = 本地车道）。 */
-  private extensions: SendExtensions | undefined;
-  /** 已经告诉过用户的「不可用扩展」清单（同一份不重复发）。 */
-  private reportedUnavailable = "";
-  private pendingExtensionNotice: string | null = null;
-
   // ---- 输出尾部轮询（per-session，替代模块级全局；池实现见 engine/tailPool.ts） ----
   private readonly outputTails = new TailPool<OutputTail>(
     (id, outputFile, emit) => new OutputTail(id, outputFile, emit),
@@ -323,7 +311,6 @@ export class SessionWorker {
     // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
     // 没带的调用方回落 provider env 默认。
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
-    this.extensions = parseSendExtensions(cmd.extensions);
     this.applyAttachedDirs(cmd.additional_dirs, cmd.attach_rejected);
   }
 
@@ -821,7 +808,6 @@ export class SessionWorker {
           //（装配细节与历史注释随迁 session-worker/queryContext.ts）。session 适配器
           // 闭包桥接 private 成员（直接传 this 会被名义类型规则挡掉）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
-          if (this.extensions) this.reportUnavailableExtensions(this.extensions);
           const queryCtx = await prepareQueryContext({
             cwd: effectiveCwd,
             trusted,
@@ -833,7 +819,6 @@ export class SessionWorker {
             processEnv: process.env,
             emit: (e) => this.emit(e),
             automationConfig: this.automationConfig,
-            extensions: this.extensions,
             session: {
               makePolicyHook: (hookCwd) => this.policy.makeHook(hookCwd),
               makeStopEffortHook: () => this.makeStopEffortHook(),
@@ -877,8 +862,7 @@ export class SessionWorker {
                 // 与上面 prepareQueryContext 收的是同一个值：LSP 总闸的两处消费者
                 // （aide-lsp 挂载 / 内置 LSP 插件退役）必须同源，见 lspGate.ts。
                 lspLanguages,
-                extensions: this.extensions,
-              },
+                  },
               branch: {
                 automationConfig: this.automationConfig,
               },
@@ -1018,17 +1002,6 @@ export class SessionWorker {
     };
   }
 
-  /** 远程车道：这台机器上用不了的扩展如实告诉用户（经事件通道，三端都看得到）；
-   *  同一份清单只说一次，清单变了（装了 python / 停了插件）再说。 */
-  private reportUnavailableExtensions(ext: SendExtensions): void {
-    const items = preflightExtensions(ext);
-    const key = items.join("\n");
-    if (key === this.reportedUnavailable) return;
-    this.reportedUnavailable = key;
-    // 在 session_init 时发（与供应商切换通知同一时机）：spawn 时发会排到用户气泡前面。
-    this.pendingExtensionNotice = items.length ? unavailableNotice(items) : null;
-  }
-
   /** system/init：供应商切换 fork 通知 + resumeSource 过户 + 模型名册采纳
    *  （原循环 system/init 分支，批 3 纯移动）。 */
   private handleSessionInit(newSid: string | undefined, q: Awaited<ReturnType<typeof query>>): void {
@@ -1039,14 +1012,6 @@ export class SessionWorker {
         notification_type: "provider_switch",
       });
       this.pendingFork = false;
-    }
-    if (this.pendingExtensionNotice) {
-      this.emit({
-        type: "notification",
-        message: this.pendingExtensionNotice,
-        notification_type: "extensions_unavailable",
-      });
-      this.pendingExtensionNotice = null;
     }
     this.resumeSource = newSid ?? this.resumeSource;
     void this.emitModelsAvailable(q);

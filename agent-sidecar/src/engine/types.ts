@@ -479,10 +479,6 @@ export type SidecarCommand =
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;
-      // 远程车道专用（Rust remote_workspace/mirror.rs 附上，客户端从不发）：桌面插件 /
-      // 用户扩展在目标机上的镜像路径 + settings 的 mcpServers/hooks 子集 + 已知不可用项。
-      // 形状宽容解析（extensions/remoteExtensions.ts）。省略 = 本地车道，读本机 claude home。
-      extensions?: unknown;
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;

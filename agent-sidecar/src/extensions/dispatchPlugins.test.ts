@@ -86,17 +86,6 @@ describe("buildDispatchPluginsOption", () => {
   }
 
   // 远程车道：用户级插件根 = 桌面用户扩展在目标机上的镜像，不是目标机自己的 claude home。
-  it("userRoot 给了就用镜像，不用本机 claude home", () => {
-    const mirror = mkdtempSync(join(tmpdir(), "aide-dispatch-mirror-"));
-    try {
-      withConfigDir(homeDir, () => {
-        const res = buildDispatchPluginsOption(cwdDir, false, mirror);
-        expect(res).toEqual([{ type: "local", path: mirror, skipMcpDiscovery: true }]);
-      });
-    } finally {
-      rmSync(mirror, { recursive: true, force: true });
-    }
-  });
 
   it("!trusted 仅用户级（项目级不注入）", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });

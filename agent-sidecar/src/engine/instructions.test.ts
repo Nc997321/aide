@@ -26,15 +26,6 @@ describe("loadAideInstructions", () => {
     return loadAideInstructions({ cwd, configDir: claudeDir, trusted: true, ...over });
   }
 
-  it("远程车道：全局 CLAUDE.md 读桌面镜像（userDir），不读目标机 configDir", async () => {
-    await writeFile(join(claudeDir, "CLAUDE.md"), "target-local rules");
-    const mirror = join(root, "mirror");
-    await mkdir(mirror, { recursive: true });
-    await writeFile(join(mirror, "CLAUDE.md"), "desktop rules");
-    const text = await load({ userDir: mirror });
-    expect(text).toContain("desktop rules");
-    expect(text).not.toContain("target-local rules");
-  });
 
   /** 造一个附加根 `<root>/<name>`；给了 memory 就顺带在 projects 下造出索引
    *  （目录名与 memoryDirs 的 key 规则一致）。 */

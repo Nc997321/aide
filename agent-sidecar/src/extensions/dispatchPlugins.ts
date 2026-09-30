@@ -71,12 +71,10 @@ export function ensureDispatchManifest(pluginRoot: string, name: string): boolea
 export function buildDispatchPluginsOption(
   cwd: string,
   trusted: boolean,
-  /** 远程车道：桌面用户扩展在目标机上的镜像（send.extensions.userDir）。缺省 = 本机 claude home。 */
-  userRoot?: string | null,
 ): SdkPluginConfig[] {
   const out: SdkPluginConfig[] = [];
 
-  const claudeHome = userRoot || process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".aide", "claude");
+  const claudeHome = process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".aide", "claude");
   if (existsSync(claudeHome) && ensureDispatchManifest(claudeHome, USER_PLUGIN_NAME)) {
     out.push({ type: "local", path: claudeHome, skipMcpDiscovery: true });
   }
@@ -94,13 +92,7 @@ export function buildDispatchPluginsOption(
 /** 读 Rust 维护的 enabled-plugins.json（AIDE_ENABLED_PLUGINS_FILE），构建 SDK
  *  options.plugins 的市场插件条目。损坏/缺席 → 空数组（降级不阻塞会话）。
  *  历史住 session-worker.ts 模块级，插件域归位迁来（纯移动）。 */
-export function buildPluginsOption(
-  /** 远程车道：桌面启用插件在目标机上的镜像（send.extensions.plugins），优先于清单文件。 */
-  mirrored?: { path: string }[],
-): { type: "local"; path: string }[] {
-  if (mirrored) {
-    return mirrored.filter((e) => e.path && existsSync(e.path)).map((e) => ({ type: "local" as const, path: e.path }));
-  }
+export function buildPluginsOption(): { type: "local"; path: string }[] {
   const file = process.env.AIDE_ENABLED_PLUGINS_FILE;
   if (!file) return [];
   try {

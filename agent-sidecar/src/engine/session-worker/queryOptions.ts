@@ -10,7 +10,6 @@ import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption, type SdkPluginConfig } from "../../extensions/dispatchPlugins.js";
 import { retireBuiltinLspPlugins } from "../../extensions/lspRetire.js";
-import type { SendExtensions } from "../../extensions/remoteExtensions.js";
 import { forkResumeOptions } from "./forkResume.js";
 import { automationQueryOverrides, type AutomationConfig } from "../../desktop/automation.js";
 import { resolveClaudeExe } from "../claudeExe.js";
@@ -40,8 +39,6 @@ export interface QuerySpawnParts {
     /** 该工作区配得上 LSP 的语言（主进程算好下发）。与 trust 同为 LSP 总闸的输入，
      *  C3 用它决定要不要退役内置 LSP 插件——见 pluginDirs。 */
     lspLanguages: string[];
-    /** 远程车道：桌面扩展在目标机上的投影（send.extensions）。本地车道缺省。 */
-    extensions?: SendExtensions;
   };
   branch: {
     automationConfig: AutomationConfig | undefined;
@@ -71,8 +68,8 @@ export interface QuerySpawnParts {
  *  **不是** cliEnv（两者白名单不同，AIDE_LSP_TOOLS 只在进程环境里稳定可见）。 */
 function pluginDirs(p: QuerySpawnParts): SdkPluginConfig[] {
   const all = [
-    ...buildPluginsOption(p.workspace.extensions?.plugins),
-    ...buildDispatchPluginsOption(p.workspace.cwd, p.workspace.trusted, p.workspace.extensions?.userDir),
+    ...buildPluginsOption(),
+    ...buildDispatchPluginsOption(p.workspace.cwd, p.workspace.trusted),
   ];
   return retireBuiltinLspPlugins(all, {
     trusted: p.workspace.trusted,
