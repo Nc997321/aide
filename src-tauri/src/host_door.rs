@@ -23,6 +23,61 @@ impl EventSink for TauriSink {
     }
 }
 
+/// Core 的资源端口 → 本机：release 读 Tauri 打包资源目录，dev 读源码树 / cargo target。
+pub struct DesktopResources(pub AppHandle);
+
+fn exe(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+impl aide_core::resources::HostResources for DesktopResources {
+    /// dev = cargo target/debug（需先 `pnpm build:codegraph`），release = 打包资源目录
+    /// `codegraph/` 子目录（与 agent-runtime 同模式）。
+    fn codegraph_runner(&self) -> Result<std::path::PathBuf, String> {
+        #[cfg(debug_assertions)]
+        {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("target")
+                .join("debug")
+                .join(exe("aide-codegraph"));
+            if path.exists() {
+                return Ok(dunce::simplified(&path).to_path_buf());
+            }
+            Err(format!(
+                "codegraph runner 未构建（{:?}）——先运行 pnpm build:codegraph",
+                path
+            ))
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let resource_dir = self.0.path().resource_dir().map_err(|e| e.to_string())?;
+            let path = resource_dir.join("codegraph").join(exe("aide-codegraph"));
+            if path.exists() {
+                return Ok(dunce::simplified(&path).to_path_buf());
+            }
+            Err(format!("codegraph runner exe missing: {path:?}"))
+        }
+    }
+
+    /// release：打包资源目录（runner 内本地 ONNX 模型解析）；dev 不设——runner 走
+    /// CARGO_MANIFEST_DIR 源码树回退。
+    fn codegraph_model_dir(&self) -> Option<std::path::PathBuf> {
+        #[cfg(debug_assertions)]
+        {
+            None
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let res_dir = self.0.path().resource_dir().ok()?;
+            Some(dunce::simplified(&res_dir).to_path_buf())
+        }
+    }
+}
+
 /// 返回 `Some(invoke)` = 不是 core 命令，交给 Tauri 命令表；`None` = 已接管并应答。
 pub fn dispatch(invoke: Invoke<Wry>) -> Option<Invoke<Wry>> {
     let Some(run) = aide_core::lookup(invoke.message.command()) else {

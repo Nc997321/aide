@@ -55,6 +55,8 @@ pub async fn run() -> i32 {
         Arc::new(WorkspaceState::new()),
         Arc::new(host_settings()),
         Arc::new(NotifySink(tx.clone())),
+        // 远程套件还不带 codegraph runner 等随包组件：如实报错（见 NoResources）。
+        Arc::new(aide_core::resources::NoResources),
     );
     let mut lines = BufReader::new(tokio::io::stdin()).lines();
     while let Ok(Some(line)) = lines.next_line().await {

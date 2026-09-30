@@ -10,6 +10,7 @@
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
 pub mod app_settings;
+pub mod codegraph;
 pub mod commands;
 pub mod paths;
 pub mod policy;
@@ -17,6 +18,7 @@ pub mod provider;
 pub mod proxy;
 pub mod pty;
 pub mod registry;
+pub mod resources;
 pub mod session_store;
 pub mod settings;
 pub mod skills;
@@ -27,6 +29,7 @@ use std::sync::Arc;
 use aide_workspace::watch::FileWatchService;
 use serde_json::Value;
 
+use resources::HostResources;
 use settings::SettingsService;
 
 pub use registry::{lookup, Reply};
@@ -54,6 +57,10 @@ pub struct Core {
     pub(crate) watch: FileWatchService,
     /// 终端 / 运行配置的 PTY 会话。
     pub pty: pty::ShellManager,
+    /// 代码索引（runner 进程的代理：惰性拉起 / 空闲回收）。
+    pub codegraph: Arc<codegraph::CodeGraphService>,
+    /// 随包资源在哪（前门回答）。
+    pub resources: Arc<dyn HostResources>,
     events: Arc<dyn EventSink>,
 }
 
@@ -62,8 +69,14 @@ impl Core {
         workspace: Arc<WorkspaceState>,
         settings: Arc<SettingsService>,
         events: Arc<dyn EventSink>,
+        resources: Arc<dyn HostResources>,
     ) -> Arc<Self> {
         Arc::new(Self {
+            codegraph: Arc::new(codegraph::CodeGraphService::new(
+                resources.clone(),
+                settings.clone(),
+            )),
+            resources,
             workspace,
             settings,
             watch: FileWatchService::default(),
@@ -83,7 +96,12 @@ impl Core {
             Arc::new(settings::MemorySecretStore::default()),
         );
         let _ = settings.initialize_blocking();
-        Self::new(Arc::new(WorkspaceState::new()), Arc::new(settings), events)
+        Self::new(
+            Arc::new(WorkspaceState::new()),
+            Arc::new(settings),
+            events,
+            Arc::new(resources::NoResources),
+        )
     }
 
     /// 事件出口本身（给长寿的后台线程持有——持 `Arc<Core>` 会让 Core 与它的线程互相引用）。

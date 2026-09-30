@@ -6,32 +6,6 @@ use serde::Serialize;
 use tauri::State;
 
 pub use aide_core::app_settings::*;
-use crate::settings::SettingsService;
-
-// 代码索引开关已是工作区级（`commands::workspace::codegraph_workspaces`，
-// 每工作区默认关），全局 settings 字段已删除——本文件只剩 embedder 配置职责。
-pub(crate) fn resolve_codegraph_embedder(
-    service: &SettingsService,
-) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
-    let settings = public_settings(service)?;
-    Ok(RuntimeCodeGraphEmbedderConfig {
-        backend: settings.codegraph_embedder.backend,
-        base_url: settings.codegraph_embedder.base_url,
-        api_key: service
-            .secrets()
-            .get("codegraph/default/apiKey")
-            .map_err(|error| error.to_string())?
-            .unwrap_or_default(),
-        model: settings.codegraph_embedder.model,
-        format: settings.codegraph_embedder.format,
-        dim: settings.codegraph_embedder.dim,
-        score_threshold: settings.codegraph_embedder.score_threshold,
-    })
-}
-
-/// 运行时 embedder 配置 DTO。**数据唯一主人在 codegraph-core**（主进程与
-/// codegraph-runner 进程共用同一份定义——它跨进程边界序列化传输）。
-pub(crate) use codegraph_core::RuntimeCodeGraphEmbedderConfig;
 
 /// Send a desktop notification with the correct AppUserModelID,
 /// bypassing the notification plugin's dev-mode skip.

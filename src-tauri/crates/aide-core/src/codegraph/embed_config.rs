@@ -6,14 +6,39 @@
 
 use codegraph_core::RuntimeCodeGraphEmbedderConfig;
 
+use crate::app_settings::public_settings;
+use crate::settings::SettingsService;
+
+/// 设置里的 embedder 块 + 密钥端口里的 API key → 随 RPC 下传给 runner 的运行时配置。
+/// 代码索引开关是工作区级（`commands::workspace::codegraph_workspaces`，每工作区默认关），
+/// 不在这里。
+fn resolve_codegraph_embedder(
+    service: &SettingsService,
+) -> Result<RuntimeCodeGraphEmbedderConfig, String> {
+    let settings = public_settings(service)?;
+    Ok(RuntimeCodeGraphEmbedderConfig {
+        backend: settings.codegraph_embedder.backend,
+        base_url: settings.codegraph_embedder.base_url,
+        api_key: service
+            .secrets()
+            .get("codegraph/default/apiKey")
+            .map_err(|error| error.to_string())?
+            .unwrap_or_default(),
+        model: settings.codegraph_embedder.model,
+        format: settings.codegraph_embedder.format,
+        dim: settings.codegraph_embedder.dim,
+        score_threshold: settings.codegraph_embedder.score_threshold,
+    })
+}
+
 /// Read the codegraph embedder config from the app config file. The block lives
 /// at `config["settings"]["codegraphEmbedder"]` (a field of `AppSettings`).
 /// Returns the default (fastembed) if the file or block is missing — zero-config
 /// out of the box. Best-effort: malformed JSON → default, logged, never panics.
-pub(crate) fn load_embedder_config(
-    service: &crate::settings::SettingsService,
+pub fn load_embedder_config(
+    service: &SettingsService,
 ) -> RuntimeCodeGraphEmbedderConfig {
-    crate::commands::settings::resolve_codegraph_embedder(service).unwrap_or_else(|error| {
+    resolve_codegraph_embedder(service).unwrap_or_else(|error| {
         tracing::warn!("codegraph: invalid embedder config, using default: {error}");
         RuntimeCodeGraphEmbedderConfig {
             backend: "fastembed".to_string(),
@@ -33,6 +58,6 @@ pub(crate) fn load_embedder_config(
 /// changing it takes effect immediately without a rebuild. Reuses
 /// `load_embedder_config`'s invalid-config fallback. 阈值计算在 codegraph-core
 /// （与 runner 共用同一实现，两侧永不漂移）。
-pub(crate) fn query_score_threshold(service: &crate::settings::SettingsService) -> f32 {
+pub fn query_score_threshold(service: &SettingsService) -> f32 {
     codegraph_core::effective_score_threshold(&load_embedder_config(service))
 }

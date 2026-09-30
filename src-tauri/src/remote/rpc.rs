@@ -107,6 +107,12 @@ static CORE_EXPOSED: &[&str] = &[
     "set_session_workspace",
     "session_identity_drift",
     "set_session_meta",
+    // ── CodeGraph（闭包内 useCodeGraphProgress 被动调用链）──
+    "codegraph_build_index",
+    "codegraph_build_progress",
+    "codegraph_close",
+    "codegraph_reindex_file",
+    "codegraph_rescan",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -133,15 +139,6 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("get_active_workspace", handlers::get_active_workspace),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
-    // ── CodeGraph（闭包内 useCodeGraphProgress 被动调用链）──
-    ("codegraph_build_index", handlers::codegraph_build_index),
-    (
-        "codegraph_build_progress",
-        handlers::codegraph_build_progress,
-    ),
-    ("codegraph_close", handlers::codegraph_close),
-    ("codegraph_reindex_file", handlers::codegraph_reindex_file),
-    ("codegraph_rescan", handlers::codegraph_rescan),
     // ── 模型/权限模式默认值 ──
     ("get_default_models", handlers::get_default_models),
     (

@@ -278,7 +278,7 @@ mod tests {
 
     #[tokio::test]
     async fn unknown_command_is_rejected_not_ignored() {
-        let r = invoke(core(), call("pty_spawn_shell", json!({}), None)).await;
+        let r = invoke(core(), call("no_such_command", json!({}), None)).await;
         assert!(r.unwrap_err().contains("unsupported"));
     }
 

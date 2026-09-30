@@ -2,7 +2,6 @@ mod automation;
 // 内嵌浏览器子系统（骨架阶段：纯核心+领域类型+端口签名已落地并单测；adapter/命令待
 // 可视原型定 A/B 后填充）。私有模块，对外经 commands 暴露命令。
 mod browser;
-mod codegraph;
 // commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
@@ -11,7 +10,7 @@ mod diagnostics;
 mod host_door;
 mod lsp;
 /// 权限策略住在 aide-core（Host 自持）；保留 `crate::policy` 路径。
-use aide_core::policy;
+use aide_core::{codegraph, policy};
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
 pub(crate) mod remote_workspace;
@@ -173,9 +172,6 @@ pub fn run() {
                 }
             }
         })
-        // CodeGraph 已进程隔离：主进程只持有 RPC 代理（runner 二进制由它
-        // 惰性拉起，ONNX/向量库/tree-sitter 都不在 aide.exe 里）。
-        .manage(std::sync::Arc::new(codegraph::CodeGraphService::new()))
         .manage(std::sync::Arc::new(lsp::LspState::new()))
         .manage(std::sync::Arc::new(automation::AutomationService::new()))
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
@@ -187,6 +183,7 @@ pub fn run() {
                 std::sync::Arc::clone(&workspace_state),
                 std::sync::Arc::clone(&settings_service),
                 std::sync::Arc::new(host_door::TauriSink(app.handle().clone())),
+                std::sync::Arc::new(host_door::DesktopResources(app.handle().clone())),
             ));
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
@@ -242,13 +239,6 @@ pub fn run() {
             // ——注入真冻结后审报告，退出码即 verdict。见 selfcheck.rs 注释。
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::selfcheck::selfcheck_on_startup(app.handle());
-
-            // CodeGraph RPC 代理挂上 AppHandle（runner 路径/资源目录/settings
-            // 访问都要它；manage 先于 setup，只能此处补挂）。
-            {
-                let svc = app.state::<std::sync::Arc<codegraph::CodeGraphService>>();
-                svc.attach(app.handle().clone());
-            }
 
             // 迁移老 provider schema（idempotent）——必须在 spawn_runtime 取 env 之前
             if let Err(e) = crate::runtime::provider::ensure_migrated() {
@@ -416,12 +406,6 @@ pub fn run() {
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
             // Plugin skills scanning
             // Code graph
-            codegraph::commands::codegraph_build_index,
-            codegraph::commands::codegraph_goto_definition,
-            codegraph::commands::codegraph_close,
-            codegraph::commands::codegraph_reindex_file,
-            codegraph::commands::codegraph_rescan,
-            codegraph::commands::codegraph_build_progress,
             // 卡死诊断黑匣子
             diagnostics::log_frontend_error,
             diagnostics::diag_heartbeat,

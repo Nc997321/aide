@@ -19,17 +19,15 @@
 //! 看门狗：不需要心跳——主进程死亡 ⇒ runner stdin EOF ⇒ runner 自行退出。
 
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 // 锁中毒策略（全局统一）：本文件的 std Mutex 保护的都是简单簿记字段
 // （Option<Runner>/HashMap/String/Instant），持锁方 panic 不会破坏不变量；
 // 而中毒即 panic 会击穿主进程——与进程隔离的目标背道而驰。故一律
 // `unwrap_or_else(PoisonError::into_inner)` 恢复 guard 而非 panic。
-use std::sync::{Arc, Mutex, OnceLock, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
-use tauri::AppHandle;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{ChildStdin, Command};
 use tokio::sync::{oneshot, Mutex as TokioMutex};
@@ -41,6 +39,8 @@ use codegraph_core::types::QueryResult;
 use codegraph_core::RuntimeCodeGraphEmbedderConfig;
 
 use super::embed_config::load_embedder_config;
+use crate::resources::HostResources;
+use crate::settings::SettingsService;
 
 /// 空闲多久后回收 runner（无在途请求且无构建活动）。
 const IDLE_REAP_AFTER: Duration = Duration::from_secs(15 * 60);
@@ -48,8 +48,10 @@ const IDLE_REAP_AFTER: Duration = Duration::from_secs(15 * 60);
 const IDLE_CHECK_TICK: Duration = Duration::from_secs(60);
 
 pub struct CodeGraphService {
-    /// setup 阶段注入（manage 先于 setup，AppHandle 只能后挂）。
-    app: OnceLock<AppHandle>,
+    /// runner 二进制 / 模型目录在哪（前门回答）。
+    resources: Arc<dyn HostResources>,
+    /// embedder 配置（warm reload 重放构建时读）。
+    settings: Arc<SettingsService>,
     inner: Arc<Inner>,
 }
 
@@ -85,9 +87,10 @@ struct Runner {
 }
 
 impl CodeGraphService {
-    pub fn new() -> Self {
+    pub fn new(resources: Arc<dyn HostResources>, settings: Arc<SettingsService>) -> Self {
         Self {
-            app: OnceLock::new(),
+            resources,
+            settings,
             inner: Arc::new(Inner {
                 proc: Mutex::new(None),
                 spawn_lock: TokioMutex::new(()),
@@ -104,18 +107,6 @@ impl CodeGraphService {
                 restarts: AtomicUsize::new(0),
             }),
         }
-    }
-
-    /// setup 阶段注入 AppHandle（资源目录解析 / settings 访问）。幂等。
-    pub fn attach(&self, app: AppHandle) {
-        let _ = self.app.set(app);
-    }
-
-    fn app_handle(&self) -> Result<AppHandle, String> {
-        self.app
-            .get()
-            .cloned()
-            .ok_or_else(|| "codegraph service not attached".to_string())
     }
 
     fn runner_alive(inner: &Inner) -> bool {
@@ -292,16 +283,13 @@ impl CodeGraphService {
         if Self::runner_alive(&self.inner) {
             return Ok(());
         }
-        let app = self.app_handle()?;
-        self.spawn_runner(&app)
+        self.spawn_runner()
     }
 
     // 注意：本函数体内没有任何 await（长任务全部 tokio::spawn 出去），故意
     // 用同步签名——避免 async fn 包装引入的 Send 推断噪音。
-    fn spawn_runner(&self, app: &AppHandle) -> Result<(), String> {
-        use tauri::Manager;
-
-        let bin = resolve_runner_path(app)?;
+    fn spawn_runner(&self) -> Result<(), String> {
+        let bin = self.resources.codegraph_runner()?;
         let mut cmd = Command::new(&bin);
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
@@ -312,13 +300,9 @@ impl CodeGraphService {
             const CREATE_NO_WINDOW: u32 = 0x0800_0000;
             cmd.creation_flags(CREATE_NO_WINDOW);
         }
-        // release：把打包资源目录注入（runner 内本地 ONNX 模型解析）。
-        // dev 不设——runner 走 CARGO_MANIFEST_DIR 源码树回退。
-        #[cfg(not(debug_assertions))]
-        {
-            if let Ok(res_dir) = app.path().resource_dir() {
-                cmd.env("AIDE_CODEGRAPH_MODEL_DIR", dunce::simplified(&res_dir));
-            }
+        // 随包模型目录（runner 内本地 ONNX 模型解析）；前门不给 = runner 走源码树回退（dev）。
+        if let Some(model_dir) = self.resources.codegraph_model_dir() {
+            cmd.env("AIDE_CODEGRAPH_MODEL_DIR", model_dir);
         }
 
         let mut child = cmd
@@ -381,17 +365,15 @@ impl CodeGraphService {
         if self.inner.index_ready.load(Ordering::Relaxed) {
             if let Some(root) = warm_root {
                 let svc = CodeGraphService {
-                    app: OnceLock::new(),
+                    resources: self.resources.clone(),
+                    settings: self.settings.clone(),
                     inner: self.inner.clone(),
                 };
-                let _ = svc.app.set(app.clone());
-                let app2 = app.clone();
                 tokio::spawn(async move {
+                    let settings = svc.settings.clone();
                     let prep = tokio::task::spawn_blocking(move || {
-                        let cfg = app2
-                            .try_state::<Arc<crate::settings::SettingsService>>()
-                            .map(|s| load_embedder_config(s.inner()))?;
-                        let proxy = crate::commands::proxy::detect_proxy();
+                        let cfg = load_embedder_config(&settings);
+                        let proxy = crate::proxy::detect_proxy();
                         Some((cfg, proxy))
                     })
                     .await;
@@ -473,45 +455,6 @@ impl CodeGraphService {
             Ok(res) => res,
             Err(_) => Err("codegraph runner exited before responding".into()),
         }
-    }
-}
-
-/// 解析 runner 二进制路径：dev = cargo target/debug（需先 `pnpm
-/// build:codegraph`），release = 打包资源目录 `codegraph/` 子目录（与
-/// agent-runtime 同模式）。
-fn resolve_runner_path(app: &AppHandle) -> Result<PathBuf, String> {
-    #[cfg(debug_assertions)]
-    {
-        let _ = app;
-        let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let name = if cfg!(windows) {
-            "aide-codegraph.exe"
-        } else {
-            "aide-codegraph"
-        };
-        let path = manifest.join("target").join("debug").join(name);
-        if path.exists() {
-            return Ok(dunce::simplified(&path).to_path_buf());
-        }
-        Err(format!(
-            "codegraph runner 未构建（{:?}）——先运行 pnpm build:codegraph",
-            path
-        ))
-    }
-    #[cfg(not(debug_assertions))]
-    {
-        use tauri::Manager;
-        let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-        let name = if cfg!(windows) {
-            "aide-codegraph.exe"
-        } else {
-            "aide-codegraph"
-        };
-        let path = resource_dir.join("codegraph").join(name);
-        if path.exists() {
-            return Ok(dunce::simplified(&path).to_path_buf());
-        }
-        Err(format!("codegraph runner exe missing: {path:?}"))
     }
 }
 

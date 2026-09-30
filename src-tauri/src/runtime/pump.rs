@@ -90,61 +90,10 @@ pub(super) fn start(p: Pump) {
                     if let Some(req) =
                         crate::codegraph::agent_bridge::parse_codegraph_query(&event)
                     {
-                        use tauri::Manager;
-                        let app2 = app.clone();
+                        let core = app.state::<Arc<aide_core::Core>>().inner().clone();
                         let stdin2 = stdin_for_agent.clone();
                         tokio::spawn(async move {
-                            // 政策层输入：阈值按当前 settings 现解析（query-time，
-                            // 不缓存、不重建）；trusted 同理由主进程计算——
-                            // 信任是政策，runner 是机制。两者都是阻塞读，收进
-                            // spawn_blocking。
-                            let trust_root = req.project_root.clone();
-                            let app_for_policy = app2.clone();
-                            let (score_threshold, trusted) =
-                                tokio::task::spawn_blocking(move || {
-                                    let score_threshold = app_for_policy
-                                        .try_state::<Arc<crate::settings::SettingsService>>()
-                                        .map(|s| {
-                                            crate::codegraph::query_score_threshold(s.inner())
-                                        })
-                                        .unwrap_or(0.35);
-                                    let trusted = crate::commands::workspace::is_path_trusted(
-                                        &trust_root,
-                                    );
-                                    (score_threshold, trusted)
-                                })
-                                .await
-                                .unwrap_or((0.35, false));
-                            let body = match app2
-                                .try_state::<Arc<crate::codegraph::CodeGraphService>>()
-                            {
-                                Some(svc) => {
-                                    match svc
-                                        .agent_query(
-                                            &req.tool,
-                                            &req.args,
-                                            &req.project_root,
-                                            trusted,
-                                            score_threshold,
-                                        )
-                                        .await
-                                    {
-                                        Ok(v) => v,
-                                        Err(e) => serde_json::json!({
-                                            "ok": false, "status": "error",
-                                            "error": e,
-                                        }),
-                                    }
-                                }
-                                None => serde_json::json!({
-                                    "ok": false, "status": "error",
-                                    "error": "codegraph service unavailable",
-                                }),
-                            };
-                            let payload = crate::codegraph::agent_bridge::build_result_command(
-                                &req.request_id,
-                                body,
-                            );
+                            let payload = crate::codegraph::agent_bridge::answer(&core, &req).await;
                             if let Ok(mut line) = serde_json::to_string(&payload) {
                                 line.push('\n');
                                 let mut g = stdin2.lock().await;
