@@ -10,9 +10,10 @@ use std::sync::Arc;
 use aide_core::{Core, EventSink, Reply};
 use serde_json::Value;
 use tauri::ipc::{Invoke, InvokeBody, InvokeError, InvokeResponseBody};
-use tauri::{AppHandle, Emitter, Manager, Wry};
+use tauri::{AppHandle, Manager, Wry};
 
-/// Core 的事件出口 → Tauri 全窗口广播（与既有 `app.emit` 同一语义）。
+/// 本机 Host（进程内 Core）的事件出口 → 只投给连着本机 Host 的窗口（Host 窗口连的是别的
+/// Host，本机的 chat-event / 文件树事件不许漏进去，见 `host_window`）。
 ///
 /// 例外：`system-notification`（`Core::notify`）不进 WebView，由本前门就地弹系统通知——
 /// Host 不弹窗，弹窗是 GUI 的事。
@@ -24,9 +25,7 @@ impl EventSink for TauriSink {
             show_system_notification(&payload);
             return;
         }
-        if let Err(e) = self.0.emit(event, payload) {
-            tracing::warn!(event, "core event emit failed: {e}");
-        }
+        crate::host_window::emit_local(&self.0, event, &payload);
     }
 }
 
@@ -165,6 +164,58 @@ impl aide_core::resources::HostResources for DesktopResources {
         let res_dir = self.0.path().resource_dir().ok()?;
         Some(res_dir.join("lsp"))
     }
+}
+
+/// Host 窗口的前门：它发来的 core 命令原样转发给它那台 Host 的 `aide-host serve`（参数是
+/// Host 原生路径，不翻译）；二进制结果（`$bytes`）还原成原始字节。GUI 命令（剪贴板、内嵌
+/// 浏览器、窗口…）不在 core 表里，照常交给本机 Tauri 命令表。
+///
+/// 返回 `Some(invoke)` = 不归这里管（本机窗口 / GUI 命令）。
+pub fn forward(invoke: Invoke<Wry>) -> Option<Invoke<Wry>> {
+    let app = invoke.message.webview().app_handle().clone();
+    let label = invoke.message.webview().label().to_string();
+    let Some(host) = app.state::<crate::host_window::HostWindows>().host_of(&label) else {
+        return Some(invoke);
+    };
+    let cmd = invoke.message.command().to_string();
+    if aide_core::lookup(&cmd).is_none() {
+        return Some(invoke);
+    }
+    let args = match invoke.message.payload() {
+        InvokeBody::Json(v) => v.clone(),
+        InvokeBody::Raw(_) => {
+            invoke.resolver.reject(format!("{cmd}：不接受原始字节参数"));
+            return None;
+        }
+    };
+    let svc = app
+        .state::<Arc<crate::remote_workspace::RemoteWorkspaces>>()
+        .inner()
+        .clone();
+    invoke.resolver.respond_async_serialized(async move {
+        let reply = async {
+            let conn = svc.connection(&host).await?;
+            conn.invoke(&cmd, args, None).await
+        }
+        .await
+        .map_err(|e| InvokeError::from(Value::String(e)))?;
+        match reply
+            .get(aide_host::protocol::BYTES_KEY)
+            .and_then(Value::as_str)
+        {
+            Some(b64) => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map(InvokeResponseBody::Raw)
+                    .map_err(|e| InvokeError::from(Value::String(e.to_string())))
+            }
+            None => serde_json::to_string(&reply)
+                .map(InvokeResponseBody::Json)
+                .map_err(|e| InvokeError::from(Value::String(e.to_string()))),
+        }
+    });
+    None
 }
 
 /// 返回 `Some(invoke)` = 不是 core 命令，交给 Tauri 命令表；`None` = 已接管并应答。

@@ -251,8 +251,13 @@ impl RemoteWorkspaces {
     }
 }
 
-/// host 通知 → 桌面事件（路径译回桌面形态后照原事件名 emit，前端无感）。
+/// host 通知 → 桌面事件。有 Host 窗口连着这台 Host：事件原样只投给它的窗口（Host 模型）；
+/// 否则按旧模型把路径译回桌面形态后广播（P1d 删除这一支）。
 fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
+    if crate::host_window::has_windows(app, host) {
+        crate::host_window::emit_to_host(app, host, &n.event, &n.payload);
+        return;
+    }
     match n.event.as_str() {
         FILE_TREE_CHANGED => {
             let dirs: Vec<String> = serde_json::from_value::<Vec<String>>(n.payload)

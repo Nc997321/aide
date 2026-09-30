@@ -9,6 +9,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen as tauriListen } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { open as shellOpen } from "@tauri-apps/plugin-shell";
 
 export interface AideTransport {
@@ -27,10 +28,22 @@ class TauriTransport implements AideTransport {
   }
   listen<T>(event: string, cb: (e: { payload: T }) => void): Promise<() => void> {
     // Tauri Event<T> 含 { event, id, payload }，结构上满足 { payload: T }，直传。
-    return tauriListen<T>(event, cb);
+    // **窗口作用域**：一个窗口 = 一个 Host，后端对 Host 事件一律 emit_to(窗口)。Tauri 的默认
+    // （Any）监听会收到发给**任何**窗口的事件——WSL 窗口会看到本机会话的 chat-event。
+    // 全局广播（app.emit）照样收得到。拿不到当前窗口（测试 / 非 Tauri 环境）退回原调用形状。
+    const target = currentWindowTarget();
+    return target ? tauriListen<T>(event, cb, { target }) : tauriListen<T>(event, cb);
   }
   openExternal(url: string): Promise<void> {
     return shellOpen(url);
+  }
+}
+
+function currentWindowTarget(): { kind: "WebviewWindow"; label: string } | undefined {
+  try {
+    return { kind: "WebviewWindow", label: getCurrentWebviewWindow().label };
+  } catch {
+    return undefined;
   }
 }
 

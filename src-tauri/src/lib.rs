@@ -7,6 +7,7 @@ pub mod commands;
 mod conversation;
 mod diagnostics;
 mod host_door;
+mod host_window;
 /// Host 自持的能力住在 aide-core；保留 `crate::codegraph` / `crate::lsp` 路径。
 use aide_core::{codegraph, lsp};
 pub mod remote;
@@ -147,6 +148,7 @@ pub fn run() {
         .manage(diagnostics::DiagnosticsState::new())
         .manage(std::sync::Arc::clone(&settings_service))
         .manage(std::sync::Arc::clone(&workspace_state))
+        .manage(host_window::HostWindows::default())
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
         // （node 常驻）、remote 网关都需要 aide.exe 活着。真正退出的唯一出口是
@@ -163,6 +165,10 @@ pub fn run() {
                     let _ = window.hide();
                     api.prevent_close();
                 }
+            }
+            // Host 窗口关掉 = 真关（不进托盘）：解绑，必要时断开那台 Host
+            if let tauri::WindowEvent::Destroyed = event {
+                host_window::on_window_destroyed(window.app_handle(), window.label());
             }
         })
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
@@ -220,8 +226,9 @@ pub fn run() {
             .disable_drag_drop_handler()
             .build()?;
 
-            #[cfg(target_os = "windows")]
-            apply_window_theme(app);
+            if let Some(main) = app.get_webview_window("main") {
+                style_window(&main);
+            }
 
             // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
             diagnostics::start(app.handle());
@@ -364,10 +371,16 @@ pub fn run() {
             remote_workspace::remote_ws_disconnect,
             remote_workspace::remote_ws_statuses,
             remote_workspace::remote_ws_host_of,
+            host_window::open_host_window,
+            host_window::current_host,
             ]);
-            // 远程工作区拦截 → 本机 Host 命令表（aide-core）→ 其余 Tauri 命令。
+            // Host 窗口转发 → 远程工作区拦截（旧模型，P1d 删）→ 本机 Host 命令表（aide-core）
+            // → 其余 Tauri 命令。
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
-                match remote_workspace::routes::intercept(invoke).and_then(host_door::dispatch) {
+                match host_door::forward(invoke)
+                    .and_then(remote_workspace::routes::intercept)
+                    .and_then(host_door::dispatch)
+                {
                     Some(invoke) => commands(invoke),
                     None => true,
                 }
@@ -457,15 +470,17 @@ fn toggle_main_window(app: &tauri::AppHandle) {
 /// 1. Sets the window theme to Dark (→ `DWMWA_USE_IMMERSIVE_DARK_MODE` on Windows).
 /// 2. Sets `DWMWA_CAPTION_COLOR` (Win 11) so the title bar matches the app's
 ///    background (#1e1e2e) instead of generic dark gray.
+///
+/// 主窗口与 Host 窗口共用（无边框窗口的同一套外观）；非 Windows 为空操作。
+pub(crate) fn style_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    apply_window_theme(window);
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
+}
+
 #[cfg(target_os = "windows")]
-fn apply_window_theme(app: &mut tauri::App) {
-    use tauri::Manager;
-
-    let window = match app.get_webview_window("main") {
-        Some(w) => w,
-        None => return,
-    };
-
+fn apply_window_theme(window: &tauri::WebviewWindow) {
     // Ensure decorations are off (tauri.conf.json sets this, but
     // window-state plugin may have restored stale state — belt-and-suspenders)
     let _ = window.set_decorations(false);
