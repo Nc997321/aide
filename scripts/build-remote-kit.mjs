@@ -56,14 +56,19 @@ function buildViaWsl(triple) {
   const wslPath = execFileSync("wsl.exe", ["wslpath", "-a", tauriDir.replace(/\\/g, "/")])
     .toString()
     .trim();
+  // 脚本走 **stdin**（`bash -ls`），不上命令行：`run()` 在 Windows 上开 shell，cmd.exe 会把
+  // 拼起来的命令行按 `&&` 拆开——bash 只收到 `set`（打出一屏变量），cmd 自己去跑 `[`。
+  // 走 stdin 就没有任何一层引号/转义要对付。
   const script = [
     "set -e",
-    '[ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"',
+    'if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi',
     `rustup target add ${triple} >/dev/null 2>&1 || true`,
     `cd '${wslPath}'`,
     `cargo build ${profileArgs.join(" ")} -p aide-host --target ${triple}`,
-  ].join(" && ");
-  run("wsl.exe", ["-e", "bash", "-lc", script]);
+    "",
+  ].join("\n");
+  console.log(`$ wsl.exe -e bash -ls  <<< cargo build -p aide-host --target ${triple}`);
+  execFileSync("wsl.exe", ["-e", "bash", "-ls"], { input: script, stdio: ["pipe", "inherit", "inherit"] });
   return true;
 }
 
