@@ -148,19 +148,29 @@ pub fn write_enabled_plugins_manifest(service: &SettingsService) -> Result<(), S
                     if !plugin_enabled(&enabled, &key) {
                         continue;
                     }
-                    if let Some(latest) = install::latest_version_dir(&p.path()) {
-                        entries.push(EnabledPluginEntry {
-                            name: plugin.clone(),
-                            marketplace: market.clone(),
-                            path: latest.to_string_lossy().to_string(),
-                        });
+                    let Some(latest) = install::latest_version_dir(&p.path()) else { continue };
+                    // 只列真插件：每条安装路径都会写 `.claude-plugin/plugin.json`（含 inline 物化）。
+                    // 真机清单里出现过 `".git" → temp_git_…\.git\objects`（克隆残留目录被当成插件）
+                    // ——本机只是加载一个空插件，同步到远程工作区就是把 git 对象库发给每台服务器。
+                    if !is_plugin_dir(&latest) {
+                        continue;
                     }
+                    entries.push(EnabledPluginEntry {
+                        name: plugin.clone(),
+                        marketplace: market.clone(),
+                        path: latest.to_string_lossy().to_string(),
+                    });
                 }
             }
         }
     }
     let json = serde_json::to_string_pretty(&entries).map_err(|e| e.to_string())?;
     atomic_write(&enabled_plugins_manifest_path(), &json)
+}
+
+/// 目录是不是一个已安装的插件（有 `.claude-plugin/plugin.json`）。
+pub(crate) fn is_plugin_dir(dir: &std::path::Path) -> bool {
+    dir.join(".claude-plugin").join("plugin.json").is_file()
 }
 
 fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
@@ -332,6 +342,21 @@ pub async fn set_marketplace_enabled(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 克隆残留（`.git/objects` 这类没有插件清单的目录）不算插件，不进启用清单。
+    #[test]
+    fn only_dirs_with_a_plugin_manifest_are_plugins() {
+        let root = std::env::temp_dir().join(format!("aide-is-plugin-{}", std::process::id()));
+        let real = root.join("real");
+        std::fs::create_dir_all(real.join(".claude-plugin")).unwrap();
+        std::fs::write(real.join(".claude-plugin").join("plugin.json"), "{}").unwrap();
+        let junk = root.join(".git").join("objects");
+        std::fs::create_dir_all(&junk).unwrap();
+        assert!(is_plugin_dir(&real));
+        assert!(!is_plugin_dir(&junk));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn manifest_path_under_config_dir() {
         let p = enabled_plugins_manifest_path();

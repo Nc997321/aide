@@ -9,6 +9,7 @@
 //! - [`launcher`]：进到目标机的一跳（`wsl.exe` / `ssh`），对上层同构。
 //! - [`install`]：远程套件（aide-host + sidecar + Claude CLI）按版本哈希幂等安装。
 //! - [`connection`]：与目标机 `aide-host serve` 的 JSON-RPC 长连接。
+//! - [`mirror`]：插件 / 用户扩展的镜像——桌面是唯一真相源，目标机只有按内容哈希命名的缓存。
 //! - [`routes`]：IPC 拦截层——参数里带远程路径的工作区命令转发给 aide-host，在目标机上
 //!   跑与桌面**同一份**实现（crates/aide-workspace）；不支持的命令大声拒绝，绝不回落本机。
 //! - agent：会话按工作区归属分「车道」，见 `crate::runtime`（lane）。
@@ -19,6 +20,7 @@ pub mod connection;
 pub mod install;
 pub mod launcher;
 pub mod lsp_pipe;
+pub mod mirror;
 pub mod path;
 pub mod routes;
 pub mod sessions;
@@ -63,6 +65,8 @@ pub struct RemoteWorkspaces {
     connecting: Mutex<HashMap<HostId, Arc<TokioMutex<()>>>>,
     installed: Mutex<HashMap<HostId, Installed>>,
     status: Mutex<HashMap<HostId, HostStatus>>,
+    /// 按主机的扩展镜像状态（持锁 = 同一台主机的同步串行）。
+    mirrors: Mutex<HashMap<HostId, Arc<TokioMutex<mirror::HostMirror>>>>,
 }
 
 impl RemoteWorkspaces {
@@ -101,6 +105,39 @@ impl RemoteWorkspaces {
     }
 
     /// 已安装套件信息（agent 车道启动需要）；未安装则先安装。
+    /// 把桌面当前的扩展集合投到这台主机，返回随 send 下发的 `extensions` 值（目标机路径）。
+    /// 不失败：连不上 / 传不上的部分进 `unavailable`，会话照常发出。
+    pub async fn extensions(&self, host: &HostId) -> serde_json::Value {
+        let installed = match self.installed(host).await {
+            Ok(i) => i,
+            Err(e) => {
+                return serde_json::json!({
+                    "plugins": [], "user_dir": null, "settings": {},
+                    "unavailable": [format!("plugins and your skills could not be prepared on {}: {e}", host.label())],
+                })
+            }
+        };
+        let label = host.label();
+        let bundle = tokio::task::spawn_blocking(move || {
+            mirror::build_bundle(
+                &crate::commands::claude_home(),
+                &crate::commands::marketplace::enabled_plugins_manifest_path(),
+                &label,
+            )
+        })
+        .await
+        .unwrap_or_default();
+        let state = Arc::clone(
+            self.mirrors
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .entry(host.clone())
+                .or_default(),
+        );
+        let mut state = state.lock().await;
+        mirror::sync(host, &installed.base, bundle, &mut state).await
+    }
+
     pub async fn installed(&self, host: &HostId) -> Result<Installed, String> {
         if let Some(i) = self
             .installed

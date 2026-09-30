@@ -297,3 +297,87 @@ async fn wsl_remote_language_server_speaks_desktop_uris() {
     let _ = child.start_kill();
     conn.invoke("delete_file", json!({"path": dir}), None).await.expect("cleanup");
 }
+
+/// 扩展镜像：桌面上的插件 + 用户 skill 投到 WSL；第二次（模拟 Aide 重启）不重传；
+/// 上传中断留下的 `.part` 不被当成完整单元，下一次重做。
+#[tokio::test]
+#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）与 pnpm build:remote-kit"]
+async fn wsl_extension_mirror_syncs_once_and_recovers_from_partial_upload() {
+    use super::mirror;
+    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
+    let host = HostId::Wsl(distro);
+    // 不走 ensure_installed：镜像只需要 sh + tar，而装套件会替换目标机上正在用的版本目录。
+    // 独立的镜像根：不碰真实的 ~/.aide/host/ext（GC 会动它）。
+    let home = install::run_script(&host, "printf %s \"$HOME\"", None).await.expect("home");
+    let base = format!("{home}/.aide/e2e-mirror-{}", std::process::id());
+
+    // 桌面侧：一个插件（hook 直接执行的脚本，NTFS 上没有 x 位）+ 用户 skill + settings。
+    let desk = std::env::temp_dir().join(format!("aide-e2e-mirror-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&desk);
+    let plugin = desk.join("plugin");
+    std::fs::create_dir_all(plugin.join(".claude-plugin")).unwrap();
+    std::fs::write(plugin.join(".claude-plugin/plugin.json"), r#"{"name":"e2e"}"#).unwrap();
+    std::fs::create_dir_all(plugin.join("hooks")).unwrap();
+    std::fs::write(
+        plugin.join("hooks/hooks.json"),
+        r#"{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"\"${CLAUDE_PLUGIN_ROOT}/hooks/run-hook.cmd\" start"}]}]}}"#,
+    )
+    .unwrap();
+    std::fs::write(plugin.join("hooks/run-hook.cmd"), ": ; echo hook-ran\n").unwrap();
+    let claude = desk.join("claude");
+    std::fs::create_dir_all(claude.join("skills/s")).unwrap();
+    std::fs::write(claude.join("skills/s/SKILL.md"), "---\nname: s\n---\nbody\n").unwrap();
+    std::fs::write(
+        claude.join("settings.json"),
+        r#"{"env":{"ANTHROPIC_API_KEY":"sk-e2e"},"mcpServers":{"win":{"command":"C:\\x.exe"}}}"#,
+    )
+    .unwrap();
+    let manifest = desk.join("enabled.json");
+    std::fs::write(&manifest, json!([{"name": "e2e", "marketplace": "m", "path": plugin}]).to_string()).unwrap();
+
+    let bundle = || mirror::build_bundle(&claude, &manifest, &host.label());
+    let mut state = mirror::HostMirror::default();
+    let ext = mirror::sync(&host, &base, bundle(), &mut state).await;
+    let plugin_dir = ext["plugins"][0]["path"].as_str().expect("plugin mirrored").to_string();
+    let user_dir = ext["user_dir"].as_str().expect("user unit mirrored").to_string();
+    assert!(ext["unavailable"].to_string().contains("`win`"), "{ext}");
+    assert!(!ext.to_string().contains("sk-e2e"), "settings.env must never travel: {ext}");
+
+    let check = format!(
+        "\"{p}/hooks/run-hook.cmd\" && cat {u}/skills/s/SKILL.md && stat -c %a {b}/ext && stat -c %i {p}/.complete",
+        p = plugin_dir,
+        u = user_dir,
+        b = base
+    );
+    let out = install::run_script(&host, &check, None).await.expect("check");
+    assert!(out.contains("hook-ran"), "hook script must be executable on the target: {out}");
+    assert!(out.contains("body"), "{out}");
+    assert!(out.contains("\n700\n"), "mirror root must be private: {out}");
+    let inode = out.lines().last().unwrap().to_string();
+
+    // 模拟 Aide 重启：内存状态清空，但目标机上已完整 → 不重传（.complete 还是那个 inode）。
+    let mut fresh = mirror::HostMirror::default();
+    let again = mirror::sync(&host, &base, bundle(), &mut fresh).await;
+    assert_eq!(again["plugins"], ext["plugins"]);
+    let out = install::run_script(&host, &format!("stat -c %i {plugin_dir}/.complete"), None).await.unwrap();
+    assert_eq!(out.trim(), inode, "second sync must not re-upload");
+
+    // 上传中断：完整目录没了、只剩没有 .complete 的 .part → 下一次重做。
+    install::run_script(
+        &host,
+        &format!("rm -rf {plugin_dir} && mkdir -p {plugin_dir}.part && echo half > {plugin_dir}.part/x"),
+        None,
+    )
+    .await
+    .unwrap();
+    let mut fresh = mirror::HostMirror::default();
+    mirror::sync(&host, &base, bundle(), &mut fresh).await;
+    let out = install::run_script(&host, &format!("ls {plugin_dir}/.complete && ls {plugin_dir}.part 2>&1; true"), None)
+        .await
+        .unwrap();
+    assert!(out.contains(".complete"), "{out}");
+    assert!(out.contains("No such file"), ".part must be consumed by the retry: {out}");
+
+    let _ = install::run_script(&host, &format!("rm -rf {base}"), None).await;
+    let _ = std::fs::remove_dir_all(&desk);
+}

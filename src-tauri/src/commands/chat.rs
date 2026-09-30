@@ -407,6 +407,12 @@ pub async fn send_message(
         runtime_mgr.ensure_remote_lane(&app, &host).await?;
         runtime_mgr.bind_session_lane(&session_id, &host);
         runtime_mgr.translate_for_lane(&host, &mut cmd);
+        // 插件 / 用户扩展：桌面是唯一真相源，按需投到目标机的哈希缓存里，路径随 send 下发
+        //（每条 send 都带：桌面上启用/停用插件后，下一次 query 装配就看得到）。
+        use tauri::Manager;
+        if let Some(svc) = app.try_state::<std::sync::Arc<crate::remote_workspace::RemoteWorkspaces>>() {
+            cmd["extensions"] = svc.extensions(&host).await;
+        }
     }
 
     runtime_mgr.send_to_runtime(&cmd).await

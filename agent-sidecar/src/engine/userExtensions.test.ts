@@ -33,6 +33,11 @@ describe("loadUserMcpServers", () => {
     expect(loadUserMcpServers()).toEqual({ s: { type: "sse", url: "http://x" } });
   });
   it("无 mcpServers 键返回空", () => { writeSettings({}); expect(loadUserMcpServers()).toEqual({}); });
+  it("远程车道的 settings 子集优先于本机文件", () => {
+    writeSettings({ mcpServers: { local: { command: "x" } } });
+    expect(loadUserMcpServers({ mcpServers: { desk: { command: "npx" } } })).toEqual({ desk: { command: "npx" } });
+    expect(loadUserMcpServers({})).toEqual({}, "给了子集就不回落本机文件——目标机上那份不是真相源");
+  });
 });
 
 describe("loadUserHooks", () => {

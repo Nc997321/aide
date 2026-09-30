@@ -125,6 +125,11 @@ pub(super) fn git_err(stderr: &str) -> String {
     format!("{}: {}", code, stderr.trim())
 }
 
+/// 插件检出**逐字节等于上游**：用户若开了 `core.autocrlf=true`，Windows 上的检出会把 shell
+/// 脚本改成 CRLF——本机 Git Bash 容忍，同步到远程工作区（Linux）后 hook 直接报
+/// `\r: command not found`。全局 -c 选项，必须置于子命令之前。
+const NO_EOL_CONVERSION: [&str; 4] = ["-c", "core.autocrlf=false", "-c", "core.eol=lf"];
+
 /// 浅克隆 git 仓库（带代理探测）。成功返回 Ok(())；git 进程非零退出或启动失败
 /// 一律经 git_err 分类为结构化错误码（NETWORK_FAILURE/REPO_NOT_FOUND/TIMEOUT/...），
 /// 供前端 ERROR_MAP 映射为可操作动作（如 REPO_NOT_FOUND → "切换市场源"）。
@@ -136,6 +141,7 @@ pub(super) fn git_clone(url: &str, target: &std::path::Path) -> Result<(), Strin
     }
     // 代理作为 git 全局 -c 选项，必须置于子命令之前
     crate::commands::proxy::apply_git_proxy(&mut cmd);
+    cmd.args(NO_EOL_CONVERSION);
     cmd.args(["clone", "--depth", "1"]).arg(url).arg(target);
 
     let out = cmd
@@ -237,6 +243,7 @@ fn run_git(args: &[String], cwd: &std::path::Path) -> Result<(), String> {
     // 代理作为 git 全局 -c 选项，必须置于子命令之前；否则插件克隆/拉取直连
     // github 会挂死（spawn_blocking 阻塞 → 前端「点击更新没反应」）。
     crate::commands::proxy::apply_git_proxy(&mut cmd);
+    cmd.args(NO_EOL_CONVERSION);
     cmd.args(args);
     let out = cmd.output().map_err(|e| e.to_string())?;
     if !out.status.success() {

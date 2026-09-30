@@ -115,6 +115,36 @@ Tauri v2 的 `invoke_handler` 是闭包——在命令表外包一层，所有�
 `<ver>` = 应用版本 + host/runtime 内容哈希：开发期改了代码也会触发重装；旧版本目录自动清理。
 下载走桌面的代理设置（`commands::proxy::detect_proxy`），缓存在 `~/.aide/cache/remote-kit/`。
 
+### 插件与用户扩展（`remote_workspace/mirror.rs`）
+
+本机与多个远程工作区同时开是常态，所以**插件只在桌面安装一次**，远程不设第二个安装入口。桌面是
+唯一真相源（市场插件、`~/.aide/claude` 下的 skills / agents / commands / hooks / output-styles、
+全局 `CLAUDE.md`、settings.json 的 `mcpServers` / `hooks`）；目标机上只有一份按内容哈希命名、
+只读、随时可删的镜像 `~/.aide/host/ext/<hash>/`。
+
+- **何时同步**：每条发往远程车道的 send 前（`RemoteWorkspaces::extensions`）。同一台主机串行；
+  内存里记着已确认完整的哈希，没变化时零往返；Aide 重启后一次探针认回已有的单元，不重传。
+- **怎么下发**：Rust 在 send 上附 `extensions`（目标机路径 + settings 子集 + 已知不可用项），
+  **客户端从不发这个字段**（三端协议不变）。sidecar（`extensions/remoteExtensions.ts`）有它就用它，
+  没有（本地车道）就读本机 claude home——本地行为不变。每条 send 都带，所以桌面上启停插件后，
+  下一次 query 装配即生效；已在跑的会话继续用它启动时的那份（目录不可变）。
+- **目标机上的 `~/.aide/claude`** 只管 transcripts / 凭据 / 记忆，**不再是扩展来源**。
+
+风险与对策（2026-09-30 评审，均有测试钉住）：
+
+| 风险 | 对策 |
+|---|---|
+| 半截镜像（断线、并发） | 每单元一条 tar.gz，解到 `<hash>.part/` → 写 `.complete` → 整体 `mv`；探针只认 `.complete`；重试重做 `.part`（真机 e2e 覆盖） |
+| 运行中会话的插件被更新 | 目录按内容哈希、永不原地改；GC 只删当前集合外且 7 天未刷新的目录 |
+| NTFS 丢可执行位 / CRLF | 打包时按 shebang、`.sh`、被 hooks/.mcp.json 以 `${CLAUDE_PLUGIN_ROOT}/…` 引用重建 0755；插件检出关 `core.autocrlf`（`marketplace/install.rs`）；内容逐字节不改 |
+| 启用清单混入非插件目录 | 只认有 `.claude-plugin/plugin.json` 的目录（清单生成与同步两处）；单元 >50 MB 不传并上报 |
+| 桌面专属命令 / 桌面回环 URL | Windows 形态命令、`127.0.0.1` 的 MCP 不下发，进 `unavailable` |
+| 目标机缺运行时（python3、zsh…） | sidecar 在目标机上逐条解析命令头，缺的经 `notification`（`extensions_unavailable`）告诉三端，同一清单只说一次 |
+| 机密 | 只取扩展相关条目，**不**搬 settings.json 的 `env`、不碰凭据；settings 子集随 send 走 stdin，不落目标机磁盘，也不进 CLI 子进程 env（cliEnv 白名单）；镜像根 `chmod 700` |
+| 本机 / 远程命名漂移 | 镜像沿用同名插件（`aide-user`、市场插件名），`aide-user:foo` 两边一致 |
+
+固有边界：只能在桌面生效的 hook（系统通知、提示音）在远程跑不了——如实上报，不静默。
+
 ## 已知边界（v1）
 
 - **代码索引 / 运行配置 / 记忆观测台**：远程工作区里明确拒绝（界面降级为空）。

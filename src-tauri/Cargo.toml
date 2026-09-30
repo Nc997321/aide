@@ -84,6 +84,9 @@ encoding_rs = "0.8"
 # （provider.rs::refresh_system_default_models）。选 ureq 而非 reqwest——轻量同步、
 # 无 async-runtime 依赖、配 spawn_blocking 包同步 IO；rustls 跨平台免 OpenSSL。
 ureq = { version = "2", features = ["json", "tls"] }
+# 远程工作区扩展镜像：插件 / 用户扩展打成 tar.gz 经 stdin 流到目标机（remote_workspace::mirror）。
+tar = "0.4"
+flate2 = "1"
 # 剥掉 Windows `resource_dir()` 返回的 `\\?\` verbatim 前缀，避免把扩展长度路径
 # 传给外部进程（node 的 realpathSync 处理不了 `\\?\`，会退化到 lstat 'C:' 崩溃）。
 dunce = "1"

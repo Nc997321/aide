@@ -505,6 +505,10 @@ export type SidecarCommand =
       // 刷新的新头在下一次 query() 重连才生效。值是凭据：不得进日志（N5）。
       // 每条 send 刷新（缺席 = 清空）。省略 = 无注入（桌面路径恒省略）。
       mcp_headers?: Record<string, Record<string, string>>;
+      // 远程车道专用（Rust remote_workspace/mirror.rs 附上，客户端从不发）：桌面插件 /
+      // 用户扩展在目标机上的镜像路径 + settings 的 mcpServers/hooks 子集 + 已知不可用项。
+      // 形状宽容解析（extensions/remoteExtensions.ts）。省略 = 本地车道，读本机 claude home。
+      extensions?: unknown;
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;

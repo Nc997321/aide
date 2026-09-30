@@ -9,7 +9,11 @@ function settingsFile(): string {
   return join(home, "settings.json");
 }
 
-function readSettings(): Record<string, any> {
+/** 远程车道的 settings 子集（send.extensions.settings）：给了就用它，不读本机文件。 */
+export type SettingsOverride = { mcpServers?: Record<string, any>; hooks?: Record<string, any> } | undefined;
+
+function readSettings(override?: SettingsOverride): Record<string, any> {
+  if (override) return override;
   const p = settingsFile();
   if (!existsSync(p)) return {};
   try { return JSON.parse(readFileSync(p, "utf8")) ?? {}; }
@@ -17,8 +21,8 @@ function readSettings(): Record<string, any> {
 }
 
 /** 过滤 disabled:true 的 mcpServer，原样透传 config（stdio/sse/http）。 */
-export function loadUserMcpServers(): Record<string, any> {
-  const servers = readSettings().mcpServers;
+export function loadUserMcpServers(override?: SettingsOverride): Record<string, any> {
+  const servers = readSettings(override).mcpServers;
   if (!servers || typeof servers !== "object") return {};
   const out: Record<string, any> = {};
   for (const [name, cfg] of Object.entries(servers as Record<string, any>)) {
@@ -34,6 +38,7 @@ export type CompiledHooksByEvent = Record<string, { matcher?: string; hooks: Hoo
 /** loadUserHooks 的编译上下文（cwd = 会话工作目录，hook 子进程的工作目录）。 */
 export interface UserHooksContext {
   cwd: string | undefined;
+  settings?: SettingsOverride;
 }
 
 /** 过滤 disabled 条目、把 command 型条目编译成 SDK HookCallback（F4：options.hooks
@@ -41,7 +46,7 @@ export interface UserHooksContext {
  *  分组（SDK hooks option 形状）。编译失败的条目丢弃（compileCommandHook 内部已
  *  记日志；命令原文不落日志，N5）。 */
 export function loadUserHooks(ctx: UserHooksContext): CompiledHooksByEvent {
-  const hooks = readSettings().hooks;
+  const hooks = readSettings(ctx.settings).hooks;
   if (!hooks || typeof hooks !== "object") return {};
   const out: CompiledHooksByEvent = {};
   for (const [event, entries] of Object.entries(hooks as Record<string, HookEntry[]>)) {

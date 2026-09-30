@@ -38,6 +38,8 @@ const NODE_MIRRORS: &[&str] = &["https://nodejs.org/dist", "https://npmmirror.co
 /// 安装完成后 agent 启动所需的全部路径（目标机路径）。
 #[derive(Debug, Clone)]
 pub struct Installed {
+    /// 目标机上的套件根：`$HOME/.aide/host`（扩展镜像住在它下面的 `ext/`）。
+    pub base: String,
     pub host_bin: String,
     pub claude_exe: String,
     /// None = 用目标机登录 shell PATH 上的 node。
@@ -145,7 +147,7 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(900);
 
 /// 在目标机跑一段脚本并收集 stdout（带超时）。
-async fn run_script(host: &HostId, script: &str, stdin: Option<&[u8]>) -> Result<String, String> {
+pub(super) async fn run_script(host: &HostId, script: &str, stdin: Option<&[u8]>) -> Result<String, String> {
     let limit = if stdin.is_some() { TRANSFER_TIMEOUT } else { PROBE_TIMEOUT };
     let mut cmd = launcher::command(host, script)?;
     let mut child = cmd.spawn().map_err(|e| format!("无法连接 {}：{e}", host.label()))?;
@@ -329,6 +331,7 @@ true"#
     };
 
     Ok(Installed {
+        base: base.clone(),
         host_bin: format!("{base}/{ver}/aide-host"),
         claude_exe: format!("{claude_dir}/claude"),
         node,

@@ -40,6 +40,9 @@ export interface InstructionSources {
   cwd: string;
   /** Aide 的 Claude 配置根（CLAUDE_CONFIG_DIR）。 */
   configDir: string;
+  /** 全局 CLAUDE.md 所在目录；缺省 = configDir。远程车道 = 桌面用户扩展的镜像
+   *  （send.extensions.userDir）——全局指令是用户的，跟着桌面走，不认目标机上那份。 */
+  userDir?: string | null;
   /** 主根是否信任（受限模式跳过主根 CLAUDE.md）。**附加根不走这道门**（D8：@ 即信任）。 */
   trusted: boolean;
   /** 本会话的 @目录账本（附加根）。 */
@@ -66,7 +69,7 @@ export async function loadAideInstructions(p: InstructionSources): Promise<strin
 /** 主根两块：全局 CLAUDE.md 恒读；主根 CLAUDE.md 仅在 trusted 时读——不让不受信任
  *  仓库植入的项目指令影响 agent 行为（受限模式语义，未变）。 */
 async function readBaseInstructions(p: InstructionSources): Promise<string[]> {
-  const files = [join(p.configDir, "CLAUDE.md")];
+  const files = [join(p.userDir || p.configDir, "CLAUDE.md")];
   if (p.trusted) files.push(join(p.cwd, "CLAUDE.md"));
   const chunks = await Promise.all(files.map((f) => readInstructionFile(f)));
   return chunks.filter((t): t is string => !!t && t.length > 0);

@@ -87,6 +87,7 @@ GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 
 - **远程路径形态唯一真相源** `remote_workspace/path.rs`（`\\wsl.localhost\<distro>\…` / `\\aide-ssh.invalid\<alias>\…`）；前端 `@aide/sdk` 的 `parseRemotePath` 只做显示。
 - **「目录还在吗」一律 `remote_workspace::path::present`**：远程路径同步 stat 不了，按存在处理。对远程路径返回 false 会让会话 cwd 静默回落活动工作区——2026-09-18 事故的同一形态。
 - **agent 车道**：会话按工作区归属绑定车道（`runtime/remote_lane.rs`），事件泵与本机同一条（`runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
+- **插件 / 用户扩展：桌面是唯一真相源**（`remote_workspace/mirror.rs`）：目标机只有按内容哈希命名的只读镜像 `~/.aide/host/ext/<hash>/`，路径随 send 的 `extensions` 字段下发（只有远程车道附，客户端从不发）；**不许在远程开第二个安装入口，也不许把目标机的 `~/.aide/claude` 当扩展来源**。远程用不了的扩展必须经 `notification` 如实上报，不静默消失。
 - **不同步 OAuth 凭据到目标机**（refresh token 轮换会互相顶掉；服务器可能多人共用）。官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`；API Key 类供应商随 send 下发，无需登录。
 - 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须保持**纯 Rust 无 C 依赖**（一个静态二进制跑遍任意发行版）。
 
