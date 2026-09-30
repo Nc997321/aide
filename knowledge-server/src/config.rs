@@ -34,6 +34,13 @@ pub struct Config {
     /// 这是网络层准入，不是身份识别——内网私有化部署时用来把外网整个挡在门外。
     /// 例：`192.168.1.0/24,10.0.0.0/8`
     pub allowed_cidrs: Vec<String>,
+    /// 这版服务的版本号，`/api/health` 会如实回报。
+    ///
+    /// **由构建期注入**（Dockerfile 的 `ARG KB_VERSION` ← release.sh），不是 crate 的
+    /// `CARGO_PKG_VERSION`：镜像标签才是用户手里那个号，两者曾经各说各话（crate 停在
+    /// 0.1.0，镜像已经在 0.4.0）。本地 `up -d --build` 不传参数 → `dev` →
+    /// 客户端见到 `dev` 不提示升级（开发构建本来就不该被催）。
+    pub version: String,
 }
 
 impl Config {
@@ -60,6 +67,7 @@ impl Config {
                 "http://tauri.localhost,tauri://localhost,http://localhost:1420",
             ),
             allowed_cidrs: env_list("KB_ALLOWED_CIDR", ""),
+            version: env("KB_VERSION", "dev"),
         }
     }
 }

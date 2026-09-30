@@ -58,16 +58,31 @@ compose 不含 `build:`——客户机器上没有源码，应用镜像从阿里
 
 ```bash
 docker login registry.example.com   # 密码在 ACR 控制台「访问凭证」里设
-./release.sh 0.2.1                               # = docker build + push（例：新版本号，标签随版本走）
+./release.sh 0.5.0        # = build（带 KB_VERSION 构建参数）+ push 两个标签
 ```
 
-推完**再**同步 compose 里 knowledge 服务默认镜像的标签（脚本末尾会提醒）。
-⚠️ 顺序不能反：**先 push 再改标签**——反过来新拿到 compose 的客户会去拉一个不存在的 tag。
-**别用旧标签覆盖重推**：已经拉过该标签的机器不会跟着换 digest，客户还得额外学一步
-`docker compose pull`。发完记得**主动通知客户**（没有更新检查机制），并附上 `.env` 里那行
-`KB_IMAGE`——老客户手里那份 compose 是交付时下载的，默认标签停在那一版，不写这行就永远
-停在那一版。客户侧拿到 `docker-compose.yml` + `.env.example`，改好 `DB_PASSWORD` 后
-`docker compose up -d` 即可；升级与回滚见下节。
+**每次发布推两个标签，这是「用户侧升级命令一辈子不变」的全部机制**：
+
+| 标签 | 语义 | 谁在用 |
+|---|---|---|
+| `:<版本号>`（如 `0.5.0`） | **不可变**。回滚、钉住某一版 | 用户想钉版本时写进 `.env` 的 `KB_IMAGE` |
+| `:stable` | **移动**，每次都指向最新那版 | 交付的 `docker-compose.yml` 默认跟的就是它 |
+
+于是**交付件不需要随版本改**（compose 里跟的是 `:stable`），用户侧那条命令也永远不变：
+
+```bash
+docker compose pull knowledge && docker compose up -d knowledge
+```
+
+⚠️ 规矩与理由：
+- **版本号标签别覆盖重推**：已经拉过该标签的机器不会跟着换 digest，客户还得额外学一步
+  `docker compose pull`。要发新东西就升版本号（`:stable` 是唯一有意移动的标签）。
+- **版本号要注入镜像**（`release.sh` 的 `--build-arg KB_VERSION=`）：客户端拿它判断
+  「服务端够不够新」，不够就在面板上提示用户升级、附带上面那条命令。不带这个参数构建
+  出来的是 `dev`，客户端见了不提示（本地 `up -d --build` 就是这一档）。
+- **升级提示不再依赖主动通知**：客户端自己会说。但大版本的行为变化仍建议知会一声。
+- 客户侧拿到 `docker-compose.yml` + `.env.example`，改好 `DB_PASSWORD` 后
+  `docker compose up -d` 即可；升级与回滚见下节。
 
 **仓库内开发验证**用 overlay 补 build（交付文件不含它）：
 
@@ -77,27 +92,27 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 ### 客户侧升级与回滚
 
+**就一条命令，不随版本变**（跟的是移动标签 `:stable`）：
+
 ```bash
-# 1) 在 .env 里改/加一行，指向新标签
-KB_IMAGE=registry.example.com/aide/aide-knowledge:0.2.1
-
-# 2) 拉应用镜像（db 没变，不用拉）
-docker compose pull knowledge
-
-# 3) 重建（不需要先删容器，也不需要 down）
-docker compose up -d knowledge
-
-# 4) 确认起来了
-docker compose logs --tail=50 knowledge
-curl -s http://127.0.0.1:8788/api/health
+docker compose pull knowledge && docker compose up -d knowledge
 ```
+
+确认起来了：
+
+```bash
+docker compose logs --tail=50 knowledge
+curl -s http://127.0.0.1:8788/api/health     # version 字段就是当前那版
+```
+
+客户端面板也会替你说话：服务端太旧时，面板顶部直接给出上面那条命令（可复制）。
 
 - **升级只用 `up -d`，永远别加 `-v`**：`docker compose down -v` 会把 `pgdata`（数据库）与
   `kbdata`（附件）两个卷一起删掉 = 删库。手动 `docker rm -f` 容器同样没必要——`up -d`
   发现镜像 digest 变了会自己重建，只换容器不碰卷。
-- 第 2 步在**换标签**时可省（新标签本地没有，`up -d` 会自己拉）。它只在「同一个标签被重新
-  推过、远端 digest 变了」时必要——而发布约定就是不覆盖旧标签，所以那个场面不该出现。
-- 回滚 = 把 `KB_IMAGE` 改回旧标签 → `docker compose pull knowledge && docker compose up -d knowledge`。
+- `pull` 这一步**不能省**：跟的是移动标签 `:stable`，本地已经有同名镜像时 `up -d` 不会
+  自己去比对远端 digest——不 pull 就永远停在旧那版（这也是为什么给用户的那条命令自带 `pull`）。
+- 回滚 = 在 `.env` 里把 `KB_IMAGE` 钉成旧版本号 → `docker compose pull knowledge && docker compose up -d knowledge`。
   **能不能直接退，看这次发布有没有动 `migrations/`**：没动（纯 API / 客户端修正）可以直接退；
   动了就要意识到 schema 已经前进了——迁移在服务启动时执行（`src/main.rs` 的 `db::migrate`），
   sqlx 不会自己往回走。
@@ -106,6 +121,11 @@ curl -s http://127.0.0.1:8788/api/health
   `NOT NULL`，而 0.3.0 的建文档 INSERT 压根不写这一列——退回旧镜像后**新建文档会直接失败**
   （NOT NULL 违例），而读文档不受影响，所以症状很迷惑：老文档都能打开、就是建不了新的。
   `kind` 那列没事（有 `DEFAULT 'doc'`）。要退就得连数据库一起退——升级前的 `pg_dump` 就是为此。
+
+  ✅ **0.5.0 → 0.4.0 可以退**（007 只是加两列：`documents.mime` 带默认值、
+  `revisions.search_text` 可空，旧版本忽略它们即可）。退回去之后只是新能力消失
+  （网页条目看不见、取件地址 404），存量数据一个不丢；再升回来也不丢——这就是
+  「加列可退、改列不可退」的那条线。
 
   升级**前**值得跑一次这条（只读，看一眼有没有会让 006 失败的孤儿行）：
   ```bash
@@ -116,9 +136,8 @@ curl -s http://127.0.0.1:8788/api/health
   整体失败**（服务起不来），先查清那些行是怎么来的。
 - 升级前顺手备份（可选，两秒）：`docker compose exec -T db pg_dump -U aide aide_kb > kb-$(date +%F).sql`
 
-**怎么确认新版真的生效**：health 端点只报 status / parsers / tokenizer，**不报版本**——判据
-是行为（比如换了上传上限的版本，拿一个刚过大小的文件试导入），或看 `docker compose ps`
-里 knowledge 服务的镜像 tag / digest。
+**怎么确认新版真的生效**：`curl -s 127.0.0.1:8788/api/health` 里的 `version` 就是当前那版
+（0.5.0 起才有这个字段；没有它就说明还在旧版）。它也是客户端判断「要不要提示用户升级」的依据。
 
 ### 内网给团队开放
 

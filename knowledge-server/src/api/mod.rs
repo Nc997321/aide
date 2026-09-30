@@ -183,14 +183,19 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
     Ok(router)
 }
 
-/// 健康检查。除了 status，还回报**实际装配了哪些后端**。
+/// 健康检查。除了 status，还回报**版本**与**实际装配了哪些后端**。
 ///
 /// 这不是凑数：装配错了（比如注册表里漏注册一个后端）不会报编译错误，
 /// 只会表现为「某种格式导入不了」。让它在这里可见，排障时少一轮猜测。
+///
+/// `version` 是给**客户端**看的：界面要能在「服务端太旧」时说一句人话，
+/// 而不是让用户对着 404 猜（见 aide 前端 `KnowledgeBase/serverVersion.ts`）。
+/// 老版本服务端没有这个字段——**没有 = 旧**，那正是最需要提示的一档。
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     Json(json!({
         "status": "ok",
         "service": "aide-knowledge",
+        "version": state.config.version,
         "parsers": state.parsers.backend_ids(),
         "tokenizer": state.tokenizer.id(),
     }))

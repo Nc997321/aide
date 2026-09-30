@@ -127,6 +127,8 @@ STATUS="$(cat "$CODE_FILE")"
 expect "$STATUS" "200" "GET /api/health → 200"
 expect "$(field "$body" status)" "ok" "服务状态 ok"
 expect "$(field "$body" tokenizer)" "jieba-rs" "分词器装配正确"
+# 客户端靠它判断「服务端够不够新」并提示升级；本地 --build 出来的是 dev
+expect "$(field "$body" version)" "dev" "服务端自报版本（本地构建 = dev，客户端不据此催升级）"
 
 say "实例状态（要求干净库）"
 body="$(api GET /api/auth/status)"

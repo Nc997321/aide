@@ -31,8 +31,10 @@ services:
     # 需要排障时再临时加 ports，别默认开。
 
   knowledge:
-    # 默认钉在当前发布版本（交付时随版本更新这个标签）；客户可用 .env 的 KB_IMAGE 覆盖。
-    image: ${KB_IMAGE:-registry.example.com/aide/aide-knowledge:0.4.0}
+    # :stable 是**移动标签**（每次发布指向最新那版）。跟它，用户侧那条升级命令
+    # （docker compose pull knowledge && docker compose up -d knowledge）就一辈子不变。
+    # 要钉住某一版 / 回滚：在 .env 里写 KB_IMAGE=…:0.5.0（版本号标签不可变）。
+    image: ${KB_IMAGE:-registry.example.com/aide/aide-knowledge:stable}
     restart: unless-stopped
     depends_on:
       db:

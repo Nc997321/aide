@@ -14,6 +14,13 @@ RUN cargo build --release --bin aide-knowledge
 
 FROM debian:bookworm-slim
 
+# 构建期注入版本号：`docker build --build-arg KB_VERSION=0.5.0`（release.sh 会带）。
+# 为什么从构建期来，而不是读 crate 的 version：**镜像标签与 crate 版本是两条线**，
+# 客户端要判定「服务端够不够新」只能用镜像那个号。不带参数时是 `dev`——
+# 本地 `up -d --build` 出来的就是这个，客户端见 `dev` 不提示升级。
+ARG KB_VERSION=dev
+ENV KB_VERSION=${KB_VERSION}
+
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates libssl3 \
  && rm -rf /var/lib/apt/lists/*
