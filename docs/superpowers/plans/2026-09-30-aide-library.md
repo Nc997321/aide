@@ -62,6 +62,21 @@
 | **上传进度**（字节百分比 + 「服务端正在处理…」） | `kbClient.postWithProgress`（唯一不走 fetch 的一处）、`useKnowledgeBase.uploading`、索引态进度条 | 单测：0→37%→99% 文案切换、结束后清空；真机 25 MB 文件上传成功（环回太快，肉眼看不到条） |
 | **`?live=1` 夹具连真服务** | 夹具 `live` 开关 + `window.__kbHarness` 钩子；`ModalDialog` 一起挂 | 见上表「真机」两列 |
 
+### 发布闭环（2026-09-30 夜三轮，已发 0.5.0）
+
+服务端变了（新迁移 + 新路由 + 新解析器），旧镜像上「在右栏打开」是 404、`.html` 传不进去——
+而用户的服务是他们自己部署的，于是补了一层「客户端自己会说」：
+
+| 做了什么 | 落点 |
+|---|---|
+| 服务端自报版本 | `/api/health` 的 `version`（构建期注入 `KB_VERSION`，本地构建 = `dev`） |
+| **双标签**：`:<版本号>` 不可变 / `:stable` 移动 | `release.sh`（一次推两个）+ 交付 compose 跟 `:stable` |
+| 于是用户侧升级命令**一辈子不变** | `docker compose pull knowledge && docker compose up -d knowledge` |
+| 客户端提示 | `serverVersion.ts`（判据唯一产地）+ 面板顶部提示条（可复制那条命令） |
+
+**没报 version = 旧**（0.5.0 之前没有这个字段）——这是最需要提示的一档；`dev` 不催。
+已推 `0.5.0` 与 `stable` 到 ACR，并用推上去的镜像实测 health 回 `0.5.0`。
+
 ### 还没做的（下一步的手上活）
 
 1. **网页产物的相对资源**：取件地址只发一份文本，自包含的单文件 html 正常，
