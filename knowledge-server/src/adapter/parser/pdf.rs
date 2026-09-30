@@ -37,6 +37,8 @@ impl DocumentParser for PdfParser {
         };
 
         Ok(ParsedDocument {
+            // 产物是抽取出来的文本，**不是** pdf 本身（见 port::ParsedDocument）
+            mime: "text/markdown".to_string(),
             title: None,
             markdown: text,
             warnings,

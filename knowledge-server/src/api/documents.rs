@@ -75,6 +75,9 @@ pub struct DocumentDetail {
     pub slug: String,
     pub title: String,
     pub content: String,
+    /// 内容的存储类型（`text/markdown` / `text/html`）。前端按它分派预览，
+    /// agent 按它决定怎么理解 `content`。
+    pub mime: String,
     pub version_no: i32,
     pub status: DocumentStatus,
 }
@@ -141,6 +144,9 @@ pub async fn create(
             slug,
             title: title.to_string(),
             content: body.content.unwrap_or_default(),
+            // 新建入口产出的永远是 markdown。别的类型只能从摄取进来
+            // （那条路按扩展名定 mime，见 adapter/parser/）——**不采信客户端**。
+            mime: "text/markdown".to_string(),
             author_id: user.id,
         },
     )
@@ -298,11 +304,12 @@ pub async fn get(
         String,
         String,
         String,
+        String,
         i32,
         String,
     )> = sqlx::query_as(
         r#"SELECT d.id, d.space_id, d.parent_id, d.kind, d.slug,
-                  d.title, r.content, r.version_no, d.status
+                  d.title, r.content, d.mime, r.version_no, d.status
              FROM documents d
              JOIN revisions r ON r.id = d.current_revision_id
             WHERE d.id = $1"#,
@@ -311,7 +318,8 @@ pub async fn get(
     .fetch_optional(&mut *tx)
     .await?;
 
-    let Some((id, space_id, parent_id, kind, slug, title, content, version_no, status)) = row else {
+    let Some((id, space_id, parent_id, kind, slug, title, content, mime, version_no, status)) = row
+    else {
         return Err(AppError::NotFound("文档没有可读取的版本".into()));
     };
 
@@ -323,6 +331,7 @@ pub async fn get(
         slug,
         title,
         content,
+        mime,
         version_no,
         // DB 里是 text + CHECK 约束，理论上只可能是三个合法值之一；
         // 万一出现意外值，退化成 draft 而不是让整个请求 500
@@ -539,7 +548,8 @@ pub async fn release_lock(
 
 /// 权限前置检查。抽出来是为了保证每个写接口都走同一段逻辑——
 /// 散落在各处理器里的判权迟早会漏掉一个。
-async fn require(
+/// （`pub(crate)`：取件地址的签票口也走这一条，不另写一套判权。）
+pub async fn require(
     conn: &mut PgConnection,
     user_id: Uuid,
     document_id: Uuid,

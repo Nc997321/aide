@@ -12,7 +12,13 @@ pub struct Config {
     pub port: u16,
     /// 附件与导入产物的落盘目录
     pub storage_dir: PathBuf,
+    /// 会话的滑动窗口：一直在用就一直不用重登（到期前一个节流窗口内自动续期）
     pub session_ttl_hours: i64,
+    /// 会话的**绝对上限**，从创建时刻起算，续期不延长它。
+    ///
+    /// 为什么必须有：滑动续期让泄露的凭据「只要攻击者一直在用就不过期」。
+    /// 到这条线上必须重新登录一次（spec §4.3）。
+    pub session_hard_ttl_hours: i64,
     /// 编辑软锁有效期，前端需在此间隔内心跳续租
     pub lock_ttl_seconds: i64,
     /// 同一作者对同一文档的连续保存合并窗口，避免边写边存堆出一串无意义版本
@@ -41,6 +47,7 @@ impl Config {
             port: env_parse("KB_PORT", 8788),
             storage_dir: PathBuf::from(env("KB_STORAGE_DIR", "./storage")),
             session_ttl_hours: env_parse("KB_SESSION_TTL_HOURS", 24 * 14),
+            session_hard_ttl_hours: env_parse("KB_SESSION_HARD_TTL_HOURS", 24 * 90),
             lock_ttl_seconds: env_parse("KB_LOCK_TTL_SECONDS", 300),
             revision_merge_window_seconds: env_parse("KB_REVISION_MERGE_WINDOW_SECONDS", 300),
             cors_allowed_origins: env_list(

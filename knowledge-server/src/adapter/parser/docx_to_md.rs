@@ -50,6 +50,8 @@ impl DocumentParser for DocxToMdParser {
         let extracted = super::docx_images::extract_data_url_images(&markdown);
 
         Ok(ParsedDocument {
+            // 产物是解析出来的 markdown，**不是** docx 本身（见 port::ParsedDocument）
+            mime: "text/markdown".to_string(),
             title: first_heading(&extracted.markdown),
             markdown: extracted.markdown,
             warnings: extracted.warnings,

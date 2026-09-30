@@ -26,6 +26,7 @@ pub mod documents;
 pub mod extract;
 pub mod ingest;
 pub mod ip_filter;
+pub mod preview;
 pub mod search;
 pub mod spaces;
 
@@ -57,6 +58,8 @@ pub struct AppState {
     pub tokenizer: Arc<dyn Tokenizer>,
     /// 二进制存储（端口）。今天是文件系统，换对象存储只改 `main.rs` 一行。
     pub blobs: Arc<dyn BlobStore>,
+    /// 预览取件票据（内存态，进程重启即失效——这是设计，不是缺陷）。
+    pub previews: Arc<crate::domain::preview_token::PreviewTokens>,
 }
 
 /// 按配置构造 CORS 层。
@@ -140,6 +143,13 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
                 .delete(documents::delete),
         )
         .route("/api/documents/{id}/revisions", get(documents::revisions))
+        // 预览取件：签票要 Bearer（谁在预览、能预览什么由账号决定），
+        // 兑票口**刻意不挂鉴权**——浏览器直接导航过来，发不出 Authorization。
+        .route(
+            "/api/documents/{id}/preview-token",
+            post(preview::mint_token),
+        )
+        .route("/p/{token}", get(preview::fetch))
         .route("/api/documents/{id}/revert", post(documents::revert))
         .route(
             "/api/documents/{id}/lock",

@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use crate::port::{DocumentParser, ParseError, ParseOutcome, ParserChain};
 
-use super::{docx_lite, docx_to_md, markdown, pdf};
+use super::{docx_lite, docx_to_md, html, markdown, pdf};
 
 pub struct ParserRegistry {
     backends: Vec<Arc<dyn DocumentParser>>,
@@ -27,6 +27,10 @@ impl ParserRegistry {
     pub fn with_defaults() -> Self {
         Self::new(vec![
             Arc::new(markdown::MarkdownParser),
+            // html 与 markdown 同属**文本形态**：原件原样入库，只是多一份
+            // 剥了标记的可搜文本（domain::search_text）。扩展名与其余后端不重叠，
+            // 位置只影响可读性。
+            Arc::new(html::HtmlParser),
             // docx 双后端：docx-to-md 保真度高（直出 Markdown）但只有 0.1.0，
             // 排前面让它优先；失败则自动落到 docx-lite 兜底。
             // 想整体换后端，改这里一行即可，上层完全不感知。

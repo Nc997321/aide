@@ -6,6 +6,7 @@
 pub mod docx_images;
 pub mod docx_lite;
 pub mod docx_to_md;
+pub mod html;
 pub mod markdown;
 pub mod pdf;
 pub mod registry;

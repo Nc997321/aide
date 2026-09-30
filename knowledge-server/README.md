@@ -171,6 +171,33 @@ psql "$KB_DB_URL" -c "INSERT INTO _migrations (name) VALUES ('003_vector.sql')"
 
 ## 当前能力
 
+### 条目 = 原件 + 派生可搜文本
+
+库里的一篇东西是**条目**：一份内容 + 一个 mime + 一份可搜文本（`documents.mime` /
+`revisions.search_text`）。
+
+| 形态 | 原件 | 存法 | 目前收录 |
+|---|---|---|---|
+| **文本形态** | 本身就是文本 | `revisions.content` | `md` / `markdown` / `txt` / `html` / `htm` |
+| **字节形态** | 字节（图片/pdf/…） | 由解析器抽成 markdown 后入库 | `docx` / `pdf` |
+
+- **mime 由服务端按扩展名定，绝不采信客户端给的 `Content-Type`**（那是发送方自述）。
+  docx / pdf 传进来会被解析成 markdown，所以它们的 mime **仍是 `text/markdown`**——
+  mime 描述的是库里存的那份内容，不是上传的文件。
+- **html 是文本形态**：原件原样存（agent 读到的、人编辑的都是这份源码），
+  另派生一份剥掉标记的可搜文本用于检索（`domain/search_text.rs`，剥标记的规则只此一处）。
+- 派生规则同时服务**写入**与**编辑保存**两条路——漏了后者会搜到旧内容。
+
+### 会话有效期：滑动续期 + 绝对上限
+
+- **滑动**（`KB_SESSION_TTL_HOURS`，默认 14 天）：一直在用就一直不用重新登录。
+  到期前一个节流窗口内（24h）才会写库续期，不是每个请求都写。
+- **绝对上限**（`KB_SESSION_HARD_TTL_HOURS`，默认 90 天）：钉在 `created_at` 上，
+  续期推不动它。到点必须重新登录一次。
+
+⚠️ 代价写在明处：滑动续期让**泄露的凭据「只要攻击者一直在用就不过期」**——
+绝对上限就是给这一点兜底的。
+
 ## 网络准入：可选 IP 白名单
 
 `KB_ALLOWED_CIDR`（逗号分隔 CIDR，留空=不限制）用来把外网挡在门外。
@@ -221,12 +248,25 @@ Bearer 顺带带来：服务端无状态（查 `sessions` 表）、三种前端�
 | 编辑锁 | `POST/DELETE /api/documents/{id}/lock`、`POST /api/documents/{id}/lock/heartbeat` |
 | 检索 | `GET /api/search?q=&space_id=&limit=` |
 | 摄取 | `POST /api/ingest?space_id=`、`GET /api/ingest/formats` |
+| 预览取件 | `POST /api/documents/{id}/preview-token`（要 Bearer）、**`GET /p/{token}`（不要 Bearer）** |
+
+### 取件地址（`/p/{token}`）
+
+右栏内嵌浏览器**直接导航**过去，地址栏发不出 `Authorization` 头（与前端
+`assetLoader.ts` 走 objectURL 是同一个原因）。所以预览口用**不透明 token** 鉴权：
+
+- 由已登录用户为自己的某一份条目签出（判权沿用文档读权限），**只换得来那一份的只读字节**；
+- 短时（10 分钟）、**只在内存里**——进程重启即全部失效，这是设计不是缺陷；
+- 过期 / 未知 / 条目已删都是 404，文案写清「回资料库重新打开」。
+
+第三步的**发布**会复用同一条通路，只是把票换成持久的那种（届时另加表，不是把这张改成落库）。
 
 ## 还没做
 
 - 文档级 ACL 的读写接口（权限模型与合并逻辑已在 `domain/permission.rs`，只差出口）
 - 向量检索（`migrations/optional/003_vector.sql` 已备好，等 pgvector 就位）
-- 摄取管道的 UI（接口已有，docx/pdf 导入目前靠 curl / psql 手动走）
+- 图片 / pdf / xlsx 作为**一等条目**（现在它们要么作为 md 附件、要么被抽成文本，
+  原件不留）——“条目 = 原件 + 派生表示”的字节形态那一刀
 - 标签 / 双链的读写接口（表已建）
 - **回收站 / 恢复**：删除已是软删（`deleted_at`），但界面上没有入口——被删文档只能由
   管理员在库里 `UPDATE documents SET deleted_at = NULL` 捞回来。要做「已删列表 + 恢复」

@@ -38,6 +38,13 @@ pub fn placeholder(idx: usize) -> String {
 /// 这样无论底层换成哪个库，上层拿到的都是同一个结构。
 #[derive(Debug, Clone)]
 pub struct ParsedDocument {
+    /// **落库那份内容**的类型，不是上传文件的类型：docx / pdf 传进来会被解析成
+    /// markdown，所以它们的 `mime` 仍是 `text/markdown`；html 是文本形态，
+    /// 原件原样存 `markdown` 字段（字段名是历史包袱，它就是「正文」）。
+    ///
+    /// 由服务端按扩展名决定，绝不采信客户端给的 `Content-Type`。
+    pub mime: String,
+
     /// 统一转成 Markdown。知识库的一等存储格式就是 Markdown。
     /// 附件位置以解析期占位符 `{{asset:<下标>}}` 标记，见 [`placeholder`]。
     pub markdown: String,

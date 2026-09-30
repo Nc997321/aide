@@ -46,7 +46,10 @@ pub async fn search_full_text(
                   -- 若直接吐 <mark>，前端就只能 v-html 信任这段 HTML（XSS 面）；
                   -- 用哨兵则前端可以先整体转义、再按哨兵切成高亮片段——
                   -- 安全性不再依赖"正文里没有尖括号"，最坏只是高亮错位。
-                  ts_headline('simple'::regconfig, r.content, q,
+                  -- 高亮片段从**派生可搜文本**切：html 条目直接切 content 的话，
+                  -- 片段里会带着标签噪声（而 tsv 已经按派生文本建了索引，
+                  -- 两者同源才不会出现「搜得到但高亮在别处」）。
+                  ts_headline('simple'::regconfig, coalesce(r.search_text, r.content), q,
                               'MaxFragments=3, MaxWords=24, MinWords=8, '
                               'StartSel=[[HL]], StopSel=[[/HL]]') AS snippet
              FROM revisions r

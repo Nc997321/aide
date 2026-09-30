@@ -63,6 +63,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         parsers,
         tokenizer,
         blobs,
+        // 进程内存态：重启即全部失效，这是预览票据的设计语义（见 domain/preview_token.rs）
+        previews: Arc::new(crate::domain::preview_token::PreviewTokens::new()),
     };
 
     let app = build_router(state)?;

@@ -46,6 +46,9 @@ pub struct DocumentSummary {
     pub kind: DocumentKind,
     pub slug: String,
     pub title: String,
+    /// 内容的存储类型。列表也带出来，前端才能在**打开之前**就显示对的图标
+    /// （网页产物与文档不是一回事）。
+    pub mime: String,
     pub version_no: i32,
     pub status: String,
     pub updated_at: DateTime<Utc>,
@@ -183,9 +186,18 @@ pub async fn documents(
     // ⚠️ ORDER BY 只提供**稳定**顺序，真正的节点顺序由前端组装树时决定（同一条规则
     // 写两遍：文件夹优先、名称升序）。让 SQL 与前端一致的意义是不会出现「SQL 排了
     // 一种、前端排了另一种」的错位。
-    let rows: Vec<(Uuid, Option<Uuid>, String, String, String, i32, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            r#"SELECT d.id, d.parent_id, d.kind, d.slug, d.title,
+    let rows: Vec<(
+        Uuid,
+        Option<Uuid>,
+        String,
+        String,
+        String,
+        String,
+        i32,
+        String,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+            r#"SELECT d.id, d.parent_id, d.kind, d.slug, d.title, d.mime,
                       COALESCE(r.version_no, 0) AS version_no,
                       d.status,
                       d.updated_at
@@ -206,7 +218,7 @@ pub async fn documents(
     Ok(Json(
         rows.into_iter()
             .map(
-                |(id, parent_id, kind, slug, title, version_no, status, updated_at)| {
+                |(id, parent_id, kind, slug, title, mime, version_no, status, updated_at)| {
                     DocumentSummary {
                         id,
                         parent_id,
@@ -215,6 +227,7 @@ pub async fn documents(
                         kind: DocumentKind::try_from(kind.as_str()).unwrap_or(DocumentKind::Doc),
                         slug,
                         title,
+                        mime,
                         version_no,
                         status,
                         updated_at,

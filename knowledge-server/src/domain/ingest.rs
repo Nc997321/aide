@@ -44,6 +44,9 @@ pub struct IngestInput {
 #[derive(Debug, Clone)]
 pub struct ParsedFile {
     pub title: String,
+    /// 落库内容的类型（html 条目就是 `text/html`），由解析后端给出。
+    /// 它决定可搜文本怎么派生——见 `domain::search_text`。
+    pub mime: String,
     /// 含解析期占位符 `{{asset:i}}`；`prepare_assets` 会把它换成 `asset://<uuid>`。
     pub markdown: String,
     /// 实际生效的后端标识，落进日志/审计——「这篇文档为什么结构丢了」靠它解释
@@ -98,6 +101,7 @@ pub fn parse_file(
 
     Ok(ParsedFile {
         title,
+        mime: outcome.document.mime,
         markdown: outcome.document.markdown,
         backend: outcome.backend,
         warnings: outcome.document.warnings,
@@ -136,6 +140,7 @@ pub async fn ingest_parsed(
             slug,
             title: parsed.title.clone(),
             content: parsed.markdown,
+            mime: parsed.mime.clone(),
             author_id: input.author_id,
         },
     )
@@ -477,6 +482,7 @@ mod tests {
     fn parsed_with(markdown: &str, assets: Vec<ParsedAsset>) -> ParsedFile {
         ParsedFile {
             title: "T".into(),
+            mime: "text/markdown".into(),
             markdown: markdown.to_string(),
             backend: "test",
             warnings: Vec::new(),

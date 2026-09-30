@@ -32,9 +32,10 @@ pub async fn save_revision(
     input: SaveInput,
 ) -> AppResult<(Uuid, i32)> {
     // FOR UPDATE 锁文档行：两个并发保存不能算出同一个 version_no。
-    // 顺手把 kind 带出来——文件夹没有正文，不能进这条路径。
-    let current: Option<(Option<Uuid>, String)> = sqlx::query_as(
-        "SELECT current_revision_id, kind
+    // 顺手把 kind 与 mime 带出来——文件夹没有正文，不能进这条路径；
+    // mime 决定可搜文本怎么派生（html 要剥标记）。
+    let current: Option<(Option<Uuid>, String, String)> = sqlx::query_as(
+        "SELECT current_revision_id, kind, mime
            FROM documents
           WHERE id = $1 AND deleted_at IS NULL
           FOR UPDATE",
@@ -43,7 +44,7 @@ pub async fn save_revision(
     .fetch_optional(&mut *conn)
     .await?;
 
-    let Some((current_revision_id, kind)) = current else {
+    let Some((current_revision_id, kind, mime)) = current else {
         return Err(AppError::NotFound("文档不存在或已被删除".into()));
     };
 
@@ -53,6 +54,13 @@ pub async fn save_revision(
         return Err(AppError::BadRequest("文件夹没有正文，不能保存版本".into()));
     }
 
+    // 可搜文本与分词输入都从同一次派生来——两者不同源会让「能搜到」和
+    // 「高亮在哪」对不上，而那种错只能靠翻库才看得出来。
+    // ⚠️ 编辑保存也要重算（spec Review Focus #4）：漏了就会搜到**旧内容**。
+    let search_text = crate::domain::search_text::derive(&mime, &input.content);
+    let tokenize_src = search_text.as_deref().unwrap_or(&input.content);
+    let content_tokenized = tokenizer.tokenize(tokenize_src);
+
     // 合并窗口：同一作者的连续保存改写当前版本而不是新建，
     // 否则边写边存会在版本历史里堆出一串无意义的 v2/v3/v4。
     if !input.force_new_version {
@@ -61,6 +69,7 @@ pub async fn save_revision(
                 r#"UPDATE revisions
                       SET title = $2, content = $3,
                           title_tokenized = $4, content_tokenized = $5,
+                          search_text = $9,
                           change_note = COALESCE($6, change_note)
                     WHERE id = $1
                       AND author_id = $7
@@ -71,10 +80,11 @@ pub async fn save_revision(
             .bind(&input.title)
             .bind(&input.content)
             .bind(tokenizer.tokenize(&input.title))
-            .bind(tokenizer.tokenize(&input.content))
+            .bind(&content_tokenized)
             .bind(&input.change_note)
             .bind(input.author_id)
             .bind(config.revision_merge_window_seconds)
+            .bind(&search_text)
             .fetch_optional(&mut *conn)
             .await?;
 
@@ -104,8 +114,8 @@ pub async fn save_revision(
     let (rev_id,): (Uuid,) = sqlx::query_as(
         r#"INSERT INTO revisions
              (document_id, version_no, title, content,
-              title_tokenized, content_tokenized, author_id, change_note)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+              title_tokenized, content_tokenized, author_id, change_note, search_text)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
            RETURNING id"#,
     )
     .bind(input.document_id)
@@ -113,9 +123,10 @@ pub async fn save_revision(
     .bind(&input.title)
     .bind(&input.content)
     .bind(tokenizer.tokenize(&input.title))
-    .bind(tokenizer.tokenize(&input.content))
+    .bind(&content_tokenized)
     .bind(input.author_id)
     .bind(&input.change_note)
+    .bind(&search_text)
     .fetch_one(&mut *conn)
     .await?;
 
@@ -141,6 +152,9 @@ pub struct CreateInput {
     pub slug: String,
     pub title: String,
     pub content: String,
+    /// 落库内容的类型（决定可搜文本怎么派生）。新建的普通文档是 markdown；
+    /// 摄取来的条目由解析器给出（html 就是 text/html）。
+    pub mime: String,
     pub author_id: Uuid,
 }
 
@@ -170,8 +184,8 @@ pub async fn create_node(
 /// 插节点行。title 与 kind 在这里落库——标题上移之后它不再只存在于 revisions。
 async fn insert_node(conn: &mut PgConnection, input: &CreateInput) -> AppResult<Uuid> {
     let (doc_id,): (Uuid,) = sqlx::query_as(
-        r#"INSERT INTO documents (space_id, parent_id, kind, slug, title, created_by, updated_by)
-           VALUES ($1, $2, $3, $4, $5, $6, $6)
+        r#"INSERT INTO documents (space_id, parent_id, kind, slug, title, created_by, updated_by, mime)
+           VALUES ($1, $2, $3, $4, $5, $6, $6, $7)
            RETURNING id"#,
     )
     .bind(input.space_id)
@@ -180,6 +194,8 @@ async fn insert_node(conn: &mut PgConnection, input: &CreateInput) -> AppResult<
     .bind(&input.slug)
     .bind(&input.title)
     .bind(input.author_id)
+    // 文件夹也有 mime 列（NOT NULL），给默认值即可——它没有正文，没人读它
+    .bind(&input.mime)
     .fetch_one(&mut *conn)
     .await?;
     Ok(doc_id)
@@ -192,19 +208,24 @@ async fn insert_first_revision(
     doc_id: Uuid,
     input: &CreateInput,
 ) -> AppResult<Uuid> {
+    // 与 save_revision 同一条派生规则（唯一产地见 domain::search_text）
+    let search_text = crate::domain::search_text::derive(&input.mime, &input.content);
+    let tokenize_src = search_text.as_deref().unwrap_or(&input.content);
+
     let (rev_id,): (Uuid,) = sqlx::query_as(
         r#"INSERT INTO revisions
              (document_id, version_no, title, content,
-              title_tokenized, content_tokenized, author_id)
-           VALUES ($1, 1, $2, $3, $4, $5, $6)
+              title_tokenized, content_tokenized, author_id, search_text)
+           VALUES ($1, 1, $2, $3, $4, $5, $6, $7)
            RETURNING id"#,
     )
     .bind(doc_id)
     .bind(&input.title)
     .bind(&input.content)
     .bind(tokenizer.tokenize(&input.title))
-    .bind(tokenizer.tokenize(&input.content))
+    .bind(tokenizer.tokenize(tokenize_src))
     .bind(input.author_id)
+    .bind(&search_text)
     .fetch_one(&mut *conn)
     .await?;
 

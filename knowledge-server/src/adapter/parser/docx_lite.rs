@@ -41,6 +41,8 @@ impl DocumentParser for DocxLiteParser {
         //   - 图片丢弃（它只做 extract_text，没有读 media 的 API，**也数不出张数**）
         // 数不出张数就无条件说明这个限制 —— 沉默是这里唯一的错误选项。
         Ok(ParsedDocument {
+            // 产物是抽取出来的 markdown，**不是** docx 本身（见 port::ParsedDocument）
+            mime: "text/markdown".to_string(),
             title: None,
             markdown: text,
             warnings: vec![

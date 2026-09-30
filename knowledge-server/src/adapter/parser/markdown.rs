@@ -26,6 +26,7 @@ impl DocumentParser for MarkdownParser {
         })?;
 
         Ok(ParsedDocument {
+            mime: "text/markdown".to_string(),
             title: first_heading(&content),
             markdown: content,
             warnings: no_warnings(),

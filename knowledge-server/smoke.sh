@@ -3,7 +3,9 @@
 #
 # 一条命令验证后端主链路：bootstrap → invite → join → createSpace →
 # createDocument → lock/heartbeat/release → update（含合并窗口与换作者新版本）→
-# revert → search → 软删（级联子树 / 检索过滤 / 删后重建同名）→ logout → 邀请令牌复用拒绝。
+# revert → search → 摄取（含图 docx 的资源通道 / **html 产物** / 取件地址）→
+# 网页条目的检索与编辑后重算 → 软删（级联子树 / 检索过滤 / 删后重建同名）→
+# 会话有效期（滑动续期 / 绝对上限 / 过期）→ logout → 邀请令牌复用拒绝。
 #
 # 前置（在 knowledge-server/ 目录下）：
 #   docker compose down -v 2>/dev/null; docker compose up -d --build
@@ -16,8 +18,9 @@
 #
 # 不覆盖（需要真实时间或并发，不适合冒烟）：
 #   锁 TTL 过期被他人取走（默认 300s）、心跳迟到的旧持有人不复活、文档级 ACL。
-#   摄取只覆盖「含图 docx 的资源通道」这一条链路（fixture 见 tests/fixtures/）；
 #   pdf 与其它格式、批量导入不在范围内。
+#   ⚠️ 会话有效期那三条断言要直接改库里的时间（`psql_kb`），**只在
+#      `-p kbsmoke` 那套隔离栈下会真正执行**；换别的实例跑会打印 ⚠️ 跳过。
 set -euo pipefail
 
 BASE="${1:-http://127.0.0.1:8788}"
@@ -88,6 +91,33 @@ expect() {
 }
 
 say() { printf '\n== %s ==\n' "$1"; }
+
+# search_kb QUERY TOKEN —— 检索一条；返回 body，状态码走 $CODE_FILE（与 api() 同约定）。
+# 查询串走 stdin：中文出现在 argv 上会被 git-bash 按 ANSI 代码页转码（见文件头说明）。
+search_kb() {
+  local out
+  out="$(printf '%s' "$1" | curl -sS --max-time 15 -G "$BASE/api/search" \
+    --data-urlencode 'q@-' \
+    -H "Accept: application/json" -H "Authorization: Bearer $2" \
+    -w $'\n%{http_code}')"
+  printf '%s' "${out##*$'\n'}" > "$CODE_FILE"
+  printf '%s' "${out%$'\n'*}"
+}
+
+# psql_kb SQL —— 直接查冒烟栈的库（会话有效期要改时间，没有别的办法）。
+# 只有「本机 + 冒烟 overlay + -p kbsmoke」这套栈下可用；拿不到返回空串，
+# 调用点据此**明说跳过**（不静默）。
+psql_kb() {
+  docker compose -f docker-compose.yml -f docker-compose.dev.yml \
+    -f docker-compose.smoke.yml -p kbsmoke exec -T db \
+    psql -U aide -d aide_kb -tAc "$1" 2>/dev/null | tr -d '\r' | sed '/^[[:space:]]*$/d' | head -1
+}
+
+# sha256('<token>') 的 SQL 表达式——与 api/extract.rs::hash_token 同一算法，
+# 用它把断言精确打到刚建出来的那一条会话上，而不是「最新的那条」。
+session_hash_sql() {
+  printf "encode(sha256(convert_to('%s','UTF8')),'hex')" "$1"
+}
 
 # ── 冒烟开始 ─────────────────────────────────────────────────────────
 
@@ -281,6 +311,124 @@ else
 fi
 rm -f "$ASSET_BIN"
 
+say "资料库：网页产物（html）"
+# 一个自包含的 html：正文里一个独特词（青鸾）、待替换词（朱雀）、
+# <script> 里另一个独特词（smokeOnlyScriptWord，Review Focus #2 用）。
+HTML_DIR="$(mktemp -d)"
+HTML_FIXTURE="$HTML_DIR/smoke.html"
+printf '%s' '<!doctype html>
+<html><head><title>季度复盘</title>
+<style>.kpi{color:#c00}</style>
+<script>var smokeOnlyScriptWord=1;</script>
+</head>
+<body><h1>季度复盘</h1><p>关键词：青鸾。待替换词：朱雀。</p></body></html>' > "$HTML_FIXTURE"
+
+resp="$(curl -sS --max-time 60 -X POST "$BASE/api/ingest?spaceId=$SPACE_ID" \
+  -H "Accept: application/json" -H "Authorization: Bearer $TOKEN_B" \
+  -F "file=@$HTML_FIXTURE" -w $'\n%{http_code}')"
+STATUS="${resp##*$'\n'}"
+resp="${resp%$'\n'*}"
+expect "$STATUS" "201" "上传 html → 201"
+HTML_DOC_ID="$(field "$resp" documentId)"
+[ -n "$HTML_DOC_ID" ] || { echo "  ✗ 未拿到网页条目 id" >&2; exit 1; }
+expect "$(field "$resp" backend)" "html" "走的是 html 后端"
+
+body="$(api GET "/api/documents/$HTML_DOC_ID" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "读回网页条目 → 200"
+expect "$(field "$body" mime)" "text/html" "mime 是 text/html（由服务端按扩展名定）"
+"$PY" - "$body" "$HTML_FIXTURE" <<'PYEOF'
+import sys, json
+doc = json.loads(sys.argv[1])
+raw = open(sys.argv[2], encoding="utf-8").read()
+if doc["content"] != raw:
+    print("  ✗ 库里存的不是原件 —— agent 读到的是被改造过的文本", file=sys.stderr)
+    sys.exit(1)
+print("  ✓ 正文逐字等于上传的原件（agent 读得到能改的源码）")
+PYEOF
+
+body="$(api GET /api/ingest/formats)"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "GET /api/ingest/formats → 200"
+"$PY" - "$body" <<'PYEOF'
+import sys, json
+exts = json.loads(sys.argv[1])["extensions"]
+if "html" not in exts or "htm" not in exts:
+    print(f"  ✗ 没收录 html/htm：{exts}", file=sys.stderr); sys.exit(1)
+if "csv" in exts or "json" in exts:
+    print(f"  ✗ 混进了非产品格式（spec §5.1）：{exts}", file=sys.stderr); sys.exit(1)
+print("  ✓ 收录 html/htm，且没有 csv/json")
+PYEOF
+
+say "取件地址：本机可达、免 Bearer 的预览通路"
+body="$(api POST "/api/documents/$HTML_DOC_ID/preview-token" "" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "签预览票 → 200"
+PREVIEW_TOKEN="$(field "$body" token)"
+[ -n "$PREVIEW_TOKEN" ] || { echo "  ✗ 未拿到预览 token" >&2; exit 1; }
+
+PREVIEW_BIN="$(mktemp)"
+hdr="$(curl -sS --max-time 15 -D - -o "$PREVIEW_BIN" "$BASE/p/$PREVIEW_TOKEN")"
+expect "$(printf '%s' "$hdr" | head -1 | tr -d '\r' | awk '{print $2}')" "200" \
+  "不带 Authorization 取件 → 200（浏览器直接导航，发不出鉴权头）"
+if printf '%s' "$hdr" | grep -qi '^content-type: text/html'; then
+  echo "  ✓ 取件的 Content-Type 是 text/html"
+else
+  echo "  ✗ 取件的 Content-Type 不是 text/html：" >&2
+  printf '%s\n' "$hdr" | head -5 >&2
+  exit 1
+fi
+if cmp -s "$PREVIEW_BIN" "$HTML_FIXTURE"; then
+  echo "  ✓ 取到的字节与上传的原件逐字相同"
+else
+  echo "  ✗ 取到的字节与原件不同" >&2
+  exit 1
+fi
+rm -f "$PREVIEW_BIN"
+
+body="$(api GET "/p/definitely-not-a-token" "")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "404" "无效取件 token → 404"
+case "$body" in
+  *失效*) echo "  ✓ 404 文案写清了下一步" ;;
+  *) echo "  ✗ 404 文案没写清（实际：$body）" >&2; exit 1 ;;
+esac
+
+say "网页条目的检索：剥标记、排除脚本"
+body="$(search_kb '青鸾' "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "搜正文词 → 200"
+expect "$(field "$body" hits.0.documentId)" "$HTML_DOC_ID" "正文词命中网页条目"
+expect "$(field "$body" hits.1.documentId)" "" "只命中这一条"
+"$PY" - "$body" <<'PYEOF'
+import sys, json
+snip = json.loads(sys.argv[1])["hits"][0]["snippet"]
+if "<" in snip or ">" in snip:
+    print(f"  ✗ 高亮片段里带着标签：{snip}", file=sys.stderr); sys.exit(1)
+print(f"  ✓ 高亮片段里没有标签：{snip[:40]}")
+PYEOF
+body="$(search_kb 'smokeOnlyScriptWord' "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "搜 <script> 里的词 → 200"
+expect "$(field "$body" hits)" "[]" "脚本内容零命中（Review Focus #2）"
+
+say "网页条目编辑后可搜文本跟着重算"
+EDIT_BODY="$("$PY" - "$HTML_FIXTURE" <<'PYEOF'
+import sys, json
+raw = open(sys.argv[1], encoding="utf-8").read()
+print(json.dumps({"title": "季度复盘", "content": raw.replace("朱雀", "玄武"), "changeNote": "换一个词"}))
+PYEOF
+)"
+body="$(api PUT "/api/documents/$HTML_DOC_ID" "$EDIT_BODY" "$TOKEN_B")"
+STATUS="$(cat "$CODE_FILE")"
+expect "$STATUS" "200" "编辑网页条目 → 200"
+expect "$(field "$body" merged)" "true" "同一作者在合并窗口内 → 改写当前版本（正是最容易漏算的那条路）"
+
+body="$(search_kb '玄武' "$TOKEN_B")"
+expect "$(field "$body" hits.0.documentId)" "$HTML_DOC_ID" "改后的词能搜到"
+body="$(search_kb '朱雀' "$TOKEN_B")"
+expect "$(field "$body" hits)" "[]" "改前的词搜不到了（Review Focus #4）"
+
 say "解析失败不留孤儿文件"
 count_storage() {
   docker compose exec -T knowledge sh -c 'ls -1 /app/storage 2>/dev/null | wc -l' 2>/dev/null | tr -d '\r '
@@ -468,6 +616,46 @@ STATUS="${body##*$'\n'}"
 body="${body%$'\n'*}"
 expect "$STATUS" "200" "按文件夹标题检索 → 200"
 expect "$(field "$body" hits)" "[]" "文件夹不进检索结果"
+
+say "会话有效期：滑动续期 + 绝对上限"
+if [ -n "$(psql_kb 'SELECT 1')" ]; then
+  body="$(api POST /api/auth/login '{"account":"smoke-admin","password":"smoke-pass-123"}')"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "200" "管理员重新登录，另取一条会话 → 200"
+  TOKEN_S="$(field "$body" token)"
+  [ -n "$TOKEN_S" ] || { echo "  ✗ 未拿到新会话 token" >&2; exit 1; }
+  HASH_S="$(session_hash_sql "$TOKEN_S")"
+
+  body="$(api GET /api/auth/me "" "$TOKEN_S")"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "200" "正常凭据仍然 200（滑动没弄坏正常路径）"
+
+  # ① 快到期 → 用一次就被推到满窗口（免登录不再每 14 天破功）
+  psql_kb "UPDATE sessions SET expires_at = now() + interval '1 hour' WHERE token_hash = $HASH_S" >/dev/null
+  body="$(api GET /api/auth/me "" "$TOKEN_S")"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "200" "快到期时用一次 → 200"
+  expect "$(psql_kb "SELECT (expires_at > now() + interval '13 days') FROM sessions WHERE token_hash = $HASH_S")" \
+    "t" "窗口被续期推后（滑动生效）"
+
+  # ② 绝对上限：created_at 推到 100 天前，expires_at 留在未来 → 仍然 401
+  psql_kb "UPDATE sessions SET created_at = now() - interval '100 days' WHERE token_hash = $HASH_S" >/dev/null
+  expect "$(psql_kb "SELECT (expires_at > now()) FROM sessions WHERE token_hash = $HASH_S")" \
+    "t" "（前置）这条会话的 expires_at 确实还在未来"
+  body="$(api GET /api/auth/me "" "$TOKEN_S")"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "401" "超过绝对上限 → 401（滑动兜不住的那一头）"
+
+  # ③ 过期凭据照旧 401
+  body="$(api POST /api/auth/login '{"account":"smoke-admin","password":"smoke-pass-123"}')"
+  TOKEN_X="$(field "$body" token)"
+  psql_kb "UPDATE sessions SET expires_at = now() - interval '1 hour' WHERE token_hash = $(session_hash_sql "$TOKEN_X")" >/dev/null
+  body="$(api GET /api/auth/me "" "$TOKEN_X")"
+  STATUS="$(cat "$CODE_FILE")"
+  expect "$STATUS" "401" "过期凭据 → 401"
+else
+  echo "  ⚠️ 拿不到冒烟栈的数据库句柄（非本机 -p kbsmoke 栈）——本段三条断言未执行"
+fi
 
 say "登出"
 body="$(api POST /api/auth/logout "" "$TOKEN_E")"
