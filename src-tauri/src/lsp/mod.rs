@@ -10,6 +10,7 @@ pub mod detector;
 pub mod jump;
 pub mod docs;
 pub mod manager;
+pub mod workspace_langs;
 pub mod profiles;
 pub mod protocol;
 pub mod registry;

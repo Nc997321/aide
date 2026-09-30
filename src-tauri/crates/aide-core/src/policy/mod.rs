@@ -9,6 +9,7 @@
 pub mod evaluate;
 pub mod matchers;
 pub mod model;
+pub mod safe_rules;
 
 // Re-exports are the policy module's public surface for the commands layer
 // (Task 5) and the sidecar fixture. They are unused until Task 5 wires the

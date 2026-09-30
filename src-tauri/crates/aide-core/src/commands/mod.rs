@@ -9,6 +9,7 @@ pub mod migration;
 pub mod notifications;
 pub mod onboarding;
 pub mod provider;
+pub mod workspace;
 pub mod recent;
 pub mod watch;
 

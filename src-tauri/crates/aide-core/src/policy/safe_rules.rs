@@ -75,7 +75,7 @@ fn prefix_matcher(cmd: &str) -> Value {
 
 /// 幂等写入安全命令白名单到 local scope，返回**新增条数**。已存在同 (tool, matcher)
 /// 规则（用户手动加的或上次自动写的）跳过；文件不存在时由 settings store 自动创建。
-pub(crate) fn ensure_safe_rules(
+pub fn ensure_safe_rules(
     service: &SettingsService,
     project: &Path,
 ) -> Result<usize, SettingsError> {
@@ -115,7 +115,7 @@ pub(crate) fn ensure_safe_rules(
 
 /// 删除 local scope 里的自动规则（id ∈ 安全命令确定性 id 集合），返回**删除条数**。
 /// 用户手动规则保留。无自动规则时返回 0，不报错。
-pub(crate) fn remove_safe_rules(
+pub fn remove_safe_rules(
     service: &SettingsService,
     project: &Path,
 ) -> Result<usize, SettingsError> {

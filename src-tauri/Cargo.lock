@@ -112,6 +112,7 @@ name = "aide-core"
 version = "0.8.0"
 dependencies = [
  "aide-workspace",
+ "dunce",
  "once_cell",
  "regex",
  "serde",

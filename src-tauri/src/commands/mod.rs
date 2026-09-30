@@ -5,6 +5,7 @@ pub mod clipboard;
 pub mod detectors;
 pub mod file_assoc;
 pub mod mcp_probe;
+pub mod workspace_trust;
 pub mod filesystem;
 pub mod marketplace;
 pub mod memory_observatory;
@@ -13,7 +14,7 @@ pub mod permissions;
 pub use aide_core::proxy;
 /// 已迁入 aide-core 的命令模块；保留 `crate::commands::<模块>` 路径。
 pub use aide_core::commands::{
-    customizations, knowledge, migration, notifications, onboarding, recent,
+    customizations, knowledge, migration, notifications, onboarding, recent, workspace,
 };
 pub mod remote;
 pub mod run_configs;
@@ -21,7 +22,6 @@ pub mod run_process;
 pub mod session;
 pub mod settings;
 pub mod shell;
-pub mod workspace;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -45,12 +45,7 @@ pub struct Session {
 
 
 
-#[derive(Debug, Serialize, Clone)]
-pub struct WorkspaceInfo {
-    pub key: String,
-    pub name: String,
-    pub missing: bool,
-}
+pub use aide_core::commands::workspace::WorkspaceInfo;
 
 
 

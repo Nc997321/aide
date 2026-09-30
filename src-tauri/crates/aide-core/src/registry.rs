@@ -47,6 +47,7 @@ static TABLES: &[&[Command]] = &[
     crate::commands::onboarding::COMMANDS,
     crate::commands::provider::COMMANDS,
     crate::commands::recent::COMMANDS,
+    crate::commands::workspace::COMMANDS,
     crate::proxy::COMMANDS,
     crate::commands::watch::COMMANDS,
 ];

@@ -1,10 +1,42 @@
-use std::path::PathBuf;
-use std::sync::Arc;
-use tauri::State;
+//! 工作区：显式注册表（侧栏列表的数据源）、活动工作区、信任白名单、每工作区开关（LSP /
+//! 索引 / JDK）、@目录授权裁定、日常工作区。全部是 Host 数据（state.json + 项目目录）。
 
-use super::{claude_projects_dir, WorkspaceInfo, WorkspaceState};
-use crate::runtime::AgentRuntimeManager;
-use crate::settings::{SettingsScope, SettingsService};
+use std::path::PathBuf;
+
+use serde::Serialize;
+
+use crate::paths::claude_projects_dir;
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+use crate::{command, Core};
+use serde::Deserialize;
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("workspace_get_jdk", workspace_get_jdk),
+    command!("workspace_set_jdk", workspace_set_jdk),
+    command!("list_workspaces", list_workspaces),
+    command!("daily_workspace", daily_workspace),
+    command!("set_workspace", set_workspace),
+    command!("create_workspace", create_workspace),
+    command!("remove_workspace", remove_workspace),
+    command!("unhide_workspace", unhide_workspace),
+    command!("is_workspace_trusted", is_workspace_trusted),
+    command!("workspace_set_lsp_enabled", workspace_set_lsp_enabled),
+    command!("workspace_set_lsp_excludes", workspace_set_lsp_excludes),
+    command!("workspace_get_lsp_excludes", workspace_get_lsp_excludes),
+    command!("workspace_get_codegraph_enabled", workspace_get_codegraph_enabled),
+    command!("workspace_set_codegraph_enabled", workspace_set_codegraph_enabled),
+];
+
+
+#[derive(Debug, Serialize, Clone)]
+pub struct WorkspaceInfo {
+    pub key: String,
+    pub name: String,
+    pub missing: bool,
+}
+
 
 // ── 子实现层 ──
 // git_exclude：信任 / 索引激活时把 `.aide/` 幂等写入仓库 .git/info/exclude，
@@ -142,7 +174,7 @@ pub fn trust_key_from_key(key: &str) -> String {
 /// 等 Rust 侧门控点调用；读 state.json 是轻量 IO，调用方已在 spawn_blocking
 /// 或命令体里。
 pub fn is_path_trusted(path: &str) -> bool {
-    trusted_keys(&super::settings::load_state()).contains(&trust_key_from_path(path))
+    trusted_keys(&crate::app_settings::load_state()).contains(&trust_key_from_path(path))
 }
 
 /// 清掉 state 的 workspace（激活）字段。
@@ -165,7 +197,7 @@ pub struct WorkspaceLspConfig {
 
 /// 读某工作区的 LSP 配置（不存在 → 默认：关闭、无排除）。
 pub fn lsp_workspace_config(key: &str) -> WorkspaceLspConfig {
-    let config = super::settings::load_state();
+    let config = crate::app_settings::load_state();
     config
         .get("lsp_workspaces")
         .and_then(|w| w.get(key))
@@ -176,7 +208,7 @@ pub fn lsp_workspace_config(key: &str) -> WorkspaceLspConfig {
 
 /// 设某工作区 LSP 开关。写 state JSON 的 lsp_workspaces[key].enabled。
 pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         let entry = config
             .as_object_mut()
             .ok_or("state not object")?
@@ -199,7 +231,7 @@ pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
 
 /// 设某工作区排除目录列表。写 state JSON 的 lsp_workspaces[key].exclude_dirs。
 pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         let entry = config
             .as_object_mut()
             .ok_or("state not object")?
@@ -233,7 +265,7 @@ pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
 /// 塌缩）；裸路径请走 `is_codegraph_enabled_for_path`，勿直接喂路径——
 /// 路径分隔符不在归一范围，会算出不存在的键而静默按关。
 pub fn codegraph_workspace_enabled(key: &str) -> bool {
-    super::settings::load_state()
+    crate::app_settings::load_state()
         .get("codegraph_workspaces")
         .and_then(|w| w.get(trust_key_from_key(key)))
         .and_then(|v| v.get("enabled"))
@@ -246,47 +278,11 @@ pub fn is_codegraph_enabled_for_path(path: &str) -> bool {
     codegraph_workspace_enabled(&trust_key_from_path(path))
 }
 
-/// 该工作区有哪几种语言**配得上语言服务器**——agent LSP 工具的挂载闸门数据源。
-///
-/// 「配得上」= detector 探到了该语言 + `registry::resolve` 能解析出 server 来源
-/// （用户覆盖 > 捆绑 > PATH，三级优先级由 resolve 内部处理，不在这里重造）。
-/// 两者缺一，工具挂了也只会返回 no_server——那就干脆别挂，省下每轮重发的工具 schema。
-///
-/// 与 `is_codegraph_enabled_for_path` 并列：都是「主进程算好、下发给 sidecar」的政策值
-/// （见 automation/scheduler.rs 的 trusted/codegraph_enabled 同款处理）。
-///
-/// **签名带 `app`**：`registry::resolve` 需要它解析捆绑资源路径。无 app 就查不了
-/// 捆绑 server，**不许**退化成「只查 PATH」——那会把一批用户误判成「没有 LSP」。
-pub fn lsp_languages_for_path(app: &tauri::AppHandle, workspace_root: &str) -> Vec<String> {
-    use tauri::Manager;
-    let langs = lsp_language_ids_of(workspace_root);
-    if langs.is_empty() {
-        return vec![]; // 探不到语言：连 settings 都不必读
-    }
-    let Ok(settings) = app
-        .try_state::<std::sync::Arc<crate::settings::SettingsService>>()
-        .map(|s| crate::commands::settings::public_settings(s.inner()))
-        .unwrap_or(Ok(Default::default()))
-    else {
-        return vec![];
-    };
-    langs
-        .into_iter()
-        .filter(|lang| crate::lsp::registry::resolve(*lang, &settings, app).is_some())
-        .map(|lang| lang.id_str().to_string())
-        .collect()
-}
-
-/// 纯路径判定部分：该根探测到哪些语言。与 app 无关，故可单测。
-fn lsp_language_ids_of(workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
-    crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root))
-}
-
 /// 设某工作区索引开关。写 state JSON 的 codegraph_workspaces[key].enabled，
 /// key 同样先过归一（幂等：横杠形态再归一不变）。
 pub fn set_codegraph_enabled(key: &str, enabled: bool) -> Result<(), String> {
     let key = trust_key_from_key(key);
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         let entry = config
             .as_object_mut()
             .ok_or("state not object")?
@@ -310,7 +306,7 @@ pub fn set_codegraph_enabled(key: &str, enabled: bool) -> Result<(), String> {
 
 /// 读某工作区选中的 JDK home（未选 → None = 系统默认）。
 pub fn workspace_jdk(key: &str) -> Option<String> {
-    let config = super::settings::load_state();
+    let config = crate::app_settings::load_state();
     config
         .get("workspace_jdks")
         .and_then(|w| w.get(key))
@@ -322,7 +318,7 @@ pub fn workspace_jdk(key: &str) -> Option<String> {
 /// 设某工作区 JDK。空路径 = 清除（回到系统默认），并把键从 map 里摘掉——
 /// 不留空串死数据。
 pub fn set_workspace_jdk(key: &str, jdk_home: &str) -> Result<(), String> {
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         let entry = config
             .as_object_mut()
             .ok_or("state not object")?
@@ -343,18 +339,35 @@ pub fn set_workspace_jdk(key: &str, jdk_home: &str) -> Result<(), String> {
 
 /// 读某工作区选中的 JDK home（未选 → 空串 = 系统默认）。轻量 state 读，
 /// 与 workspace_get_lsp_excludes 同形（async + Result，无 spawn_blocking）。
-#[tauri::command]
-pub async fn workspace_get_jdk(workspace_root: String) -> Result<String, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGetJdkArgs {
+    workspace_root: String,
+}
+
+async fn workspace_get_jdk(_core: Arc<Core>, a: WorkspaceGetJdkArgs) -> Result<String, String> {
+    let WorkspaceGetJdkArgs { workspace_root } = a;
+    {
     let key = path_to_key(&workspace_root);
     Ok(workspace_jdk(&key).unwrap_or_default())
+}
 }
 
 /// 设某工作区 JDK（空 = 系统默认）。前端选择器改动即调，run 进程启动时
 /// 由前端读回合入 env（JAVA_HOME → shell.rs 前置 bin 到 PATH）。
-#[tauri::command]
-pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSetJdkArgs {
+    workspace_root: String,
+    jdk_home: String,
+}
+
+async fn workspace_set_jdk(_core: Arc<Core>, a: WorkspaceSetJdkArgs) -> Result<(), String> {
+    let WorkspaceSetJdkArgs { workspace_root, jdk_home } = a;
+    {
     let key = path_to_key(&workspace_root);
     set_workspace_jdk(&key, &jdk_home)
+}
 }
 
 /// 工作区列表 = 显式注册表（state.json `registeredWorkspaces`，见子模块
@@ -362,13 +375,19 @@ pub async fn workspace_set_jdk(workspace_root: String, jdk_home: String) -> Resu
 /// 路径，missing = 路径磁盘不存在（准确信号）。扫描 + hiddenWorkspaces 过滤
 /// + try_decode 反向解码随旧机制一并退役（hiddenWorkspaces 仅存于迁移跳过
 /// 与 remove-hide 的降级兼容写）。
-#[tauri::command]
-pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListWorkspacesArgs {
+}
+
+async fn list_workspaces(_core: Arc<Core>, a: ListWorkspacesArgs) -> Result<Vec<WorkspaceInfo>, String> {
+    let _ = a;
+    {
     tokio::task::spawn_blocking(|| {
-        let config = super::settings::load_state();
-        let daily = daily::daily_path_in(&super::our_config_dir());
+        let config = crate::app_settings::load_state();
+        let daily = daily::daily_path_in(&crate::paths::our_config_dir());
         let mut infos = infos_from_registry(&config, |p| {
-            crate::remote_workspace::path::present(std::path::Path::new(p))
+            crate::workspace::present(std::path::Path::new(p))
         });
         // 日常目录存在且已注册（它是 cwd / 信任 / 记忆目录的锚），但它不是用户要管理
         // 的项目：从所有工作区列表（侧栏分区、WorkspacePicker）里剔除。唯一过滤点，
@@ -379,17 +398,25 @@ pub async fn list_workspaces() -> Result<Vec<WorkspaceInfo>, String> {
     .await
     .map_err(|e| format!("list_workspaces panicked: {}", e))?
 }
+}
 
 /// 日常模式的归属（key + path）。给前端做「这个会话是不是日常」的判定与落点绑定用。
 ///
 /// 纯计算无 IO：路径由配置目录推出，key 与注册时走同一条链（normalize → path_to_key），
 /// 故无需读 state、也无需 spawn_blocking（同步命令不碰 IO，不触发 check:sync-io 守卫）。
-#[tauri::command]
-pub fn daily_workspace() -> DailyWorkspace {
-    let dir = daily::daily_path_in(&super::our_config_dir());
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyWorkspaceArgs {
+}
+
+async fn daily_workspace(_core: Arc<Core>, a: DailyWorkspaceArgs) -> Result<DailyWorkspace, String> {
+    let _ = a;
+    blocking(move || -> Result<DailyWorkspace, String> { Ok((|| -> DailyWorkspace {
+    let dir = daily::daily_path_in(&crate::paths::our_config_dir());
     let path = normalize_registration_path(&dir.to_string_lossy());
     let key = path_to_key(&path);
     DailyWorkspace { key, path }
+})()) }).await
 }
 
 #[derive(serde::Serialize)]
@@ -398,12 +425,17 @@ pub struct DailyWorkspace {
     pub path: String,
 }
 
-#[tauri::command]
-pub fn set_workspace(
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWorkspaceArgs {
     key: String,
     path: String,
-) -> Result<(), String> {
+}
+
+async fn set_workspace(core: Arc<Core>, a: SetWorkspaceArgs) -> Result<(), String> {
+    let SetWorkspaceArgs { key, path } = a;
+    let workspace_state = core.workspace.clone();
+    blocking(move || -> Result<(), String> {
     {
         let mut k = workspace_state.key.lock().map_err(|e| e.to_string())?;
         *k = Some(key.clone());
@@ -414,29 +446,35 @@ pub fn set_workspace(
     }
     let _ = save_workspace_state(&key);
     Ok(())
+}).await
 }
 
 /// 登记一个磁盘目录为工作区并立即切换（显式注册的主入口）。
 /// 幂等：dup-key 再登记不动既有条目（path 主人是先登记者），仅补激活。
 /// 注册不伪造目录（删旧 create_dir_all）：SDK 实际写的是横杠形态编码目录，
 /// sessions 扫描对缺失目录已有容错（计划 D7）。
-#[tauri::command]
-pub fn create_workspace(
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateWorkspaceArgs {
     path: String,
-) -> Result<WorkspaceInfo, String> {
+}
+
+async fn create_workspace(core: Arc<Core>, a: CreateWorkspaceArgs) -> Result<WorkspaceInfo, String> {
+    let CreateWorkspaceArgs { path } = a;
+    let workspace_state = core.workspace.clone();
+    blocking(move || -> Result<WorkspaceInfo, String> {
     // normalize 先行：注册表条目、激活 key、返回的 WorkspaceInfo 三者同源
     let path = normalize_registration_path(&path);
     let p = std::path::Path::new(&path);
     // 远程路径（WSL / SSH）的存在性由目录选择器经目标机确认过，这里不做本机 stat
-    if !crate::remote_workspace::path::present(p) {
+    if !crate::workspace::present(p) {
         return Err(format!("目录不存在: {}", path));
     }
     let key = path_to_key(&path);
     // 登记（幂等）+ 重新登记 = 自动从黑名单移除（降级兼容清理）。登记后校验
     // 条目确实在表：register false 的段损坏分支如实报错（激活一个未注册的
     // 工作区会让侧栏静默缺失），dup 竞态良性放行（rust-reviewer 违反项 2 同形）。
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         register_in_config(config, &path, registry::now_ms());
         if registered_path_for_key(config, &key).is_none() {
             return Err(format!(
@@ -461,10 +499,11 @@ pub fn create_workspace(
         name: path,
         missing: false,
     })
+}).await
 }
 
 pub fn load_workspace_state() -> Option<String> {
-    let config = super::settings::load_state();
+    let config = crate::app_settings::load_state();
     config
         .get("workspace")
         .and_then(|w| w.as_str())
@@ -472,7 +511,7 @@ pub fn load_workspace_state() -> Option<String> {
 }
 
 fn save_workspace_state(path: &str) -> Result<(), String> {
-    super::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         config["workspace"] = serde_json::Value::String(path.to_string());
         Ok(())
     })
@@ -481,15 +520,20 @@ fn save_workspace_state(path: &str) -> Result<(), String> {
 /// 移除工作区：hide = 摘出注册表（转录保留）+ 黑名单兼容写（降级容忍 D5）；
 /// delete = 摘出注册表 + 变体转录目录全删（D8 加固）。若移除的是当前激活
 /// 工作区，清空激活态。
-#[tauri::command]
-pub async fn remove_workspace(
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveWorkspaceArgs {
     key: String,
     mode: String,
-) -> Result<(), String> {
+}
+
+async fn remove_workspace(core: Arc<Core>, a: RemoveWorkspaceArgs) -> Result<(), String> {
+    let RemoveWorkspaceArgs { key, mode } = a;
+    let workspace_state = core.workspace.clone();
+    {
     match mode.as_str() {
         "hide" => {
-            super::settings::with_state_mut(|config| {
+            crate::app_settings::with_state_mut(|config| {
                 unregister_in_config(config, &key);
                 hide_in_config(config, &key);
                 Ok(())
@@ -504,7 +548,7 @@ pub async fn remove_workspace(
             .map_err(|e| format!("删除任务失败: {}", e))?
             .map_err(|e| format!("删除目录失败: {}", e))?;
             // 已摘表，从黑名单移除（若曾被隐藏）
-            super::settings::with_state_mut(|config| {
+            crate::app_settings::with_state_mut(|config| {
                 unregister_in_config(config, &key);
                 unhide_in_config(config, &key);
                 Ok(())
@@ -528,20 +572,28 @@ pub async fn remove_workspace(
             let mut p = workspace_state.path.lock().map_err(|e| e.to_string())?;
             *p = None;
         }
-        super::settings::with_state_mut(|config| {
+        crate::app_settings::with_state_mut(|config| {
             clear_active_in_config(config);
             Ok(())
         })?;
     }
     Ok(())
 }
+}
 
 /// 重新显示（重登记）一个工作区：按 key 解码回真实 path 后登记；顺带清
 /// 黑名单兼容位。解码失败（目标已不存在）静默 ok——list 不再读黑名单，
 /// 此命令仅服务降级窗口，尽力而为语义不变。
-#[tauri::command]
-pub fn unhide_workspace(key: String) -> Result<(), String> {
-    super::settings::with_state_mut(|config| {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UnhideWorkspaceArgs {
+    key: String,
+}
+
+async fn unhide_workspace(_core: Arc<Core>, a: UnhideWorkspaceArgs) -> Result<(), String> {
+    let UnhideWorkspaceArgs { key } = a;
+    blocking(move || -> Result<(), String> {
+    crate::app_settings::with_state_mut(|config| {
         match resolve_path_from_key(&key) {
             Some(path) => {
                 register_in_config(config, &path, registry::now_ms());
@@ -557,6 +609,7 @@ pub fn unhide_workspace(key: String) -> Result<(), String> {
         unhide_in_config(config, &key);
         Ok(())
     })
+}).await
 }
 
 // ── 工作区信任（Trusted Workspace）Tauri 命令 ──
@@ -568,100 +621,33 @@ pub fn unhide_workspace(key: String) -> Result<(), String> {
 // 一致）。
 
 /// 当前路径的工作区是否已信任。
-#[tauri::command]
-pub async fn is_workspace_trusted(path: String) -> Result<bool, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IsWorkspaceTrustedArgs {
+    path: String,
+}
+
+async fn is_workspace_trusted(_core: Arc<Core>, a: IsWorkspaceTrustedArgs) -> Result<bool, String> {
+    let IsWorkspaceTrustedArgs { path } = a;
+    {
     tokio::task::spawn_blocking(move || is_path_trusted(&path))
         .await
         .map_err(|e| format!("is_workspace_trusted panicked: {}", e))
 }
-
-/// 信任一个工作区（按路径，归一后写入白名单）。信任即把安全只读命令白名单
-/// （grep/cat/head…）幂等写入 local scope 并广播给 live 会话，返回新增条数。
-/// 规则写入失败仅记日志，不因此拒信任（信任 key 是主动作）。
-#[tauri::command]
-pub async fn trust_workspace(
-    path: String,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-) -> Result<usize, String> {
-    let key = trust_key_from_path(&path);
-    let project = PathBuf::from(&path);
-    let project_for_write = project.clone();
-    let service = settings.inner().clone();
-    let service_for_write = service.clone();
-
-    let added = tokio::task::spawn_blocking(
-        move || -> Result<usize, String> {
-            super::settings::with_state_mut(|config| {
-                trust_in_config(config, &key);
-                Ok(())
-            })?;
-            // 信任即备好 git 忽略（幂等，失败仅记日志，不因此拒信任）。
-            ensure_aide_excluded(&project_for_write);
-            // 信任即写入安全只读命令白名单（幂等）。失败仅记日志，按 0 处理。
-            match super::permissions::ensure_safe_rules(&service_for_write, &project_for_write) {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    tracing::warn!(?e, path = %project_for_write.display(), "trust_workspace: ensure_safe_rules failed");
-                    Ok(0)
-                }
-            }
-        },
-    )
-    .await
-    .map_err(|e| format!("trust_workspace panicked: {e}"))??;
-
-    runtime
-        .broadcast_policy_change(SettingsScope::Local, Some(project.as_path()), &service)
-        .await;
-    Ok(added)
-}
-
-/// 取消信任一个工作区（按路径）。对称删除自动写入的安全规则并广播，返回删除条数。
-/// 清理失败仅记日志，不因此拒取消信任。
-#[tauri::command]
-pub async fn untrust_workspace(
-    path: String,
-    settings: State<'_, Arc<SettingsService>>,
-    runtime: State<'_, AgentRuntimeManager>,
-) -> Result<usize, String> {
-    let key = trust_key_from_path(&path);
-    let project = PathBuf::from(&path);
-    let project_for_write = project.clone();
-    let service = settings.inner().clone();
-    let service_for_write = service.clone();
-
-    let removed = tokio::task::spawn_blocking(
-        move || -> Result<usize, String> {
-            super::settings::with_state_mut(|config| {
-                untrust_in_config(config, &key);
-                Ok(())
-            })?;
-            match super::permissions::remove_safe_rules(&service_for_write, &project_for_write) {
-                Ok(n) => Ok(n),
-                Err(e) => {
-                    tracing::warn!(?e, path = %project_for_write.display(), "untrust_workspace: remove_safe_rules failed");
-                    Ok(0)
-                }
-            }
-        },
-    )
-    .await
-    .map_err(|e| format!("untrust_workspace panicked: {e}"))??;
-
-    runtime
-        .broadcast_policy_change(SettingsScope::Local, Some(project.as_path()), &service)
-        .await;
-    Ok(removed)
 }
 
 // ── 工作区 LSP 开关 Tauri 命令 ──
 
-#[tauri::command]
-pub async fn workspace_set_lsp_enabled(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSetLspEnabledArgs {
     workspace_root: String,
     enabled: bool,
-) -> Result<(), String> {
+}
+
+async fn workspace_set_lsp_enabled(_core: Arc<Core>, a: WorkspaceSetLspEnabledArgs) -> Result<(), String> {
+    let WorkspaceSetLspEnabledArgs { workspace_root, enabled } = a;
+    {
     // 信任门：未信任工作区拒开 LSP（LSP 跑外部二进制 + 索引工作区，本就该走信任门）
     if enabled && !is_path_trusted(&workspace_root) {
         return Err("untrusted workspace".into());
@@ -669,12 +655,18 @@ pub async fn workspace_set_lsp_enabled(
     let key = path_to_key(&workspace_root);
     set_lsp_enabled(&key, enabled)
 }
+}
 
-#[tauri::command]
-pub async fn workspace_set_lsp_excludes(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSetLspExcludesArgs {
     workspace_root: String,
     dirs: Vec<String>,
-) -> Result<(), String> {
+}
+
+async fn workspace_set_lsp_excludes(_core: Arc<Core>, a: WorkspaceSetLspExcludesArgs) -> Result<(), String> {
+    let WorkspaceSetLspExcludesArgs { workspace_root, dirs } = a;
+    {
     let key = path_to_key(&workspace_root);
     set_lsp_excludes(&key, dirs)?;
     // 改排除集 → 触发该工作区 server 重拉（init exclude 不支持热改）
@@ -682,44 +674,78 @@ pub async fn workspace_set_lsp_excludes(
     // 或在此 emit 信号。v1：返回 OK，前端 disable→enable LSP 完成重拉。
     Ok(())
 }
+}
 
 /// 读某工作区 LSP 排除目录列表（spec T15 读路径补齐：UI 不再 write-only）。
 /// 纯 config 读取，与 workspace_set_lsp_excludes 对称；async + Result 与其它
 /// workspace_set_lsp_* 命令保持一致。
-#[tauri::command]
-pub async fn workspace_get_lsp_excludes(workspace_root: String) -> Result<Vec<String>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGetLspExcludesArgs {
+    workspace_root: String,
+}
+
+async fn workspace_get_lsp_excludes(_core: Arc<Core>, a: WorkspaceGetLspExcludesArgs) -> Result<Vec<String>, String> {
+    let WorkspaceGetLspExcludesArgs { workspace_root } = a;
+    {
     let key = path_to_key(&workspace_root);
     Ok(lsp_workspace_config(&key).exclude_dirs)
+}
 }
 
 // ── 工作区代码索引开关 Tauri 命令 ──
 
 /// 读某工作区索引开关（桌面右栏「代码索引」面板渲染用）。
-#[tauri::command]
-pub async fn workspace_get_codegraph_enabled(workspace_root: String) -> Result<bool, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGetCodegraphEnabledArgs {
+    workspace_root: String,
+}
+
+async fn workspace_get_codegraph_enabled(_core: Arc<Core>, a: WorkspaceGetCodegraphEnabledArgs) -> Result<bool, String> {
+    let WorkspaceGetCodegraphEnabledArgs { workspace_root } = a;
+    {
     // state.json 读轻量，但与 is_workspace_trusted 同款走 spawn_blocking，
     // 命令体不碰文件 IO。
     tokio::task::spawn_blocking(move || is_codegraph_enabled_for_path(&workspace_root))
         .await
         .map_err(|e| format!("workspace_get_codegraph_enabled panicked: {e}"))
 }
+}
 
 /// 设某工作区索引开关。**不设信任门**：开关只是「意向」记录，信任把关在
 /// 建索引的门（gate::skip_reason + 前端 ensureIndex）——未信任工作区开了
 /// 开关也能安全落盘，等信任后索引自然建起来（沿用既有 untrusted 通知流）。
-#[tauri::command]
-pub async fn workspace_set_codegraph_enabled(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceSetCodegraphEnabledArgs {
     workspace_root: String,
     enabled: bool,
-) -> Result<(), String> {
+}
+
+async fn workspace_set_codegraph_enabled(_core: Arc<Core>, a: WorkspaceSetCodegraphEnabledArgs) -> Result<(), String> {
+    let WorkspaceSetCodegraphEnabledArgs { workspace_root, enabled } = a;
+    {
     tokio::task::spawn_blocking(move || {
         set_codegraph_enabled(&trust_key_from_path(&workspace_root), enabled)
     })
     .await
     .map_err(|e| format!("workspace_set_codegraph_enabled panicked: {e}"))?
 }
+}
 
+/// 编码 key → 真实路径（`path_to_key` 的逆，旧数据回退用）。编码把分隔符与 `:` 都变成 `-`，
+/// 有歧义（目录名本身可含 `-`），故逐段试探磁盘上真实存在的前缀。两种形态：
+/// - Windows：`C--Users-me-proj` → `C:\Users\me\proj`
+/// - Unix：`-home-me-proj` → `/home/me/proj`（远程 Host 跑在 Linux 上，必须认得）
 pub fn resolve_path_from_key(key: &str) -> Option<String> {
+    if let Some(rest) = key.strip_prefix('-') {
+        return if rest.is_empty() {
+            Some("/".to_string())
+        } else {
+            try_decode("/", rest, '/')
+        };
+    }
     let mut chars = key.chars();
     let drive = chars.next()?;
     chars.next()?;
@@ -733,27 +759,12 @@ pub fn resolve_path_from_key(key: &str) -> Option<String> {
             None
         };
     }
-    try_decode(&format!("{}:\\", drive), &rest)
+    try_decode(&format!("{}:\\", drive), &rest, '\\')
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// 不存在的路径不该 panic，也不该假装有语言。这条离开 AppHandle 也能验，
-    /// 故把纯路径部分拆成 `lsp_language_ids_of`。
-    #[test]
-    fn lsp_language_ids_unknown_path_is_empty() {
-        assert!(lsp_language_ids_of("C:/definitely/not/here").is_empty());
-    }
-
-    /// 本仓库根目录应至少探到 Rust 与 TypeScript（有 src-tauri/Cargo.toml 与 src/*.ts）。
-    /// 用真实仓库当夹具：若 detector 的探测规则被改坏，这条会红。
-    #[test]
-    fn lsp_language_ids_of_a_real_tree_is_not_empty() {
-        let here = env!("CARGO_MANIFEST_DIR");
-        assert!(!lsp_language_ids_of(here).is_empty(), "仓库根应探测到语言: {here}");
-    }
 
     // ── filter_hidden 随扫描机制退役（list 换注册表源，唯一调用方消失，死代码删除）──
     // hiddenWorkspaces 纯函数（hidden_keys/hide_in_config/unhide_in_config）保留：
@@ -828,6 +839,17 @@ mod tests {
     fn trusted_keys_reads_array() {
         let cfg = serde_json::json!({ "trustedWorkspaces": ["a", "b"] });
         assert_eq!(trusted_keys(&cfg), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn resolve_path_from_key_decodes_unix_keys() {
+        let dir = std::env::temp_dir().join("aide-decode-unix-probe");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.to_string_lossy().to_string();
+        if path.starts_with('/') {
+            assert_eq!(resolve_path_from_key(&path_to_key(&path)).as_deref(), Some(path.as_str()));
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -987,7 +1009,7 @@ mod tests {
         // 空 = 清除回系统默认，且键从 map 摘掉（不留空串死数据）
         set_workspace_jdk(key, "").unwrap();
         assert_eq!(workspace_jdk(key), None);
-        let config = crate::commands::settings::load_state();
+        let config = crate::app_settings::load_state();
         let still_there = config
             .get("workspace_jdks")
             .and_then(|w| w.get(key))
@@ -999,14 +1021,14 @@ mod tests {
     }
 }
 
-fn try_decode(prefix: &str, remaining: &str) -> Option<String> {
+fn try_decode(prefix: &str, remaining: &str, sep: char) -> Option<String> {
     for (i, ch) in remaining.char_indices() {
         if ch == '-' {
             let component = &remaining[..i];
             let candidate = format!("{}{}", prefix, component);
             if !component.is_empty() && PathBuf::from(&candidate).exists() {
-                let next_prefix = format!("{}{}\\", prefix, component);
-                if let Some(result) = try_decode(&next_prefix, &remaining[i + 1..]) {
+                let next_prefix = format!("{prefix}{component}{sep}");
+                if let Some(result) = try_decode(&next_prefix, &remaining[i + 1..], sep) {
                     return Some(result);
                 }
             }

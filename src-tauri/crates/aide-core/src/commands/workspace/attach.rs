@@ -30,7 +30,7 @@ pub struct AttachResolution {
 
 /// 裁定入口：读注册表（轻量 IO，同 `is_path_trusted` 的口径）后走纯核心。
 pub fn resolve_attach_dirs(raw: &[String], session_cwd: &str) -> AttachResolution {
-    let config = crate::commands::settings::load_state();
+    let config = crate::app_settings::load_state();
     resolve_with_registry(raw, session_cwd, &registry::registered(&config))
 }
 

@@ -511,38 +511,10 @@ pub fn get_active_workspace(
     })
 }
 
-pub fn list_workspaces(
-    _app: AppHandle,
-    _params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(crate::commands::workspace::list_workspaces().await) })
-}
-
-/// 日常模式的归属（key + path）。对远程端而言「日常」就是工作区列表里的一项——
-/// 而 list_workspaces 恰好在服务端把它滤掉了，所以远程要进日常只能单独问这条。
-/// 与桌面同一实现（`commands::workspace::daily_workspace`）：纯计算、无 IO、
-/// **不激活**活动工作区，配对设备只读得到身份，改不了桌面状态。
-pub fn daily_workspace(
-    _app: AppHandle,
-    _params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(Ok(crate::commands::workspace::daily_workspace())) })
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PathArgs {
     path: String,
-}
-
-pub fn is_workspace_trusted(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: PathArgs = parse(params)?;
-        to_json(crate::commands::workspace::is_workspace_trusted(a.path).await)
-    })
 }
 
 pub fn trust_workspace(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
@@ -550,7 +522,7 @@ pub fn trust_workspace(app: AppHandle, params: Value) -> BoxFuture<'static, Resu
         let a: PathArgs = parse(params)?;
         let settings = app.state::<Arc<SettingsService>>();
         let runtime = app.state::<AgentRuntimeManager>();
-        to_json(crate::commands::workspace::trust_workspace(a.path, settings, runtime).await)
+        to_json(crate::commands::workspace_trust::trust_workspace(a.path, settings, runtime).await)
     })
 }
 
@@ -562,7 +534,7 @@ pub fn untrust_workspace(
         let a: PathArgs = parse(params)?;
         let settings = app.state::<Arc<SettingsService>>();
         let runtime = app.state::<AgentRuntimeManager>();
-        to_json(crate::commands::workspace::untrust_workspace(a.path, settings, runtime).await)
+        to_json(crate::commands::workspace_trust::untrust_workspace(a.path, settings, runtime).await)
     })
 }
 

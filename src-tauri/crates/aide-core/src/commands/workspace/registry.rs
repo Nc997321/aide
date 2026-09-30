@@ -12,7 +12,7 @@
 // session_config_roots_in 范式，temp dir 可测），真实路径由 ensure 外壳
 // 传入。命令编排留在宿主 mod.rs。
 
-use crate::commands::WorkspaceInfo;
+use super::WorkspaceInfo;
 
 /// 注册表条目——state.json `registeredWorkspaces` 数组元素（落盘 DTO）。
 ///
@@ -192,12 +192,12 @@ pub fn migrate_registry_in(
 /// 启动迁移外壳：单 `with_state_mut` 临界区（扫描 + 登记 + marker 原子落盘）。
 /// marker 已真则直接 Ok，跳过扫目录。失败由调用方记日志下次启动重试。
 pub fn ensure_registry_migrated() -> Result<(), String> {
-    crate::commands::settings::with_state_mut(|state| {
+    crate::app_settings::with_state_mut(|state| {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
-        let count = migrate_registry_in(state, &crate::commands::claude_projects_dir(), now);
+        let count = migrate_registry_in(state, &crate::paths::claude_projects_dir(), now);
         if count > 0 {
             tracing::info!("workspace registry migration: {count} workspaces seeded");
         }
@@ -250,10 +250,10 @@ pub fn ensure_workspace_registered(path: &std::path::Path) -> Result<(), String>
     }
     let path_str = path.to_string_lossy();
     let key = super::path_to_key(&normalize_registration_path(&path_str));
-    if registered_path_for_key(&crate::commands::settings::load_state(), &key).is_some() {
+    if registered_path_for_key(&crate::app_settings::load_state(), &key).is_some() {
         return Ok(());
     }
-    crate::commands::settings::with_state_mut(|config| {
+    crate::app_settings::with_state_mut(|config| {
         register_in_config(config, &path_str, now_ms());
         // register 的 false 有两种含义：并发竞态下的 dup（良性，条目已在）与
         // 段损坏（非数组，写入被拒）——按「写后仍在不在」判别，后者如实报错，
@@ -609,7 +609,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let key = path_to_key(&dir.to_string_lossy());
         // 清理残留（同名测试目录可能带着上次运行的注册条目）
-        crate::commands::settings::with_state_mut(|c| {
+        crate::app_settings::with_state_mut(|c| {
             unregister_in_config(c, &key);
             Ok(())
         })
@@ -618,14 +618,14 @@ mod tests {
         // 首调：登记
         ensure_workspace_registered(&dir).unwrap();
         assert_eq!(
-            registered_path_for_key(&crate::commands::settings::load_state(), &key).as_deref(),
+            registered_path_for_key(&crate::app_settings::load_state(), &key).as_deref(),
             Some(dir.to_string_lossy().as_ref())
         );
 
         // 二调：预检命中 → Ok，条目不重复
         ensure_workspace_registered(&dir).unwrap();
         assert_eq!(
-            registered(&crate::commands::settings::load_state())
+            registered(&crate::app_settings::load_state())
                 .iter()
                 .filter(|w| w.key == key)
                 .count(),
@@ -633,7 +633,7 @@ mod tests {
         );
 
         // 清理（state.json 是真实文件，测试键必摘）
-        crate::commands::settings::with_state_mut(|c| {
+        crate::app_settings::with_state_mut(|c| {
             unregister_in_config(c, &key);
             Ok(())
         })

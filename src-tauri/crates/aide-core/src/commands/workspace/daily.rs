@@ -30,7 +30,7 @@ pub fn is_daily_path(daily_dir: &Path, path: &str) -> bool {
 /// 目录必须存在，不只是为了能当 cwd：`resolve_path_from_key` 的反解逐段校验存在性
 /// （workspace/mod.rs 的 try_decode），目录不在则侧栏「日常」分区会整段列不出会话。
 pub fn ensure_daily_workspace() -> Result<(), String> {
-    let dir = daily_path_in(&crate::commands::our_config_dir());
+    let dir = daily_path_in(&crate::paths::our_config_dir());
     std::fs::create_dir_all(&dir).map_err(|e| format!("create {}: {e}", dir.display()))?;
     super::ensure_workspace_registered(&dir)
 }
@@ -73,19 +73,19 @@ mod tests {
     #[test]
     #[ignore]
     fn smoke_bootstrap_creates_registers_and_does_not_activate() {
-        let active_before = crate::commands::settings::load_state()
+        let active_before = crate::app_settings::load_state()
             .get("workspace")
             .cloned();
 
         ensure_daily_workspace().expect("bootstrap 应成功");
 
-        let dir = daily_path_in(&crate::commands::our_config_dir());
+        let dir = daily_path_in(&crate::paths::our_config_dir());
         assert!(dir.exists(), "日常目录应被创建: {}", dir.display());
 
-        let key = super::super::path_to_key(&dir.to_string_lossy());
-        let after = crate::commands::settings::load_state();
+        let key = crate::commands::workspace::path_to_key(&dir.to_string_lossy());
+        let after = crate::app_settings::load_state();
         assert!(
-            super::super::registered_path_for_key(&after, &key).is_some(),
+            crate::commands::workspace::registered_path_for_key(&after, &key).is_some(),
             "日常目录应已注册（key={key}）"
         );
         assert_eq!(
@@ -96,7 +96,7 @@ mod tests {
 
         let n1 = registered_len(&after);
         ensure_daily_workspace().expect("第二次应幂等成功");
-        let n2 = registered_len(&crate::commands::settings::load_state());
+        let n2 = registered_len(&crate::app_settings::load_state());
         assert_eq!(n1, n2, "幂等：重复引导不新增条目");
     }
 

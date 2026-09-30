@@ -87,10 +87,9 @@ pub fn run() {
     }
     let saved_key = commands::load_workspace_state();
     // 「工作区还在吗」注入远程感知判定：远程路径同步 stat 不了，按存在处理（Host 核心的
-    // 根解析、桌面的会话 cwd 兜底共用这一判定）。
-    let workspace_state = std::sync::Arc::new(WorkspaceState::with_presence(
-        remote_workspace::path::present,
-    ));
+    // 根解析 / 工作区列表、桌面的会话 cwd 兜底共用这一判定）。
+    aide_core::workspace::set_presence_check(remote_workspace::path::present);
+    let workspace_state = std::sync::Arc::new(WorkspaceState::new());
     // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
     let settings_service = std::sync::Arc::new(settings::SettingsService::new(
         settings::SettingsPaths::new().expect("settings paths"),
@@ -400,12 +399,6 @@ pub fn run() {
             commands::session::session_jsonl_size,
             commands::session::session_truncate_jsonl,
             commands::session::find_sessions_since,
-            commands::workspace::list_workspaces,
-            commands::workspace::daily_workspace,
-            commands::workspace::set_workspace,
-            commands::workspace::create_workspace,
-            commands::workspace::remove_workspace,
-            commands::workspace::unhide_workspace,
             commands::memory_observatory::memory_observatory_scan,
             commands::memory_observatory::memory_observatory_read_file,
             commands::memory_observatory::memory_observatory_snapshot,
@@ -414,9 +407,8 @@ pub fn run() {
             commands::memory_observatory::memory_observatory_scan_all,
             commands::memory_observatory::memory_index_for_dir,
             // 工作区信任（Trusted Workspace）
-            commands::workspace::is_workspace_trusted,
-            commands::workspace::trust_workspace,
-            commands::workspace::untrust_workspace,
+            commands::workspace_trust::trust_workspace,
+            commands::workspace_trust::untrust_workspace,
             commands::settings::notify_send,
             commands::settings::session_notification_info,
             commands::permissions::get_permission_settings,
@@ -492,15 +484,8 @@ pub fn run() {
             // 通知中心持久化
             // 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录
             // LSP built-in
-            commands::workspace::workspace_set_lsp_enabled,
-            commands::workspace::workspace_set_lsp_excludes,
-            commands::workspace::workspace_get_lsp_excludes,
             // 工作区级代码索引开关（每工作区默认关，右侧栏面板读写）
-            commands::workspace::workspace_get_codegraph_enabled,
-            commands::workspace::workspace_set_codegraph_enabled,
             // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
-            commands::workspace::workspace_get_jdk,
-            commands::workspace::workspace_set_jdk,
             lsp::lsp_detect_languages,
             lsp::lsp_ensure_server,
             lsp::lsp_did_open,

@@ -257,7 +257,7 @@ async fn lsp_languages_for_send(app: &tauri::AppHandle, workspace_root: &str) ->
     let app = app.clone();
     let root = workspace_root.to_string();
     tokio::task::spawn_blocking(move || {
-        crate::commands::workspace::lsp_languages_for_path(&app, &root)
+        crate::lsp::workspace_langs::lsp_languages_for_path(&app, &root)
     })
     .await
     .unwrap_or_default()

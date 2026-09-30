@@ -80,6 +80,11 @@ static CORE_EXPOSED: &[&str] = &[
     // ── 通知中心持久化 ──
     "load_notifications",
     "save_notifications",
+    // ── 工作区（只读身份 + 信任查询；信任写入要广播给 live 会话，仍走 REGISTRY 包装）──
+    "list_workspaces",
+    // 日常模式归属：工作区列表把它滤掉了，远程端要进「日常」只能单独问这条（只读）。
+    "daily_workspace",
+    "is_workspace_trusted",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -124,12 +129,6 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("set_session_meta", handlers::set_session_meta),
     // ── 工作区与信任 ──
     ("get_active_workspace", handlers::get_active_workspace),
-    ("list_workspaces", handlers::list_workspaces),
-    // 日常模式归属：工作区列表把它滤掉了（list_workspaces 服务端 retain），
-    // 远程端要进「日常」只能单独问这条。只读身份（key + path），不激活、不改
-    // 状态——配对设备与桌面同信任层，收录判据不缺（见 handlers 同名包装器）。
-    ("daily_workspace", handlers::daily_workspace),
-    ("is_workspace_trusted", handlers::is_workspace_trusted),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
     // ── CodeGraph（闭包内 useCodeGraphProgress 被动调用链）──
@@ -177,7 +176,7 @@ mod tests {
     /// 而编译、其余命令都不受影响（静默回归）。钉住本次收录意图。
     #[test]
     fn registry_exposes_daily_workspace() {
-        assert!(lookup("daily_workspace").is_some());
+        assert!(CORE_EXPOSED.contains(&"daily_workspace"));
     }
 
     /// 白名单登记的 core 命令必须真的在 core 表里（否则远程端调用即「未知命令」）。
