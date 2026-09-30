@@ -10,11 +10,6 @@ import type { EvalProbe } from "./runEval.js";
  * 2. **如实**：降级/截断/跨域都要说出来，不把「没读到」伪装成「页面是空的」。
  */
 
-/** headless 宿主：内嵌浏览器结构性不存在（不是暂时不可用），如实说清以免模型改用 curl 绕。 */
-export const NO_BROWSER_HOST_TEXT =
-  "No embedded browser in this environment: the browser tools only work in the Aide desktop app " +
-  "(they drive a real WebView2 owned by the desktop host). There is nothing to read or operate here.";
-
 /** 缺省视图时的引导语（`view_id` 解析失败时 Rust 给的错误已足够具体，这里只补一条下一步）。 */
 export const NO_VIEW_TEXT =
   "No embedded browser view is open. Open one in Aide's browser panel (Ctrl+Shift+B), navigate it " +

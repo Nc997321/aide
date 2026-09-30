@@ -12,7 +12,7 @@
 import http from "node:http";
 import { existsSync } from "node:fs";
 import { SessionManager } from "./src/engine/session-manager.js";
-import { check, report } from "./smoke-headless-lib.js";
+import { check, report } from "./smoke-ledger.js";
 
 const DEFAULT_CLAUDE_EXE =
   process.env.USERPROFILE +

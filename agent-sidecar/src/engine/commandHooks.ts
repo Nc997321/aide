@@ -97,7 +97,7 @@ interface SpecFields {
 }
 
 /** settings.json 条目是自由 JSON（X1 边界例外）：逐字段收窄，任何形状违规
- *  整体拒绝（fail-closed，与 sessionMetadata.parseMcpHeaders 同纪律）。 */
+ *  整体拒绝（fail-closed）。 */
 function parseSpecFields(entry: unknown): SpecFields | null {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const e = entry as Record<string, unknown>;

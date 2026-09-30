@@ -2,8 +2,7 @@
 //!
 //! 为什么裁定在 Rust：PWA/鸿蒙与桌面共用同一个 sidecar 会话，授权请求可能来自任何
 //! 客户端，前端校验只能算 UX；Rust 是唯一能读 `registeredWorkspaces` 的层。
-//! （headless 没有这一层——那里的授权归宿主网关，见
-//! docs/superpowers/plans/2026-09-17-cross-directory-session.md 的 F9/D4。）
+//! （设计见 docs/superpowers/plans/2026-09-17-cross-directory-session.md 的 F9/D4。）
 //!
 //! 判据（D4）：只认**已注册工作区**本身或其子目录。fail-closed——任何一条不过就丢弃
 //! 并计入 `rejected`（不静默：前端要能显示"未注册，已忽略"），合法条目照常下发；

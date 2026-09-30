@@ -1,4 +1,4 @@
-//! AutomationService：常驻调度器 + headless 执行引擎。
+//! AutomationService：常驻调度器 + 无人值守执行引擎。
 //!
 //! 执行模型：到点 → 组装 send 命令（prompt 注入手册、权限白名单、护栏）→
 //! 共享 runtime 起一次性会话（sidecar 终态自毁）→ runtime stdout 泵挂钩

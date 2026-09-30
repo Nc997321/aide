@@ -1,4 +1,4 @@
-//! 自动化任务（Automation）：定时/间隔/单次触发 headless SDK 会话。
+//! 自动化任务（Automation）：定时/间隔/单次触发无人值守 SDK 会话。
 //!
 //! 竖切包结构（codegraph/lsp 范式）：
 //! - `mod.rs`（本文件）：类型定义 + ~/.aide/automations/ 的 JSON 存储（recent.rs 范式）

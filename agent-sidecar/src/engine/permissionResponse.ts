@@ -1,6 +1,6 @@
 // permission_response 线形状 → 规范决策（纯函数，无 IO、不依赖权限核心）。
 //
-// 为什么需要它：协议有两个形态——标签联合（官方推荐，headless 网关用）与扁平字段袋
+// 为什么需要它：协议有两个形态——标签联合（官方推荐形态）与扁平字段袋
 // （桌面 Rust / 远程 / ohos 恒走这条，历史兼容）。而引擎只该有**一种**读法：归一成
 // "决策对象"之后，session-worker 的命令分支与 permissions.ts 的应答点都只看决策的
 // kind，不再各自解释字段组合（旧扁平形态下 engine 被迫写防御代码——「ignoring any
@@ -121,8 +121,8 @@ type ClassifyResult =
 /** 线形状 → 规范决策。**不抛错**：不可判的形状返回 reason，由调用方发非致命 error
  *  帧并按拒绝 fail-closed 收尾——绝不把挂起请求悬死。
  *
- *  形态选择只看 `response` 是否在场（headless 的 zod 边界已强制"恰好一个在场"；
- *  stdin 面缺 schema，此处以 response 优先、缺席回落扁平形态）。 */
+ *  形态选择只看 `response` 是否在场（stdin 面缺 schema，此处以 response 优先、
+ *  缺席回落扁平形态）。 */
 export function classifyPermissionResponse(cmd: ResponseShaped): ClassifyResult {
   const wire = asRecord(cmd.response);
   if (wire) return classifyWire(wire);

@@ -194,7 +194,7 @@ let exitHooksInstalled = false;
 
 /** 装退出钩子：正常退出 / SIGINT / SIGTERM / 未捕获异常，四条路径共用同一次同步强杀。
  *  没有它，sidecar 一死（含被打字机式收尾漏掉的路径）常驻的 claude.exe 就永远留着。
- *  桌面宿主专用——headless 有自己的收尾（见 index.ts）。幂等。 */
+ *  幂等。 */
 export function installExitReaper(): void {
   if (exitHooksInstalled) return;
   exitHooksInstalled = true;

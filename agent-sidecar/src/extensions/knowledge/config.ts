@@ -5,7 +5,7 @@
 // （session-worker.ts 的 startLoop → queryContext.ts），会话中途重新登录知识库后
 // 旧值会一直用到开新会话——现读让重登自愈（设计 spec §3）。
 // 为什么凭据在文件里而不是 env：env 会被 Bash 工具子进程继承，模型跑 `env` 即可
-// 外带（engine/sessionMetadata.ts 红线）。env 里只有**路径**。
+// 外带。env 里只有**路径**。
 import { readFileSync } from "node:fs";
 
 export interface KbRuntimeConfig {

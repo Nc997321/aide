@@ -12,7 +12,6 @@ const sessionStub: HookBuildContext["session"] = {
   makePolicyHook: () => async () => ({}),
   makeStopEffortHook: () => async () => ({}),
   makeModelSwitchGuard: () => null,
-  metadata: () => ({}),
 };
 
 let dir = "";
@@ -34,7 +33,6 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
     emit: () => {},
     taskTools: undefined,
     automationConfig: undefined,
-    mcpHeaders: undefined,
     session: sessionStub,
     ...over,
   };

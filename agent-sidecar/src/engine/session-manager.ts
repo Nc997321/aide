@@ -91,7 +91,6 @@ export class SessionManager {
     }
 
     // 内嵌浏览器 MCP 工具的 Rust 回包：同上，按 request_id 结算，无会话路由。
-    // （headless 下永远收不到这条——`invokeBodySchema` 刻意不含它，见 headless-schema.ts。）
     if (cmd.cmd === "browser_result") {
       resolveBrowserResult(cmd);
       return;
@@ -167,10 +166,6 @@ export class SessionManager {
     worker = new SessionWorker(sessionId, emit, {
       cwd: cmd.cwd,
       envOverrides: cmd.env ?? {},
-      // 会话元数据 / MCP 头注入（headless 网关下发，桌面恒缺席）：worker 侧
-      // 统一走边界收窄（sessionMetadata.ts），manager 不重复校验。
-      metadata: cmd.metadata,
-      mcpHeaders: cmd.mcp_headers,
       // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。
       onSelfStop: (w) => {
         this.workers.delete(w.routingKey);

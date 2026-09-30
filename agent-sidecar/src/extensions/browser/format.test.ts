@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  NO_BROWSER_HOST_TEXT,
   formatBridgeFailure,
   formatEval,
   formatRead,
@@ -320,13 +319,5 @@ describe("可见性旁注（已删）", () => {
     });
     expect(s).toContain("cannot await it");
     expect(s).toContain("window");
-  });
-});
-
-describe("NO_BROWSER_HOST_TEXT", () => {
-  it("说清是环境没有该能力，而不是暂时不可用（否则模型会重试或找 workaround）", () => {
-    expect(NO_BROWSER_HOST_TEXT).toContain("No embedded browser in this environment");
-    expect(NO_BROWSER_HOST_TEXT).toContain("desktop app");
-    expect(NO_BROWSER_HOST_TEXT).toContain("nothing to read");
   });
 });

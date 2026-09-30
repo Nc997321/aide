@@ -40,7 +40,6 @@ import { readRecorder } from "./browser/recorder.js";
 import { renderNetwork } from "./browser/network.js";
 import { renderConsole } from "./browser/console.js";
 import {
-  NO_BROWSER_HOST_TEXT,
   asRecord,
   formatBridgeFailure,
   formatEval,
@@ -63,26 +62,14 @@ function textResult(text: string): ToolResult {
 }
 
 /**
- * headless 宿主**结构性**没有内嵌浏览器（不是暂时不可用）。
- *
- * 必须在**发起前**短路：桥的对面是桌面 Rust，headless 没有回包方，发出去只会白等 15s 超时，
- * 而超时文案会把「本环境没这个能力」伪装成「浏览器卡了」。
- */
-function hasBrowserHost(env: NodeJS.ProcessEnv): boolean {
-  return env.AIDE_HEADLESS !== "1";
-}
-
-/**
- * 工具公共壳：host 短路 → 发桥 → 失败转文本 → 成功走格式化器。
+ * 工具公共壳：发桥 → 失败转文本 → 成功走格式化器。
  * **永不抛**（MCP 会把抛出的 handler 变成 isError，是本模块的红线）。
  */
 async function call(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
   makeCall: () => BrowserCall,
   render: (data: unknown) => string,
 ): Promise<ToolResult> {
-  if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
   try {
     const resp = await queryBrowser(makeCall(), emit);
     if (!resp.ok) return textResult(formatBridgeFailure(resp));
@@ -119,7 +106,6 @@ const includeHiddenArg = z
   );
 
 export function buildBrowserTabsTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -130,12 +116,11 @@ export function buildBrowserTabsTool(
       "Call this FIRST when a task involves a page: the other browser tools take a `view_id` and this is where you learn it. " +
       "A view stays alive even when the browser panel is closed or the tab is switched away, so the page you need may already be open.",
     {},
-    () => call(env, emit, () => ({ op: "list_views" }), formatTabs),
+    () => call(emit, () => ({ op: "list_views" }), formatTabs),
   );
 }
 
 export function buildBrowserReadTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -151,8 +136,7 @@ export function buildBrowserReadTool(
       "It does NOT run arbitrary script — use browser_eval for that.",
     { view_id: viewIdArg, include_hidden: includeHiddenArg },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      const projection = { includeHidden: args.include_hidden === true };
+          const projection = { includeHidden: args.include_hidden === true };
       try {
         const r = await runEval(buildProjectionScript(projection), { viewId: args.view_id }, emit);
         // runEval 的失败文本已是面向模型的（异常/不可序列化/桥失败各自不同），不加工。
@@ -172,7 +156,6 @@ export function buildBrowserReadTool(
 }
 
 export function buildBrowserEvalTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -203,8 +186,7 @@ export function buildBrowserEvalTool(
         ),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      try {
+          try {
         if (args.frame) {
           const outcome = await evalInFrame(args.view_id, args.frame, args.script, emit);
           return textResult(formatFrameEval(outcome));
@@ -284,7 +266,6 @@ async function runAct(
 }
 
 export function buildBrowserActTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -342,8 +323,7 @@ export function buildBrowserActTool(
         .describe('Only with action=press: modifiers to hold down (e.g. ["ctrl"] for Ctrl+A).'),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      const bad = validateActArgs(args);
+          const bad = validateActArgs(args);
       if (bad) return textResult(bad);
 
       const target: ActTarget = {
@@ -438,7 +418,6 @@ async function resolveShotTarget(
  * DOM 里但只有一个面板可见）。2026-09-16 agent 实测提出这条需求。
  */
 export function buildBrowserScreenshotTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -480,8 +459,7 @@ export function buildBrowserScreenshotTool(
         ),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      try {
+          try {
         const fullPage = args.full_page === true;
         const format = args.format === "png" ? "png" : "jpeg";
         // 只有真的给了元素口径才去解析——没有 text/selector 的老路径一发都不多发。
@@ -522,7 +500,6 @@ export function buildBrowserScreenshotTool(
  * 「点了但本就不该变」变成假失败），而是**调用点需要能表达自己的期望**。
  */
 export function buildBrowserWaitTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -565,8 +542,7 @@ export function buildBrowserWaitTool(
         .describe(`Poll interval, default ${WAIT_INTERVAL_DEFAULT_MS}. Polling happens on the host, not in the page.`),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-
+    
       const mode = args.until === "load" ? "load" : "condition";
       if (mode === "condition" && !args.condition) {
         return textResult(
@@ -602,7 +578,6 @@ export function buildBrowserWaitTool(
  * 收在一个工具里而不是散成五个——每加一个工具就是每轮请求多一份 schema。
  */
 export function buildBrowserTabTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -645,8 +620,7 @@ export function buildBrowserTabTool(
         ),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      try {
+          try {
         return textResult(
           await performTabAction(
             args.action,
@@ -677,7 +651,6 @@ const NETWORK_LIMIT_MAX = 100;
  * 缓冲活在**当前文档**上，导航即清零——所以"这次才装上"必须如实说（`armedBefore`）。
  */
 export function buildBrowserNetworkTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -695,8 +668,7 @@ export function buildBrowserNetworkTool(
         .describe(`How many of the most recent requests to show (default ${NETWORK_LIMIT_DEFAULT}, max ${NETWORK_LIMIT_MAX}).`),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      try {
+          try {
         const r = await readRecorder(
           { kind: "reqs", limit: args.limit ?? NETWORK_LIMIT_DEFAULT, match: args.filter },
           args.view_id,
@@ -731,7 +703,6 @@ const CONSOLE_LIMIT_MAX = 100;
  * **当前文档**上，所以"这次才装上"必须如实说（`armedBefore`）。
  */
 export function buildBrowserConsoleTool(
-  env: NodeJS.ProcessEnv,
   emit: (e: ChatEvent) => void,
 ) {
   return tool(
@@ -759,8 +730,7 @@ export function buildBrowserConsoleTool(
         .describe(`How many of the most recent entries to show (default ${CONSOLE_LIMIT_DEFAULT}, max ${CONSOLE_LIMIT_MAX}).`),
     },
     async (args) => {
-      if (!hasBrowserHost(env)) return textResult(NO_BROWSER_HOST_TEXT);
-      try {
+          try {
         const level = args.level ?? "all";
         const r = await readRecorder(
           { kind: "logs", limit: args.limit ?? CONSOLE_LIMIT_DEFAULT, match: level },
@@ -782,16 +752,16 @@ export function buildBrowserConsoleTool(
 }
 
 /** 工具总装：上层只需读这张表。新增工具 = 这里加一项（并同步 browserMcp 的规则与前端镜像）。 */
-export function buildBrowserTools(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void) {
+export function buildBrowserTools(emit: (e: ChatEvent) => void) {
   return [
-    buildBrowserTabsTool(env, emit),
-    buildBrowserReadTool(env, emit),
-    buildBrowserActTool(env, emit),
-    buildBrowserWaitTool(env, emit),
-    buildBrowserEvalTool(env, emit),
-    buildBrowserScreenshotTool(env, emit),
-    buildBrowserTabTool(env, emit),
-    buildBrowserNetworkTool(env, emit),
-    buildBrowserConsoleTool(env, emit),
+    buildBrowserTabsTool(emit),
+    buildBrowserReadTool(emit),
+    buildBrowserActTool(emit),
+    buildBrowserWaitTool(emit),
+    buildBrowserEvalTool(emit),
+    buildBrowserScreenshotTool(emit),
+    buildBrowserTabTool(emit),
+    buildBrowserNetworkTool(emit),
+    buildBrowserConsoleTool(emit),
   ];
 }

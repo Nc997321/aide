@@ -6,18 +6,13 @@ import { makeLspGlanceHook } from "../lspGlance";
 import { isLspWarm, queryLsp } from "../lspClient";
 import type { ChatEvent } from "../../engine/types.js";
 import type { ModelSwitchGuard } from "../../engine/modelSwitchGuard";
-import type { SessionMetadata } from "../../engine/sessionMetadata";
 
 export interface HookBuildContext {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
               makeStopEffortHook(): HookCallback;
-              makeModelSwitchGuard(): ModelSwitchGuard | null;
-              /** 会话级元数据（headless 网关注入，引擎不解释内容）。函数形式
-               *  读活值——每条 send 刷新后 hook 下次调用即可见。
-               *  ⚠️ 只在进程内暴露：不得写进子进程 env / 日志（值可能含凭据，N5）。 */
-              metadata(): SessionMetadata };
+              makeModelSwitchGuard(): ModelSwitchGuard | null };
   /** aide-lsp 通道（闸门已算好，见 lspGate.ts）。缺省 = 不挂 grep 顺带作答。 */
   lsp?: { mounted: boolean; emit: (e: ChatEvent) => void };
 }

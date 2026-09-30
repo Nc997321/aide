@@ -15,61 +15,13 @@ if (process.argv[2] === "test-mcp") {
 }
 
 // Windows：给 Bash 工具的非交互 bash 注入 BASH_ENV（chcp 65001），让 Windows
-// 原生 CLI 输出 UTF-8，防 GBK 乱码。引擎级平台行为——桌面与 headless 两宿主
-// 共享（headless 会话同样跑 Bash 工具；2026-09-11 验收发现 headless 分支漏挂）。
-// test-mcp 探活分支在上面已退出，不需要。
+// 原生 CLI 输出 UTF-8，防 GBK 乱码。test-mcp 探活分支在上面已退出，不需要。
 ensureWindowsBashEnv(process.env);
 
-// headless 子命令：HTTP/SSE 宿主。业务前端直连（不走桌面 Rust 宿主），事件按会话
-// 订阅。配置走 env：AIDE_HEADLESS_PORT（默认 18090）、AIDE_HEADLESS_TOKEN（鉴权，
-// 省略则只允许回环监听）。桌面路径零改动，本分支不触碰任何 stdio 初始化。
-if (process.argv[2] === "headless") {
-  // 宿主标记：内嵌浏览器工具据此在**发起前**短路成引导文本。没有它，桥的对面（桌面 Rust）
-  // 不存在，调用只会白等 15s 超时，而超时文案会把「本环境没这个能力」伪装成「浏览器卡了」。
-  // 工具本身**照挂不摘**——理由见 browserMcp.ts（工具列表跨宿主稳定，模型要拿到明确信号）。
-  process.env.AIDE_HEADLESS = "1";
-  const { startHeadlessServer, PROTOCOL_VERSION } = await import("./headless-server.js");
-  const port = Number(process.env.AIDE_HEADLESS_PORT ?? "18090");
-  const token = process.env.AIDE_HEADLESS_TOKEN || undefined;
-  const handle = await startHeadlessServer({
-    port,
-    token,
-    createManager: (dispatch) => {
-      const manager = new SessionManager({ emit: dispatch });
-      manager.startHealthTimer();
-      return manager;
-    },
-  });
-  // 监听地址是宿主内部的安全基线（不鉴权禁对外），这里只报端口。
-  // protocol 随 listening 行暴露（版本化三处之一，另两处见 headless-server.ts）。
-  console.log(JSON.stringify({ type: "headless-listening", port: handle.port, protocol: PROTOCOL_VERSION }));
-  const shutdownHeadless = (): void => {
-    // fire-and-forget 的收尾：close 失败要落日志可见，且信号驱动的退出必须真退出
-    // （worker 的 SDK 连接是持久句柄，不 exit 进程会滞留——N4）。
-    handle
-      .close()
-      .then(() => process.exit(0))
-      .catch((e) => {
-        console.error("[headless] shutdown failed:", String(e));
-        process.exit(1);
-      });
-  };
-  process.on("SIGTERM", shutdownHeadless);
-  process.on("SIGINT", shutdownHeadless);
-  process.on("uncaughtException", (e) => {
-    // 长驻宿主兜底（N4）：单点异常不静默死，报错后按失败退出让宿主重启
-    console.error("[headless] uncaughtException:", e);
-    process.exit(1);
-  });
-} else {
-  await mainDesktop();
-}
+await mainDesktop();
 
-// ---- 桌面宿主（stdin/stdout 协议，由 Rust 拉起）：原顶层初始化原样收进本函数，
-//      执行顺序不变；headless 分支不再走这里。 ----
+// ---- 桌面宿主（stdin/stdout 协议，由 Rust 拉起） ----
 async function mainDesktop(): Promise<void> {
-  // （ensureWindowsBashEnv 已上移到 host 分支前的共同路径——headless 共享）
-
   // codegraph-explore skill 落地：任务级触发「探索代码先用索引工具」，
   // 与 MCP instructions 互补。内建于 runtime，免用户配置。
   ensureCodegraphSkill(process.env);

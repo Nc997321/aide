@@ -9,11 +9,7 @@ import type {
 import { MessageQueue } from "./generator.js";
 import { PermissionManager, makeGuardedCanUseTool } from "./permissions.js";
 import { approvedExtras, classifyPermissionResponse } from "./permissionResponse.js";
-import {
-  hasPathAttachment,
-  normalizeInlineImages,
-  resolveImageAttachments,
-} from "./imageAttachments.js";
+import { normalizeInlineImages } from "./imageAttachments.js";
 import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
@@ -45,7 +41,6 @@ import { buildCliEnv } from "./cliEnv.js";
 import { thinkingDisabledFor } from "./thinkingPolicy.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
-import { parseMcpHeaders, type McpHeaderMap, type SessionMetadata } from "./sessionMetadata.js";
 import { cancelAllCodegraphQueries } from "../extensions/codegraphClient.js";
 import { cancelAllLspQueries, queryLsp } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
@@ -98,10 +93,6 @@ export interface SessionWorkerOptions {
   cwd?: string;
   initialModel?: string;
   envOverrides?: Record<string, string>;
-  /** 会话元数据（headless 网关下发，引擎不解释；hooks 经 HookBuildContext 读取）。 */
-  metadata?: SessionMetadata;
-  /** MCP 头注入表（构造器过 parseMcpHeaders 收窄——stdin 是协议面，类型不等于可信，N1）。 */
-  mcpHeaders?: McpHeaderMap;
   /** 测试缝：覆盖 SDK query 实现。生产省略用真 query。 */
   queryFn?: typeof query;
   /** btw 支线回合结束自毁回调：worker 自停后由 SessionManager 把自己摘出注册表。 */
@@ -175,7 +166,7 @@ export class SessionWorker {
 
   // ---- 会话自动命名（截取首条用户消息内容作标题，见 titleGenerator.ts） ----
   /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
-   *  自动化/headless 运行（scheduler、smoke）不给会话起标题。 */
+   *  自动化运行（scheduler、smoke）不给会话起标题。 */
   private autoTitle = true;
   /** 思考开关（send.thinking_enabled 下发），缺省开启。关闭 = 从能力上禁用思考：
    *  ① 请求层——spawn 时 thinking: disabled（官方 API 真正不思考、省 token）；
@@ -199,7 +190,7 @@ export class SessionWorker {
   /** 每个 worker 只命名一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
 
-  // ---- 自动化运行（无人值守 headless，调度器发起） ----
+  // ---- 自动化运行（无人值守，调度器发起） ----
   // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
@@ -210,12 +201,6 @@ export class SessionWorker {
   // ---- Provider env 覆盖（per-session） ----
   private envOverrides: Record<string, string>;
 
-  // ---- 会话级元数据 / MCP 头注入（headless 网关机制，见 sessionMetadata.ts） ----
-  // 每条 send 刷新（缺席 = 清空，与 envOverrides 同形）；元数据只暴露给进程内
-  // hooks（HookBuildContext.session.metadata），绝不进 cliEnv（Bash 工具子进程
-  // 继承 env，模型可外带凭据——安全红线）。
-  private metadata: SessionMetadata;
-  private mcpHeaders: McpHeaderMap | undefined;
   /** 远程车道：桌面扩展在本机（目标机）上的投影，每条 send 刷新（缺席 = 本地车道）。 */
   private extensions: SendExtensions | undefined;
   /** 已经告诉过用户的「不可用扩展」清单（同一份不重复发）。 */
@@ -266,8 +251,6 @@ export class SessionWorker {
     this.onSelfStop = opts.onSelfStop;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
-    this.metadata = opts.metadata ?? {};
-    this.mcpHeaders = this.sanitizeMcpHeaders(opts.mcpHeaders);
     this.currentModel = opts.initialModel ?? this.envOverrides.ANTHROPIC_MODEL ?? this.currentModel;
     // provider env 通道携带的 effort 初始值（Rust 把 provider effort_level / 前端选择器
     // 值都注入 CLAUDE_CODE_EFFORT_LEVEL，与 ANTHROPIC_MODEL 同形）——只作初始值读出来，
@@ -331,21 +314,8 @@ export class SessionWorker {
     return this.modelSwitchGuard;
   }
 
-  /** MCP 头注入表的边界收窄 + 失败可见（N1）：非法形状整体忽略（fail-closed，
-   *  半对半错的注入表比没有更糟）。错误只报形状不报值——值是凭据（N5）。 */
-  private sanitizeMcpHeaders(raw: McpHeaderMap | undefined): McpHeaderMap | undefined {
-    if (raw === undefined) return undefined;
-    const parsed = parseMcpHeaders(raw);
-    if (parsed === undefined) {
-      console.error(`[session ${this.routingKey}] send.mcp_headers 形状非法，已忽略本次注入（值不落日志，N5）`);
-    }
-    return parsed;
-  }
-
-  /** 每条 send 都携带宿主当前计算出的运行时配置（Rust provider 环境 / headless
-   * 网关的会话元数据与 MCP 头注入）；在命令真正执行时更新，防止等待前一条图片
-   * probe 时提前覆盖其连接身份。元数据/注入表每条 send 刷新（缺席 = 清空，
-   * token 轮换语义）；新头在下一次 query() 重连才生效（mcpServers 随 spawn 固化）。 */
+  /** 每条 send 都携带宿主当前计算出的运行时配置（Rust provider 环境）；在命令真正
+   * 执行时更新，防止等待前一条图片 probe 时提前覆盖其连接身份。 */
   private applySendRuntimeConfig(cmd: Extract<SidecarCommand, { cmd: "send" }>): void {
     this.envOverrides = cmd.env ?? {};
     const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
@@ -353,8 +323,6 @@ export class SessionWorker {
     // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
     // 没带的调用方回落 provider env 默认。
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
-    this.metadata = cmd.metadata ?? {};
-    this.mcpHeaders = this.sanitizeMcpHeaders(cmd.mcp_headers);
     this.extensions = parseSendExtensions(cmd.extensions);
     this.applyAttachedDirs(cmd.additional_dirs, cmd.attach_rejected);
   }
@@ -604,7 +572,7 @@ export class SessionWorker {
       // 下面只碰 decision，不再各自解释字段组合（词汇与规则见 engine/permissionResponse.ts）。
       const verdict = classifyPermissionResponse(cmd);
       if (!verdict.ok) {
-        // 不可判的形状（只可能来自 stdin 面——headless 有 schema 挡在 400）。
+        // 不可判的形状（stdin 协议面，类型不等于可信）。
         // 不静默吞（N1），并按拒绝 fail-closed 收尾：绝不把挂起请求悬死。
         this.emit({ type: "error", message: `permission_response ${verdict.reason}`, fatal: false });
         this.permMgr.resolve(cmd.id, { kind: "unanswered", reason: verdict.reason });
@@ -706,14 +674,9 @@ export class SessionWorker {
 
     if (this.stopped) return;
 
-    // 图片线形状归一：内嵌 base64 / 引擎本地路径 → 内嵌（守卫见 imageAttachments.ts）。
-    // 守门在入口——下游（buildUserMessage / 插队队列 / display）只认识内嵌形式。
-    // **无 path 时走同步归一**：下面的同步前缀里发生着会话标题、权限模式等副作用，
-    // 无条件 await 会把它们整体推迟一个 microtask（实测打挂 5 个既有用例）。
+    // 图片附件入口校验（同步——下面的同步前缀里发生着会话标题、权限模式等副作用）。
     // 抛错由 enqueueSend 报成非致命 error 帧：该条 send 整体拒发，不静默丢消息。
-    const images = hasPathAttachment(cmd.images)
-      ? await resolveImageAttachments(cmd.images)
-      : normalizeInlineImages(cmd.images);
+    const images = normalizeInlineImages(cmd.images);
 
     // session_id 在命令里是路由键（SessionManager 用它找 worker）。
     // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
@@ -870,14 +833,11 @@ export class SessionWorker {
             processEnv: process.env,
             emit: (e) => this.emit(e),
             automationConfig: this.automationConfig,
-            mcpHeaders: this.mcpHeaders,
             extensions: this.extensions,
             session: {
               makePolicyHook: (hookCwd) => this.policy.makeHook(hookCwd),
               makeStopEffortHook: () => this.makeStopEffortHook(),
               makeModelSwitchGuard: () => this.makeModelSwitchGuard(),
-              // 会话元数据读取口（函数形式读活值——每条 send 刷新后可见）。
-              metadata: () => this.metadata,
             },
           });
 
@@ -981,8 +941,7 @@ export class SessionWorker {
             // 错误终态（F3）：主动回收 CLI 子进程（N4 孤儿红线）。close 放在迭代
             // 结束之后——迭代中 close 自己是已知陷阱（见 finishTurn 的 setImmediate
             // 先例）。worker 不 stopped：下一条 send 走 handleSend 的 !currentQuery
-            // 分支以 resume 重启，env/mcp_headers 随新 spawn 重新定装（C4 token
-            // 轮换的异常恢复路径由此闭环）。
+            // 分支以 resume 重启，env 随新 spawn 重新定装。
             q.close();
           }
           // for await 结束（queue closed 或错误终态）→ 退出 while

@@ -11,7 +11,6 @@ import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
 import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
-import { applyMcpHeaders, type McpHeaderMap } from "../sessionMetadata.js";
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
 import type { SendExtensions } from "../../extensions/remoteExtensions.js";
@@ -30,11 +29,10 @@ export interface QueryContextDeps {
   processEnv: NodeJS.ProcessEnv;
   emit: (e: ChatEvent) => void;
   automationConfig: AutomationConfig | undefined;
-  mcpHeaders: McpHeaderMap | undefined;
   /** 远程车道：桌面扩展在目标机上的投影（send.extensions）。本地车道缺省。 */
   extensions?: SendExtensions;
   /** builtinHooks 的会话适配器（worker 建闭包桥接 private 成员：
-   *  policy/stopEffort/modelSwitchGuard/metadata）。 */
+   *  policy/stopEffort/modelSwitchGuard）。 */
   session: HookBuildContext["session"];
 }
 
@@ -71,7 +69,6 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 内嵌浏览器读写（读骨架 / 执行脚本 / CDP）：注册条件=!trusted 跳过、AIDE_BROWSER_TOOLS=off
   // 跳过。**带 emit**——它要走 request_id 桥回桌面 Rust 驱动 WebView2（本仓库第三种形态：
   // knowledge 直连 HTTP、docs 本地同步解析、codegraph 与本插件回主进程）。
-  // headless 下**照挂**，由工具层发起前短路成引导文本（不在注册处摘除，理由见 browserMcp.ts）。
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
   // agent LSP 工具：闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
   // 闸门数据 lspLanguages 由主进程算好下发（同 codegraph_enabled 的政策值通道）。
@@ -118,9 +115,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
 
   // mcpServers 终装：内建(codegraph/docs) + 用户配置 → automation 白名单过滤
   //（未预授权的连接器不挂载——其工具对模型根本不存在，第一层收口；policy hook
-  // 白名单裁决是第二层）→ 会话级头注入。applyMcpHeaders 只动 http/sse 条目
-  //（内建 sdk 型天然不受影响）；桌面路径 mcpHeaders=undefined 时零拷贝直通
-  //（见 sessionMetadata.ts）。
+  // 白名单裁决是第二层）。
   const assembledMcp = assembleMcpServers(
     {
       ...(codegraphMcp ?? {}),
@@ -131,12 +126,9 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     },
     userMcp,
   );
-  const mcpServers = applyMcpHeaders(
-    deps.automationConfig
-      ? filterMcpServers(assembledMcp, deps.automationConfig.mcpAllowlist)
-      : assembledMcp,
-    deps.mcpHeaders,
-  );
+  const mcpServers = deps.automationConfig
+    ? filterMcpServers(assembledMcp, deps.automationConfig.mcpAllowlist)
+    : assembledMcp;
 
   return {
     instructions,

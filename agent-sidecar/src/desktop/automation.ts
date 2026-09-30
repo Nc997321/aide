@@ -1,6 +1,6 @@
 import type { SidecarCommand } from "../engine/types.js";
 
-/** 自动化运行（无人值守 headless 会话）的配置与纯函数判定。
+/** 自动化运行（无人值守会话）的配置与纯函数判定。
  *
  *  与 btw 支线的关键区别：
  *  - 转录要落盘（persistSession 不动，默认 true）——运行历史复用会话查看器；

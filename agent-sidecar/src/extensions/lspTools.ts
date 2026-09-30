@@ -62,7 +62,6 @@ const target = () => ({
  * 挂载闸门三条见 `lspGate.ts`（**别在这里重写**——退役内置 LSP 通道的判据是同一份，
  * 分叉会造出「两个都没有」或「两个都在」）。返回 null = server 不挂载 = 工具对模型不存在。
  *
- * headless 不在闸门里单独列一条：`lspLanguages` 由主进程下发，headless 不发 ⇒ 空 ⇒ 关。
  */
 export function lspMcpRegistration(deps: LspToolsDeps): Record<string, unknown> | null {
   if (!lspToolsMounted(deps)) return null;

@@ -1,4 +1,4 @@
-// 冒烟：headless 验证 inline SDK MCP server 是否真正把工具暴露给模型、且 instructions
+// 冒烟：直连 SDK 验证 inline SDK MCP server 是否真正把工具暴露给模型、且 instructions
 // 让模型采纳工具（2026-07-26 codegraph 实锤：instructions 缺失时第三方模型对工具视而不见）。
 // 用法（agent-sidecar 目录）：npx tsx smoke-mcp.ts
 // 需 AIDE_CLAUDE_EXE 指向 claude.exe（SDK 平台包里的），否则用 DEFAULT_CLAUDE_EXE 兜底。
