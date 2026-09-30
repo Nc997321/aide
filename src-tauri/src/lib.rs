@@ -17,7 +17,6 @@ mod settings;
 use std::path::PathBuf;
 
 use commands::file_assoc::PendingOpenFile;
-use commands::WorkspaceState;
 use tauri::{Emitter, Manager};
 
 fn init_logging() {
@@ -58,46 +57,14 @@ pub fn run() {
         default_hook(info);
     }));
 
-    // state.json 播种（legacy config.json → state.json 一次性 key 搬迁）必须在
-    // load_workspace_state 之前——它读的就是 state.json。幂等；失败保留 legacy
-    // 文件，设置迁移清理时会重试。
-    if let Err(e) = commands::settings::seed_state_from_legacy(
-        &commands::config_path(),
-        &commands::state_path(),
-    ) {
-        eprintln!("[aide] state.json seeding failed: {e}");
-    }
-    // 工作区显式注册表一次性迁移（扫 claude/projects 播种，marker 幂等）必须在
-    // 活动工作区恢复之前——恢复路径优先查注册表。失败不阻断启动，下次重试。
-    if let Err(e) = commands::workspace::ensure_registry_migrated() {
-        eprintln!("[aide] workspace registry migration failed: {e}");
-    }
-    // 日常目录引导：建目录 + 幂等注册。**刻意不激活**——活动工作区仍由下面的恢复链
-    // 与用户操作决定（「日常」是内部实现细节，不该顶掉用户的当前项目，也不该影响
-    // 引导向导的跳过判据）。失败不阻断启动（与上面同策略）。
-    if let Err(e) = commands::workspace::daily::ensure_daily_workspace() {
-        eprintln!("[aide] daily workspace bootstrap failed: {e}");
-    }
-    let saved_key = commands::load_workspace_state();
-    // 「工作区还在吗」注入远程感知判定：远程路径同步 stat 不了，按存在处理（Host 核心的
-    // 根解析 / 工作区列表、桌面的会话 cwd 兜底共用这一判定）。
-    let workspace_state = std::sync::Arc::new(WorkspaceState::new());
+    // 本机 Host 启动引导第一段（数据迁移 / 日常目录 / 恢复活动工作区）——与 aide-host serve
+    // 共用同一份（aide_core::host）。
+    let workspace_state = std::sync::Arc::new(aide_core::host::prepare_workspace());
     // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
     let settings_service = std::sync::Arc::new(settings::SettingsService::new(
         settings::SettingsPaths::new().expect("settings paths"),
         std::sync::Arc::new(settings::KeyringSecretStore::new()),
     ));
-    if let Some(key) = saved_key {
-        // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
-        // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
-        let path =
-            commands::workspace::registered_path_for_key(&commands::settings::load_state(), &key)
-                .or_else(|| commands::resolve_path_from_key(&key));
-        if let Some(path) = path {
-            *workspace_state.path.lock().unwrap() = Some(std::path::PathBuf::from(&path));
-        }
-        *workspace_state.key.lock().unwrap() = Some(key);
-    }
 
     let builder = tauri::Builder::default();
     // 单实例（**仅 release**）：二次启动唤出首实例窗口、转发 argv 后立即退出。
@@ -234,44 +201,14 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::selfcheck::selfcheck_on_startup(app.handle());
 
-            // 迁移老 provider schema（idempotent）——必须在 spawn_runtime 取 env 之前
-            if let Err(e) = crate::runtime::provider::ensure_migrated() {
-                tracing::error!("provider schema migration failed: {e}（继续用旧配置）");
-            }
-
-            // 启动持久 Agent Runtime（single persistent process，所有会话共享）
-            // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
-            // setup 闭包是同步的，不能直接调 spawn_runtime。
-            // Runtime 住 aide-core；GUI 侧钩子（内嵌浏览器 / 冻结诊断）先挂上。
-            let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
-            core.runtime
-                .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
-            tauri::async_runtime::spawn(async move {
-                if let Err(e) = aide_core::runtime::start_with_active_provider(&core).await {
-                    eprintln!("[aide] Agent Runtime 启动失败: {e}");
-                }
-            });
-
-            // 自动化调度器（住 Host 核心）：常驻 tokio task（30s tick + 启动 missed-run 扫描）。
+            // 本机 Host 启动引导第二段（provider 迁移 / agent runtime / 自动化 / 内置插件）——与
+            // aide-host serve 共用同一份（aide_core::host）。GUI 侧钩子（内嵌浏览器 / 冻结诊断）
+            // 必须先挂上，runtime 起来后的第一条事件就要经过它。
             {
                 let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
-                tauri::async_runtime::spawn(async move { core.automation.start(&core) });
-            }
-
-            // 内置插件：后台确保已安装/版本更新（git 网络 IO，必须 spawn_blocking +
-            // 失败只记日志，不阻塞启动——CLAUDE.md 主线程红线）。用户已卸载（墓碑）
-            // 或手动禁用的内置插件不会被复活/重置，见 marketplace/bundled.rs。
-            {
-                let service = app
-                    .state::<std::sync::Arc<settings::SettingsService>>()
-                    .inner()
-                    .clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        commands::marketplace::bundled::ensure_bundled_plugins_installed(&service);
-                    })
-                    .await;
-                });
+                core.runtime
+                    .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
+                tauri::async_runtime::spawn(async move { aide_core::host::start(&core) });
             }
 
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调

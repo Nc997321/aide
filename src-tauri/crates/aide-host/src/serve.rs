@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use aide_core::resources::HostResources;
 use aide_core::settings::{FileSecretStore, SettingsPaths, SettingsService};
-use aide_core::{Core, EventSink, WorkspaceState};
+use aide_core::{Core, EventSink};
 use aide_host::protocol::{
     HelloInfo, InvokeParams, Notification, Request, Response, ServeInit, METHOD_HELLO,
     METHOD_INVOKE, PROTOCOL_VERSION,
@@ -126,23 +126,18 @@ pub async fn run() -> i32 {
         }
     });
 
+    // Host 启动引导：与桌面本机 Host 同一份（aide_core::host）——数据迁移 / 日常目录 /
+    // 恢复活动工作区，然后 provider 迁移 / agent runtime / 自动化 / 内置插件。
+    let workspace = tokio::task::spawn_blocking(aide_core::host::prepare_workspace)
+        .await
+        .unwrap_or_default();
     let core = Core::new(
-        Arc::new(WorkspaceState::new()),
+        Arc::new(workspace),
         Arc::new(host_settings()),
         Arc::new(NotifySink(tx.clone())),
         Arc::new(HostKit { init, install_dir }),
     );
-    // agent runtime 与自动化调度：Host 一起来就拉起（与桌面本机 Host 同一时机）。起不来只留痕
-    // ——send 会如实报「Runtime not spawned」，其余命令照常可用。
-    {
-        let core = Arc::clone(&core);
-        tokio::spawn(async move {
-            if let Err(e) = aide_core::runtime::start_with_active_provider(&core).await {
-                eprintln!("[aide-host] agent runtime failed to start: {e}");
-            }
-        });
-    }
-    core.automation.start(&core);
+    aide_core::host::start(&core);
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;

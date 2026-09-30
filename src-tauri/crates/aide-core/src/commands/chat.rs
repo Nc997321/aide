@@ -321,6 +321,12 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     let app = core.clone();
     {
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
+    // 工作目录必须真在：不在时 sidecar 起 claude 会 ENOENT，SDK 把它误报成「二进制与 libc 不匹配」
+    // ——用户拿到一条完全错误的线索（2026-09-30 真机）。如实说是哪个目录不在。
+    let cwd_check = cwd.clone();
+    if !blocking(move || Ok(crate::workspace::present(&cwd_check))).await? {
+        return Err(format!("会话工作目录不存在：{}", cwd.display()));
+    }
     let cwd_str = cwd.to_string_lossy().to_string();
 
     // 显式注册：会话 cwd 在发送前幂等落账进工作区注册表（新装首聊回落 home

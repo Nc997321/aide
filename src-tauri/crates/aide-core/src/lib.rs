@@ -14,6 +14,7 @@ pub mod automation;
 pub mod lsp;
 pub mod codegraph;
 pub mod commands;
+pub mod host;
 pub mod paths;
 pub mod policy;
 pub mod provider;

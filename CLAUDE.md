@@ -90,6 +90,7 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 - **供应商按 Host 自持**（2026-09-30 定）：每个 Host 一份供应商与密钥；远程 Host 的密钥落 `~/.aide/secrets.json`（0600，`FileSecretStore`）。**不同步 OAuth 凭据**（refresh token 轮换会互相顶掉）；官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`。
 - **插件 / MCP / hooks / 记忆也按 Host 自持**：Host 窗口里的市场 / 定制项命令本来就跑在那台 Host 上，装到它自己的 `~/.aide`。
 - **远程套件**：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；桌面按内容哈希装到目标机 `~/.aide/host/<ver>/`，连接时首行 `ServeInit`（协议 v4，`crates/aide-host/src/protocol.rs` 是两端唯一真相源）。serve 进程整体切到用户登录环境（agent / 终端 / LSP / git 看到与用户终端一致的 PATH）；窗口的最后一扇关掉 = 断开 = serve 收掉它的 runtime 与语言服务器。aide-host 必须是**不依赖任何系统 C 库的单个静态二进制**：crate 自带源码的 C/汇编（如 rustls 的 ring）允许，静态编入；需要目标机装 `.so` / 头文件 / pkg-config 的依赖（libdbus、openssl-sys 动态链接等）一律禁止。
+- **Host 的启动职责只写在 `aide_core::host`**（`prepare_workspace` + `start`：数据迁移、日常目录、恢复活动工作区、provider 迁移、runtime / 自动化 / 内置插件），桌面 setup 与 `aide-host serve` 都调它。**不许只写在某一扇前门里**——2026-09-30 真机：serve 漏了日常目录引导，WSL 窗口的会话 cwd 不存在，claude 起不来（SDK 还误报成 libc 不匹配）。
 - **「目录还在吗」一律 `aide_core::workspace::present`**：判定为不在 = 会话 cwd 回落活动工作区，误判就是 2026-09-18「跑错项目」事故的形态。
 - 真机回归：`src/remote_workspace/e2e_tests.rs`（WSL 上的安装 / 工作区操作 / 一轮真实会话 / Host 里的语言服务器），运行方式见文件头。
 

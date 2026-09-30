@@ -95,7 +95,12 @@ async fn wsl_install_connect_and_workspace_ops() {
         .await
         .expect("stage");
     let staged = staged.as_str().unwrap();
-    assert!(staged.starts_with('/') && staged.ends_with("shot.png"), "staged on the Host: {staged}");
+    // 重名会追加 ` (n)`（重复跑 e2e 时 /tmp 里已有前几次的），只认「落在 Host 上的 shot*.png」
+    let name = staged.rsplit('/').next().unwrap_or("");
+    assert!(staged.starts_with('/') && name.starts_with("shot") && name.ends_with(".png"), "staged on the Host: {staged}");
+    let back = conn.invoke("read_file_base64", json!({"path": staged})).await.expect("read staged");
+    assert_eq!(back, json!("aGk="), "staged bytes round-trip");
+    let _ = conn.invoke("delete_file", json!({"path": staged})).await;
 
     // ── 监听：改动应在防抖窗口后以通知回推 ──
     conn.invoke("file_tree_watch", json!({"root": dir})).await.expect("watch");
@@ -263,6 +268,15 @@ async fn wsl_host_serve_runs_a_chat_round() {
     )
     .await
     .expect("connect");
+
+    // Host 启动引导（aide_core::host，与桌面同一份）：全新 HOME 上日常目录也必须建好
+    //（2026-09-30 真机：serve 漏了这步，日常会话 cwd 不存在，claude 起不来）。
+    let daily = conn.invoke("daily_workspace", json!({})).await.expect("daily_workspace");
+    let daily = daily["path"].as_str().unwrap().to_string();
+    assert!(daily.starts_with(&home), "daily workspace under the Host's HOME: {daily}");
+    conn.invoke("list_directory", json!({"path": daily}))
+        .await
+        .expect("daily workspace directory must exist on a fresh Host");
 
     let cwd = env("AIDE_E2E_REPO").unwrap_or_else(|| conn.info.home.clone());
     let sid = format!("e2e-host-{}", std::process::id());
