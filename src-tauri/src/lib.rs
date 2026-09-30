@@ -356,8 +356,6 @@ pub fn run() {
             commands::shell::pty_kill,
             commands::shell::poll_pty_output,
             commands::shell::pty_spawn_shell,
-            commands::onboarding::claude_credentials_exist,
-            commands::onboarding::claude_start_login,
             commands::filesystem::file_open,
             commands::file_assoc::consume_pending_open_file,
             commands::file_assoc::register_open_with,
@@ -489,11 +487,6 @@ pub fn run() {
             // when WebView2 doesn't expose File.path)
             commands::clipboard::stage_dropped_file,
             // Recent access
-            commands::recent::record_recent_session,
-            commands::recent::record_recent_file,
-            commands::recent::list_recent,
-            commands::recent::remove_recent_session,
-            commands::recent::clear_recent,
             // Chat (Agent SDK)
             commands::chat::send_message,
             commands::chat::permission_response,
@@ -509,7 +502,6 @@ pub fn run() {
             commands::chat::btw_ask,
             // Knowledge base runtime credentials
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
-            commands::knowledge::knowledge_set_runtime_config,
             // Plugin skills scanning
             commands::shell::scan_plugin_skills,
             // Code graph
@@ -526,12 +518,7 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::open_devtools,
             // 通知中心持久化
-            commands::notifications::load_notifications,
-            commands::notifications::save_notifications,
             // 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录
-            commands::migration::check_claude_migration,
-            commands::migration::migrate_claude_data,
-            commands::migration::dismiss_claude_migration,
             // LSP built-in
             commands::workspace::workspace_set_lsp_enabled,
             commands::workspace::workspace_set_lsp_excludes,

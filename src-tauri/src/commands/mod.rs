@@ -6,16 +6,13 @@ pub mod customizations;
 pub mod detectors;
 pub mod file_assoc;
 pub mod filesystem;
-pub mod knowledge;
 pub mod marketplace;
 pub mod memory_observatory;
-pub mod migration;
-pub mod notifications;
-pub mod onboarding;
 pub mod permissions;
 /// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
 pub use aide_core::proxy;
-pub mod recent;
+/// 已迁入 aide-core 的命令模块；保留 `crate::commands::<模块>` 路径。
+pub use aide_core::commands::{knowledge, migration, notifications, onboarding, recent};
 pub mod remote;
 pub mod run_configs;
 pub mod run_process;
@@ -25,7 +22,6 @@ pub mod shell;
 pub mod workspace;
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::path::PathBuf;
 
 // ── Shared Types ──
@@ -138,113 +134,13 @@ pub use aide_core::paths::{
 };
 
 
-/// 会话显示名的权威源：`~/.aide/sessions/<id>.json` 的 `name` 字段
-/// （create/rename/auto_rename 三处写）。任何「按 id 展示会话名」的地方都应
-/// 以它为准，元数据缺失时由调用方决定兜底。list_sessions 与 list_recent
-/// （recent.json 只存快照名）都经此对齐。
-pub(crate) fn our_session_name(session_id: &str) -> Option<String> {
-    let path = our_sessions_dir().join(format!("{}.json", session_id));
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                return v
-                    .get("name")
-                    .and_then(|n| n.as_str())
-                    .map(|s| s.to_string());
-            }
-        }
-    }
-    None
-}
+// ── 会话档案 / 转录定位（住在 aide-core） ──
 
-/// 会话绑定的供应商 id 权威源：`~/.aide/sessions/<id>.json` 的 `provider` 字段
-/// （set_session_provider / 前端 stampProvider 写）。空串视为未记（filter）。
-/// 「会话属于哪个供应商」的 Rust 侧解析（send_message 按会话 provider 构造 env）
-/// 与前端 session_provider 命令共用此口径。
-pub(crate) fn our_session_provider_field(session_id: &str) -> Option<String> {
-    let path = our_sessions_dir().join(format!("{}.json", session_id));
-    if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-                return v
-                    .get("provider")
-                    .and_then(|p| p.as_str())
-                    .filter(|s| !s.is_empty())
-                    .map(|s| s.to_string());
-            }
-        }
-    }
-    None
-}
+pub use aide_core::session_store::{
+    find_session_jsonl_globally, our_session_is_automation, our_session_name,
+    our_session_provider_field, our_session_workspace, SessionWorkspaceRef,
+};
 
-/// 会话档案里记的工作区归属（`wsPath` / `wsKey`）。两个字段由同一次
-/// `set_session_workspace` 成对落盘，所以也成对读取——拆成两个 getter 只会让
-/// "读一半"（有 path 没 key）成为可能。空串视为未记（filter）。
-///
-/// 这是「会话属于哪个工作区」的**权威源**：send_message 的 cwd 兜底
-/// （显式 workspace_root 缺席时）与前端 `session_workspace` 命令共用此口径。
-/// 只读不推断：档案里没有就是没有，调用方自己决定兜底与留痕。
-#[derive(Clone, Debug, Default, Serialize)]
-pub struct SessionWorkspaceRef {
-    #[serde(rename = "wsPath")]
-    pub path: Option<String>,
-    #[serde(rename = "wsKey")]
-    pub key: Option<String>,
-}
-
-pub(crate) fn our_session_workspace(session_id: &str) -> SessionWorkspaceRef {
-    let path = our_sessions_dir().join(format!("{}.json", session_id));
-    let Ok(content) = fs::read_to_string(&path) else {
-        return SessionWorkspaceRef::default();
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return SessionWorkspaceRef::default();
-    };
-    let field = |k: &str| {
-        v.get(k)
-            .and_then(|s| s.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string())
-    };
-    SessionWorkspaceRef {
-        path: field("wsPath"),
-        key: field("wsKey"),
-    }
-}
-
-/// 会话是否是自动化运行产物（tags 含 "automation"）。
-/// 运行转录仍是普通 session JSONL（查看器直接复用），但不进正常会话列表——
-/// 一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。tags 由
-/// AutomationService 发起运行时写入 `~/.aide/sessions/<id>.json`。
-pub(crate) fn our_session_is_automation(session_id: &str) -> bool {
-    let path = our_sessions_dir().join(format!("{}.json", session_id));
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            return v
-                .get("tags")
-                .and_then(|t| t.as_array())
-                .map(|a| a.iter().any(|x| x.as_str() == Some("automation")))
-                .unwrap_or(false);
-        }
-    }
-    false
-}
-
-/// 多根查找核心：对每个配置根的 `projects/` 做一次 [`find_session_jsonl_in`]。
-fn find_session_jsonl_across_roots(roots: &[PathBuf], id: &str) -> Vec<PathBuf> {
-    roots
-        .iter()
-        .flat_map(|root| find_session_jsonl_in(&root.join("projects"), id))
-        .collect()
-}
-
-/// `find_session_jsonl_in` scoped to **所有已知配置根**：先全局，再各作用域。
-///
-/// session id 全局唯一（UUID），多根扫描至多命中一处；全局排第一保证
-/// 历史会话（会话目录隔离落地之前落的盘）优先命中，行为与改动前兼容。
-pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
-    find_session_jsonl_across_roots(&session_config_roots(), id)
-}
 
 // Re-export from workspace module
 pub use workspace::{load_workspace_state, resolve_path_from_key, resolve_project_dirs};
@@ -252,6 +148,7 @@ pub use workspace::{load_workspace_state, resolve_path_from_key, resolve_project
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     fn ws_with_path(p: &std::path::Path) -> WorkspaceState {
         let ws = WorkspaceState::new();
@@ -339,52 +236,6 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         assert!(find_session_jsonl_in(&root, "no-such-id").is_empty());
         let _ = fs::remove_dir_all(&root);
-    }
-
-    /// 会话目录隔离（2026-09-07）：automation 的转录落在作用域配置根下，
-    /// 读侧必须对称——只扫全局的话，点开运行记录就是空白（线上实锤）。
-    #[test]
-    fn finds_jsonl_in_scoped_config_root_not_just_global() {
-        let base = std::env::temp_dir().join("aide_mod_test_scoped_roots");
-        let _ = fs::remove_dir_all(&base);
-
-        // 全局配置根（历史会话形态）不放目标 id，防误命中
-        let global_proj = base.join("claude").join("projects").join("C--ws");
-        fs::create_dir_all(&global_proj).unwrap();
-        fs::write(global_proj.join("other-id.jsonl"), b"{}").unwrap();
-
-        // 作用域配置根（automation 隔离形态）：目标 jsonl 在这里
-        let scoped_proj = base
-            .join("scopes")
-            .join("automation")
-            .join("aut_x")
-            .join("claude")
-            .join("projects")
-            .join("C--ws");
-        fs::create_dir_all(&scoped_proj).unwrap();
-        let id = "11111111-2222-3333-4444-555555555555";
-        fs::write(scoped_proj.join(format!("{id}.jsonl")), b"{}").unwrap();
-
-        let roots = session_config_roots_in(&base);
-        assert_eq!(roots.len(), 2, "全局 + 一个作用域");
-        assert_eq!(roots[0], base.join("claude"), "全局恒排第一");
-
-        let hits = find_session_jsonl_across_roots(&roots, id);
-        assert_eq!(hits.len(), 1);
-        assert!(hits[0].starts_with(&base.join("scopes")));
-
-        let _ = fs::remove_dir_all(&base);
-    }
-
-    /// scopes 目录不存在（没人用过隔离）→ 退化为只有全局，不报错。
-    #[test]
-    fn session_config_roots_fall_back_to_global_only() {
-        let base = std::env::temp_dir().join("aide_mod_test_no_scopes");
-        let _ = fs::remove_dir_all(&base);
-        fs::create_dir_all(base.join("claude")).unwrap();
-        let roots = session_config_roots_in(&base);
-        assert_eq!(roots, vec![base.join("claude")]);
-        let _ = fs::remove_dir_all(&base);
     }
 
     // 回归：HistoryBlock 的线上 JSON 形状要跟前端 src/types/chat.ts 的 ContentBlock

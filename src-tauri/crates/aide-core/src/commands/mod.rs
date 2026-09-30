@@ -3,7 +3,12 @@
 pub mod fs;
 pub mod git;
 pub mod jdk;
+pub mod knowledge;
+pub mod migration;
+pub mod notifications;
+pub mod onboarding;
 pub mod provider;
+pub mod recent;
 pub mod watch;
 
 use serde::Deserialize;

@@ -9,12 +9,24 @@
 //!
 //! 文件：~/.aide/notifications.json（与 diagnostics/recent 同根）。
 
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("load_notifications", load_notifications),
+    command!("save_notifications", save_notifications),
+];
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use super::our_config_dir;
+use crate::paths::our_config_dir;
 
 /// 并发 save 的 tmp 文件名递增后缀，保证每次写各自独立的 tmp，互不踩踏。
 static SAVE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -104,18 +116,33 @@ pub fn save_notifications_file(records: Vec<NotificationRecord>) -> Result<(), S
 
 // ── Tauri 命令（async + spawn_blocking，文件 IO 不堵主线程）──
 
-#[tauri::command]
-pub async fn load_notifications() -> Result<Vec<NotificationRecord>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadNotificationsArgs {
+}
+
+async fn load_notifications(_core: Arc<Core>, a: LoadNotificationsArgs) -> Result<Vec<NotificationRecord>, String> {
+    let _ = a;
+    {
     tokio::task::spawn_blocking(load_notifications_file)
         .await
         .map_err(|e| format!("load_notifications task panicked: {e}"))
 }
+}
 
-#[tauri::command]
-pub async fn save_notifications(records: Vec<NotificationRecord>) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveNotificationsArgs {
+    records: Vec<NotificationRecord>,
+}
+
+async fn save_notifications(_core: Arc<Core>, a: SaveNotificationsArgs) -> Result<(), String> {
+    let SaveNotificationsArgs { records } = a;
+    {
     tokio::task::spawn_blocking(move || save_notifications_file(records))
         .await
         .map_err(|e| format!("save_notifications task panicked: {e}"))?
+}
 }
 
 #[cfg(test)]

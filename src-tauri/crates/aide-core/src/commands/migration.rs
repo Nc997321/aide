@@ -20,11 +20,26 @@
 //!   检测由前端 `App.vue onMounted` 调 `check_claude_migration` 触发，不在 `lib.rs`
 //!   setup 自动跑（避免卡首帧）。
 
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("check_claude_migration", check_claude_migration),
+    command!("migrate_claude_data", migrate_claude_data),
+    command!("dismiss_claude_migration", dismiss_claude_migration),
+];
+
 use serde::Serialize;
 use std::path::{Path, PathBuf};
 
-use super::settings::{load_state, with_state_mut};
-use super::{claude_home, our_config_dir, user_home};
+use crate::app_settings::{load_state, with_state_mut};
+use crate::paths::{claude_home, our_config_dir, user_home};
 
 /// 迁移源：用户系统老 `~/.claude/`（Claude CLI 数据）
 fn legacy_claude_dir() -> PathBuf {
@@ -115,8 +130,14 @@ pub struct MigrationSummary {
 }
 
 /// 纯读：探测 `~/.claude/` 是否存在 + 读 state.json 两个标记。轻量，同步即可。
-#[tauri::command]
-pub fn check_claude_migration() -> Result<MigrationStatus, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckClaudeMigrationArgs {
+}
+
+async fn check_claude_migration(_core: Arc<Core>, a: CheckClaudeMigrationArgs) -> Result<MigrationStatus, String> {
+    let _ = a;
+    blocking(move || -> Result<MigrationStatus, String> {
     let legacy = legacy_claude_dir();
     let legacy_exists = legacy.is_dir();
     let has_migratable =
@@ -136,23 +157,38 @@ pub fn check_claude_migration() -> Result<MigrationStatus, String> {
         done,
         dismissed,
     })
+}).await
 }
 
 /// 执行迁移。重 IO（拷 projects/ 可能数百 MB）→ `spawn_blocking` 不阻塞主线程。
-#[tauri::command]
-pub async fn migrate_claude_data() -> Result<MigrationSummary, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrateClaudeDataArgs {
+}
+
+async fn migrate_claude_data(_core: Arc<Core>, a: MigrateClaudeDataArgs) -> Result<MigrationSummary, String> {
+    let _ = a;
+    {
     tokio::task::spawn_blocking(migrate_blocking)
         .await
         .map_err(|e| format!("migration task panicked: {e}"))?
 }
+}
 
 /// 用户选「不再提示」——只压住自动弹窗，不影响 SettingsPanel 后备按钮主动触发。
-#[tauri::command]
-pub fn dismiss_claude_migration() -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DismissClaudeMigrationArgs {
+}
+
+async fn dismiss_claude_migration(_core: Arc<Core>, a: DismissClaudeMigrationArgs) -> Result<(), String> {
+    let _ = a;
+    blocking(move || -> Result<(), String> {
     with_state_mut(|state| {
         state[DISMISSED_KEY] = serde_json::Value::Bool(true);
         Ok(())
     })
+}).await
 }
 
 fn migrate_blocking() -> Result<MigrationSummary, String> {

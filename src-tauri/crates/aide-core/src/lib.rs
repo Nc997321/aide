@@ -16,6 +16,7 @@ pub mod policy;
 pub mod provider;
 pub mod proxy;
 pub mod registry;
+pub mod session_store;
 pub mod settings;
 pub mod workspace;
 

@@ -10,6 +10,19 @@
 //! 写入序列（一次凭据轮换不值得触发一次全量状态落盘）。风险交底同下：token 明文落盘，
 //! 与 localStorage 里已存的明文 token 风险等价（见设计 spec §6.1）。
 
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("knowledge_set_runtime_config", knowledge_set_runtime_config),
+];
+
 use serde_json::{json, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -36,7 +49,7 @@ fn config_file_name(debug_build: bool) -> &'static str {
 /// 凭据文件路径：`~/.aide/knowledge.json`（dev 档为 `knowledge.dev.json`），与
 /// state.json 同目录、刻意独立。文件名随构建档位，理由见 `config_file_name`。
 pub fn kb_config_path() -> PathBuf {
-    crate::commands::our_config_dir().join(config_file_name(cfg!(debug_assertions)))
+    crate::paths::our_config_dir().join(config_file_name(cfg!(debug_assertions)))
 }
 
 /// 入参 → 动作：登出删文件 / 否则写。分支判定与副作用分离，便于直接单测。
@@ -81,7 +94,7 @@ fn write_config_atomic(path: &Path, content: &str) -> Result<(), String> {
     fs::create_dir_all(dir).map_err(|e| format!("Failed to create config dir: {e}"))?;
     let tmp = path.with_extension("json.tmp");
     fs::write(&tmp, content).map_err(|e| format!("Failed to write knowledge config temp: {e}"))?;
-    if let Err(e) = crate::commands::settings::persist_file(&tmp, path) {
+    if let Err(e) = crate::app_settings::persist_file(&tmp, path) {
         // rename 始终失败：清理临时文件，原文件未动
         let _ = fs::remove_file(&tmp);
         return Err(e);
@@ -93,13 +106,22 @@ fn write_config_atomic(path: &Path, content: &str) -> Result<(), String> {
 ///
 /// 同步命令：一个几百字节文件的写，达不到冻主线程的量级，按构建期守卫
 /// （`scripts/check-sync-io-commands.mjs`）要求埋 `trace_command`——真卡了能点名。
-#[tauri::command]
-pub fn knowledge_set_runtime_config(base_url: String, token: Option<String>) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("knowledge_set_runtime_config");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KnowledgeSetRuntimeConfigArgs {
+    base_url: String,
+    #[serde(default)]
+    token: Option<String>,
+}
+
+async fn knowledge_set_runtime_config(_core: Arc<Core>, a: KnowledgeSetRuntimeConfigArgs) -> Result<(), String> {
+    let KnowledgeSetRuntimeConfigArgs { base_url, token } = a;
+    blocking(move || -> Result<(), String> {
     apply_config_action(
         &kb_config_path(),
         config_action(&base_url, token.as_deref()),
     )
+}).await
 }
 
 #[cfg(test)]

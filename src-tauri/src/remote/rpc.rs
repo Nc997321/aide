@@ -76,6 +76,10 @@ static CORE_EXPOSED: &[&str] = &[
     "set_active_provider_id",
     "get_provider_catalog",
     "refresh_models",
+    "claude_credentials_exist",
+    // ── 通知中心持久化 ──
+    "load_notifications",
+    "save_notifications",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -128,13 +132,6 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("is_workspace_trusted", handlers::is_workspace_trusted),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
-    (
-        "claude_credentials_exist",
-        handlers::claude_credentials_exist,
-    ),
-    // ── 通知中心持久化 ──
-    ("load_notifications", handlers::load_notifications),
-    ("save_notifications", handlers::save_notifications),
     // ── CodeGraph（闭包内 useCodeGraphProgress 被动调用链）──
     ("codegraph_build_index", handlers::codegraph_build_index),
     (

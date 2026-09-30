@@ -568,36 +568,7 @@ pub fn untrust_workspace(
 
 // ── 设置与供应商 ──
 
-pub fn claude_credentials_exist(
-    _app: AppHandle,
-    _params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(Ok(crate::commands::onboarding::claude_credentials_exist())) })
-}
-
 // ── 通知中心持久化 ──
-
-pub fn load_notifications(
-    _app: AppHandle,
-    _params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move { to_json(crate::commands::notifications::load_notifications().await) })
-}
-
-pub fn save_notifications(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Args {
-            records: Vec<crate::commands::notifications::NotificationRecord>,
-        }
-        let a: Args = parse(params)?;
-        to_json(crate::commands::notifications::save_notifications(a.records).await)
-    })
-}
 
 // ── CodeGraph ──
 

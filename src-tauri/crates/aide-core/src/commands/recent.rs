@@ -1,3 +1,17 @@
+
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("record_recent_session", record_recent_session),
+    command!("record_recent_file", record_recent_file),
+    command!("list_recent", list_recent),
+    command!("remove_recent_session", remove_recent_session),
+    command!("clear_recent", clear_recent),
+];
+
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -5,9 +19,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use tauri::State;
 
-use super::{find_session_jsonl_globally, our_config_dir, our_session_name};
+use crate::paths::our_config_dir;
+use crate::session_store::{find_session_jsonl_globally, our_session_name};
 use crate::settings::SettingsService;
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -171,7 +185,7 @@ static RECENT: Lazy<Mutex<RecentState>> = Lazy::new(|| Mutex::new(load_recent_fi
 /// 从同一个家读——曾读 config.json 的 settings 子树，设置体系迁移后那个家没了，
 /// 用户改的条数静默失效、永远拿默认 10。
 pub fn current_limit(service: &crate::settings::SettingsService) -> usize {
-    super::settings::public_settings(service)
+    crate::app_settings::public_settings(service)
         .map(|s| s.recent_limit as usize)
         .unwrap_or(10)
 }
@@ -197,20 +211,26 @@ pub fn now_ms() -> u64 {
 // 搬离主线程后不再埋 `trace_command`：guard 在 dispatch 后立刻 drop，对 async
 // 命令没有意义（见 CLAUDE.md「trace_command 兜底」）。
 
-#[tauri::command]
-pub async fn record_recent_session(
-    service: State<'_, Arc<SettingsService>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordRecentSessionArgs {
     ws_key: String,
     ws_name: String,
     session_id: String,
     name: String,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+}
+
+async fn record_recent_session(core: Arc<Core>, a: RecordRecentSessionArgs) -> Result<(), String> {
+    let RecordRecentSessionArgs { ws_key, ws_name, session_id, name } = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(move || {
         record_recent_session_blocking(&service, ws_key, ws_name, session_id, name)
     })
     .await
     .map_err(|e| format!("record_recent_session task panicked: {e}"))?
+}
 }
 
 fn record_recent_session_blocking(
@@ -232,17 +252,23 @@ fn record_recent_session_blocking(
     save_recent_file(&guard)
 }
 
-#[tauri::command]
-pub async fn record_recent_file(
-    service: State<'_, Arc<SettingsService>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RecordRecentFileArgs {
     ws_key: String,
     path: String,
     name: String,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+}
+
+async fn record_recent_file(core: Arc<Core>, a: RecordRecentFileArgs) -> Result<(), String> {
+    let RecordRecentFileArgs { ws_key, path, name } = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(move || record_recent_file_blocking(&service, ws_key, path, name))
         .await
         .map_err(|e| format!("record_recent_file task panicked: {e}"))?
+}
 }
 
 fn record_recent_file_blocking(
@@ -261,15 +287,21 @@ fn record_recent_file_blocking(
     save_recent_file(&guard)
 }
 
-#[tauri::command]
-pub async fn list_recent(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRecentArgs {
     ws_key: String,
-    service: State<'_, Arc<SettingsService>>,
-) -> Result<RecentView, String> {
-    let service = service.inner().clone();
+}
+
+async fn list_recent(core: Arc<Core>, a: ListRecentArgs) -> Result<RecentView, String> {
+    let ListRecentArgs { ws_key } = a;
+    let service = core.settings.clone();
+    {
+    let service = service.clone();
     tokio::task::spawn_blocking(move || list_recent_blocking(ws_key, &service))
         .await
         .map_err(|e| format!("list_recent task panicked: {e}"))?
+}
 }
 
 fn list_recent_blocking(ws_key: String, service: &SettingsService) -> Result<RecentView, String> {
@@ -298,16 +330,24 @@ fn list_recent_blocking(ws_key: String, service: &SettingsService) -> Result<Rec
     Ok(RecentView { sessions, files })
 }
 
-#[tauri::command]
-pub async fn remove_recent_session(session_id: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoveRecentSessionArgs {
+    session_id: String,
+}
+
+async fn remove_recent_session(_core: Arc<Core>, a: RemoveRecentSessionArgs) -> Result<(), String> {
+    let RemoveRecentSessionArgs { session_id } = a;
+    {
     tokio::task::spawn_blocking(move || remove_recent_session_blocking(&session_id))
         .await
         .map_err(|e| format!("remove_recent_session task panicked: {e}"))?
 }
+}
 
 /// 阻塞实现。`delete_session` 自己就在阻塞线程上（它也要删 jsonl），直接调这个
 /// 而不是回调 async 命令——省一次跨线程往返。
-pub(crate) fn remove_recent_session_blocking(session_id: &str) -> Result<(), String> {
+pub fn remove_recent_session_blocking(session_id: &str) -> Result<(), String> {
     let mut guard = RECENT.lock().map_err(|e| e.to_string())?;
     let before = guard.sessions.len();
     guard.sessions.retain(|s| s.session_id != session_id);
@@ -317,11 +357,20 @@ pub(crate) fn remove_recent_session_blocking(session_id: &str) -> Result<(), Str
     Ok(())
 }
 
-#[tauri::command]
-pub async fn clear_recent(category: Option<String>) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearRecentArgs {
+    #[serde(default)]
+    category: Option<String>,
+}
+
+async fn clear_recent(_core: Arc<Core>, a: ClearRecentArgs) -> Result<(), String> {
+    let ClearRecentArgs { category } = a;
+    {
     tokio::task::spawn_blocking(move || clear_recent_blocking(category.as_deref()))
         .await
         .map_err(|e| format!("clear_recent task panicked: {e}"))?
+}
 }
 
 fn clear_recent_blocking(category: Option<&str>) -> Result<(), String> {
