@@ -180,11 +180,10 @@ impl HostConnection {
         }
     }
 
-    pub async fn invoke(&self, cmd: &str, args: Value, root: Option<String>) -> Result<Value, String> {
+    pub async fn invoke(&self, cmd: &str, args: Value) -> Result<Value, String> {
         let params = serde_json::to_value(InvokeParams {
             cmd: cmd.to_string(),
             args,
-            root,
         })
         .map_err(|e| e.to_string())?;
         self.call(METHOD_INVOKE, params).await

@@ -60,46 +60,6 @@ pub fn command(host: &HostId, script: &str) -> Result<tokio::process::Command, S
     Ok(cmd)
 }
 
-/// aide-core 终端的远程钩子（`terminal::set_remote_shell`）：远程工作区路径 → 目标机登录
-/// shell 的 argv + 本机 PTY 的 cwd（家目录）。本机路径返回 None，照常起本机 shell。
-pub fn remote_shell(cwd: &str) -> Option<Result<(Vec<String>, std::path::PathBuf), String>> {
-    let (host, posix_cwd) = super::path::parse(cwd)?;
-    let local_cwd = aide_core::paths::user_home().unwrap_or_else(|| std::path::PathBuf::from("."));
-    Some(terminal_argv(&host, &posix_cwd).map(|argv| (argv, local_cwd)))
-}
-
-/// 交互式终端的启动参数（交给 PTY 跑，不是 piped）：在目标机 `cwd` 下开用户的登录 shell。
-pub fn terminal_argv(host: &HostId, cwd: &str) -> Result<Vec<String>, String> {
-    // cd 失败（目录已删）不致命：落到家目录照样给一个 shell
-    let script = format!(
-        "cd {} 2>/dev/null || cd; exec \"${{SHELL:-/bin/sh}}\" -l",
-        sh_quote(cwd)
-    );
-    match host {
-        HostId::Wsl(distro) => {
-            if !cfg!(windows) {
-                return Err("WSL 工作区只在 Windows 上可用".to_string());
-            }
-            Ok(vec![
-                "wsl.exe".into(),
-                "-d".into(),
-                distro.clone(),
-                "--exec".into(),
-                "sh".into(),
-                "-c".into(),
-                script,
-            ])
-        }
-        HostId::Ssh(alias) => Ok(vec![
-            "ssh".into(),
-            "-t".into(),
-            "--".into(),
-            alias.clone(),
-            format!("sh -c {}", sh_quote(&script)),
-        ]),
-    }
-}
-
 /// 列出本机已安装的 WSL 发行版（`wsl.exe -l -q`）。非 Windows → 空。
 pub async fn list_wsl_distros() -> Result<Vec<String>, String> {
     if !cfg!(windows) {

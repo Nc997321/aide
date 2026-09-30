@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isRemotePath, parseRemotePath, remoteDesktopPath, resolveAgainstWorkspace } from "./remoteWorkspace";
+import { parseRemotePath } from "./remoteWorkspace";
 import { resolveFileLinkPath } from "../utils/fileLink";
 
-// 与 Rust remote_workspace/path.rs 的用例对齐：Rust 为准，这里是显示/判定用的影子实现。
-describe("parseRemotePath", () => {
+// 旧版登记的 UNC 远程工作区：侧栏据此认出它属于哪台 Host（点开进该 Host 的窗口）。
+describe("parseRemotePath（旧版远程工作区条目）", () => {
   it("识别 WSL 的各种写法", () => {
     for (const p of [
       "\\\\wsl.localhost\\Debian\\home\\u\\proj",
@@ -24,32 +24,17 @@ describe("parseRemotePath", () => {
 
   it("本机路径与普通 UNC 不是远程", () => {
     for (const p of ["C:\\Users\\u", "/home/u", "\\\\fileserver\\share\\x", ""]) {
-      expect(isRemotePath(p)).toBe(false);
+      expect(parseRemotePath(p)).toBeNull();
     }
   });
 });
 
-describe("remoteDesktopPath", () => {
-  it("往返", () => {
-    const d = remoteDesktopPath("wsl:Debian", "/home/u/p/a.rs");
-    expect(d).toBe("\\\\wsl.localhost\\Debian\\home\\u\\p\\a.rs");
-    expect(parseRemotePath(d)?.posix).toBe("/home/u/p/a.rs");
+// Host 窗口里的路径就是 Host 原生路径：聊天文件链接不做任何翻译。
+describe("聊天文件链接解析（Host 原生路径）", () => {
+  it("POSIX 绝对路径原样返回", () => {
+    expect(resolveFileLinkPath("/home/u/p/src/a.rs", "/home/u/p")).toBe("/home/u/p/src/a.rs");
   });
-  it("根目录", () => {
-    expect(remoteDesktopPath("ssh:box", "/")).toBe("\\\\aide-ssh.invalid\\box\\");
-  });
-});
-
-describe("聊天文件链接解析（远程会话）", () => {
-  const ws = "\\\\wsl.localhost\\Debian\\home\\u\\p";
-  it("目标机绝对路径 → 该主机的桌面形态", () => {
-    expect(resolveAgainstWorkspace("/home/u/p/src/a.rs", ws)).toBe("\\\\wsl.localhost\\Debian\\home\\u\\p\\src\\a.rs");
-    expect(resolveFileLinkPath("/home/u/p/src/a.rs", ws)).toBe("\\\\wsl.localhost\\Debian\\home\\u\\p\\src\\a.rs");
-  });
-  it("本机工作区的 POSIX 路径原样返回（mac / Linux 桌面）", () => {
-    expect(resolveFileLinkPath("/Users/u/a.rs", "/Users/u")).toBe("/Users/u/a.rs");
-  });
-  it("相对路径仍挂到工作区根下", () => {
-    expect(parseRemotePath(resolveFileLinkPath("src/a.rs", ws))?.posix).toBe("/home/u/p/src/a.rs");
+  it("相对路径挂到工作区根下", () => {
+    expect(resolveFileLinkPath("src/a.rs", "/home/u/p")).toBe("/home/u/p/src/a.rs");
   });
 });

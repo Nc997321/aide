@@ -1,5 +1,6 @@
-//! 目标机用户的**登录环境**（PATH 里的 nvm / cargo / pyenv…）。agent 与语言服务器都要看到
-//! 与用户自己终端一致的工具链：wsl/ssh 起的是非登录环境，PATH 往往缺一大截。
+//! 目标机用户的**登录环境**（PATH 里的 nvm / cargo / pyenv…）。Host 进程整体切到它：agent、
+//! 终端、语言服务器、git 都要看到与用户自己终端一致的工具链——wsl/ssh 起的是非登录环境，PATH
+//! 往往缺一大截。
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -9,29 +10,8 @@ const ENV_MARKER: &str = "__AIDE_LOGIN_ENV__";
 
 /// 以交互式登录 shell 取环境（`-lic`：Debian/Ubuntu 的 .bashrc 对非交互 shell 直接
 /// return，nvm 之类只装在那里）。rc 文件往 stdout 打的任何东西都在标记之前，被丢弃。
-pub async fn login_env() -> Option<HashMap<String, String>> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
-    for flags in ["-lic", "-lc"] {
-        let script = format!("printf '\\n{ENV_MARKER}\\n'; env -0");
-        let fut = tokio::process::Command::new(&shell)
-            .arg(flags)
-            .arg(&script)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .output();
-        let Ok(Ok(out)) = tokio::time::timeout(std::time::Duration::from_secs(15), fut).await else {
-            continue;
-        };
-        if let Some(env) = parse_env_dump(&out.stdout) {
-            return Some(env);
-        }
-    }
-    None
-}
-
-/// 同步版（`serve` 在建 tokio runtime **之前**调用：此时进程单线程，改进程环境是安全的）。
+///
+/// `serve` 在建 tokio runtime **之前**调用：此时进程单线程，改进程环境是安全的。
 /// 超时 15s 杀掉 shell，与异步版同一口径。
 pub fn login_env_blocking() -> Option<HashMap<String, String>> {
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
@@ -116,13 +96,6 @@ pub fn which(name: &str, env: Option<&HashMap<String, String>>) -> Option<String
         .map(|dir| PathBuf::from(dir).join(name))
         .find(|cand| cand.is_file())
         .map(|cand| cand.to_string_lossy().into_owned())
-}
-
-/// 登录环境只取一次（一次 shell 启动可达数秒；serve 进程里的每次探测都要用）。
-pub async fn cached_login_env() -> Option<&'static HashMap<String, String>> {
-    static CELL: tokio::sync::OnceCell<Option<HashMap<String, String>>> =
-        tokio::sync::OnceCell::const_new();
-    CELL.get_or_init(login_env).await.as_ref()
 }
 
 #[cfg(test)]

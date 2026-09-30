@@ -68,7 +68,7 @@
 
 Java/jdtls 专属配置**只准**待在 `src-tauri/crates/aide-core/src/lsp/profiles/java.rs`（LSP 整体已是 Host 能力，住 aide-core）。公共层（`manager.rs` / `mod.rs` / `protocol.rs` / `cmLsp.ts`）必须语言无关——新命令一律按文件扩展名分派（`lang_from_ext_of`）。
 
-**扩展名有三条轴，别混用**（2026-09-29 立，起因：agri-ai-agent 只探测出 Java）：**服务归属** = `LanguageId::from_ext`（唯一权威表；`.vue`/`.tsx` 归 TypeScript、`.jsx` 归 JavaScript，**没有独立的 vue 语言**——`vue-language-server` 是要客户端桥接的 proxy，装了也零响应）；**文档 languageId** = `document_lang_id`（`.vue` 必须发 `"vue"`、`.tsx`/`.jsx` 必须发 `*react`，否则 TLS 丢弃文档 / 按 TS 解析 SFC 与 JSX；前端只报服务 id，这个字符串由 Rust 推）；**探针靶子** = `probe_exts`（只递 server 原生能解析的形态，`.vue` 不算）。语言探测必须下钻：marker 链认领一级子目录里的项目，扩展名计数走有界遍历。**agent 的 LSP 工具每一发都必须比 grep 值**（2026-09-29 实测：用户实际跑 DeepSeek 等模型，旧工具只回裸坐标 + 冷窗口空等，84 个会话里被调用 1 次、grep 1667 次）：定义带函数体、引用带行文本与所在函数、没答上时同一发给文本兜底（标 UNVERIFIED）；grep 顺带作答 hook（`lspGlance.ts`）把语义答案送到它已经在用的 grep 里，**未命中必须廉价**（预算 1.5s + 负缓存）。按名查询的命中必须挪到名字本身上（`agent_nav::refine_to_name`：tsserver 给的是整个声明的起点，拿它查引用 = 查 `export` 关键字 → 空 → 假「确认没有」）。前端影子表 `src/utils/lspLang.ts` 必须与 `from_ext` 同步（`pnpm check:lsp-parity` 构建期兜）。**TS 的 typescript SDK 必须由 `lsp/profiles/ts_sdk.rs` 解析后用 `initializationOptions.tsserver.path` 递进去**（**且必须恒发 `disableAutomaticTypingAcquisition: true`**：tsserver 默认会在用户工作区跑包管理器装 `@types/*`——实测把 `frontend/` 的顶层依赖挪进 `node_modules/.ignored/` 让前端跑不起来，用户既没批准也不可见；缺 `@types` 由用户自己装）——TLS 只在工作区根及其祖先里找 SDK，工程在子目录（`frontend/`）时它看不见，`initialize` 直接失败；路径还必须是平台原生分隔符（它按 `path.sep` 切分反推模块根）。详见 `src-tauri/crates/aide-workspace/src/detect/languages.rs`（探测已迁入 aide-workspace，远程工作区在目标机上跑同一份）抬头与 `profiles/ts_sdk.rs`。
+**扩展名有三条轴，别混用**（2026-09-29 立，起因：agri-ai-agent 只探测出 Java）：**服务归属** = `LanguageId::from_ext`（唯一权威表；`.vue`/`.tsx` 归 TypeScript、`.jsx` 归 JavaScript，**没有独立的 vue 语言**——`vue-language-server` 是要客户端桥接的 proxy，装了也零响应）；**文档 languageId** = `document_lang_id`（`.vue` 必须发 `"vue"`、`.tsx`/`.jsx` 必须发 `*react`，否则 TLS 丢弃文档 / 按 TS 解析 SFC 与 JSX；前端只报服务 id，这个字符串由 Rust 推）；**探针靶子** = `probe_exts`（只递 server 原生能解析的形态，`.vue` 不算）。语言探测必须下钻：marker 链认领一级子目录里的项目，扩展名计数走有界遍历。**agent 的 LSP 工具每一发都必须比 grep 值**（2026-09-29 实测：用户实际跑 DeepSeek 等模型，旧工具只回裸坐标 + 冷窗口空等，84 个会话里被调用 1 次、grep 1667 次）：定义带函数体、引用带行文本与所在函数、没答上时同一发给文本兜底（标 UNVERIFIED）；grep 顺带作答 hook（`lspGlance.ts`）把语义答案送到它已经在用的 grep 里，**未命中必须廉价**（预算 1.5s + 负缓存）。按名查询的命中必须挪到名字本身上（`agent_nav::refine_to_name`：tsserver 给的是整个声明的起点，拿它查引用 = 查 `export` 关键字 → 空 → 假「确认没有」）。前端影子表 `src/utils/lspLang.ts` 必须与 `from_ext` 同步（`pnpm check:lsp-parity` 构建期兜）。**TS 的 typescript SDK 必须由 `lsp/profiles/ts_sdk.rs` 解析后用 `initializationOptions.tsserver.path` 递进去**（**且必须恒发 `disableAutomaticTypingAcquisition: true`**：tsserver 默认会在用户工作区跑包管理器装 `@types/*`——实测把 `frontend/` 的顶层依赖挪进 `node_modules/.ignored/` 让前端跑不起来，用户既没批准也不可见；缺 `@types` 由用户自己装）——TLS 只在工作区根及其祖先里找 SDK，工程在子目录（`frontend/`）时它看不见，`initialize` 直接失败；路径还必须是平台原生分隔符（它按 `path.sep` 切分反推模块根）。详见 `src-tauri/crates/aide-workspace/src/detect/languages.rs` 抬头与 `profiles/ts_sdk.rs`。
 
 ## 架构红线：远程控制是单设备模型（刻意设计，改动前先确认）
 
@@ -78,27 +78,20 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 
 **relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
-## 架构红线：Host 模型——一张命令表，多个前门（迁移中）
+## 架构红线：Host 模型——一张命令表，多个前门
 
-**一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
+**一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆 / 供应商），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
 
-- **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层），远程由 `aide-host serve` 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令/迁移按 docs/host-model.md §4。**禁止再开平行分派**（Tauri 薄包装 + aide-host 手写分派那种两份）。
-- **Host 自持状态住 `aide_core::Core`**（`WorkspaceState` 已迁入，Tauri 以 `Arc` 共享同一实例）；Core 需要的宿主能力（发事件、资源路径…）一律经 Core 字段注入，**aide-core 禁止依赖 Tauri**，且与 aide-host 同守「无系统 C 库、单静态二进制」约束。
-- **只有一套模型**：P1（窗口连 WSL Host）落地时删除下面「远程工作区」的逐命令路由与路径翻译，不许两种「远程」并存。
-
-
-## 架构红线：远程工作区（WSL / SSH）——一份实现，两处运行
-
-GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 / SSH 服务器）。设计全文见 [docs/remote-workspaces.md](docs/remote-workspaces.md)。与上面的「远程控制」（手机遥控桌面）无关。
-
-- **工作区操作只有一份实现**：fs / 搜索 / git / 文件监听 / 会话转录读取在 Tauri 无关的 `src-tauri/crates/aide-workspace`；fs / 搜索 / git 的命令层已是 aide-core 命令表（桌面与 aide-host 共用），其余仍是桌面一行转调 + aide-host 分派。**禁止为远程再写第二份**；新代码需要工作区根就显式收 `root`，别在 crate 里认「活动工作区」。
-- **新增「按路径操作工作区文件」的命令（P1 前的过渡）**：写进 aide-core 命令表（aide-host 自动获得）→ `src-tauri/src/remote_workspace/routes.rs` 登记路径参数。缺后者，远程工作区里它就回落本机执行（跑错机器）。会在本机起进程操作工作区的命令（索引 / 运行配置）遇到远程路径必须**拒绝**，不许回落。**LSP 例外（已支持）**：服务器经 `aide-host lsp` 在目标机上起（登录 PATH 解析），stdio 套 `remote_workspace/lsp_pipe.rs` 做 URI 互译——aide-core 的 LSP 经过渡端口 `lsp::remote`（桌面实现 `remote_workspace/lsp_bridge.rs`，P1 删除）够到这些；LSP 代码碰工作区文件一律走 `lsp/workspace_access.rs`（本机直读 / 远程问 aide-host），**别在 LSP 代码里直接 `std::fs` 读工作区**。
-- **远程路径形态唯一真相源** `remote_workspace/path.rs`（`\\wsl.localhost\<distro>\…` / `\\aide-ssh.invalid\<alias>\…`）；前端 `@aide/sdk` 的 `parseRemotePath` 只做显示。
-- **「目录还在吗」一律 `remote_workspace::path::present`**：远程路径同步 stat 不了，按存在处理。对远程路径返回 false 会让会话 cwd 静默回落活动工作区——2026-09-18 事故的同一形态。
-- **agent 车道**：agent runtime 住 aide-core（`crates/aide-core/src/runtime/`）；远程工作区的会话经过渡端口 `runtime::ports::{LaneRouter, LaneAdapter}` 绑定车道（桌面实现 `remote_workspace/lanes.rs`，P1 删除），事件泵与本机同一条（aide-core `runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
-- **插件 / 用户扩展：桌面是唯一真相源**（`remote_workspace/mirror.rs`）：目标机只有按内容哈希命名的只读镜像 `~/.aide/host/ext/<hash>/`，路径随 send 的 `extensions` 字段下发（只有远程车道附，客户端从不发）；**不许在远程开第二个安装入口，也不许把目标机的 `~/.aide/claude` 当扩展来源**。远程用不了的扩展必须经 `notification` 如实上报，不静默消失。
-- **不同步 OAuth 凭据到目标机**（refresh token 轮换会互相顶掉；服务器可能多人共用）。官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`；API Key 类供应商随 send 下发，无需登录。
-- 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须是**不依赖任何系统 C 库的单个静态二进制**（一个二进制跑遍任意发行版、目标机零安装）：crate 自带源码的 C/汇编（如 rustls 的 ring）允许，静态编入；需要目标机装 `.so` / 头文件 / pkg-config 的依赖（libdbus、openssl-sys 动态链接等）一律禁止。（2026-09-30 由「纯 Rust 无 C」修订：Host 要发 HTTPS，rustls 经 ring 带 C；约束的目的——静态、零安装——不变。）
+- **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机窗口由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层）；Host 窗口由 `host_door::forward` 原样转发给那台 Host 的 `aide-host serve`，serve 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令按 docs/host-model.md §4。**禁止再开平行分派**。
+- **Host 自持状态住 `aide_core::Core`**；Core 需要的宿主能力一律经端口注入：事件 `EventSink`、随包资源 `HostResources`、GUI 侧能力 `runtime::ports::AgentHooks`（内嵌浏览器 / 冻结诊断）。**aide-core 禁止依赖 Tauri**，且与 aide-host 同守「无系统 C 库、单静态二进制」约束。Host 不弹系统通知：`Core::notify` 发 `system-notification` 事件，由 GUI 前门弹。
+- **只有一套远程**：旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已于 2026-09-30 删除（P1d），**不许复活**。Host 窗口里前后端之间一律是 **Host 原生路径**，不翻译；功能代码不认识「现在在哪台机器」。
+- **事件隔离两头做**：后端本机 Core 事件只 `emit_to` 本机窗口、serve 通知只 `emit_to` 该 Host 的窗口（`src/host_window.rs`）；前端监听一律窗口作用域（`@aide/sdk` 的 `TauriTransport.listen`）。**不要在共享代码里用 Tauri 默认的全局 `listen`**——它会收到发给任何窗口的事件（WSL 窗口看到本机会话的 chat-event）。
+- **GUI 与 Host 之间的跨界必须显式、用户看得见**（`src/host_window.rs`）：本机文件进对话 = 上传到 Host 暂存（`upload_local_files` → core `stage_dropped_file`）；「用本机程序打开 / 在资源管理器中显示」对 WSL 路径译成 `\\wsl.localhost\…`、SSH 如实拒绝（`host_window::gui_path`）；「从本机复制供应商」是一次显式动作，不做自动同步。GUI 侧工具（内嵌浏览器）的应答经 core `agent_tool_result`（白名单结果命令）回到 Host 的 runtime。
+- **供应商按 Host 自持**（2026-09-30 定）：每个 Host 一份供应商与密钥；远程 Host 的密钥落 `~/.aide/secrets.json`（0600，`FileSecretStore`）。**不同步 OAuth 凭据**（refresh token 轮换会互相顶掉）；官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`。
+- **插件 / MCP / hooks / 记忆也按 Host 自持**：Host 窗口里的市场 / 定制项命令本来就跑在那台 Host 上，装到它自己的 `~/.aide`。
+- **远程套件**：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；桌面按内容哈希装到目标机 `~/.aide/host/<ver>/`，连接时首行 `ServeInit`（协议 v4，`crates/aide-host/src/protocol.rs` 是两端唯一真相源）。serve 进程整体切到用户登录环境（agent / 终端 / LSP / git 看到与用户终端一致的 PATH）；窗口的最后一扇关掉 = 断开 = serve 收掉它的 runtime 与语言服务器。aide-host 必须是**不依赖任何系统 C 库的单个静态二进制**：crate 自带源码的 C/汇编（如 rustls 的 ring）允许，静态编入；需要目标机装 `.so` / 头文件 / pkg-config 的依赖（libdbus、openssl-sys 动态链接等）一律禁止。
+- **「目录还在吗」一律 `aide_core::workspace::present`**：判定为不在 = 会话 cwd 回落活动工作区，误判就是 2026-09-18「跑错项目」事故的形态。
+- 真机回归：`src/remote_workspace/e2e_tests.rs`（WSL 上的安装 / 工作区操作 / 一轮真实会话 / Host 里的语言服务器），运行方式见文件头。
 
 ## 架构红线：可替换技术必须藏在端口后面
 

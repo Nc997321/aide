@@ -9,8 +9,6 @@
  * 稳定判定（点开后由 FileViewer 自己报"文件不存在"）。
  */
 
-import { isRemotePath, resolveAgainstWorkspace } from "../api/remoteWorkspace";
-
 /** 可跳转的文件扩展名白名单——与 FileViewer 能打开的类型对齐 */
 const FILE_EXTENSIONS =
   "ts|tsx|vue|rs|js|jsx|mjs|cjs|css|scss|less|html|json|jsonc|md|toml|yaml|yml|sh|ps1|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock|txt|ini|cfg|conf";
@@ -52,11 +50,6 @@ export function parseFileLink(text: string): FileLink | null {
 
 /** 相对路径挂到工作区根下；绝对路径（POSIX / 盘符 / URI）原样返回。 */
 export function resolveFileLinkPath(path: string, workspacePath?: string): string {
-  // 远程工作区（WSL / SSH）的会话：模型正文里的 `/home/u/p/a.rs` 是目标机路径，
-  // 译成该工作区主机的桌面形态才能再交回 IPC（否则会在本机找 C:\home\…）。
-  if (path.startsWith("/") && workspacePath && isRemotePath(workspacePath)) {
-    return resolveAgainstWorkspace(path, workspacePath);
-  }
   const hasScheme = /^[A-Za-z][A-Za-z0-9+.-]*:/.test(path);
   const isAbsolute = hasScheme || path.startsWith("/") || /^[A-Za-z]:[\\/]/.test(path);
   if (isAbsolute || !workspacePath) return path;

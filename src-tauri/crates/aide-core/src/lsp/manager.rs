@@ -232,19 +232,10 @@ impl LspManager {
         if let Some(e) = self.recent_failure(&key).await {
             return Err(e);
         }
-        // dead 或不存在 → spawn 新的。
-        // 远程工作区：服务器在**目标机**上解析（aide-host lsp 按登录 PATH 找），桌面的覆盖 /
-        // 捆绑 / PATH 发现都是本机的东西，不适用。
-        let src = if crate::lsp::remote::is_remote(workspace) {
-            match lang.server_binary().filter(|_| remote_supported(lang)) {
-                Some(binary) => ServerSource::Which { binary: binary.to_string() },
-                None => return Err(EnsureError::ServerNotFound),
-            }
-        } else {
-            match registry::resolve(lang, settings, core.resources.as_ref()) {
-                Some(src) => src,
-                None => return Err(EnsureError::ServerNotFound),
-            }
+        // dead 或不存在 → spawn 新的（覆盖 > 捆绑 > PATH；Host 进程跑在用户登录环境里）。
+        let src = match registry::resolve(lang, settings, core.resources.as_ref()) {
+            Some(src) => src,
+            None => return Err(EnsureError::ServerNotFound),
         };
         match spawn_and_init(workspace, lang, &src, core, settings).await {
             Ok(handle) => {
@@ -344,14 +335,6 @@ impl LspManager {
     }
 }
 
-/// 远程工作区（WSL / SSH）支持哪些语言的服务器。
-///
-/// Java 不在：jdtls 要桌面侧的数据目录与捆绑的 lombok（`profiles/java.rs`），搬上目标机是
-/// 另一件事。其余语言的服务器都是「PATH 上一个可执行文件 + stdio」，经 `aide-host lsp` 就能跑。
-pub fn remote_supported(lang: LanguageId) -> bool {
-    !matches!(lang, LanguageId::Java)
-}
-
 // ── 排除集 ──
 
 /// 排除集 = ALWAYS_IGNORE_DIRS ∪ workspace.lsp_exclude_dirs，转 `**/{dir}/**` globs。
@@ -432,14 +415,9 @@ async fn spawn_and_init(
     .exclude_dirs;
     let exclude_globs = build_exclude_globs(&exclude_dirs);
 
-    // —— 生产 spawn ——（远程工作区：服务器经 aide-host 跑在目标机上）
+    // —— 生产 spawn ——
     #[cfg(not(test))]
-    let (transport, child, stderr_lines) = match crate::lsp::remote::bridge()
-        .filter(|b| b.to_posix(workspace).is_some())
-    {
-        Some(bridge) => spawn_remote(workspace, lang, src, bridge).await?,
-        None => spawn_real(workspace, lang, src, core).await?,
-    };
+    let (transport, child, stderr_lines) = spawn_real(workspace, lang, src, core).await?;
     #[cfg(test)]
     let (transport, child, stderr_lines) = spawn_test(workspace, lang, src).await;
 
@@ -655,35 +633,6 @@ fn collect_stderr(
 ///
 /// 目标机上没装该语言的服务器 → aide-host 退出码 127、stderr 说明试了什么；那几行随
 /// 握手失败的原因回到面板（与本机「找不到 server」同一条可见路径）。
-#[cfg(not(test))]
-async fn spawn_remote(
-    workspace: &str,
-    lang: LanguageId,
-    src: &ServerSource,
-    bridge: &'static dyn crate::lsp::remote::RemoteLsp,
-) -> Result<
-    (
-        LspTransport,
-        Option<Arc<TokioMutex<tokio::process::Child>>>,
-        Arc<TokioMutex<Vec<String>>>,
-    ),
-    EnsureError,
-> {
-    let (program, args) = registry::to_command(lang, src, None);
-    let mut argv = vec![program];
-    argv.extend(args);
-    let mut server = bridge
-        .spawn_server(workspace, argv)
-        .await
-        .map_err(EnsureError::SpawnFailed)?;
-    let stderr_lines: Arc<TokioMutex<Vec<String>>> = Arc::new(TokioMutex::new(Vec::new()));
-    if let Some(stderr) = server.stderr.take() {
-        collect_stderr(stderr, lang, Arc::clone(&stderr_lines));
-    }
-    let transport = LspTransport::with_reader_source(server.to_server, server.from_server);
-    Ok((transport, Some(Arc::new(TokioMutex::new(server.child))), stderr_lines))
-}
-
 // ── spawn_test（mock）──
 
 #[cfg(test)]
@@ -897,13 +846,8 @@ async fn init_handshake(
     exclude_globs: &[String],
 ) -> Result<(), EnsureError> {
     let root_uri = crate::lsp::protocol::path_to_uri(workspace);
-    // 远程工作区的服务器跑在目标机上：桌面的 PID 在那边不存在，而 LSP 规定「父进程不在了
-    // server 就该退出」——TLS 等会按 processId 轮询、看不到就自杀。远程一律发 null。
-    let process_id = if crate::lsp::remote::is_remote(workspace) {
-        serde_json::Value::Null
-    } else {
-        serde_json::json!(std::process::id())
-    };
+    // server 与本进程在同一台机器上（Host 模型）：发本进程 PID，「父进程不在了就退出」照常成立。
+    let process_id = serde_json::json!(std::process::id());
     // 初始化选项按语言档案注入（Rust excludeGlobs / Go directoryFilters /
     // TS 按工作区挂 Vue 插件 / 其余默认）。
     let init_options = crate::lsp::profiles::profile(lang).init_options(

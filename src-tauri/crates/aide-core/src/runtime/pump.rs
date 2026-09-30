@@ -1,9 +1,7 @@
 //! sidecar stdout 泵：心跳看门狗 + 事件分发 + codegraph / LSP / 浏览器桥拦截。
 //!
-//! 从 `spawn_runtime` 抽出，按**车道**（lane）参数化：本机车道 = Host 的正常形态；
-//! 旧模型远程车道（WSL / SSH 上的 sidecar，经 `aide-host agent` 管道，过渡期）复用同一条泵，
-//! 只在 [`LaneAdapter`] 的几处分叉——桥查询就地回错、事件路径译回桌面形态、进程死亡只波及
-//! 本车道的会话。
+//! 从 `spawn_runtime` 抽出。一个 Host 一个 sidecar 进程，一条泵（WSL / SSH 工作区的会话跑在
+//! 那台 Host 自己的泵里，见 docs/host-model.md）。
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,29 +14,10 @@ use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as TokioMutex;
 
 use super::emit_runtime_dead;
-use super::ports::LaneAdapter;
 use crate::Core;
-
-/// sidecar 进程跑在哪。
-#[derive(Clone)]
-pub enum Lane {
-    Local,
-    /// 旧模型远程车道（过渡，见 [`super::ports`]）。
-    Remote(Arc<dyn LaneAdapter>),
-}
-
-impl Lane {
-    fn tag(&self) -> String {
-        match self {
-            Lane::Local => String::new(),
-            Lane::Remote(l) => format!(" {}", l.tag()),
-        }
-    }
-}
 
 pub struct Pump {
     pub core: Arc<Core>,
-    pub lane: Lane,
     pub stdout: ChildStdout,
     pub stderr: ChildStderr,
     /// 桥查询的回写通道（与命令写入同一个 stdin）。
@@ -51,7 +30,6 @@ pub struct Pump {
 pub fn start(p: Pump) {
     let Pump {
         core,
-        lane,
         stdout,
         stderr,
         stdin: stdin_for_agent,
@@ -63,7 +41,6 @@ pub fn start(p: Pump) {
     let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
     let tail_for_reader = Arc::clone(&stderr_tail);
     let tail_for_stderr = Arc::clone(&stderr_tail);
-    let lane_for_stderr = lane.clone();
 
     tokio::spawn(async move {
         let stderr_tail = tail_for_reader;
@@ -75,15 +52,6 @@ pub fn start(p: Pump) {
                     let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
                         continue;
                     };
-                    // 远程车道：codegraph 桥查询由本机服务执行，而工作区在目标机上
-                    // ——就地回错误结果（不回就是让 agent 白等 15s 超时）。LSP 桥照常走下面的
-                    // 分派：语言服务器经 aide-host 跑在目标机上，查询在 lsp_agent 里做路径互译。浏览器桥照常
-                    // 放行：内嵌浏览器就在桌面上，远程 agent 用它天经地义。
-                    if let Lane::Remote(adapter) = &lane {
-                        if adapter.answer_locally(&event, &stdin_for_agent).await {
-                            continue;
-                        }
-                    }
                     // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
                     // 查询在独立任务里跑，不阻塞 reader 主循环——慢查询
                     // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
@@ -111,12 +79,8 @@ pub fn start(p: Pump) {
                     if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
                         let core2 = core.clone();
                         let stdin2 = stdin_for_agent.clone();
-                        let adapter = match &lane {
-                            Lane::Remote(a) => Some(a.clone()),
-                            Lane::Local => None,
-                        };
                         tokio::spawn(async move {
-                            super::lsp_agent::handle(core2, stdin2, req, adapter).await;
+                            super::lsp_agent::handle(core2, stdin2, req).await;
                         });
                         continue;
                     }
@@ -172,11 +136,6 @@ pub fn start(p: Pump) {
                             }
                         }
                     }
-                    // 远程车道：结构化字段里的目标机路径译回桌面形态（前端据此打开文件 /
-                    // 算 diff，拿到的必须是能再交回 IPC 的路径）。
-                    if let Lane::Remote(adapter) = &lane {
-                        adapter.map_event_paths(&mut event);
-                    }
                     let _ = chat_events_tx.send(event.clone());
                     core.emit("chat-event", event);
                 }
@@ -185,14 +144,7 @@ pub fn start(p: Pump) {
             }
         };
 
-        let report = |core: &Core| match &lane {
-            Lane::Local => emit_runtime_dead(core, &stderr_tail, reason),
-            // 远程车道只波及绑在它上面的会话（WSL 关机 / 断网不该连累本机会话）
-            Lane::Remote(adapter) => {
-                let tail: Vec<String> = stderr_tail.lock().unwrap().iter().cloned().collect();
-                adapter.on_dead(core, tail, reason)
-            }
-        };
+        let report = |core: &Core| emit_runtime_dead(core, &stderr_tail, reason);
         if reason == "heartbeat_timeout" {
             report(&core);
             killed_clone.store(true, Ordering::Relaxed);
@@ -211,7 +163,7 @@ pub fn start(p: Pump) {
             if line.is_empty() {
                 continue;
             }
-            eprintln!("[runtime stderr{}] {}", lane_for_stderr.tag(), line);
+            eprintln!("[runtime stderr] {}", line);
             let mut buf = tail_writer.lock().unwrap();
             if buf.len() >= 8 {
                 buf.pop_front();

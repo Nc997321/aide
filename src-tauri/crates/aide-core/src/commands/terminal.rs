@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use serde::Deserialize;
 
@@ -22,18 +22,6 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("run_process_stop", run_process_stop),
     command!("scan_plugin_skills", scan_plugin_skills),
 ];
-
-/// 过渡期（P1 前）的远程工作区终端：cwd 是远程路径时返回 `(argv, 本机 cwd)`，
-/// 由宿主改为在 PTY 里跑 `wsl.exe …` / `ssh -t …`。P1（窗口连 Host）后终端本来就开在
-/// Host 上，这个钩子随逐命令路由一起删除。
-pub type RemoteShell = fn(&str) -> Option<Result<(Vec<String>, PathBuf), String>>;
-
-static REMOTE_SHELL: OnceLock<RemoteShell> = OnceLock::new();
-
-/// 启动时调一次（第二次调用被忽略）。
-pub fn set_remote_shell(hook: RemoteShell) {
-    let _ = REMOTE_SHELL.set(hook);
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -151,19 +139,6 @@ pub struct PtySpawnShellArgs {
 async fn pty_spawn_shell(core: Arc<Core>, a: PtySpawnShellArgs) -> Result<(), String> {
     blocking(move || {
         let events = core.events();
-        if let Some(remote) = REMOTE_SHELL.get().and_then(|hook| hook(&a.cwd)) {
-            let (argv, local_cwd) = remote?;
-            let args: Vec<&str> = argv[1..].iter().map(|s| s.as_str()).collect();
-            return core.pty.spawn_shell(
-                &a.session_id,
-                &argv[0],
-                &args,
-                &local_cwd,
-                a.rows,
-                a.cols,
-                events,
-            );
-        }
         let program = resolve_shell(&a.shell)?;
         #[cfg(target_os = "windows")]
         let args = utf8_console_args(&program);

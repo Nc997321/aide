@@ -1219,11 +1219,11 @@ mod tests {
 
         // 与 `ask_language` 同序：先递一个该语言的真实文件（顺带触发工程加载），再按名查。
         let primed =
-            first_source_files(&WorkspaceAccess::Local, &root, crate::lsp::detector::LanguageId::TypeScript, MAX_PRIMED)
+            first_source_files(&WorkspaceAccess, &root, crate::lsp::detector::LanguageId::TypeScript, MAX_PRIMED)
                 .await;
         assert!(!primed.is_empty(), "工作区里应当找得到 .ts 代表文件");
         eprintln!("primed = {primed:?}");
-        prime_project(&WorkspaceAccess::Local, &h, &root, crate::lsp::detector::LanguageId::TypeScript).await;
+        prime_project(&WorkspaceAccess, &h, &root, crate::lsp::detector::LanguageId::TypeScript).await;
 
         let hits = search_symbol(
             &h,

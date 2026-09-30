@@ -1,4 +1,4 @@
-//! 桌面 ↔ aide-host 的 stdio 协议（**唯一真相源**：桌面 `src-tauri/src/remote_host/`
+//! 桌面 ↔ aide-host 的 stdio 协议（**唯一真相源**：桌面 `src-tauri/src/remote_workspace/`
 //! 与 aide-host 都从这里取类型，改帧 = 改这一个文件，两端编译期对齐）。
 //!
 //! 传输：一行一帧的 JSON（`\n` 分隔），承载于 `wsl.exe -d <distro> -- …` 或
@@ -9,15 +9,10 @@
 //! - 通知（host → 桌面）：`{"event":"file-tree-changed","payload":[…]}`——Host 核心
 //!   （aide-core `EventSink`）发出的**任何**事件都以这一帧送达，事件名 / payload 原样。
 //!
-//! 路径：本协议里的路径**一律是目标机原生路径**（POSIX）。桌面侧的远程路径形态
-//! （`\\wsl.localhost\<distro>\…` / `\\aide-ssh\<alias>\…`）只存在于桌面，翻译在
-//! 桌面做——host 不认识桌面的路径形态。
+//! 首行（连接建立后桌面先写）：[`ServeInit`]。
 //!
-//! 语言服务器同理：`aide-host lsp` 首行读 [`LspInit`]，之后 stdin/stdout 是 LSP 原生帧
-//! （Content-Length 分帧），逐字节透传；URI 的桌面 ↔ 目标机翻译在桌面做。
-//!
-//! agent 通道**不走本协议**：`aide-host agent` 是独立进程（独立一条 wsl/ssh 管道），
-//! 首行读 [`AgentInit`]，之后 stdin/stdout 就是 sidecar 原生协议，逐字节透传。
+//! 路径：本协议里的路径**一律是 Host 原生路径**（WSL / SSH 上即 POSIX），前端直接用，不翻译
+//! （一个窗口 = 一个 Host，见 docs/host-model.md）。
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -30,7 +25,9 @@ use std::collections::HashMap;
 /// （经 `invoke`），事件经通知帧回推。
 /// v3（2026-09-30）：`serve` 首行 [`ServeInit`]——serve 成为完整 Host（agent runtime /
 /// 自动化 / LSP 都在它里面），进程级环境随连接给。
-pub const PROTOCOL_VERSION: u32 = 3;
+/// v4（2026-09-30）：删除旧模型——`invoke` 去掉 `root`（前端自带 `cwd`），删除 `agent` /
+/// `lsp` 两个独立通道与 `transcript_*` / `lsp_detect` 等桌面取原料的命令。
+pub const PROTOCOL_VERSION: u32 = 4;
 
 pub const METHOD_HELLO: &str = "hello";
 pub const METHOD_INVOKE: &str = "invoke";
@@ -73,16 +70,13 @@ pub struct HelloInfo {
     pub user: String,
 }
 
-/// `invoke`：按 Tauri 命令名分派到 aide-workspace 的同一份实现。
-/// `args` 是前端 invoke 的原始参数（camelCase，路径已翻译成目标机路径）；
-/// `root` 是需要工作区根的命令（git 系 / get_project_info）由桌面解析好的根。
+/// `invoke`：按前端 invoke 的命令名查 aide-core 命令表。`args` 是前端 invoke 的原始参数
+/// （camelCase，Host 原生路径）。
 #[derive(Debug, Serialize, Deserialize)]
 pub struct InvokeParams {
     pub cmd: String,
     #[serde(default)]
     pub args: Value,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
 }
 
 /// `aide-host serve` 的首行：Host 进程级的设定（敏感值走 stdin 不走命令行——命令行在目标机
@@ -102,37 +96,3 @@ pub struct ServeInit {
     #[serde(default)]
     pub claude_exe: Option<String>,
 }
-
-/// `aide-host agent` 的首行：sidecar 的进程环境（provider 凭据等敏感值走这里而不是
-/// 命令行——命令行在目标机 `ps` 里对所有用户可见）。
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct AgentInit {
-    #[serde(default)]
-    pub env: HashMap<String, String>,
-    /// 兜底 env：只在目标机登录环境**没有**该键时生效（如桌面探测到的代理——目标机自己
-    /// 配了代理就用它自己的）。
-    #[serde(default)]
-    pub default_env: HashMap<String, String>,
-    /// node 可执行文件；None = 用 PATH 上的 `node`。
-    #[serde(default)]
-    pub node: Option<String>,
-    /// sidecar 入口 runtime.js；None = host 安装目录下的 `runtime/runtime.js`。
-    #[serde(default)]
-    pub runtime: Option<String>,
-}
-
-/// `aide-host lsp` 的首行：在目标机上起哪个语言服务器。
-///
-/// 服务器**在目标机上解析**（登录环境的 PATH）：桌面看不到目标机装了什么，SSH 工作区更是
-/// 连文件都摸不到。桌面只给候选（与本机 PATH 发现同一份二进制名，见桌面 `LanguageId::server_binary`）。
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct LspInit {
-    /// 候选命令（argv），按序取第一个 `argv[0]` 在目标机登录 PATH 上找得到的。
-    pub candidates: Vec<Vec<String>>,
-    /// 工作目录（目标机路径，通常是工作区根）。
-    pub cwd: String,
-}
-
-/// `invoke` 里的 LSP 探测命令（**不是** Tauri 命令名——桌面 LSP 层按工作区是否远程选择
-/// 本机实现或向 host 要，见桌面 `lsp::workspace_access`）。
-pub const LSP_COMMANDS: &[&str] = &["lsp_detect", "lsp_representatives"];

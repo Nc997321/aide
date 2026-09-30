@@ -1,22 +1,13 @@
 //! 活动工作区状态与命令的根解析。
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
-/// 「这个工作区目录还在吗」的判定。默认 `exists()`；前门在启动时可注入更懂路径形态的判定
-/// ——桌面在远程工作区过渡期注入 `remote_workspace::path::present`（远程路径同步 stat 不了，
-/// 按存在处理）。判定为不在 = 回落，对远程路径误判就是 2026-09-18 的「跑错项目」。
-/// 进程级：一个进程只有一个 Host。
-static PRESENCE: OnceLock<fn(&Path) -> bool> = OnceLock::new();
-
-/// 启动时调一次（第二次调用被忽略）。
-pub fn set_presence_check(check: fn(&Path) -> bool) {
-    let _ = PRESENCE.set(check);
-}
-
-/// 工作区目录是否（按当前 Host 的口径）存在。**凡「工作区还在吗」一律走这里**。
+/// 工作区目录是否还在。**凡「工作区还在吗」一律走这里**（判定为不在 = 回落活动工作区 /
+/// 家目录，误判就是 2026-09-18 的「跑错项目」）。Host 模型下工作区与 Host 在同一台机器上，
+/// 本机 stat 即权威。
 pub fn present(p: &Path) -> bool {
-    PRESENCE.get().map_or_else(|| p.exists(), |check| check(p))
+    p.exists()
 }
 
 pub struct WorkspaceState {

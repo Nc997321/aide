@@ -195,7 +195,7 @@ pub fn forward(invoke: Invoke<Wry>) -> Option<Invoke<Wry>> {
     invoke.resolver.respond_async_serialized(async move {
         let reply = async {
             let conn = svc.connection(&host).await?;
-            conn.invoke(&cmd, args, None).await
+            conn.invoke(&cmd, args).await
         }
         .await
         .map_err(|e| InvokeError::from(Value::String(e)))?;

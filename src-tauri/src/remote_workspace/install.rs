@@ -39,8 +39,6 @@ const NODE_MIRRORS: &[&str] = &["https://nodejs.org/dist", "https://npmmirror.co
 /// 安装完成后 agent 启动所需的全部路径（目标机路径）。
 #[derive(Debug, Clone)]
 pub struct Installed {
-    /// 目标机上的套件根：`$HOME/.aide/host`（扩展镜像住在它下面的 `ext/`）。
-    pub base: String,
     pub host_bin: String,
     pub claude_exe: String,
     /// None = 用目标机登录 shell PATH 上的 node。
@@ -332,7 +330,6 @@ true"#
     };
 
     Ok(Installed {
-        base: base.clone(),
         host_bin: format!("{base}/{ver}/aide-host"),
         claude_exe: format!("{claude_dir}/claude"),
         node,
@@ -457,8 +454,6 @@ fn write_atomic(path: &Path, bytes: &[u8]) {
 pub struct HostEnv {
     pub env: HashMap<String, String>,
     pub default_env: HashMap<String, String>,
-    /// 桌面回环代理在目标机上的改写主机（见 [`loopback_host_for`]）；None = 丢弃。
-    pub loopback_host: Option<String>,
 }
 
 pub async fn host_env(host: &HostId, installed: &Installed) -> HostEnv {
@@ -469,12 +464,12 @@ pub async fn host_env(host: &HostId, installed: &Installed) -> HostEnv {
         .ok()
         .flatten();
     let mut default_env = HashMap::new();
-    let mut loopback_host = None;
     if let Some(url) = desktop_proxy {
         if let Some((h, port)) = proxy_host_port(&url) {
             let target_url = if is_loopback_host(&h) {
-                loopback_host = loopback_host_for(host, installed, port).await;
-                loopback_host.as_deref().map(|lh| replace_proxy_host(&url, lh))
+                loopback_host_for(host, installed, port)
+                    .await
+                    .map(|lh| replace_proxy_host(&url, &lh))
             } else {
                 Some(url.clone())
             };
@@ -489,7 +484,6 @@ pub async fn host_env(host: &HostId, installed: &Installed) -> HostEnv {
     HostEnv {
         env,
         default_env,
-        loopback_host,
     }
 }
 

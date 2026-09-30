@@ -255,25 +255,9 @@ fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
 
 /// 该工作区配得上 LSP 的语言（sidecar 据此决定挂不挂 aide-lsp 工具）。
 ///
-/// 本机：探测要遍历工作区（有界，但仍是文件系统 IO）——放 `spawn_blocking`，不占 tokio worker；
+/// 探测要遍历工作区（有界，但仍是文件系统 IO）——放 `spawn_blocking`，不占 tokio worker；
 /// JoinError → 空表（退化成「不挂 LSP 工具」，与「探不到语言」走同一条路径）。
-/// 远程（WSL / SSH）：在目标机上探测，「配得上」= 目标机登录 PATH 上真有该语言的服务器
-/// （`aide-host lsp_detect`）；连不上 → 空表，同样退化成不挂。
 async fn lsp_languages_for_send(core: &std::sync::Arc<crate::Core>, workspace_root: &str) -> Vec<String> {
-    let access = crate::lsp::workspace_access::WorkspaceAccess::of(workspace_root);
-    if access.is_remote() {
-        return match access.remote_detect(workspace_root).await {
-            Ok((_, available)) => available
-                .into_iter()
-                .filter(|l| crate::lsp::manager::remote_supported(*l))
-                .map(|l| l.id_str().to_string())
-                .collect(),
-            Err(e) => {
-                tracing::info!(root = workspace_root, error = %e, "remote lsp detection failed");
-                vec![]
-            }
-        };
-    }
     let core = core.clone();
     let root = workspace_root.to_string();
     tokio::task::spawn_blocking(move || {
@@ -452,13 +436,6 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // 而不是回一个「Runtime not spawned」。已在跑时这里只是一次内存判断。
     if !runtime_mgr.is_running() {
         crate::runtime::start_with_active_provider(&app).await?;
-    }
-
-    // 旧模型远程工作区（过渡，P1 删除）：会话跑在目标机的 sidecar 上（车道）。路由器确保
-    // 车道在、绑定会话、把命令里的桌面路径译成目标机路径；此后同会话的其它命令由
-    // send_to_runtime 按绑定自动路由。本机工作区原样通过。
-    if let Some(router) = runtime_mgr.lane_router() {
-        router.prepare_send(&app, &session_id, &cwd_str, &mut cmd).await?;
     }
 
     runtime_mgr.send_to_runtime(&cmd).await

@@ -49,10 +49,6 @@ pub fn dispatch(app: AppHandle, command: &str, params: Value) -> Option<BoxFutur
     if !CORE_EXPOSED.contains(&command) {
         return None;
     }
-    // 过渡期：落在远程工作区的会话命令向 aide-host 取（与桌面 IPC 的 routes 同一判定）
-    if let Some(route) = crate::remote_workspace::sessions::route(&app, command, &params) {
-        return Some(Box::pin(crate::remote_workspace::sessions::run(app, route)));
-    }
     aide_core::lookup(command)?;
     Some(Box::pin(call_core(app, command.to_string(), params)))
 }
@@ -93,7 +89,7 @@ static CORE_EXPOSED: &[&str] = &[
     // 日常模式归属：工作区列表把它滤掉了，远程端要进「日常」只能单独问这条（只读）。
     "daily_workspace",
     "is_workspace_trusted",
-    // ── 会话管理与元数据（远程工作区的会话由 dispatch 先经 remote_workspace::sessions 路由）──
+    // ── 会话管理与元数据 ──
     "list_sessions",
     "list_sessions_for_workspace",
     "create_session",

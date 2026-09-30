@@ -282,8 +282,6 @@ pub async fn files_mentioning(
     let mask = crate::lsp::detector::KNOWN_SOURCE_EXTS
         .iter()
         .filter(|e| crate::lsp::detector::LanguageId::from_ext(e) == Some(lang))
-        // 远程的 TS 服务器不挂 Vue 插件：递 `.vue` 过去只换来一条 didOpen 失败，白占一个预热名额。
-        .filter(|e| !(access.is_remote() && **e == "vue"))
         .map(|e| format!("*.{e}"))
         .collect::<Vec<_>>()
         .join(",");
@@ -406,7 +404,7 @@ mod tests {
         let root = dir.to_string_lossy().replace('\\', "/");
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         let files = rt.block_on(files_mentioning(
-            &WorkspaceAccess::Local,
+            &WorkspaceAccess,
             &root,
             "useThing",
             crate::lsp::detector::LanguageId::TypeScript,
@@ -436,7 +434,7 @@ mod tests {
         std::fs::write(dir.join("notes.md"), "run_jump appears in docs\n").unwrap();
         let root = dir.to_string_lossy().to_string();
         let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        let v = rt.block_on(text_search(&WorkspaceAccess::Local, &root, "run_jump"));
+        let v = rt.block_on(text_search(&WorkspaceAccess, &root, "run_jump"));
         let _ = std::fs::remove_dir_all(&dir);
         assert_eq!(v["ok"], true, "{v}");
         let files: Vec<&str> = v["matches"]

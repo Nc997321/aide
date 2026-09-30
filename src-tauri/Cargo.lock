@@ -135,7 +135,6 @@ name = "aide-host"
 version = "0.8.0"
 dependencies = [
  "aide-core",
- "aide-workspace",
  "base64 0.22.1",
  "serde",
  "serde_json",

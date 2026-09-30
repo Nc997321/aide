@@ -15,11 +15,10 @@ pub mod job_object;
 pub mod lsp_agent;
 pub mod ports;
 pub mod pump;
-pub use pump::Lane;
 use crate::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
 use crate::Core;
-use ports::{AgentHooks, LaneRouter};
+use ports::AgentHooks;
 
 /// Per-session routing info used to scope permission-policy broadcasts.
 /// `workspace_root` decides which sessions a project/local policy change
@@ -75,8 +74,6 @@ pub struct AgentRuntimeManager {
     pub bg_tasks: bg_registry::BgTaskRegistry,
     /// GUI 侧能力（浏览器查询 / 诊断 / 自动化观测），挂 GUI 的前门注入。见 [`ports`]。
     hooks: OnceLock<Box<dyn AgentHooks>>,
-    /// 旧模型远程车道路由（过渡，P1 删除）。未注入 = 只有本机车道。
-    lanes: OnceLock<Box<dyn LaneRouter>>,
 }
 
 impl AgentRuntimeManager {
@@ -99,7 +96,6 @@ impl AgentRuntimeManager {
             job: Mutex::new(None),
             bg_tasks: bg_registry::BgTaskRegistry::default(),
             hooks: OnceLock::new(),
-            lanes: OnceLock::new(),
         }
     }
 
@@ -112,14 +108,6 @@ impl AgentRuntimeManager {
         self.hooks.get().map(|h| h.as_ref())
     }
 
-    /// 注入旧模型远程车道路由（过渡，P1 删除）。
-    pub fn set_lane_router(&self, router: Box<dyn LaneRouter>) {
-        let _ = self.lanes.set(router);
-    }
-
-    pub fn lane_router(&self) -> Option<&dyn LaneRouter> {
-        self.lanes.get().map(|r| r.as_ref())
-    }
 
     /// 测试专用构造器：`send_to_runtime` 录制命令而非写 stdin。
     #[cfg(test)]
@@ -228,7 +216,6 @@ impl AgentRuntimeManager {
 
         pump::start(pump::Pump {
             core: Arc::clone(core),
-            lane: pump::Lane::Local,
             stdout,
             stderr,
             stdin: self.stdin.lock().unwrap().as_ref().ok_or("stdin not set")?.clone(),
@@ -247,16 +234,9 @@ impl AgentRuntimeManager {
             self.sent_commands.lock().unwrap().push(cmd.clone());
             return Ok(());
         }
-        let lane = cmd
-            .get("session_id")
-            .and_then(|s| s.as_str())
-            .and_then(|sid| self.lane_router().and_then(|r| r.stdin_for(sid)));
-        let stdin = match lane {
-            Some(remote) => remote?,
-            None => {
-                let guard = self.stdin.lock().unwrap();
-                guard.as_ref().ok_or("Runtime not spawned")?.clone()
-            }
+        let stdin = {
+            let guard = self.stdin.lock().unwrap();
+            guard.as_ref().ok_or("Runtime not spawned")?.clone()
         };
         let mut line = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
         line.push('\n');
@@ -309,9 +289,6 @@ impl AgentRuntimeManager {
         if let Some(child_arc) = child {
             let mut c = child_arc.lock().await;
             let _ = c.start_kill();
-        }
-        if let Some(router) = self.lane_router() {
-            router.kill_all().await;
         }
     }
 

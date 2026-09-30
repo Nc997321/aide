@@ -111,7 +111,7 @@ pub fn answer_browser_query(
         let sent = async {
             svc.connection(&host)
                 .await?
-                .invoke("agent_tool_result", serde_json::json!({ "payload": payload }), None)
+                .invoke("agent_tool_result", serde_json::json!({ "payload": payload }))
                 .await
         }
         .await;
@@ -121,18 +121,13 @@ pub fn answer_browser_query(
     });
 }
 
-/// 该 Host 当前是否有窗口连着（旧模型的桌面形态事件翻译据此让路，P1d 删除）。
-pub fn has_windows(app: &AppHandle, host: &HostId) -> bool {
-    !app.state::<HostWindows>().windows_of(host).is_empty()
-}
-
 /// GUI 动作（用本机程序打开 / 在资源管理器中显示）要碰 Host 上的文件：显式跨界。
 /// 本机窗口原样；WSL Host 的原生路径译成桌面能开的 `\\wsl.localhost\…`；SSH Host 上的文件
 /// 本机根本摸不到——如实拒绝，不假装打开。
 pub fn gui_path(window: &WebviewWindow, path: &str) -> Result<String, String> {
     match window.app_handle().state::<HostWindows>().host_of(window.label()) {
         None => Ok(path.to_string()),
-        Some(host @ HostId::Wsl(_)) => Ok(crate::remote_workspace::path::to_desktop(&host, path)),
+        Some(HostId::Wsl(distro)) => Ok(crate::remote_workspace::path::wsl_desktop_path(&distro, path)),
         Some(host) => Err(format!("{} 上的文件无法在本机打开", host.label())),
     }
 }
@@ -274,10 +269,10 @@ pub async fn import_local_providers(window: WebviewWindow) -> Result<usize, Stri
         .collect::<Result<_, _>>()?;
     let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
     let conn = svc.connection(&host).await?;
-    let remote = conn.invoke("get_providers", serde_json::json!({}), None).await?;
+    let remote = conn.invoke("get_providers", serde_json::json!({})).await?;
     let remote = remote.as_array().cloned().unwrap_or_default();
     let (inputs, copied) = merge_provider_inputs(&remote, &local);
-    conn.invoke("set_providers", serde_json::json!({ "providers": inputs }), None)
+    conn.invoke("set_providers", serde_json::json!({ "providers": inputs }))
         .await?;
     Ok(copied)
 }
@@ -306,7 +301,7 @@ pub async fn upload_local_files(window: WebviewWindow, paths: Vec<String>) -> Re
         use base64::Engine as _;
         let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
         let staged = conn
-            .invoke("stage_dropped_file", serde_json::json!({ "name": name, "base64": b64 }), None)
+            .invoke("stage_dropped_file", serde_json::json!({ "name": name, "base64": b64 }))
             .await?;
         out.push(staged.as_str().unwrap_or_default().to_string());
     }

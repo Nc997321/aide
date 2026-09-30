@@ -15,24 +15,15 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::ChildStdin;
 use tokio::sync::Mutex as TokioMutex;
 
-use super::ports::LaneAdapter;
 use crate::lsp::agent_bridge::{build_result_command, LspQueryRequest};
 use crate::Core;
 
 /// 执行一条 agent LSP 查询并回写结果。
-///
-/// `lane` = 旧模型远程车道（None = 本机车道）。远程车道的 sidecar 跑在目标机上，
-/// 它给的路径是目标机 POSIX 路径、它要读回的结果路径也必须是——语言服务器虽然也在目标机上，
-/// 但 LspManager 在桌面、按桌面形态（`\\wsl.localhost\…`）管理工作区，所以进出各译一次。
 pub async fn handle(
     core: Arc<Core>,
     stdin: Arc<TokioMutex<ChildStdin>>,
-    mut req: LspQueryRequest,
-    lane: Option<Arc<dyn LaneAdapter>>,
+    req: LspQueryRequest,
 ) {
-    if let Some(l) = &lane {
-        l.lsp_request_in(&mut req);
-    }
     // 可观测性：桥被拦截后既不转发前端也不回任何 UI，没有这行就只剩「成功或 15s
     // 超时」两种可见状态，出错时无从定位（同 browser_agent 的既有教训）。
     let tool = req.tool.clone();
@@ -47,10 +38,6 @@ pub async fn handle(
         tracing::warn!(tool, %request_id, error, "lsp bridge: replied with error");
     }
 
-    let mut body = body;
-    if let Some(l) = &lane {
-        l.lsp_result_out(&mut body);
-    }
     let payload = build_result_command(&req.request_id, body);
     if let Ok(mut line) = serde_json::to_string(&payload) {
         line.push('\n');

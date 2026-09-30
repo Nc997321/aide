@@ -8,8 +8,6 @@ mod conversation;
 mod diagnostics;
 mod host_door;
 mod host_window;
-/// Host 自持的能力住在 aide-core；保留 `crate::codegraph` / `crate::lsp` 路径。
-use aide_core::{codegraph, lsp};
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
 pub(crate) mod remote_workspace;
@@ -83,8 +81,6 @@ pub fn run() {
     let saved_key = commands::load_workspace_state();
     // 「工作区还在吗」注入远程感知判定：远程路径同步 stat 不了，按存在处理（Host 核心的
     // 根解析 / 工作区列表、桌面的会话 cwd 兜底共用这一判定）。
-    aide_core::workspace::set_presence_check(remote_workspace::path::present);
-    aide_core::commands::terminal::set_remote_shell(remote_workspace::launcher::remote_shell);
     let workspace_state = std::sync::Arc::new(WorkspaceState::new());
     // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
     let settings_service = std::sync::Arc::new(settings::SettingsService::new(
@@ -300,8 +296,8 @@ pub fn run() {
 
             Ok(())
         })
-        // 远程工作区的 IPC 拦截层包在命令分派外面：参数里带远程路径的工作区命令在这里
-        // 转发给目标机（见 remote_workspace/routes.rs），其余原样交给命令表。
+        // 分派链包在命令表外面：Host 窗口的 core 命令转发给它那台 Host（host_door::forward），
+        // 本机窗口的 core 命令进程内直调（host_door::dispatch），其余交给 Tauri 命令表。
         .invoke_handler({
             let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
                 Box::new(tauri::generate_handler![
@@ -369,19 +365,14 @@ pub fn run() {
             remote_workspace::remote_ws_connect,
             remote_workspace::remote_ws_disconnect,
             remote_workspace::remote_ws_statuses,
-            remote_workspace::remote_ws_host_of,
             host_window::open_host_window,
             host_window::current_host,
             host_window::import_local_providers,
             host_window::upload_local_files,
             ]);
-            // Host 窗口转发 → 远程工作区拦截（旧模型，P1d 删）→ 本机 Host 命令表（aide-core）
-            // → 其余 Tauri 命令。
+            // Host 窗口转发（远程 Host 的 serve）→ 本机 Host 命令表（aide-core）→ 其余 Tauri 命令。
             move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
-                match host_door::forward(invoke)
-                    .and_then(remote_workspace::routes::intercept)
-                    .and_then(host_door::dispatch)
-                {
+                match host_door::forward(invoke).and_then(host_door::dispatch) {
                     Some(invoke) => commands(invoke),
                     None => true,
                 }

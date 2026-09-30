@@ -1,10 +1,10 @@
 import { getTransport } from "../transport";
 
-// ── 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）──
+// ── 远程 Host 的连接管理（WSL 发行版 / SSH 服务器）──
 // Rust 侧：src-tauri/src/remote_workspace/。与「远程控制」（手机遥控桌面，remote_* 命令）无关。
 //
-// 远程路径在桌面一律是 UNC 形态，文件树 / 编辑器 / git / 搜索照常传路径即可——IPC 拦截层
-// 按路径把命令转发到目标机。这里只有**连接管理**与**路径显示**两件事。
+// 一个窗口 = 一个 Host（见 ./host.ts）：远程 Host 在它自己的窗口里用，路径是 Host 原生路径，
+// 不做任何翻译。这里只剩可连接目标的列举与连接状态。
 
 /** 可连接的目标：本机 WSL 发行版 + `~/.ssh/config` 的 Host 别名。 */
 export interface RemoteTargets {
@@ -20,7 +20,7 @@ export interface RemoteHostStatus {
   label: string;
   state: "connecting" | "installing" | "connected" | "error" | "disconnected" | "";
   detail?: string;
-  /** 目标机家目录（桌面形态），连接成功后才有。 */
+  /** 目标机家目录（Host 原生路径），连接成功后才有。 */
   home?: string;
 }
 
@@ -42,7 +42,9 @@ export const remoteWorkspaceApi = {
   },
 };
 
-// ── 路径形态（与 Rust remote_workspace/path.rs 同一规则；Rust 为准，这里只做显示/判定）──
+// ── 旧版登记的远程工作区 ──
+// Host 模型之前，远程工作区以 UNC 形态登记在本机的工作区列表里（`\\wsl.localhost\<distro>\…` /
+// `\\aide-ssh.invalid\<alias>\…`）。它们属于那台 Host：侧栏据此认出来，点开即进它的 Host 窗口。
 
 const WSL_RE = /^[\\/]{2}(wsl\.localhost|wsl\$)[\\/]([A-Za-z0-9._@-]+)(?:[\\/](.*))?$/i;
 const SSH_RE = /^[\\/]{2}aide-ssh\.invalid[\\/]([A-Za-z0-9._@-]+)(?:[\\/](.*))?$/i;
@@ -54,6 +56,7 @@ export interface RemotePathInfo {
   posix: string;
 }
 
+/** 旧版 UNC 形态的远程工作区路径 → (主机键, 显示名, 目标机路径)；其它路径 → null。 */
 export function parseRemotePath(path: string): RemotePathInfo | null {
   const toPosix = (tail: string | undefined) =>
     "/" + (tail ?? "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
@@ -62,28 +65,4 @@ export function parseRemotePath(path: string): RemotePathInfo | null {
   m = SSH_RE.exec(path);
   if (m) return { host: `ssh:${m[1]}`, label: `SSH: ${m[1]}`, posix: toPosix(m[2]) };
   return null;
-}
-
-export function isRemotePath(path: string): boolean {
-  return parseRemotePath(path) !== null;
-}
-
-/** 主机键 + 目标机路径 → 桌面形态路径（目录选择器起点等）。 */
-export function remoteDesktopPath(host: string, posix: string): string {
-  const [kind, name] = host.split(":", 2);
-  const prefix = kind === "wsl" ? `\\\\wsl.localhost\\${name}` : `\\\\aide-ssh.invalid\\${name}`;
-  const tail = posix.replace(/^\/+|\/+$/g, "");
-  return tail ? `${prefix}\\${tail.replace(/\//g, "\\")}` : `${prefix}\\`;
-}
-
-/**
- * 模型正文里的目标机绝对路径（`/home/u/p/a.rs`）→ 该会话工作区所在主机的桌面形态。
- * 会话在本机工作区、或 token 不是 POSIX 绝对路径 → 原样返回。
- * 前端点击聊天里的文件链接时用：拿到的路径必须能再交回 IPC。
- */
-export function resolveAgainstWorkspace(token: string, workspaceRoot: string | null | undefined): string {
-  if (!workspaceRoot || !token.startsWith("/")) return token;
-  const ws = parseRemotePath(workspaceRoot);
-  if (!ws) return token;
-  return remoteDesktopPath(ws.host, token);
 }

@@ -13,7 +13,6 @@ pub mod manager;
 pub mod profiles;
 pub mod protocol;
 pub mod registry;
-pub mod remote;
 pub mod rpc;
 pub mod transport;
 pub mod vue_plugin;
