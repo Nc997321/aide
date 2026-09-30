@@ -335,10 +335,14 @@ export function kbNodeMenuItems(
 export function kbCreateItems(h: {
   onNewFolder: () => void;
   onNewDoc: () => void;
+  onUpload: () => void;
 }): MenuItem[] {
   return [
     { label: "新建文件夹", action: h.onNewFolder },
     { label: "新建文档", action: h.onNewDoc },
+    // 上传和「新建」是同一类动作（都是往这个位置放东西），所以同一个入口。
+    // 认哪些格式由服务端定（见 useKnowledgeBase.uploadFile），这里不做判断。
+    { label: "上传文件…", action: h.onUpload },
   ];
 }
 

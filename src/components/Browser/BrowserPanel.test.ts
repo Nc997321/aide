@@ -530,3 +530,45 @@ describe("自己 create 的回声", () => {
     expect(w.findAll(".bp-tab-label").map((n) => n.text())).not.toContain("dev");
   });
 });
+
+describe("别的模块请求打开一个地址（资料库的网页产物预览）", () => {
+  it("openInBrowser 的待办被面板消费，地址真的交给 browser_create", async () => {
+    const w = mountPanel();
+    await flushPromises();
+
+    useRightPanel().openInBrowser("http://127.0.0.1:18788/p/abc123");
+    await flushPromises();
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "browser_create",
+      expect.objectContaining({
+        dto: expect.objectContaining({ url: "http://127.0.0.1:18788/p/abc123" }),
+      }),
+    );
+    // 消费掉：不会被第二个面板实例重复打开
+    expect(useRightPanel().pendingBrowserUrl.value).toBeNull();
+    expect(w.findAll(".bp-tab")).toHaveLength(2); // 新开一页，不动原来那页
+  });
+
+  it("有浮层盖着时先不消费——等浮层关掉再打开（那时占位洞才量得到尺寸）", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    // 面板内的浮层（导入书签的文件选择器）：原生视图此时必须让位，占位洞不可量
+    await w.find(".bp-bm-import").trigger("click");
+    await flushPromises();
+
+    useRightPanel().openInBrowser("http://127.0.0.1:18788/p/later");
+    await flushPromises();
+
+    expect(useRightPanel().pendingBrowserUrl.value).toBe("http://127.0.0.1:18788/p/later");
+    expect(lastArgsOf("browser_create")).toBeNull();
+
+    w.findComponent(FilePickerStub).vm.$emit("update:visible", false);
+    await flushPromises();
+
+    expect(lastArgsOf("browser_create")).toEqual([
+      { dto: expect.objectContaining({ url: "http://127.0.0.1:18788/p/later" }) },
+    ]);
+    expect(useRightPanel().pendingBrowserUrl.value).toBeNull();
+  });
+});

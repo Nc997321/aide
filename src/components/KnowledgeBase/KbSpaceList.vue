@@ -95,6 +95,9 @@ const vFocus = {
       class="kb-spacerow"
       :class="{ on: s.id === props.activeId }"
       :data-space="s.id"
+      tabindex="0"
+      @click="emit('select', s.id)"
+      @keydown.enter.prevent="emit('select', s.id)"
     >
       <input
         v-if="renaming === s.id"
@@ -102,11 +105,12 @@ const vFocus = {
         v-model="renameDraft"
         class="kb-inline-input"
         v-focus
+        @click.stop
         @keydown.enter="commitRename"
         @keydown.esc="renaming = null"
         @blur="commitRename"
       />
-      <span v-else data-space-label class="kb-space-name" @click="emit('select', s.id)">
+      <span v-else data-space-label class="kb-space-name">
         {{ s.name }}
       </span>
 
@@ -126,6 +130,9 @@ const vFocus = {
 </template>
 
 <style scoped>
+/* 与目录树同一套行规格：30px 高、13px 字、radius-sm、
+   选中 = surface-active + 左侧 accent 条。整个面板只有这一种选中配方。 */
+
 .kb-spaces {
   position: relative;
 }
@@ -134,18 +141,23 @@ const vFocus = {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 6px 5px 8px;
-  border-radius: 6px;
-  font-size: 12px;
+  gap: 8px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: var(--aide-radius-sm);
+  font-size: 13px;
   color: var(--aide-text-secondary);
   cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-spacerow:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
 .kb-spacerow.on {
-  background: color-mix(in srgb, var(--aide-accent) 16%, transparent);
+  background: var(--aide-surface-active);
   color: var(--aide-text-primary);
+  box-shadow: inset 2px 0 0 var(--aide-accent);
 }
+.kb-spacerow:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-spacerow.on:focus-visible { box-shadow: inset 2px 0 0 var(--aide-accent), var(--aide-accent-ring); }
 
 .kb-space-name {
   flex: 1 1 auto;
@@ -154,44 +166,54 @@ const vFocus = {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.kb-space-role { flex: 0 0 auto; font-size: 10px; opacity: 0.55; }
+.kb-space-role { flex: 0 0 auto; font-size: 11px; color: var(--aide-text-muted); }
 
+/* ⋯ 盖在角色位上：悬停/聚焦时出现，不占位、不推挤 */
 .kb-row-actions {
   position: absolute;
-  right: 4px;
+  right: 6px;
   display: flex;
   opacity: 0;
-  transition: opacity var(--aide-ease-t, 0.16s ease);
+  transition: opacity var(--aide-ease-t);
 }
+.kb-spacerow:hover .kb-row-actions,
+.kb-spacerow:focus-within .kb-row-actions { opacity: 1; }
 
 .kb-rowbtn {
   border: none;
   background: none;
-  padding: 2px;
+  padding: 0;
+  width: 22px;
+  height: 22px;
   display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--aide-text-muted);
   cursor: pointer;
-  border-radius: 4px;
+  border-radius: var(--aide-radius-sm);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-rowbtn:hover { color: var(--aide-text-primary); background: var(--aide-surface-active); }
+.kb-rowbtn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 
 .kb-inline-input {
   flex: 1 1 auto;
   min-width: 0;
-  height: 20px;
-  padding: 0 5px;
+  height: 24px;
+  padding: 0 8px;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--aide-text-primary);
-  background: var(--aide-bg-deep);
+  background: var(--aide-bg-raised);
   border: 1px solid var(--aide-accent);
-  border-radius: 4px;
+  border-radius: var(--aide-radius-sm);
   outline: none;
 }
 
 .kb-none {
-  margin: 4px 6px;
-  font-size: 11px;
+  margin: 0;
+  padding: 6px 8px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
 }
 </style>

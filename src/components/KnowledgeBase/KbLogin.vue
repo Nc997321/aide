@@ -110,7 +110,11 @@ function onInvitePaste(e: ClipboardEvent): void {
       <p v-else-if="mode === 'join'" class="kb-sub">
         把管理员发来的邀请链接整条粘贴进来。链接只能用一次。
       </p>
-      <p v-else class="kb-sub">账号由管理员分配，没有注册入口。</p>
+      <!-- 这一页是**兜底**：正常情况下凭据由 Aide 替你带着，打开面板直接进去。
+           走到这里只有两种情况——从来没登录过，或者凭据失效了。 -->
+      <p v-else class="kb-sub">
+        账号由管理员分配，没有注册入口。平时不用来这里——凭据失效了才需要重新登录一次。
+      </p>
 
       <div v-if="modes.length > 1" class="kb-tabs">
         <button
@@ -191,107 +195,120 @@ function onInvitePaste(e: ClipboardEvent): void {
 </template>
 
 <style scoped>
+/* 登录兜底页：左边是表单本身，**不套卡片**（框是模板感的来源）；
+   右边是同一份《使用指南》（还没连上服务器也能看到产品本来的样子）。
+   表单直接落在平面上，靠一条大标题和留白立住，不靠盒子。 */
+
 .kb-login {
   display: flex;
   height: 100%;
   overflow: hidden;
 }
 .kb-login-form {
-  width: 360px;
+  width: 420px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  padding: 40px;
   overflow: auto;
 }
 .kb-login-guide {
   flex: 1;
   min-width: 0;
-  border-left: 1px solid var(--aide-border);
+  border-left: 1px solid var(--aide-border-subtle);
   overflow: hidden;
 }
 .kb-card {
-  width: 320px;
+  width: 100%;
+  max-width: 320px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 22px;
-  border: 1px solid var(--aide-border);
-  border-radius: 12px;
-  background: var(--aide-bg-secondary);
+  gap: 16px;
 }
 .kb-card h2 {
   margin: 0;
-  font-size: 14px;
+  font-size: 22px;
   font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
   color: var(--aide-text-primary);
 }
 .kb-sub {
-  margin: -4px 0 4px;
-  font-size: 11px;
+  margin: -8px 0 0;
+  font-size: 12.5px;
   color: var(--aide-text-muted);
-  line-height: 1.6;
+  line-height: 1.7;
 }
+
+/* tab 不做出"槽 + 选中块"，改成下划线——少一层填充就少一分模板感 */
 .kb-tabs {
   display: flex;
-  gap: 4px;
-  padding: 2px;
-  border-radius: 8px;
-  background: var(--aide-bg-deep);
+  gap: 20px;
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
 .kb-tab {
-  flex: 1;
-  padding: 5px 6px;
-  font-size: 11px;
+  flex: none;
+  padding: 0 0 8px;
+  margin-bottom: -1px;
+  font: inherit;
+  font-size: 13px;
   border: none;
-  border-radius: 6px;
+  border-bottom: 2px solid transparent;
   background: none;
   color: var(--aide-text-muted);
   cursor: pointer;
+  transition: color var(--aide-ease-t), border-color var(--aide-ease-t);
 }
+.kb-tab:hover { color: var(--aide-text-secondary); }
 .kb-tab.on {
-  background: var(--aide-bg-secondary);
   color: var(--aide-text-primary);
+  border-bottom-color: var(--aide-accent);
 }
+.kb-tab:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+
 label {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  font-size: 11px;
+  gap: 6px;
+  font-size: 12px;
   color: var(--aide-text-muted);
 }
 input {
-  padding: 7px 9px;
-  font-size: 12px;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 13px;
   color: var(--aide-text-primary);
-  background: var(--aide-bg-primary);
-  border: 1px solid var(--aide-border);
-  border-radius: 6px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
   outline: none;
+  transition: box-shadow var(--aide-ease-t);
 }
-input:focus {
-  border-color: var(--aide-accent);
-}
+input:focus { box-shadow: var(--aide-accent-ring); }
+input::placeholder { color: var(--aide-text-muted); }
+
 .kb-err {
   margin: 0;
-  font-size: 11px;
-  color: var(--aide-error, #d0453b);
-  line-height: 1.5;
+  font-size: 12px;
+  color: var(--aide-danger);
+  line-height: 1.6;
 }
 .kb-primary {
-  padding: 8px;
-  font-size: 12px;
-  color: #fff;
+  padding: 9px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--aide-text-on-accent);
   background: var(--aide-accent);
   border: none;
-  border-radius: 6px;
+  border-radius: var(--aide-radius-sm);
+  box-shadow: var(--aide-highlight-inset);
   cursor: pointer;
+  transition: background var(--aide-ease-t);
 }
-.kb-primary:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
+.kb-primary:hover:not(:disabled) { background: var(--aide-accent-hover); }
+.kb-primary:disabled { opacity: 0.45; cursor: default; }
+.kb-primary:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 .kb-foot {
   display: flex;
   justify-content: flex-end;
@@ -299,13 +316,18 @@ input:focus {
 .kb-link {
   border: none;
   background: none;
-  padding: 0;
-  font-size: 11px;
-  color: var(--aide-accent);
-  cursor: pointer;
-}
-.kb-addr small {
-  font-size: 10px;
+  padding: 2px 0;
+  font: inherit;
+  font-size: 12px;
   color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: color var(--aide-ease-t);
+}
+.kb-link:hover { color: var(--aide-text-primary); }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-addr small {
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
+  line-height: 1.6;
 }
 </style>

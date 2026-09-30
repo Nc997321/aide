@@ -44,7 +44,7 @@ import {
   type BookmarkFolder,
 } from "../../utils/browser";
 
-const { browserActive, select } = useRightPanel();
+const { browserActive, select, pendingBrowserUrl, consumePendingBrowserUrl } = useRightPanel();
 const browser = useEmbeddedBrowser();
 // 常驻层（App 已安装）：挂载前收到的生命周期事件与 focus 请求都在它那儿缓冲着。
 const { pendingFocusViewId, buffered, takeViewEvents, consumePendingFocus } = useBrowserViews();
@@ -368,6 +368,44 @@ async function go() {
   }
 }
 
+/**
+ * 「给我在右栏打开这个地址」——来自别的模块的请求（资料库的网页产物预览）。
+ *
+ * 开**新标签**而不是改写当前页：预览是「顺手看一眼」，不该把用户正在读的那页顶掉。
+ * 走面板自己的建视图路径（`ensureView`），地址栏 / 标签 / 收藏状态与手动打开一致——
+ * 不直接调 `browser.create` 绕过面板状态。
+ */
+async function openExternally(url: string) {
+  const target = normalizeBrowserUrl(url);
+  if (!target) return;
+
+  const t = blankTab();
+  tabs.value.push(t);
+  activeId.value = t.id; // 激活 watcher 负责显隐；这里等布局落到占位洞上
+  clearMessage();
+
+  if (!(await waitForSurface())) return;
+  if (!(await ensureView(t, target))) return;
+  t.url = target;
+  if (t.id === activeId.value) syncAddressFromTab();
+}
+
+/**
+ * 等占位洞拿到真实尺寸（最多 ~10 帧）。
+ *
+ * 面板可能是**这一拍刚被展开**的（资料库点「在右栏打开」就是），此时 v-show 的
+ * 布局还没落，`rectOf()` 拿到 0×0 —— 直接建视图会失败成一个看不懂的错误。
+ */
+async function waitForSurface(): Promise<boolean> {
+  for (let i = 0; i < 10; i += 1) {
+    await nextTick();
+    if (rectOf()) return true;
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  setError("占位区未就绪（宽高为 0）");
+  return false;
+}
+
 /** ⟳ = 重载当前 URL（后端把「同 URL 导航」按重载处理：不压历史）。空标签则等同「打开」。 */
 async function reload() {
   const t = active.value;
@@ -525,9 +563,28 @@ watch(activeId, async (_id, oldId) => {
 
 // 可见性总闸：面板开关 **与** 浮层开关都收敛到 viewAllowed——开 → 露头，关 → 让位（保活，不销毁）。
 watch(viewAllowed, (ok) => {
-  if (ok) void showActive();
-  else hideTab(active.value);
+  if (ok) {
+    void showActive();
+    // 有浮层盖着时收到的「打开这个地址」不执行（建视图要占位洞的真实尺寸），
+    // 留在这儿等浮层关掉再消费
+    void consumePendingOpen();
+  } else {
+    hideTab(active.value);
+  }
 });
+
+/**
+ * 消费别的模块留下的待打开地址（`useRightPanel.openInBrowser`）。
+ *
+ * **不消费就留着的两种情况**：面板被折叠（`viewAllowed` 为假）、有浮层盖着。
+ * 那时建视图拿不到尺寸，硬开会失败成一个看不懂的错误——等开关变化时再来。
+ */
+async function consumePendingOpen() {
+  const url = pendingBrowserUrl.value;
+  if (!url || !viewAllowed.value) return;
+  consumePendingBrowserUrl();
+  await openExternally(url);
+}
 
 onMounted(() => {
   ro = new ResizeObserver(scheduleSync);
@@ -557,6 +614,11 @@ onMounted(() => {
   // 常驻层缓冲的增量（挂载前收到的都在它那儿）。
   watch(buffered, () => applyViewEvents(takeViewEvents()));
   watch(pendingFocusViewId, applyPendingFocus);
+
+  // 待打开的地址：面板可能是**挂载之后**才收到请求的（懒挂载——首次点浏览器 tab 才挂），
+  // 也可能是挂载前就压着一条（下面补一次消费）。
+  watch(pendingBrowserUrl, () => void consumePendingOpen());
+  void consumePendingOpen();
 
   // 导航事件订阅（应用逻辑见 `applyNav`）。
   void onBrowserNav(applyNav).then((fn) => {

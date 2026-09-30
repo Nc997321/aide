@@ -236,3 +236,50 @@ describe("ensureTabShown：幂等展开任意 tab（结算卡的「变更面板 
     expect(p.browserEverActive.value).toBe(false);
   });
 });
+
+// 别的模块请求「在右栏打开一个地址」（资料库的网页产物预览走它，spec 2026-09-30 §4.6）。
+// 右栏只记待办 + 展开；消费是 BrowserPanel 自己的事（它的内部状态不对外暴露）。
+describe("openInBrowser：待打开地址的待办与消费", () => {
+  it("展开右栏并记住要打开的地址", () => {
+    const p = useRightPanel();
+    p.collapse(); // 前置：右栏是收起的
+    p.openInBrowser("http://127.0.0.1:8788/p/abc");
+
+    expect(p.tab.value).toBe("browser");
+    expect(p.collapsed.value).toBe(false);
+    expect(p.pendingBrowserUrl.value).toBe("http://127.0.0.1:8788/p/abc");
+  });
+
+  it("消费之后待办清空，不会被第二个面板重复打开", () => {
+    const p = useRightPanel();
+    p.openInBrowser("http://127.0.0.1:8788/p/abc");
+
+    expect(p.consumePendingBrowserUrl()).toBe("http://127.0.0.1:8788/p/abc");
+    expect(p.consumePendingBrowserUrl()).toBeNull();
+    expect(p.pendingBrowserUrl.value).toBeNull();
+  });
+
+  it("连开两个地址时后者覆盖前者（排队没有语义）", () => {
+    const p = useRightPanel();
+    p.openInBrowser("http://127.0.0.1:8788/p/one");
+    p.openInBrowser("http://127.0.0.1:8788/p/two");
+
+    expect(p.pendingBrowserUrl.value).toBe("http://127.0.0.1:8788/p/two");
+  });
+
+  it("已经在浏览器 tab 时不会把面板收起来（幂等展开，不是 toggle）", () => {
+    const p = useRightPanel();
+    p.ensureBrowserShown();
+    p.openInBrowser("http://127.0.0.1:8788/p/abc");
+
+    expect(p.collapsed.value).toBe(false);
+    expect(p.tab.value).toBe("browser");
+  });
+
+  it("懒挂载标记照旧置位（浏览器组件要被挂起来才有人消费待办）", () => {
+    const p = useRightPanel();
+    expect(p.browserEverActive.value).toBe(false);
+    p.openInBrowser("http://127.0.0.1:8788/p/abc");
+    expect(p.browserEverActive.value).toBe(true);
+  });
+});

@@ -19,78 +19,106 @@ function renderSnippet(raw: string): string {
 <template>
   <div class="kb-search">
     <p v-if="props.busy" class="kb-state">检索中…</p>
-    <p v-else-if="!props.result" class="kb-state dim">输入关键词开始检索</p>
+    <p v-else-if="!props.result" class="kb-state">输入关键词开始检索</p>
     <p v-else-if="props.result.hits.length === 0" class="kb-state">
-      没有命中「{{ props.result.query }}」
+      没有命中「{{ props.result.query }}」<br />
+      <small>换个词试试——检索的是正文，中文按词切</small>
     </p>
 
-    <ul v-else class="kb-hits">
-      <li v-for="h in props.result.hits" :key="h.documentId" @click="emit('open', h.documentId)">
-        <div class="kb-hit-head">
-          <span class="kb-hit-title">{{ h.title }}</span>
-          <span class="kb-hit-ver">v{{ h.versionNo }}</span>
-        </div>
-        <!-- v-html 的输入已整体转义，只保留哨兵切出的 <mark> -->
-        <p class="kb-hit-snip" v-html="renderSnippet(h.snippet)" />
-      </li>
-    </ul>
+    <template v-else>
+      <p class="kb-count">{{ props.result.hits.length }} 条命中</p>
+      <ul class="kb-hits">
+        <li v-for="h in props.result.hits" :key="h.documentId" @click="emit('open', h.documentId)">
+          <div class="kb-hit-head">
+            <span class="kb-hit-title">{{ h.title }}</span>
+            <span class="kb-hit-ver">v{{ h.versionNo }}</span>
+          </div>
+          <!-- v-html 的输入已整体转义，只保留哨兵切出的 <mark> -->
+          <p class="kb-hit-snip" v-html="renderSnippet(h.snippet)" />
+        </li>
+      </ul>
+    </template>
   </div>
 </template>
 
 <style scoped>
+/* 结果是一条一条的，不是一叠卡片：分隔靠 hairline，不靠边框盒子。
+   悬停用一条通栏底色（负外边距实现），不画框。 */
+
 .kb-search {
   height: 100%;
   overflow: auto;
-  padding: 16px 26px 40px;
+  padding: 40px 24px 88px;
 }
+.kb-search > * {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* ⚠️ 这里只写上下外边距：左右交给上面 `.kb-search > *` 的 auto 居中。
+   写成 `margin: 0 0 8px` 会把 auto 覆盖成 0，整条竖轴就往左掉。 */
 .kb-state {
-  font-size: 12px;
+  margin-top: 0;
+  margin-bottom: 0;
+  font-size: 13px;
+  line-height: 1.8;
+  color: var(--aide-text-secondary);
+}
+.kb-state small { font-size: 11.5px; color: var(--aide-text-muted); }
+
+.kb-count {
+  margin-top: 0;
+  margin-bottom: 8px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
 }
-.kb-state.dim { opacity: 0.7; }
 
 .kb-hits {
   list-style: none;
-  margin: 0;
+  margin-top: 0;
+  margin-bottom: 0;
   padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
 }
 .kb-hits li {
-  padding: 10px 12px;
-  border: 1px solid var(--aide-border);
-  border-radius: 8px;
+  padding: 14px 12px;
+  margin: 0 -12px;
+  border-bottom: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
-  transition: border-color var(--aide-ease-t);
+  transition: background var(--aide-ease-t);
 }
-.kb-hits li:hover {
-  border-color: var(--aide-accent);
-}
+.kb-hits li:last-child { border-bottom: none; }
+.kb-hits li:hover { background: var(--aide-surface-hover); }
 .kb-hit-head {
   display: flex;
   align-items: baseline;
-  gap: 8px;
+  gap: 10px;
 }
 .kb-hit-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   color: var(--aide-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .kb-hit-ver {
-  font-size: 10px;
+  flex: none;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
+  font-variant-numeric: tabular-nums;
 }
 .kb-hit-snip {
-  margin: 5px 0 0;
-  font-size: 11.5px;
-  line-height: 1.65;
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.7;
   color: var(--aide-text-muted);
 }
 .kb-hit-snip :deep(mark) {
-  background: color-mix(in srgb, var(--aide-accent) 26%, transparent);
+  background: var(--aide-accent-subtle);
   color: var(--aide-text-primary);
-  border-radius: 2px;
-  padding: 0 1px;
+  border-radius: 3px;
+  padding: 0 2px;
 }
 </style>

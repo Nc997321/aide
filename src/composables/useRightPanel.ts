@@ -30,6 +30,16 @@ const wantMaximized = ref(false);
 /** 浏览器组件首次激活才挂（异步 chunk 不在启动时拉），挂上后常驻——保活语义。 */
 const browserEverActive = ref(false);
 
+/**
+ * 待打开的地址。右栏只负责「记下来 + 把浏览器 tab 露出来」，真正去
+ * `browser.create` / `browser.navigate` 的是 `BrowserPanel` 自己——它的内部状态
+ * 不对外暴露（无 props、无 emits、无 defineExpose），这个 ref 是唯一的缝。
+ *
+ * 与 `useBrowserViews` 的 `pendingFocusViewId` 同一范式：**待办 + 消费**，
+ * 而不是「把 URL 塞进别人的私有状态里」。
+ */
+const pendingBrowserUrl = ref<string | null>(null);
+
 /** 浏览器视图此刻该不该露头：视图可见性总闸的一半（另一半是 App 的 overlayLayerOpen）。 */
 const browserActive = computed(() => tab.value === "browser" && !collapsed.value);
 
@@ -82,6 +92,24 @@ function ensureTabShown(id: RightTabId) {
 /** 展开浏览器面板（agent 的 focus 请求走它）。 */
 function ensureBrowserShown() {
   ensureTabShown("browser");
+}
+
+/**
+ * 「给我在右栏把这个地址打开」——资料库的网页产物预览走它。
+ *
+ * 只记待办 + 展开右栏；面板自己消费（见 `consumePendingBrowserUrl`）。
+ * 连开两个地址时后者覆盖前者：待打开的只有一个，排队没有语义。
+ */
+function openInBrowser(url: string) {
+  ensureBrowserShown();
+  pendingBrowserUrl.value = url;
+}
+
+/** 取走待打开的地址（取走即清空，避免第二个面板实例重复打开）。 */
+function consumePendingBrowserUrl(): string | null {
+  const url = pendingBrowserUrl.value;
+  pendingBrowserUrl.value = null;
+  return url;
 }
 
 // ── 宽度：两档（窄工具 tab / 浏览器宽档），值只存内存（跨重启按窗口重算，用户 2026-09-20 定）──
@@ -138,6 +166,9 @@ export function useRightPanel() {
     setMaximized,
     ensureBrowserShown,
     ensureTabShown,
+    pendingBrowserUrl,
+    openInBrowser,
+    consumePendingBrowserUrl,
     widths,
     widthProfile,
     setWidth,
@@ -150,5 +181,6 @@ export function __resetRightPanelForTest() {
   tab.value = "files";
   wantMaximized.value = false;
   browserEverActive.value = false;
+  pendingBrowserUrl.value = null;
   widths.value = { narrow: 0, browser: 0 };
 }

@@ -77,41 +77,44 @@ const vFocus = {
 .kb-form label {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  font-size: 12px;
+  gap: 6px;
+  font-size: 12.5px;
   color: var(--aide-text-secondary);
 }
-.kb-form-hint { font-size: 11px; color: var(--aide-text-muted); margin-left: 6px; }
+.kb-form-hint { font-size: 11.5px; color: var(--aide-text-muted); margin-left: 6px; }
 .kb-form input,
 .kb-form select {
-  padding: 6px 8px;
+  padding: 7px 10px;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--aide-text-primary);
-  background: var(--aide-bg-primary);
-  border: 1px solid var(--aide-border);
-  border-radius: 6px;
+  background: var(--aide-bg-raised);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
   outline: none;
 }
 .kb-form input:focus,
-.kb-form select:focus { border-color: var(--aide-accent); }
-.kb-form-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.kb-form select:focus { box-shadow: var(--aide-accent-ring); }
+.kb-form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .kb-btn {
-  padding: 6px 12px;
+  padding: 7px 14px;
   font: inherit;
-  font-size: 12px;
-  border-radius: 6px;
-  border: 1px solid var(--aide-border);
-  background: none;
+  font-size: 13px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border-subtle);
+  background: var(--aide-surface-default);
   color: var(--aide-text-secondary);
   cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-btn:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.kb-btn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 .kb-btn.primary {
   border-color: transparent;
   background: var(--aide-accent);
   color: var(--aide-text-on-accent);
-  font-weight: 500;
+  box-shadow: var(--aide-highlight-inset);
 }
+.kb-btn.primary:hover { background: var(--aide-accent-hover); }
 .kb-btn.primary:disabled { opacity: 0.45; cursor: default; }
 </style>

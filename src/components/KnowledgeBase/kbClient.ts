@@ -116,6 +116,8 @@ export interface KbDocumentSummary {
   parentId: string | null;
   /** "doc" | "folder"。老服务端不带这个字段，消费方按 doc 兜底。 */
   kind?: "doc" | "folder";
+  /** 内容的存储类型（`text/markdown` / `text/html`）。老服务端不带 → 按 markdown 兜底。 */
+  mime?: string;
   slug: string;
   title: string;
   versionNo: number;
@@ -134,7 +136,8 @@ export interface KbSearchHit {
   title: string;
   versionNo: number;
   rank: number;
-  /** 带 <mark> 的摘要片段，后端 ts_headline 产出 */
+  /** 摘要片段，后端 ts_headline 产出。高亮是 `[[HL]]…[[/HL]]` 哨兵而不是 HTML 标签——
+   *  渲染时先整体转义再按哨兵切（见 KbSearchView.renderSnippet）。 */
   snippet: string;
 }
 
@@ -161,6 +164,17 @@ export interface KbLockHolder {
 export interface KbLockView {
   held: boolean;
   holder: KbLockHolder | null;
+}
+
+/** 上传结果（IngestResponse 的镜像）。warnings 是解析器自报的降级信息，
+ *  要如实显示给用户（「导入后内容少了」得能解释清楚）。 */
+export interface KbIngestResult {
+  documentId: string;
+  revisionId: string;
+  title: string;
+  /** 实际生效的解析后端，排障用 */
+  backend: string;
+  warnings: string[];
 }
 
 /** 服务端错误体：{ error, message }。message 是中文，直接给用户看。 */
@@ -205,13 +219,7 @@ async function request<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch {
-    // fetch 只在网络层失败（连不上 / DNS / CORS 被拦）才走到这里。
-    // 最常见的成因是 knowledge-server 没起，提示要能直接指到这一点。
-    throw new KbError(
-      "network",
-      `连不上知识库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
-      0,
-    );
+    throw networkError();
   }
 
   if (resp.status === 401) {
@@ -222,16 +230,60 @@ async function request<T>(
   const text = await resp.text();
   const data: unknown = text ? JSON.parse(text) : null;
 
-  if (!resp.ok) {
-    const d = data as { error?: string; message?: string } | null;
-    throw new KbError(
-      d?.error ?? "http_error",
-      d?.message ?? `请求失败（HTTP ${resp.status}）`,
-      resp.status,
-    );
-  }
+  if (!resp.ok) throw errorFrom(resp.status, data);
 
   return data as T;
+}
+
+/** fetch 抛异常 = **网络层**失败（连不上 / DNS / CORS 被拦）。最常见的成因是服务没起，
+ *  提示要能直接指到这一点。三条自走 fetch 的路径（JSON / 上传 / 取资源）共用它。 */
+function networkError(): KbError {
+  return new KbError(
+    "network",
+    `连不上知识库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
+    0,
+  );
+}
+
+/** 非 2xx → KbError。服务端的 `{ error, message }` 是中文，直接给用户看。 */
+function errorFrom(status: number, data: unknown): KbError {
+  const d = data as { error?: string; message?: string } | null;
+  return new KbError(
+    d?.error ?? "http_error",
+    d?.message ?? `请求失败（HTTP ${status}）`,
+    status,
+  );
+}
+
+/**
+ * 带进度的 POST。**全文件唯一不走 fetch 的一处**：fetch 没有上传进度事件，
+ * 而「传一个 30 MB 的 pdf，界面上一点动静都没有」正是这条要修的事。
+ *
+ * 进度封顶在 99%：字节传完之后服务端还要解析 + 落库（docx 要几秒），
+ * 那段时间不是"还在传"，调用方据此把文案换成「正在处理…」。
+ */
+function postWithProgress(
+  url: string,
+  headers: Record<string, string>,
+  form: FormData,
+  onProgress?: (pct: number) => void,
+): Promise<{ status: number; text: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && e.total > 0) {
+        onProgress?.(Math.min(99, Math.round((e.loaded / e.total) * 100)));
+      }
+    };
+    xhr.onload = () => resolve({ status: xhr.status, text: xhr.responseText });
+    xhr.onerror = () => reject(networkError());
+    // 取消没有入口（界面上没有中断上传的按钮），但真被取消时要说清楚，
+    // 不能伪装成网络故障
+    xhr.onabort = () => reject(new KbError("aborted", "上传被中断了，请重试", 0));
+    xhr.send(form);
+  });
 }
 
 // ── API 门面（与 packages/aide-sdk/src/api.ts 同款平铺形态）──
@@ -393,9 +445,70 @@ export const kb = {
     });
   },
 
+  /** 签一张取件票（预览地址）。要 Bearer——票**只换得来这一份条目**的只读字节，
+   *  换不来账号、换不来写。地址形如 `${getBaseUrl()}/p/${token}`，
+   *  有效期见服务端 PREVIEW_TTL_SECS（10 分钟），过期重新点一次即可。 */
+  previewToken(id: string): Promise<{ token: string; expiresAt: number }> {
+    return request("POST", `/api/documents/${id}/preview-token`);
+  },
+
   // 摄取
   formats(): Promise<{ extensions: string[] }> {
     return request("GET", "/api/ingest/formats");
+  },
+
+  /** 上传一个文件进来。`spaceId` 必填、`parentId` 可选（缺省进根）。
+   *
+   *  **认哪些格式由服务端说了算**（`formats()`）：调用方先拿它做 accept 与预检，
+   *  不认的当场拒绝——不预判、不硬编格式表。
+   *
+   *  不复用 `request()`：那个内核只发 JSON，这是 multipart。
+   */
+  async ingest(input: {
+    spaceId: string;
+    parentId?: string | null;
+    file: File;
+    /** 字节上传进度 0..100（**不含**服务端解析落库的时间）。可选。 */
+    onProgress?: (pct: number) => void;
+  }): Promise<KbIngestResult> {
+    const params = new URLSearchParams({ spaceId: input.spaceId });
+    if (input.parentId) params.set("parentId", input.parentId);
+
+    const form = new FormData();
+    // 字段名按服务端 `next_field()` 的约定（它取第一个字段当文件）
+    form.append("file", input.file, input.file.name);
+
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    // ⚠️ 不设 Content-Type：multipart 的 boundary 必须由浏览器生成
+
+    const { status, text } = await postWithProgress(
+      `${getBaseUrl()}/api/ingest?${params}`,
+      headers,
+      form,
+      input.onProgress,
+    );
+
+    if (status === 401) setToken(null);
+
+    let data: unknown = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      // 413 这类拒绝没有 JSON 体（axum 的 body-limit 拒绝是纯文本），别让解析炸掉
+      data = null;
+    }
+
+    if (status < 200 || status >= 300) {
+      // 服务端的 32 MiB 上限（DefaultBodyLimit，见 knowledge-server/src/api/mod.rs）：
+      // 给可读的话，别把裸 413 抛给用户
+      if (status === 413) {
+        throw new KbError("too_large", "文件太大，单个文件最大 32 MB", 413);
+      }
+      throw errorFrom(status, data);
+    }
+    return data as KbIngestResult;
   },
 
   /** 取资源字节（文档正文里 `asset://<uuid>` 引用的图片）。
@@ -417,12 +530,7 @@ export const kb = {
     try {
       resp = await fetch(url, { headers });
     } catch {
-      // fetch 只在网络层失败才走到这里，最常见成因是服务没起
-      throw new KbError(
-        "network",
-        `连不上知识库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
-        0,
-      );
+      throw networkError();
     }
 
     if (resp.status === 401) setToken(null);

@@ -81,10 +81,12 @@ function fmt(iso: string): string {
         </span>
         <div class="kb-hist-main">
           <span class="kb-hist-title">{{ r.title }}</span>
+          <!-- 作者与时间靠间距分开，不用中点连（中点是"模板感"最典型的记号之一） -->
           <span class="kb-hist-meta">
-            {{ r.authorName ?? "未知作者" }} · {{ fmt(r.createdAt) }}
-            <template v-if="r.changeNote"> · {{ r.changeNote }}</template>
+            <span class="kb-hist-author">{{ r.authorName ?? "未知作者" }}</span>
+            <time>{{ fmt(r.createdAt) }}</time>
           </span>
+          <span v-if="r.changeNote" class="kb-hist-note">{{ r.changeNote }}</span>
         </div>
         <span v-if="r.versionNo === doc.versionNo" class="kb-hist-cur">当前</span>
         <button
@@ -102,94 +104,112 @@ function fmt(iso: string): string {
 </template>
 
 <style scoped>
+/* 版本列表与检索结果同一套：一条一条 + hairline，没有卡片、没有胶囊。 */
+
 .kb-history {
   height: 100%;
   overflow: auto;
-  padding: 16px 20px 32px;
+  padding: 40px 24px 88px;
+}
+.kb-history > * {
+  max-width: 720px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .kb-hist-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
-  margin-bottom: 12px;
-  padding-bottom: 10px;
-  border-bottom: 1px solid var(--aide-border);
+  margin-bottom: 20px;
 }
 .kb-hist-head h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 600;
   color: var(--aide-text-primary);
+  letter-spacing: -0.005em;
 }
 .kb-hist-list {
   list-style: none;
-  margin: 0;
+  /* 只写上下：左右交给 `.kb-history > *` 的 auto 居中 */
+  margin-top: 0;
+  margin-bottom: 0;
   padding: 0;
 }
 .kb-hist-row {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 4px;
-  border-bottom: 1px solid var(--aide-border);
+  align-items: flex-start;
+  gap: 16px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--aide-border-subtle);
 }
+.kb-hist-row:last-child { border-bottom: none; }
+/* 版本号是静默的等宽小字，不是胶囊 */
 .kb-hist-ver {
-  flex-shrink: 0;
-  min-width: 36px;
-  padding: 1px 6px;
-  border-radius: 999px;
-  font-size: 11px;
+  flex: none;
+  width: 34px;
+  padding-top: 1px;
+  font-size: 12px;
   font-family: var(--aide-font-mono);
-  text-align: center;
-  background: var(--aide-bg-deep);
   color: var(--aide-text-muted);
+  font-variant-numeric: tabular-nums;
 }
-.kb-hist-ver.cur {
-  color: var(--aide-accent);
-}
+.kb-hist-ver.cur { color: var(--aide-accent); }
 .kb-hist-main {
   flex: 1;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
+  gap: 3px;
 }
 .kb-hist-title {
-  font-size: 12px;
+  font-size: 14px;
   color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .kb-hist-meta {
-  font-size: 10px;
+  display: flex;
+  gap: 12px;
+  font-size: 11.5px;
   color: var(--aide-text-muted);
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
 }
+.kb-hist-author { flex: none; }
+.kb-hist-meta time { font-variant-numeric: tabular-nums; }
+.kb-hist-note {
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: var(--aide-text-secondary);
+}
 .kb-hist-cur {
-  flex-shrink: 0;
-  font-size: 10px;
+  flex: none;
+  font-size: 11.5px;
   color: var(--aide-accent);
 }
 .kb-link {
-  flex-shrink: 0;
+  flex: none;
   border: none;
   background: none;
-  padding: 0;
-  font-size: 11px;
-  color: var(--aide-accent);
+  padding: 2px 0;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
   cursor: pointer;
+  transition: color var(--aide-ease-t);
 }
-.kb-link:disabled { opacity: 0.5; cursor: default; }
+.kb-link:hover:not(:disabled) { color: var(--aide-text-primary); }
+.kb-link:disabled { opacity: 0.4; cursor: default; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
 .kb-err {
-  margin: 0 0 8px;
-  font-size: 11px;
-  color: var(--aide-error, #d0453b);
+  margin: 0 0 12px;
+  font-size: 12px;
+  color: var(--aide-danger);
 }
 .kb-none {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--aide-text-muted);
 }
 </style>

@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>资料库第一步 · 产品原型（逻辑确认）</title>
+<style>
+/* ── 主题 token（glass 实值，抄自 src/themes/glass.ts） ── */
+:root{
+  --aide-bg-deep: rgba(8,10,16,.82);
+  --aide-bg-base: rgba(17,19,29,.52);
+  --aide-bg-raised: rgba(24,26,38,.48);
+  --aide-surface-default: rgba(255,255,255,.06);
+  --aide-surface-hover: rgba(255,255,255,.1);
+  --aide-surface-active: rgba(255,255,255,.14);
+  --aide-text-primary:#eef0f8;
+  --aide-text-secondary:#b9bdd0;
+  --aide-text-muted:#7c8296;
+  --aide-accent:#a5b8ff;
+  --aide-accent-subtle: rgba(150,170,255,.16);
+  --aide-agent-accent:#d8a0c0;
+  --aide-success:#6ee7a8;
+  --aide-warning:#fcd34d;
+  --aide-danger:#f87171;
+  --aide-border: rgba(255,255,255,.1);
+  --aide-border-subtle: rgba(255,255,255,.06);
+  --aide-border-strong: rgba(255,255,255,.17);
+  --aide-radius-sm:8px;
+  --aide-radius-md:10px;
+  --aide-radius-lg:14px;
+  --aide-font-mono:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace;
+  --aide-font-ui:'Maple Mono NF CN','Inter Variable','PingFang SC',sans-serif;
+  --aide-ambient-scene:
+    radial-gradient(560px 380px at 10% -8%, rgba(124,108,255,.32), transparent 65%),
+    radial-gradient(520px 420px at 96% 6%, rgba(64,190,220,.22), transparent 65%),
+    radial-gradient(640px 340px at 60% 112%, rgba(210,110,190,.16), transparent 70%), #0a0b11;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:var(--aide-font-ui);color:var(--aide-text-primary);
+  background:var(--aide-ambient-scene);min-height:100vh;padding:22px 26px 80px;font-size:13px;-webkit-font-smoothing:antialiased}
+h1{font-size:16px;font-weight:600;letter-spacing:.2px}
+.page-head p{margin-top:8px;font-size:12px;color:var(--aide-text-muted);line-height:1.85;max-width:1000px}
+.page-head b{color:var(--aide-text-secondary);font-weight:600}
+code{font-family:var(--aide-font-mono);font-size:11.5px;color:var(--aide-text-secondary)}
+kbd{font-family:var(--aide-font-mono);font-size:11px;background:var(--aide-surface-default);
+  border:1px solid var(--aide-border);border-radius:5px;padding:1px 5px;color:var(--aide-text-secondary)}
+
+/* 本次新增的标记 */
+.new{position:relative}
+body.mark-new .new{box-shadow:inset 3px 0 0 var(--aide-agent-accent)}
+.badge-new{display:inline-block;font-size:10px;line-height:1.6;padding:0 6px;border-radius:999px;
+  background:rgba(216,160,192,.16);color:var(--aide-agent-accent);border:1px solid rgba(216,160,192,.3);
+  margin-left:6px;vertical-align:middle}
+.legend{display:flex;gap:16px;align-items:center;margin-top:12px;flex-wrap:wrap;font-size:12px;color:var(--aide-text-muted)}
+.legend label{display:flex;gap:6px;align-items:center;cursor:pointer}
+.swatch{width:10px;height:10px;border-radius:3px;background:var(--aide-agent-accent);display:inline-block}
+
+/* ── 模拟 Aide 窗口 ── */
+.win{margin-top:16px;border:1px solid var(--aide-border);border-radius:var(--aide-radius-lg);
+  background:var(--aide-bg-deep);overflow:hidden;display:flex;height:620px}
+.rail{width:44px;border-right:1px solid var(--aide-border-subtle);display:flex;flex-direction:column;
+  align-items:center;padding:10px 0;gap:8px;background:var(--aide-bg-base)}
+.rail i{width:26px;height:26px;border-radius:7px;background:var(--aide-surface-default);
+  display:flex;align-items:center;justify-content:center;font-style:normal;font-size:13px;color:var(--aide-text-muted)}
+.rail i.on{background:var(--aide-accent-subtle);color:var(--aide-accent)}
+.kb{flex:1;display:flex;flex-direction:column;min-width:0}
+.kb-head{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--aide-border-subtle)}
+.kb-head h2{font-size:13px;font-weight:600}
+.spaces{display:flex;gap:4px}
+.spaces button{font:inherit;font-size:12px;padding:3px 9px;border-radius:var(--aide-radius-sm);
+  border:1px solid transparent;background:transparent;color:var(--aide-text-muted);cursor:pointer}
+.spaces button:hover{background:var(--aide-surface-hover)}
+.spaces button.on{background:var(--aide-accent-subtle);color:var(--aide-accent);border-color:rgba(165,184,255,.25)}
+.search{flex:1;max-width:280px;margin-left:auto;display:flex;gap:6px}
+.search input{flex:1;font:inherit;font-size:12px;padding:4px 9px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-primary)}
+.search input:focus{outline:none;border-color:var(--aide-accent)}
+.kb-body{flex:1;display:flex;min-height:0}
+.tree{width:238px;border-right:1px solid var(--aide-border-subtle);overflow:auto;padding:8px 6px;background:rgba(0,0,0,.12)}
+.tree-row{display:flex;align-items:center;gap:5px;padding:4px 6px;border-radius:var(--aide-radius-sm);
+  cursor:pointer;font-size:12.5px;color:var(--aide-text-secondary);white-space:nowrap}
+.tree-row:hover{background:var(--aide-surface-hover)}
+.tree-row.on{background:var(--aide-surface-active);color:var(--aide-text-primary)}
+.tree-row .caret{width:12px;color:var(--aide-text-muted);font-size:10px;flex:none}
+.tree-row .ico{flex:none;font-size:12px}
+.tree-row .t{overflow:hidden;text-overflow:ellipsis}
+.tree-actions{display:flex;gap:6px;padding:6px 8px 8px}
+.tree-actions button{font:inherit;font-size:11.5px;padding:3px 8px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary);cursor:pointer}
+.tree-actions button:hover{background:var(--aide-surface-hover);color:var(--aide-text-primary)}
+.doc{flex:1;display:flex;flex-direction:column;min-width:0}
+.doc-head{display:flex;align-items:center;gap:8px;padding:9px 14px;border-bottom:1px solid var(--aide-border-subtle)}
+.doc-head .title{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.doc-head .mime{font-family:var(--aide-font-mono);font-size:10.5px;color:var(--aide-text-muted);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border-subtle);border-radius:999px;padding:1px 7px}
+.tabs{margin-left:auto;display:flex;gap:3px}
+.tabs button{font:inherit;font-size:12px;padding:3px 9px;border-radius:var(--aide-radius-sm);border:1px solid transparent;
+  background:transparent;color:var(--aide-text-muted);cursor:pointer}
+.tabs button:hover{background:var(--aide-surface-hover)}
+.tabs button.on{background:var(--aide-surface-active);color:var(--aide-text-primary)}
+.doc-body{flex:1;overflow:auto;padding:16px 20px}
+.doc-body pre{font-family:var(--aide-font-mono);font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;
+  background:rgba(0,0,0,.25);border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);padding:12px}
+
+/* markdown 渲染（够用即可） */
+.md h1,.md h2,.md h3{margin:14px 0 8px;line-height:1.4}
+.md h1{font-size:18px}.md h2{font-size:15px}.md h3{font-size:13.5px}
+.md p{margin:8px 0;line-height:1.85;color:var(--aide-text-secondary)}
+.md li{margin:4px 0 4px 18px;line-height:1.8;color:var(--aide-text-secondary)}
+.md code{background:rgba(0,0,0,.3);padding:1px 4px;border-radius:4px}
+
+/* 表格 */
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th,td{border:1px solid var(--aide-border-subtle);padding:6px 10px;text-align:left}
+th{background:var(--aide-surface-default);font-weight:600;color:var(--aide-text-primary)}
+td{color:var(--aide-text-secondary)}
+tr:nth-child(even) td{background:rgba(255,255,255,.02)}
+
+/* 说明卡 */
+.card{border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);background:var(--aide-bg-raised);padding:14px 16px}
+.card h3{font-size:13px;margin-bottom:6px}
+.card p{font-size:12px;color:var(--aide-text-muted);line-height:1.85}
+.card .row{display:flex;gap:8px;margin-top:12px;flex-wrap:wrap}
+.card .row button{font:inherit;font-size:12px;padding:5px 12px;border-radius:var(--aide-radius-sm);cursor:pointer;
+  background:var(--aide-accent-subtle);border:1px solid rgba(165,184,255,.3);color:var(--aide-accent)}
+.card .row button:hover{background:rgba(150,170,255,.24)}
+.card .row button.ghost{background:var(--aide-surface-default);border-color:var(--aide-border);color:var(--aide-text-secondary)}
+
+/* right pane（模拟右栏浏览器） */
+.rp{width:360px;flex:none;border-left:1px solid var(--aide-border);display:none;flex-direction:column;background:var(--aide-bg-base)}
+.rp.on{display:flex}
+.rp-head{display:flex;align-items:center;gap:8px;padding:7px 10px;border-bottom:1px solid var(--aide-border-subtle)}
+.rp-head .t{font-size:12px;font-weight:600}
+.rp-head button{margin-left:auto;font:inherit;font-size:11.5px;padding:2px 8px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary);cursor:pointer}
+.addr{display:flex;gap:6px;align-items:center;padding:6px 10px;border-bottom:1px solid var(--aide-border-subtle);font-size:11px}
+.addr span{font-family:var(--aide-font-mono);color:var(--aide-text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.addr .ttl{margin-left:auto;flex:none;color:var(--aide-warning)}
+.rp-body{flex:1;display:flex;align-items:center;justify-content:center;background:#fff;color:#111;overflow:auto}
+.rp-body iframe{width:100%;height:100%;border:0;background:#fff}
+.rp-empty{padding:24px;text-align:center;color:var(--aide-text-muted);font-size:12px;line-height:1.9;background:var(--aide-bg-base)}
+
+/* 搜索 / 历史 */
+.hits{display:flex;flex-direction:column;gap:8px}
+.hit{border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);padding:10px 12px;cursor:pointer;background:var(--aide-bg-raised)}
+.hit:hover{border-color:var(--aide-border-strong)}
+.hit .h{font-size:12.5px;font-weight:600;margin-bottom:5px}
+.hit .s{font-size:12px;color:var(--aide-text-muted);line-height:1.8}
+.hit mark{background:rgba(252,211,77,.28);color:var(--aide-warning);border-radius:3px;padding:0 2px}
+.empty{padding:26px;text-align:center;color:var(--aide-text-muted);font-size:12px;line-height:1.9}
+.rev{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--aide-border-subtle);padding:9px 2px;font-size:12px}
+.rev .no{font-family:var(--aide-font-mono);color:var(--aide-accent);flex:none}
+.rev .meta{color:var(--aide-text-muted);flex:1}
+.rev button{font:inherit;font-size:11.5px;padding:2px 9px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary);cursor:pointer}
+
+/* （作者维度的人看标识不在这里——那是产品第二步，原型只放本次要做的） */
+
+/* 登录兜底页 */
+.gate{flex:1;display:flex;align-items:center;justify-content:center;padding:24px}
+.gate .box{width:340px;border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);
+  background:var(--aide-bg-raised);padding:18px 20px;text-align:center}
+.gate h3{font-size:13.5px;margin-bottom:8px}
+.gate p{font-size:12px;color:var(--aide-text-muted);line-height:1.85;margin-bottom:14px}
+.gate button{font:inherit;font-size:12.5px;padding:6px 16px;border-radius:var(--aide-radius-sm);cursor:pointer;
+  background:var(--aide-accent-subtle);border:1px solid rgba(165,184,255,.3);color:var(--aide-accent)}
+
+/* 演示台 */
+.bench{margin-top:22px;border:1px solid var(--aide-border);border-radius:var(--aide-radius-lg);
+  background:var(--aide-bg-base);padding:16px 18px}
+.bench h2{font-size:13.5px;margin-bottom:4px}
+.bench .sub{font-size:12px;color:var(--aide-text-muted);margin-bottom:14px;line-height:1.8}
+.bench-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+.bench-card{border:1px solid var(--aide-border-subtle);border-radius:var(--aide-radius-md);padding:12px 14px;background:rgba(0,0,0,.16)}
+.bench-card h4{font-size:12.5px;margin-bottom:6px}
+.bench-card p{font-size:11.5px;color:var(--aide-text-muted);line-height:1.8;margin-bottom:10px}
+.bench-card .row{display:flex;gap:6px;flex-wrap:wrap}
+.bench-card button{font:inherit;font-size:11.5px;padding:4px 10px;border-radius:var(--aide-radius-sm);cursor:pointer;
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary)}
+.bench-card button:hover{background:var(--aide-surface-hover);color:var(--aide-text-primary)}
+.out{margin-top:10px;font-family:var(--aide-font-mono);font-size:11px;color:var(--aide-text-muted);
+  background:rgba(0,0,0,.3);border-radius:var(--aide-radius-sm);padding:7px 9px;white-space:pre-wrap;line-height:1.7;min-height:30px}
+.toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:var(--aide-bg-raised);
+  border:1px solid var(--aide-border-strong);border-radius:var(--aide-radius-md);padding:9px 16px;font-size:12.5px;
+  color:var(--aide-text-primary);opacity:0;transition:opacity .18s;pointer-events:none;z-index:20}
+.toast.on{opacity:1}
+</style>
+</head>
+<body class="mark-new">
+
+<div class="page-head">
+  <h1>资料库（Aide 的产物库）· 第一步产品原型</h1>
+  <p>
+    这份原型只用来确认<b>逻辑与流程</b>，视觉不评价。左边那根<b>粉色竖线</b>标出的是<b>本次（第一步）要新增或改动</b>的东西，其余是现状（拿来当上下文）。
+    带 <span class="badge-new">本次</span> 的都是新的。
+  </p>
+  <p>
+    <b>这份原型里出现的东西，全部是本次要实现的</b>——没有"预告"，没有"以后再说"。看到即交付。
+  </p>
+  <p>
+    <b>建议按顺序试一遍</b>：① 打开就是主界面，没有登录页 → ② 点树里的 <code>复盘报告.html</code> → ③ 点「在右栏打开」，看网页在右边跑起来
+    → ④ 点「让它过期」再点一次打开，看失效提示 → ⑤ 点树顶的「↑ 上传」真传一个文件，或点演示台第三个按钮传一个 <code>.csv</code> 看它被<b>当场拒掉</b>
+    → ⑥ 顶部搜索点两个词，看<b>命中与不命中的差别</b>。
+  </p>
+  <div class="legend">
+    <label><input type="checkbox" id="mk" checked> <span class="swatch"></span> 标出本次改动</label>
+    <span>·</span>
+    <label><input type="checkbox" id="fragment"> 网页预览用「碎片版」（没有 &lt;html&gt;/&lt;body&gt; 的片段）</label>
+  </div>
+</div>
+
+<!-- ══ 模拟 Aide 窗口 ══ -->
+<div class="win">
+  <div class="rail">
+    <i class="on">✦</i><i>▤</i><i>⎇</i><i>◫</i><i>⚙</i>
+  </div>
+  <div class="kb">
+    <div class="kb-head">
+      <h2>资料库</h2>
+      <div class="spaces" id="spaces"></div>
+      <div class="search new">
+        <input id="q" placeholder="搜索资料库…（回车）">
+        <button class="ghost" id="go" style="font:inherit;font-size:12px;padding:4px 10px;border-radius:var(--aide-radius-sm);background:var(--aide-surface-default);border:1px solid var(--aide-border);color:var(--aide-text-secondary);cursor:pointer">搜</button>
+      </div>
+    </div>
+    <div class="kb-body">
+      <div class="tree">
+        <div class="tree-actions new">
+          <button data-new="folder">+ 文件夹</button>
+          <button data-new="doc">+ 文档</button>
+          <button data-upload>↑ 上传</button>
+          <input type="file" id="upfile" style="display:none">
+        </div>
+        <div id="tree"></div>
+      </div>
+      <div class="doc">
+        <div class="doc-head" id="dochead"></div>
+        <div class="doc-body" id="docbody"></div>
+      </div>
+    </div>
+  </div>
+  <div class="rp new" id="rp">
+    <div class="rp-head">
+      <span class="t">内嵌浏览器</span>
+      <button id="rpclose">关闭</button>
+    </div>
+    <div class="addr">
+      <span id="addr">about:blank</span>
+      <span class="ttl" id="ttl"></span>
+    </div>
+    <div class="rp-body" id="rpbody"></div>
+  </div>
+</div>
+
+<!-- ══ 演示台 ══ -->
+<div class="bench">
+  <h2>状态演示台</h2>
+  <div class="sub">把平时很难等到的状态直接摆出来看。</div>
+  <div class="bench-grid">
+
+    <div class="bench-card">
+      <h4>凭据状态<span class="badge-new">本次</span></h4>
+      <p>面板打开时用本地凭据<b>静默进入</b>。只有凭据失效才落登录兜底页；网络故障<b>不清凭据</b>，只提示重试。</p>
+      <div class="row">
+        <button data-auth="ok">正常（已登录）</button>
+        <button data-auth="expired">凭据失效</button>
+        <button data-auth="network">连不上服务</button>
+      </div>
+      <div class="out" id="out-auth">当前：已登录，直接进主界面</div>
+    </div>
+
+    <div class="bench-card">
+      <h4>取件地址的有效期<span class="badge-new">本次</span></h4>
+      <p>预览地址是<b>短时票据</b>（这里压缩成 30 秒方便看）。过期、或服务重启后，必须<b>明确失效</b>而不是白屏。</p>
+      <div class="row">
+        <button id="expire">立刻让所有票据过期</button>
+        <button id="reopen">重新签一张</button>
+      </div>
+      <div class="out" id="out-token">尚未签发</div>
+    </div>
+
+    <div class="bench-card">
+      <h4>搜索：脚本内容不该被搜到<span class="badge-new">本次</span></h4>
+      <p>网页条目存的是<b>源码</b>，但可搜文本是<b>剥掉标记后的正文</b>。点下面两个词看差别。</p>
+      <div class="row">
+        <button data-q="季度复盘">搜「季度复盘」（正文）</button>
+        <button data-q="secretName">搜「secretName」（脚本里）</button>
+      </div>
+      <div class="out" id="out-search">—</div>
+    </div>
+
+    <div class="bench-card">
+      <h4>上传入口：认哪些格式<span class="badge-new">本次</span></h4>
+      <p>资料库只收<b>它认得的</b>格式。传一个不认的，要<b>当场说清</b>，不能默默收下再显示成乱码。</p>
+      <div class="row">
+        <button data-up="md">传一个 .md</button>
+        <button data-up="html">传一个 .html</button>
+        <button data-up="csv">传一个 .csv（不该收）</button>
+      </div>
+      <div class="out" id="out-up">当前认：md / markdown / txt / docx / pdf / html</div>
+    </div>
+
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ════════════════════════════════════════════════════════════
+   样例数据。html 里含 <script>，所以闭合标签写成 <\/script>——
+   HTML 解析器按字节找 "</script"，带反斜杠就不会提前截断。
+   ════════════════════════════════════════════════════════════ */
+const HTML_SAMPLE = `<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>一季度复盘</title>
+<style>
+  body{font-family:system-ui,sans-serif;margin:0;padding:28px;background:#f6f7fb;color:#1c2030}
+  h1{font-size:22px;margin:0 0 4px}
+  .sub{color:#6b7280;font-size:13px;margin-bottom:20px}
+  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .kpi{background:#fff;border:1px solid #e5e7f0;border-radius:10px;padding:14px}
+  .kpi .n{font-size:24px;font-weight:700;color:#3b5bdb}
+  .kpi .l{font-size:12px;color:#6b7280;margin-top:4px}
+  .note{margin-top:20px;font-size:13px;color:#374151;line-height:1.9}
+  #tick{color:#0f9d7a;font-weight:600}
+<\/style>
+</head>
+<body>
+  <h1>一季度复盘</h1>
+  <div class="sub">生成于 2026-09-30 · 数据来自项目记录</div>
+  <div class="grid">
+    <div class="kpi"><div class="n">18</div><div class="l">已完成需求</div></div>
+    <div class="kpi"><div class="n">3</div><div class="l">延期项</div></div>
+    <div class="kpi"><div class="n">92%</div><div class="l">按期交付率</div></div>
+  </div>
+  <div class="note">
+    本季度最值得记的一条：把「先写测试」当默认动作之后，返工次数明显下降。<br>
+    页面已运行的秒数：<span id="tick">0</span>（这行字在动，说明脚本真的在执行）
+  </div>
+  <script>
+    var s = 0;
+    setInterval(function () {
+      s = s + 1;
+      document.getElementById('tick').textContent = s;
+      var secretName = 'quarterly_secret_token';   /* 这一串只出现在脚本里 */
+    }, 1000);
+  <\/script>
+</body>
+</html>`;
+
+// 碎片版：agent 经常只给一个片段，没有 <html>/<body>
+const HTML_FRAGMENT = `<h2 style="font-family:system-ui;margin:0 0 10px">本周看板</h2>
+<div style="font-family:system-ui;display:flex;gap:10px">
+  <div style="flex:1;background:#eef2ff;border-radius:10px;padding:14px">
+    <div style="font-size:22px;font-weight:700;color:#3b5bdb">7</div>
+    <div style="font-size:12px;color:#6b7280">进行中</div>
+  </div>
+  <div style="flex:1;background:#ecfdf5;border-radius:10px;padding:14px">
+    <div style="font-size:22px;font-weight:700;color:#0f9d7a">12</div>
+    <div style="font-size:12px;color:#6b7280">已完成</div>
+  </div>
+</div>
+<p style="font-family:system-ui;font-size:13px;color:#374151">这是一个没有 html/body 外壳的片段——浏览器照样能渲染。</p>`;
+
+const SITEMAP_SAMPLE = `<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>站点地图</title>
+<style>body{font-family:system-ui;padding:24px;background:#fff}ul{line-height:2;font-size:14px}</style>
+</head>
+<body><h1>站点地图</h1><ul><li>/ 首页</li><li>/docs 文档</li><li>/pricing 定价</li></ul></body>
+</html>`;
+
+const MD_SAMPLE = `# 数据说明
+
+这份文档说明复盘报告里每个数字的口径。
+
+## 指标口径
+
+- **已完成需求**：以任务关闭时间为准，不按创建时间
+- **延期项**：超过承诺日期仍未关闭
+- **按期交付率**：按期关闭 / 全部关闭
+
+> 报告页由会话生成，口径变更后要重新生成一次。`;
+
+let seq = 0;
+const uid = (p) => p + (++seq);
+
+const DB = {
+  spaces: [{ id: "s1", name: "我的资料库" }],
+  docs: [
+    { id: "d2", space: "s1", parent: null, kind: "folder", title: "一季度复盘" },
+    { id: "d3", space: "s1", parent: "d2", kind: "doc", mime: "text/html", title: "复盘报告.html", content: HTML_SAMPLE, frag: HTML_FRAGMENT },
+    { id: "d1", space: "s1", parent: "d2", kind: "doc", mime: "text/markdown", title: "数据说明.md", content: MD_SAMPLE },
+    { id: "d8", space: "s1", parent: null, kind: "doc", mime: "text/html", title: "站点地图.html", content: SITEMAP_SAMPLE },
+  ],
+  revisions: {
+    d1: [
+      { no: 3, at: "2026-09-30 14:02", kind: "human", by: "heaven", note: "补口径说明", cur: true },
+      { no: 2, at: "2026-09-30 11:40", kind: "ai", session: "一季度复盘", model: "deepseek-v4-pro", note: "" },
+      { no: 1, at: "2026-09-29 20:11", kind: "ai", session: "一季度复盘", model: "deepseek-v4-pro", note: "初稿" },
+    ],
+    d3: [
+      { no: 2, at: "2026-09-30 15:20", kind: "ai", session: "一季度复盘", model: "deepseek-v4-pro", note: "" , cur: true },
+      { no: 1, at: "2026-09-30 15:02", kind: "ai", session: "一季度复盘", model: "deepseek-v4-pro", note: "初稿" },
+    ],
+  },
+};
+
+const S = {
+  space: "s1",
+  open: new Set(["d2"]),
+  sel: "d3",
+  view: "doc",      // doc | history | search
+  auth: "ok",       // ok | expired | network
+  marks: true,
+  fragment: false,
+  tokens: new Map(), // token -> { docId, expiresAt }
+  lastUrl: "",
+  ticks: [],
+};
+
+/* ── 可搜文本：与 knowledge-server/src/domain/search_text.rs 同一条规则 ── */
+function searchText(mime, content) {
+  if (mime !== "text/html") return content;
+  return content
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<[^>]*>/g, " ")
+    .split(/\s+/).filter(Boolean).join(" ");
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/* ── markdown 渲染（够用即可，不追求完整） ── */
+function renderMd(src) {
+  const out = [];
+  let inFence = false, inList = false;
+  const inline = (t) => escapeHtml(t)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/`(.+?)`/g, "<code>$1</code>");
+  for (const line of String(src).split("\n")) {
+    if (/^```/.test(line)) { inFence = !inFence; out.push(inFence ? "<pre>" : "</pre>"); continue; }
+    if (inFence) { out.push(escapeHtml(line)); continue; }
+    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    if (h) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<h${h[1].length}>${inline(h[2])}</h${h[1].length}>`); continue; }
+    if (/^[-*]\s+/.test(line)) { if (!inList) { out.push("<ul>"); inList = true; } out.push(`<li>${inline(line.replace(/^[-*]\s+/, ""))}</li>`); continue; }
+    if (/^>\s?/.test(line)) { if (inList) { out.push("</ul>"); inList = false; } out.push(`<p style="border-left:2px solid var(--aide-border-strong);padding-left:10px;color:var(--aide-text-muted)">${inline(line.replace(/^>\s?/, ""))}</p>`); continue; }
+    if (!line.trim()) { if (inList) { out.push("</ul>"); inList = false; } continue; }
+    if (inList) { out.push("</ul>"); inList = false; }
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  if (inList) out.push("</ul>");
+  if (inFence) out.push("</pre>");
+  return out.join("");
+}
+
+/* ── 预览分派（与计划里 previewKind.ts 同一套规则） ──
+   只有两种，和 Aide 产品自己的词汇一致：
+   - markdown：可渲染预览（FileWindow 的 isMarkdown）
+   - html：可在浏览器打开（FileWindow 的 canOpenInBrowser = isHtmlFilePath）
+   其余一律退化纯文本。**不发明产品里没有的格式。** */
+function previewKindFor(mime) {
+  const m = String(mime || "").split(";")[0].trim().toLowerCase();
+  if (m === "text/markdown") return "markdown";
+  if (m === "text/html") return "html";
+  return "text";
+}
+
+/* ── 取件地址 ── */
+const TTL_MS = 30 * 1000;
+function mintTicket(docId) {
+  const token = Array.from({ length: 4 }, () => Math.random().toString(16).slice(2, 10)).join("");
+  const expiresAt = Date.now() + TTL_MS;
+  S.tokens.set(token, { docId, expiresAt });
+  return { token, expiresAt };
+}
+function redeem(token) {
+  const t = S.tokens.get(token);
+  if (!t) return null;
+  if (Date.now() > t.expiresAt) { S.tokens.delete(token); return null; }
+  return t.docId;
+}
+function ticketCount() { return [...S.tokens.values()].filter((t) => Date.now() <= t.expiresAt).length; }
+
+/* ── 渲染 ── */
+const $ = (id) => document.getElementById(id);
+const docById = (id) => DB.docs.find((d) => d.id === id) || null;
+
+function renderSpaces() {
+  $("spaces").innerHTML = DB.spaces
+    .map((s) => `<button data-space="${s.id}" class="${s.id === S.space ? "on" : ""}">${escapeHtml(s.name)}</button>`)
+    .join("");
+  $("spaces").querySelectorAll("button").forEach((b) =>
+    b.addEventListener("click", () => { S.space = b.dataset.space; S.sel = null; S.view = "doc"; render(); }));
+}
+
+function rowsOf(space, parent) {
+  return DB.docs.filter((d) => d.space === space && (d.parent ?? null) === parent);
+}
+
+function renderTree() {
+  const out = [];
+  const walk = (parent, depth) => {
+    for (const d of rowsOf(S.space, parent)) {
+      const isFolder = d.kind === "folder";
+      const open = S.open.has(d.id);
+      const ico = isFolder ? (open ? "📂" : "📁") : { markdown: "📄", html: "🌐", text: "📦" }[previewKindFor(d.mime)];
+      out.push(`<div class="tree-row ${d.id === S.sel ? "on" : ""}" data-id="${d.id}" style="padding-left:${6 + depth * 14}px">
+        <span class="caret">${isFolder ? (open ? "▾" : "▸") : ""}</span>
+        <span class="ico">${ico}</span>
+        <span class="t">${escapeHtml(d.title)}</span>
+      </div>`);
+      if (isFolder && open) walk(d.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  $("tree").innerHTML = out.join("") || `<div class="empty">这个空间还是空的</div>`;
+  $("tree").querySelectorAll(".tree-row").forEach((el) =>
+    el.addEventListener("click", () => {
+      const d = docById(el.dataset.id);
+      if (d.kind === "folder") { S.open.has(d.id) ? S.open.delete(d.id) : S.open.add(d.id); }
+      else { S.sel = d.id; S.view = "doc"; }
+      render();
+    }));
+}
+
+function renderDocHead() {
+  const d = docById(S.sel);
+  if (!d) { $("dochead").innerHTML = `<span class="title" style="color:var(--aide-text-muted)">从左边选一份资料</span>`; return; }
+  const kind = previewKindFor(d.mime);
+  const tabs = [];
+  tabs.push(`<button data-view="doc" class="${S.view === "doc" ? "on" : ""}">正文</button>`);
+  tabs.push(`<button data-view="history" class="${S.view === "history" ? "on" : ""}">历史</button>`);
+  $("dochead").innerHTML = `
+    <span class="title">${escapeHtml(d.title)}</span>
+    <span class="mime new">${escapeHtml(d.mime)}</span>
+    <div class="tabs">${tabs.join("")}</div>`;
+  $("dochead").querySelectorAll(".tabs button").forEach((b) =>
+    b.addEventListener("click", () => { S.view = b.dataset.view; render(); }));
+  $("dochead").querySelectorAll(".who.ai").forEach((el) =>
+    el.addEventListener("click", () => {
+      const s = el.dataset.session;
+      toast(s ? `跳回会话《${s}》——桌面端能跳，远端不能` : "这次会话已经找不到了（会话被删过）");
+    }));
+}
+
+function renderDocBody() {
+  const d = docById(S.sel);
+  if (!d) { $("docbody").innerHTML = ""; return; }
+  if (S.view === "history") return renderHistory(d);
+  const kind = previewKindFor(d.mime);
+  const body = $("docbody");
+
+  if (kind === "markdown") { body.innerHTML = `<div class="md">${renderMd(d.content)}</div>`; return; }
+
+  if (kind === "html") {
+    const frag = S.fragment && d.frag;
+    body.innerHTML = `
+      <div class="card new">
+        <h3>这是一个网页产物 🌐</h3>
+        <p>
+          库里存的是它的<b>源码</b>——agent 读到的也是源码（它可能要改它）。<br>
+          要看效果，在右栏浏览器里打开：那里加载的不是这份文本，而是资料库发给它的
+          <b>一个取件地址</b>（本机可达、只读、带一次性票据，默认 10 分钟失效）。
+        </p>
+        <div class="row">
+          <button id="openrp">在右栏打开</button>
+          <button class="ghost" id="src">看源码</button>
+        </div>
+      </div>
+      <h3 style="font-size:12.5px;margin:18px 0 8px;color:var(--aide-text-muted)">源码</h3>
+      <pre>${escapeHtml(frag ? d.frag : d.content)}</pre>`;
+    $("openrp").addEventListener("click", () => openPreview(d));
+    $("src").addEventListener("click", () => toast("上面那段就是源码；agent 读到的也是它"));
+    return;
+  }
+
+  // 兜底：没有专门预览方式的一律给原文，绝不留白。
+  // 现在到不了这条分支（库里只有 markdown 与 html），是防御。
+  body.innerHTML = `
+    <div class="card new">
+      <h3>这个类型还没有专门的查看方式 📦</h3>
+      <p>库里存得下、agent 也读得到，所以退化成<b>看原文</b>，而不是留白。</p>
+    </div>
+    <pre style="margin-top:14px">${escapeHtml(d.content)}</pre>`;
+}
+
+function renderHistory(d) {
+  const revs = DB.revisions[d.id] || [];
+  if (!revs.length) { $("docbody").innerHTML = `<div class="empty">这份资料还没有历史版本</div>`; return; }
+  $("docbody").innerHTML = revs.map((r) => `
+    <div class="rev">
+      <span class="no">v${r.no}</span>
+      <span class="meta">${escapeHtml(r.at)} · ${escapeHtml(r.by || "heaven")}${r.note ? " · " + escapeHtml(r.note) : ""}</span>
+      ${r.cur ? `<span class="badge-new" style="margin:0">当前</span>` : `<button data-revert="${r.no}">回滚到此版</button>`}
+    </div>`).join("");
+  $("docbody").querySelectorAll("[data-revert]").forEach((b) =>
+    b.addEventListener("click", () => toast(`已把 v${b.dataset.revert} 的内容复制成一个新版本（历史不丢）`)));
+}
+
+function renderResult() {
+  const res = S.result;
+  if (!res) return;
+  const body = $("docbody");
+  if (!res.hits.length) {
+    body.innerHTML = `<div class="empty">没有找到「${escapeHtml(res.q)}」<br><span style="font-size:11.5px">（如果这个词只出现在网页的脚本里，那是故意的——库搜的是正文，不是代码）</span></div>`;
+    return;
+  }
+  body.innerHTML = `<div class="hits">` + res.hits.map((h) => `
+    <div class="hit" data-id="${h.id}">
+      <div class="h">${escapeHtml(h.title)}</div>
+      <div class="s">${h.snippet}</div>
+    </div>`).join("") + `</div>`;
+  body.querySelectorAll(".hit").forEach((el) =>
+    el.addEventListener("click", () => { S.sel = el.dataset.id; S.view = "doc"; S.result = null; render(); }));
+}
+
+function render() {
+  document.body.classList.toggle("mark-new", S.marks);
+  renderSpaces();
+  renderTree();
+  if (S.auth !== "ok") return renderGate();
+  renderDocHead();
+  if (S.view === "search" && S.result) renderResult(); else renderDocBody();
+}
+
+function renderGate() {
+  const expired = S.auth === "expired";
+  $("dochead").innerHTML = "";
+  $("docbody").innerHTML = `
+    <div class="gate"><div class="box">
+      <h3>${expired ? "登录已过期" : "连不上资料库服务"}</h3>
+      <p>${expired
+        ? "资料库平时用 Aide 里存着的凭据自动进入，你不会看到这一步。只有凭据失效时才会出现。"
+        : "凭据本身没问题，<b>没有被清掉</b>。服务恢复后点重试即可——网络故障不该让你重新登录一次。"}</p>
+      <button id="retry">${expired ? "重新登录" : "重试"}</button>
+    </div></div>`;
+  $("retry").addEventListener("click", () => { S.auth = "ok"; render(); toast("已恢复"); });
+}
+
+/* ── 右栏浏览器 ── */
+function openPreview(d) {
+  // 每次打开都现签一张票据——票据是"这一次打开"的凭证，不是条目的属性
+  const { token, expiresAt } = mintTicket(d.id);
+  const url = `http://127.0.0.1:8788/p/${token}`;
+  S.lastUrl = url;
+  $("rp").classList.add("on");
+  $("addr").textContent = url;
+  $("rpbody").innerHTML = "";
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("sandbox", "allow-scripts");
+  iframe.srcdoc = S.fragment && d.frag ? d.frag : d.content;
+  $("rpbody").appendChild(iframe);
+  startTtl(expiresAt);
+  $("out-token").textContent = `已签发 · ${url}\n有效期至 ${new Date(expiresAt).toLocaleTimeString()}`;
+}
+
+function renderExpired() {
+  $("rp").classList.add("on");
+  $("addr").textContent = S.lastUrl || "http://127.0.0.1:8788/p/…";
+  $("ttl").textContent = "已失效";
+  $("rpbody").innerHTML = `<div class="rp-empty">这个预览链接已失效<br><span style="font-size:11px">回到资料库重新点一次「在右栏打开」就行</span></div>`;
+  $("out-token").textContent = "票据已失效——再打开会拿到上面这个提示，而不是白屏";
+}
+
+function startTtl(expiresAt) {
+  S.ticks.forEach(clearInterval); S.ticks = [];
+  const t = setInterval(() => {
+    const left = Math.max(0, Math.ceil((expiresAt - Date.now()) / 1000));
+    $("ttl").textContent = left > 0 ? `剩 ${left}s` : "已过期";
+    if (left <= 0) { clearInterval(t); }
+  }, 250);
+  S.ticks.push(t);
+}
+
+/* ── 搜索 ── */
+function doSearch(q) {
+  q = String(q || "").trim();
+  if (!q) { S.result = null; S.view = "doc"; render(); return; }
+  const hits = [];
+  for (const d of DB.docs) {
+    if (d.space !== S.space || d.kind === "folder") continue;
+    const hay = d.title + "\n" + searchText(d.mime, d.content || "");
+    const at = hay.toLowerCase().indexOf(q.toLowerCase());
+    if (at < 0) continue;
+    const from = Math.max(0, at - 30), to = Math.min(hay.length, at + q.length + 34);
+    const snippet = escapeHtml(hay.slice(from, to))
+      .replace(new RegExp(q.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), (m) => `<mark>${m}</mark>`);
+    hits.push({ id: d.id, title: d.title, snippet: (from > 0 ? "…" : "") + snippet + (to < hay.length ? "…" : "") });
+  }
+  S.result = { q, hits };
+  S.view = "search";
+  render();
+  $("out-search").textContent = `搜「${q}」→ ${hits.length} 条命中` +
+    (hits.length === 0 ? "（脚本里的词搜不到，因为可搜文本是剥掉标记的正文）" : "");
+}
+
+/* ── 事件 ── */
+$("q").addEventListener("keydown", (e) => { if (e.key === "Enter") doSearch($("q").value); });
+$("go").addEventListener("click", () => doSearch($("q").value));
+$("mk").addEventListener("change", (e) => { S.marks = e.target.checked; document.body.classList.toggle("mark-new", S.marks); });
+$("fragment").addEventListener("change", (e) => { S.fragment = e.target.checked; render(); if (S.sel) renderDocBody(); });
+
+document.querySelectorAll("[data-auth]").forEach((b) => b.addEventListener("click", () => {
+  S.auth = b.dataset.auth;
+  $("out-auth").textContent = { ok: "当前：已登录，直接进主界面", expired: "当前：落登录兜底页（凭据已清）", network: "当前：落兜底页，但凭据保留" }[S.auth];
+  render();
+}));
+
+$("expire").addEventListener("click", () => { S.tokens.clear(); renderExpired(); });
+$("reopen").addEventListener("click", () => {
+  const d = docById(S.sel) || docById("d3");
+  if (previewKindFor(d.mime) !== "html") { toast("先选中那份网页（季度复盘.html）再重新签"); return; }
+  S.sel = d.id; render(); openPreview(d);
+});
+$("rpclose").addEventListener("click", () => { $("rp").classList.remove("on"); toast("右栏已关闭（票据继续走它的有效期）"); });
+document.querySelectorAll("[data-q]").forEach((b) => b.addEventListener("click", () => doSearch(b.dataset.q)));
+/* ── 上传：只收认得的格式，不认的当场说清 ── */
+const UPLOAD_EXT = ["md", "markdown", "txt", "html", "htm", "docx", "pdf"];
+const mimeForExt = (ext) => (ext === "html" || ext === "htm" ? "text/html" : "text/markdown");
+
+function addUploaded(name, text) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  if (!UPLOAD_EXT.includes(ext)) {
+    const msg = `资料库还不认 .${ext} —— 它只收：${UPLOAD_EXT.join(" / ")}`;
+    toast(msg);
+    $("out-up").textContent = msg + "\n拒绝是当场发生的，不会先存进去再出问题";
+    return false;
+  }
+  const d = { id: uid("u"), space: S.space, parent: null, kind: "doc", mime: mimeForExt(ext), title: name, content: text };
+  DB.docs.push(d);
+  DB.revisions[d.id] = [{ no: 1, at: "刚刚", kind: "human", by: "heaven", note: "上传", cur: true }];
+  S.sel = d.id; S.view = "doc"; render();
+  $("out-up").textContent = `收下了：${name}\n落库类型 ${mimeForExt(ext)}（服务端按扩展名定，不信客户端）`;
+  toast(`已存进资料库：${name}`);
+  return true;
+}
+
+document.querySelector("[data-upload]").addEventListener("click", () => $("upfile").click());
+$("upfile").addEventListener("change", (e) => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = "";
+  if (!f) return;
+  const ext = (f.name.split(".").pop() || "").toLowerCase();
+  if (ext === "docx" || ext === "pdf") {
+    $("out-up").textContent = `${f.name} 是二进制格式：真实实现里由服务端解析成 markdown 再入库（原型里演不了）`;
+    toast("二进制走服务端解析，原型演不了");
+    return;
+  }
+  const r = new FileReader();
+  r.onload = () => addUploaded(f.name, String(r.result));
+  r.onerror = () => toast("这个文件读不出来（可能是编码问题）——真实实现里会如实报错，不会静默");
+  r.readAsText(f);
+});
+
+document.querySelectorAll("[data-up]").forEach((b) => b.addEventListener("click", () => {
+  const ext = b.dataset.up;
+  if (ext === "csv") return addUploaded("季度数据.csv", "a,b\n1,2");
+  if (ext === "html") return addUploaded("新报告.html", HTML_SAMPLE);
+  return addUploaded("笔记.md", "# 笔记\n\n临时传的一个 md。");
+}));
+document.querySelectorAll("[data-new]").forEach((b) => b.addEventListener("click", () => {
+  const kind = b.dataset.new;
+  const d = { id: uid("n"), space: S.space, parent: null, kind, mime: "text/markdown",
+              title: kind === "folder" ? "新建文件夹" : "未命名文档", content: "" };
+  DB.docs.push(d);
+  if (kind === "doc") DB.revisions[d.id] = [{ no: 1, at: "刚刚", by: "heaven", note: "新建", cur: true }];
+  if (kind === "doc") S.sel = d.id;
+  render(); toast(kind === "folder" ? "建了文件夹（标题就是唯一真相，不带版本）" : "建了文档（v1 已产生）");
+}));
+
+let toastT;
+function toast(msg) {
+  const el = $("toast"); el.textContent = msg; el.classList.add("on");
+  clearTimeout(toastT); toastT = setTimeout(() => el.classList.remove("on"), 2400);
+}
+
+render();
+</script>
+</body>
+</html>

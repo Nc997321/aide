@@ -7,6 +7,7 @@
 import { ref } from "vue";
 import {
   kb,
+  getBaseUrl,
   getToken,
   setToken,
   KbError,
@@ -50,6 +51,16 @@ export function useKnowledgeBase() {
   const activeDoc = ref<KbDocument | null>(null);
   const loading = ref(false);
   const error = ref<string | null>(null);
+  /** 非失败类提示（解析器的降级信息等）。与 `error` 分开：那些不是错误，
+   *  用红字报会把「少了几张图」说成「出事了」。 */
+  const notice = ref<string | null>(null);
+
+  /** 服务端认的扩展名（懒加载一次，进程内存缓存）。**唯一权威**：前端不硬编格式表。 */
+  const formats = ref<string[]>([]);
+
+  /** 正在上传的文件与**字节**进度（0..100）。null = 没有上传在跑。
+   *  99% 之后字节已发完，剩的是服务端解析 + 落库——界面据此改口叫「正在处理」。 */
+  const uploading = ref<{ name: string; pct: number } | null>(null);
 
   const query = ref("");
   const searching = ref(false);
@@ -76,11 +87,28 @@ export function useKnowledgeBase() {
     error.value = e instanceof KbError ? e.message : `${fallback}：${String(e)}`;
   }
 
+  /** 凭据失效（服务端 401）。**结构判据而不是 instanceof**：判据要能在测试替身上跑。 */
+  function isUnauthorized(e: unknown): boolean {
+    if (typeof e !== "object" || e === null) return false;
+    const err = e as { code?: unknown; status?: unknown };
+    return err.code === "unauthorized" || err.status === 401;
+  }
+
+  /** 网络层失败（服务没起 / 地址不对）。与 401 分开是有意的：一次网络抖动
+   *  不该变成一次重新登录。 */
+  function isNetworkFailure(e: unknown): boolean {
+    if (typeof e !== "object" || e === null) return false;
+    return (e as { code?: unknown }).code === "network";
+  }
+
   /**
    * 启动探测。顺序是有讲究的：
    *   1. 先问 status（公开接口，不需要 token）——空库要显示"创建管理员"而不是登录框
-   *   2. 已初始化且有 token → 拉当前用户
-   *   3. 都已初始化但没 token → 落到登录页
+   *   2. 已初始化且有 token → 拉当前用户（**免登录**：凭据由 Aide 替你带着）
+   *   3. 没凭据 / 凭据失效 → 落兜底登录页
+   *
+   * 免登录免掉的是**门槛**（让你输账号口令），不是身份：凭据仍在、仍每次带上
+   * （服务端 auth::me 照常校验 Bearer）。也**不是**"本机请求一律信任"——那等于拆锁。
    */
   async function init(): Promise<void> {
     // 无条件镜像一次（含未登录）：token 被别处清掉时顺带删主进程的文件，
@@ -111,10 +139,19 @@ export function useKnowledgeBase() {
       user.value = await kb.me();
       await loadSpaces();
     } catch (e) {
-      // me 失败时 kbClient 已清掉 token → 落到登录界面，不显示红字错误。
-      // 只有"服务连不上"才值得提示，否则每次打开面板都闪一下错误很吵。
+      // ⚠️ 两种失败必须分开走，混成一条的代价是「一次网络抖动 = 重新登录一次」：
+      //   401 → 凭据真的失效了：清本地凭据（与镜像文件），落兜底页
+      //   其余 → **绝不动凭据**，只提示重试
       user.value = null;
-      if (e instanceof KbError && e.code === "network") fail(e, "连接知识库服务失败");
+      if (isUnauthorized(e)) {
+        setToken(null);
+        void pushKnowledgeRuntime(); // token 已清 → 主进程删镜像文件
+        error.value = "登录已过期，请重新登录";
+      } else if (isNetworkFailure(e)) {
+        error.value = `连不上知识库服务（${getBaseUrl()}），稍后重试`;
+      } else {
+        fail(e, "连接知识库服务失败");
+      }
     } finally {
       ready.value = true;
     }
@@ -412,6 +449,69 @@ export function useKnowledgeBase() {
     }
   }
 
+  /**
+   * 拉一次「服务端认哪些格式」。缓存住——它随服务端版本变，不会随会话变。
+   * 失败不设为 error（用户下一步动作会再报一次，且它不阻塞任何东西）。
+   */
+  async function loadFormats(): Promise<string[]> {
+    if (formats.value.length) return formats.value;
+    try {
+      formats.value = (await kb.formats()).extensions;
+    } catch {
+      // 下拉框的 accept 拿不到就用空的；真正的拒绝在 uploadFile 里，那里会报错
+    }
+    return formats.value;
+  }
+
+  /**
+   * 上传一个文件进来（人主动放东西进去，不再只能靠跟 agent 说一句）。
+   *
+   * 认哪些格式**由服务端说了算**（`GET /api/ingest/formats`）：本地先按它预检，
+   * 不认的当场拒绝并说清收哪些——**静默收下是最糟的一类错**（东西进了库，
+   * 但没人知道它其实没被正确理解）。
+   *
+   * 返回新文档 id（失败 null，原因已进 `error`）。
+   */
+  async function uploadFile(parentId: string | null, file: File): Promise<string | null> {
+    const spaceId = activeSpaceId.value;
+    if (!spaceId) return null;
+    error.value = null;
+    notice.value = null;
+
+    // 拿不到列表（服务没起 / 接口挂了）时**不预判**：让服务端去拒绝。
+    // 用一份空表把合法上传拦下来，比不拦更糟——那看起来像「资料库什么都不收了」。
+    const allowed = await loadFormats();
+    const ext = file.name.split(".").pop()?.toLowerCase() ?? "";
+    if (allowed.length && !allowed.includes(ext)) {
+      error.value = `资料库只收这些格式：${allowed.join(" / ")}（收到的是 ${file.name}）`;
+      return null;
+    }
+
+    uploading.value = { name: file.name, pct: 0 };
+    loading.value = true;
+    try {
+      const r = await kb.ingest({
+        spaceId,
+        parentId,
+        file,
+        onProgress: (pct) => {
+          // 上传可能已经被下一次上传顶掉（同名同进度都无所谓）：只更新当前这一条
+          if (uploading.value?.name === file.name) uploading.value.pct = pct;
+        },
+      });
+      // 解析器自报的降级信息如实显示（「导入后内容少了」要能解释清楚）
+      if (r.warnings.length) notice.value = r.warnings.join("；");
+      await loadDocuments(spaceId);
+      return r.documentId;
+    } catch (e) {
+      fail(e, "上传失败");
+      return null;
+    } finally {
+      uploading.value = null;
+      loading.value = false;
+    }
+  }
+
   /** 重命名 / 移动。成功后刷新列表；改的若是当前打开的那篇，正文区的标题也要跟着变。 */
   async function patchNode(
     id: string,
@@ -517,6 +617,11 @@ export function useKnowledgeBase() {
     activeDoc,
     loading,
     error,
+    notice,
+    formats,
+    loadFormats,
+    uploading,
+    uploadFile,
     query,
     searching,
     searchResult,

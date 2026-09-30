@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import KbTree from "./KbTree.vue";
 // 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
@@ -170,10 +170,37 @@ describe("KbTree 的 ⋯ 菜单", () => {
 });
 
 describe("KbTree 的新建", () => {
-  it("＋ 开的是「新建文件夹 / 新建文档」二选一", async () => {
+  it("＋ 开的是「新建文件夹 / 新建文档 / 上传文件…」", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
-    expect(menuLabels()).toEqual(["新建文件夹", "新建文档"]);
+    expect(menuLabels()).toEqual(["新建文件夹", "新建文档", "上传文件…"]);
+  });
+
+  it("上传文件… 点开隐藏的文件选择器（上传与新建同一个入口）", async () => {
+    const w = mountTree();
+    const input = w.find<HTMLInputElement>("[data-kb-file]");
+    const opened = vi.spyOn(input.element, "click");
+
+    await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
+    await pickMenuItem(w, "上传文件…");
+
+    expect(opened).toHaveBeenCalled();
+  });
+
+  it("选中文件后发 upload（带父节点 id），并清掉 input 的值", async () => {
+    const w = mountTree();
+    const input = w.find<HTMLInputElement>("[data-kb-file]");
+    // jsdom 里 files 是只读的，用 defineProperty 造一个「用户选了文件」的现场
+    const file = new File(["x"], "复盘.html", { type: "text/html" });
+    Object.defineProperty(input.element, "files", { value: [file], configurable: true });
+
+    await w.find("[data-kb-node='f'] [data-kb-add]").trigger("click");
+    await pickMenuItem(w, "上传文件…");
+    await input.trigger("change");
+
+    expect(w.emitted("upload")?.[0]).toEqual(["f", file]);
+    // 不清的话，同一个文件连选两次不会再触发 change
+    expect(input.element.value).toBe("");
   });
 
   it("在文件夹行点「新建文档」→ create 带该文件夹 id 与 doc 类型", async () => {
