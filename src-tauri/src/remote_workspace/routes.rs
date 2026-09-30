@@ -72,6 +72,16 @@ const DENY_EXACT: &[&str] = &[
     "workspace_get_jdk",
     "workspace_set_jdk",
 ];
+/// 会话命令：会话落在远程工作区时转录在目标机上，由 `sessions::route` 判定（与手机远程
+/// `rpc::dispatch` 同一判定）；本机会话放行给 aide-core。
+const SESSION_CMDS: &[&str] = &[
+    "list_sessions",
+    "list_sessions_for_workspace",
+    "load_messages",
+    "session_last_event",
+    "session_jsonl_size",
+    "session_truncate_jsonl",
+];
 /// 本机外壳能力：WSL 的 UNC 路径 Windows 原生可用；SSH 的不行（规则 2 的特例）。
 const LOCAL_SHELL: &[&str] = &["file_open", "show_in_explorer"];
 
@@ -111,6 +121,7 @@ fn is_candidate(cmd: &str) -> bool {
         || DENY_PREFIXES.iter().any(|p| cmd.starts_with(p))
         || DENY_EXACT.contains(&cmd)
         || LOCAL_SHELL.contains(&cmd)
+        || SESSION_CMDS.contains(&cmd)
 }
 
 enum Plan {
@@ -123,6 +134,7 @@ enum ForwardKind {
     Invoke { cmd: String, root: Option<String>, result: ResultMap },
     PathTypes { order: Vec<Option<usize>>, local: Vec<String> },
     Watch { root: Option<(HostId, String)> },
+    Session(super::sessions::SessionRoute),
 }
 
 struct Forward {
@@ -132,6 +144,16 @@ struct Forward {
 }
 
 fn plan(app: &AppHandle, cmd: &str, args: &Value) -> Plan {
+    if SESSION_CMDS.contains(&cmd) {
+        return match super::sessions::route(app, cmd, args) {
+            Some(r) => Plan::Forward(Forward {
+                host: None,
+                args: Value::Null,
+                kind: ForwardKind::Session(r),
+            }),
+            None => Plan::PassThrough,
+        };
+    }
     if let Some(route) = FS_ROUTES.iter().find(|r| r.cmd == cmd) {
         return plan_fs(cmd, route, args);
     }
@@ -323,6 +345,7 @@ async fn forward(app: AppHandle, fwd: Forward) -> Result<InvokeResponseBody, Str
         .inner()
         .clone();
     match fwd.kind {
+        ForwardKind::Session(r) => json_body(&super::sessions::run(app, r).await?),
         ForwardKind::Watch { root } => {
             // 本机表：远程根 → 停；本机根 → 交给本机服务
             let local_root = match &root {

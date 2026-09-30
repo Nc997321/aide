@@ -14,6 +14,7 @@ pub mod provider;
 pub mod workspace;
 pub mod recent;
 pub mod run_configs;
+pub mod session;
 pub mod session_changes;
 pub mod watch;
 

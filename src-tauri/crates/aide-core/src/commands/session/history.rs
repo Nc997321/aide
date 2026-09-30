@@ -1,11 +1,21 @@
-// 历史消息读取的命令外壳：定位会话转录（本机配置根 / 远程主机），分页与解析在
-// aide_workspace::transcripts（桌面与远程 aide-host 共用）。
+//! 历史消息读取的命令外壳：定位会话转录（Host 的配置根），分页与解析在
+//! aide_workspace::transcripts。远程工作区的会话由桌面前门的远程路由接管。
 
-use serde_json::json;
-use tauri::State;
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
 
-use crate::commands::{find_session_jsonl_globally, LoadMessagesResult, WorkspaceState};
-use crate::remote_workspace::sessions::{host_of_session, transcript_call};
+pub static COMMANDS: &[HostCommand] = &[
+    command!("load_messages", load_messages),
+];
+
+use crate::session_store::find_session_jsonl_globally;
+use aide_workspace::transcripts::LoadMessagesResult;
 use aide_workspace::transcripts::history::load_messages_at;
 
 /// transcript 会随会话增长到多 MB，整读 + 逐行解析必须离开主线程（切会话时触发，
@@ -17,28 +27,23 @@ use aide_workspace::transcripts::history::load_messages_at;
 /// - `limit`：单页**字节预算**（UTF-8 行字节累计；至少 1 条保底）。2026-08-26 由
 ///   「目标条数」改字节预算：窗口/取回按内容量自适应（大 tool_result 占预算多则少取），
 ///   与前端 useMessageWindow 的字节预算窗口对齐；页首裁到真实 user 行保证回合完整。
-#[tauri::command]
-pub async fn load_messages(
-    _workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
-    app: tauri::AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadMessagesArgs {
     session_id: String,
+    #[serde(default)]
     offset_bytes: Option<u64>,
+    #[serde(default)]
     limit: Option<u32>,
-) -> Result<LoadMessagesResult, String> {
-    // 远程工作区的会话：转录在目标机上
-    if let Some(host) = host_of_session(&app, &session_id) {
-        let v = transcript_call(
-            &app,
-            &host,
-            "transcript_load",
-            json!({ "sessionId": session_id, "offsetBytes": offset_bytes, "limit": limit }),
-        )
-        .await?;
-        return serde_json::from_value(v).map_err(|e| e.to_string());
-    }
+}
+
+async fn load_messages(_core: Arc<Core>, a: LoadMessagesArgs) -> Result<LoadMessagesResult, String> {
+    let LoadMessagesArgs { session_id, offset_bytes, limit } = a;
+    {
     tokio::task::spawn_blocking(move || load_messages_blocking(session_id, offset_bytes, limit))
         .await
         .map_err(|e| format!("load_messages task panicked: {}", e))?
+}
 }
 
 fn load_messages_blocking(

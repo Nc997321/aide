@@ -1,15 +1,37 @@
-// 会话域总入口：本文件只保留会话元数据（~/.aide/sessions/<id>.json 的
-// CRUD / 偏好记忆 / 自动命名守门）与两处工作区会话扫描，外加子模块
-// re-export 门面——外部（lib.rs / remote/rpc/handlers / automation）继续走
-// `commands::session::X`，路径经下方 pub use 保持不变。
+//! 会话域：会话元数据（~/.aide/sessions/<id>.json 的 CRUD / 偏好记忆 / 自动命名守门）、
+//! 工作区会话扫描、转录读取（history / jsonl 子模块）。全部是 Host 数据。
 
-mod history;
-mod jsonl;
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize as _;
+#[allow(unused_imports)]
+use std::sync::Arc;
 
-pub use history::load_messages;
-pub use jsonl::{session_jsonl_size, session_last_event, session_truncate_jsonl};
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_sessions", list_sessions),
+    command!("create_session", create_session),
+    command!("delete_session", delete_session),
+    command!("rename_session", rename_session),
+    command!("auto_rename_session", auto_rename_session),
+    command!("set_session_meta", set_session_meta),
+    command!("set_session_workspace", set_session_workspace),
+    command!("session_workspace", session_workspace),
+    command!("session_model", session_model),
+    command!("session_effort", session_effort),
+    command!("session_provider", session_provider),
+    command!("session_identity_drift", session_identity_drift),
+    command!("list_sessions_for_workspace", list_sessions_for_workspace),
+    command!("find_sessions_since", find_sessions_since),
+];
+
+pub mod history;
+pub mod jsonl;
+
 // 供自动化 RunRecord.summary 读取末条消息摘要（automation/scheduler.rs）
-pub(crate) use jsonl::last_jsonl_message;
+pub use jsonl::last_jsonl_message;
 
 use serde::Deserialize;
 use serde::Serialize;
@@ -17,37 +39,30 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
-use tauri::State;
 
-use super::{
-    claude_projects_dir, claude_sessions_dir, our_session_is_automation, our_session_name,
-    our_sessions_dir, project_root_for_commands, Session, WorkspaceState,
-};
+use crate::paths::{claude_projects_dir, claude_sessions_dir, our_sessions_dir};
+use crate::session_store::{our_session_is_automation, our_session_name};
 
-// tauri 的 __cmd__<name> 宏跟随 fn 的定义模块（不随 pub use 转发），而
-// lib.rs 的 generate_handler / remote handlers 按 `commands::session::X`
-// 引用命令——把跨文件命令的宏 item 逐个转发回来，保证注册路径不变。
-pub(crate) use history::{__cmd__load_messages, __tauri_command_name_load_messages};
-pub(crate) use jsonl::{
-    __cmd__session_jsonl_size, __cmd__session_last_event, __cmd__session_truncate_jsonl,
-    __tauri_command_name_session_jsonl_size, __tauri_command_name_session_last_event,
-    __tauri_command_name_session_truncate_jsonl,
-};
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Session {
+    pub id: String,
+    pub name: String,
+    pub timestamp: u64,
+}
+
 
 /// 扫描目录 + 每个会话读一次 .jsonl 取末条消息，工作区会话多时是实打实的重 IO；
 /// 同步 command 跑在主线程上会卡窗口，这里主线程只取工作区快照，扫描进 blocking 线程。
-#[tauri::command]
-pub async fn list_sessions(
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
-    app: tauri::AppHandle,
-) -> Result<Vec<Session>, String> {
-    let active_root = project_root_for_commands(&workspace_state);
-    if let Some((host, posix)) = active_root
-        .to_str()
-        .and_then(crate::remote_workspace::path::parse)
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsArgs {
+}
+
+async fn list_sessions(core: Arc<Core>, a: ListSessionsArgs) -> Result<Vec<Session>, String> {
+    let _ = a;
+    let workspace_state = core.workspace.clone();
     {
-        return remote_sessions(&app, &host, &posix).await;
-    }
+    // 远程工作区的会话列表由前门的远程路由接管（remote_workspace::sessions），到不了这里。
     let encoded = match workspace_state.key.lock() {
         Ok(guard) => match guard.as_ref() {
             Some(key) => key.clone(),
@@ -55,41 +70,11 @@ pub async fn list_sessions(
         },
         Err(_) => return Ok(Vec::new()),
     };
-    let root = project_root_for_commands(&workspace_state);
+    let root = workspace_state.root_for(None);
     tokio::task::spawn_blocking(move || list_sessions_blocking(encoded, root))
         .await
         .map_err(|e| format!("list_sessions task panicked: {}", e))?
 }
-
-/// 远程工作区的会话列表：目标机给转录原料（id / CLI 元数据 / mtime），桌面叠加自己的
-/// 元数据（显示名、自动化标签过滤）——与本机列表同一口径。
-async fn remote_sessions(
-    app: &tauri::AppHandle,
-    host: &crate::remote_workspace::path::HostId,
-    posix_root: &str,
-) -> Result<Vec<Session>, String> {
-    let v = crate::remote_workspace::sessions::transcript_call(
-        app,
-        host,
-        "transcript_list",
-        serde_json::json!({ "root": posix_root }),
-    )
-    .await?;
-    let entries: Vec<aide_workspace::transcripts::TranscriptEntry> =
-        serde_json::from_value(v).map_err(|e| e.to_string())?;
-    let mut sessions: Vec<Session> = entries
-        .into_iter()
-        .filter(|e| !our_session_is_automation(&e.id))
-        .map(|e| Session {
-            name: our_session_name(&e.id)
-                .or(e.cli_name)
-                .unwrap_or_else(|| e.id.clone()),
-            timestamp: if e.started_at == 0 { e.mtime_ms } else { e.started_at },
-            id: e.id,
-        })
-        .collect();
-    sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
-    Ok(sessions)
 }
 
 /// 扫描单个项目目录下的 .jsonl 会话并追加到 sessions（按 session id 去重——
@@ -162,7 +147,7 @@ fn list_sessions_blocking(
     // that were started but never had a conversation still have metadata in
     // ~/.aide/claude/sessions/.
     // 同一工作区可能因 SDK 编码差异（`.` → `-`）分裂成多个项目目录，全部合并扫描。
-    for proj_dir in super::resolve_project_dirs(&claude_projects_dir(), &encoded) {
+    for proj_dir in crate::commands::workspace::resolve_project_dirs(&claude_projects_dir(), &encoded) {
         scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
@@ -231,11 +216,20 @@ fn list_sessions_blocking(
 /// 创建会话元数据。调用方传入 id——发消息、拿到 SDK 返回的真实 session id
 /// 之后才会调用这个命令（见 CLAUDE.md「会话 ID 生命周期」），所以这里的 id
 /// 从一开始就是终身 id，不存在草稿 id 需要事后改名的情况。
-#[tauri::command]
-pub async fn create_session(id: String, name: String) -> Result<Session, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateSessionArgs {
+    id: String,
+    name: String,
+}
+
+async fn create_session(_core: Arc<Core>, a: CreateSessionArgs) -> Result<Session, String> {
+    let CreateSessionArgs { id, name } = a;
+    {
     tokio::task::spawn_blocking(move || create_session_blocking(id, name))
         .await
         .map_err(|e| format!("create_session task panicked: {e}"))?
+}
 }
 
 /// 磁盘 IO 离开主线程：`create_dir_all` + `fs::write` 是真落盘，且固定在
@@ -288,11 +282,19 @@ fn write_session_created(path: &Path, id: &str, name: &str, timestamp: u64) -> R
     .map_err(|e| format!("Failed to write session: {}", e))
 }
 
-#[tauri::command]
-pub async fn delete_session(id: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteSessionArgs {
+    id: String,
+}
+
+async fn delete_session(_core: Arc<Core>, a: DeleteSessionArgs) -> Result<(), String> {
+    let DeleteSessionArgs { id } = a;
+    {
     tokio::task::spawn_blocking(move || delete_session_blocking(id))
         .await
         .map_err(|e| format!("delete_session task panicked: {e}"))?
+}
 }
 
 /// 磁盘 IO 离开主线程：删元数据 + 全局搜 jsonl 逐个删 + 扫 claude sessions 目录，
@@ -310,7 +312,7 @@ fn delete_session_blocking(id: String) -> Result<(), String> {
     // encoded '.' as '-' while Aide keeps it). Searching by id across all project
     // folders — instead of re-encoding the cwd — guarantees we delete the real
     // file rather than silently no-op'ing and leaving it resumable.
-    for jsonl in super::find_session_jsonl_globally(&id) {
+    for jsonl in crate::session_store::find_session_jsonl_globally(&id) {
         fs::remove_file(&jsonl).map_err(|e| format!("Failed to delete session file: {}", e))?;
         // Drop the per-session sibling directory (<id>/, holds subagent transcripts)
         // if Claude created one next to the .jsonl.
@@ -344,7 +346,7 @@ fn delete_session_blocking(id: String) -> Result<(), String> {
 
     // 同步移除「最近访问」中已删会话（双保险，配合 list_recent 自愈）。
     // 走阻塞实现而非 async 命令：本函数已在阻塞线程上，不必再绕一次跨线程。
-    let _ = super::recent::remove_recent_session_blocking(&id);
+    let _ = crate::commands::recent::remove_recent_session_blocking(&id);
 
     Ok(())
 }
@@ -451,11 +453,20 @@ fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(),
     .map_err(|e| format!("Failed to write: {}", e))
 }
 
-#[tauri::command]
-pub async fn rename_session(id: String, name: String) -> Result<(), String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameSessionArgs {
+    id: String,
+    name: String,
+}
+
+async fn rename_session(_core: Arc<Core>, a: RenameSessionArgs) -> Result<(), String> {
+    let RenameSessionArgs { id, name } = a;
+    {
     tokio::task::spawn_blocking(move || rename_session_blocking(id, name))
         .await
         .map_err(|e| format!("rename_session task panicked: {e}"))?
+}
 }
 
 /// 磁盘 IO 离开主线程（读-改-写会话元数据 json）。
@@ -479,11 +490,20 @@ fn rename_session_blocking(id: String, name: String) -> Result<(), String> {
 /// 判断 + 写入收在这一个函数里，防「自动标题生成的几秒内用户恰好手动改名」
 /// 的竞态——前端拿到 true 才更新 UI。
 /// 磁盘 IO 离开主线程（同 set_session_model，见 CLAUDE.md「同步 command 禁止重 IO」）。
-#[tauri::command]
-pub async fn auto_rename_session(id: String, name: String) -> Result<bool, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoRenameSessionArgs {
+    id: String,
+    name: String,
+}
+
+async fn auto_rename_session(_core: Arc<Core>, a: AutoRenameSessionArgs) -> Result<bool, String> {
+    let AutoRenameSessionArgs { id, name } = a;
+    {
     tokio::task::spawn_blocking(move || auto_rename_session_blocking(&id, &name))
         .await
         .map_err(|e| format!("auto_rename_session task panicked: {}", e))?
+}
 }
 
 fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
@@ -524,13 +544,24 @@ fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
 /// name 不在参数里——重命名带 nameSource 守门语义，走 rename_session /
 /// auto_rename_session，内部与本命令共用 `write_session_meta_blocking`。
 /// 磁盘 IO 离开主线程（见 CLAUDE.md「同步 command 禁止重 IO」）。
-#[tauri::command]
-pub async fn set_session_meta(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionMetaArgs {
     id: String,
+    /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
+    #[serde(default)]
     provider: MetaField,
+    /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
+    #[serde(default)]
     model: MetaField,
+    /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
+    #[serde(default)]
     effort: MetaField,
-) -> Result<(), String> {
+}
+
+async fn set_session_meta(_core: Arc<Core>, a: SetSessionMetaArgs) -> Result<(), String> {
+    let SetSessionMetaArgs { id, provider, model, effort } = a;
+    {
     tokio::task::spawn_blocking(move || {
         write_session_meta_blocking(
             &id,
@@ -545,6 +576,7 @@ pub async fn set_session_meta(
     .await
     .map_err(|e| format!("set_session_meta task panicked: {}", e))?
 }
+}
 
 /// 写会话自持的工作区归属（wsPath + wsKey 成对）。
 ///
@@ -555,12 +587,21 @@ pub async fn set_session_meta(
 ///
 /// 两条命令共用 `write_session_meta_blocking`（同一把锁 + 合并写），所以拆开
 /// **不会**退回到 2026-09-08 修掉的 lost update：并发写者被串行化，各改各的键。
-#[tauri::command]
-pub async fn set_session_workspace(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetSessionWorkspaceArgs {
     id: String,
+    /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
+    #[serde(default)]
     ws_path: MetaField,
+    /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
+    #[serde(default)]
     ws_key: MetaField,
-) -> Result<(), String> {
+}
+
+async fn set_session_workspace(_core: Arc<Core>, a: SetSessionWorkspaceArgs) -> Result<(), String> {
+    let SetSessionWorkspaceArgs { id, ws_path, ws_key } = a;
+    {
     tokio::task::spawn_blocking(move || {
         write_session_meta_blocking(
             &id,
@@ -574,18 +615,24 @@ pub async fn set_session_workspace(
     .await
     .map_err(|e| format!("set_session_workspace task panicked: {}", e))?
 }
+}
 
 /// 读回会话自持的工作区归属（根路径 + 编码 key）；没记过 / 没档案 → None。
 ///
 /// 与 `session_model` / `session_provider` 同族同口径（同一份 `<id>.json`），
 /// 值可能缺席是常态：存量会话（本字段落地前建的）就是没有。调用方按
 /// 「查不到就回落」处理，**不推断、不回写**。
-#[tauri::command]
-pub async fn session_workspace(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionWorkspaceArgs {
     id: String,
-) -> Result<Option<super::SessionWorkspaceRef>, String> {
+}
+
+async fn session_workspace(_core: Arc<Core>, a: SessionWorkspaceArgs) -> Result<Option<crate::session_store::SessionWorkspaceRef>, String> {
+    let SessionWorkspaceArgs { id } = a;
+    {
     tokio::task::spawn_blocking(move || {
-        let ws = super::our_session_workspace(&id);
+        let ws = crate::session_store::our_session_workspace(&id);
         // wsPath 是承重字段（发送 cwd 用它）；只有 key 没有 path 视为没记过。
         if ws.path.is_none() {
             return Ok(None);
@@ -595,10 +642,18 @@ pub async fn session_workspace(
     .await
     .map_err(|e| format!("session_workspace task panicked: {}", e))?
 }
+}
 
 /// 读回会话记住的模型选择；没有元数据文件或没记过 → None。
-#[tauri::command]
-pub async fn session_model(id: String) -> Result<Option<String>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionModelArgs {
+    id: String,
+}
+
+async fn session_model(_core: Arc<Core>, a: SessionModelArgs) -> Result<Option<String>, String> {
+    let SessionModelArgs { id } = a;
+    {
     tokio::task::spawn_blocking(move || {
         let path = our_sessions_dir().join(format!("{}.json", id));
         if !path.exists() {
@@ -615,10 +670,18 @@ pub async fn session_model(id: String) -> Result<Option<String>, String> {
     .await
     .map_err(|e| format!("session_model task panicked: {}", e))?
 }
+}
 
 /// 读回会话记住的 effort 选择；没有元数据文件或没记过 → None。
-#[tauri::command]
-pub async fn session_effort(id: String) -> Result<Option<String>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEffortArgs {
+    id: String,
+}
+
+async fn session_effort(_core: Arc<Core>, a: SessionEffortArgs) -> Result<Option<String>, String> {
+    let SessionEffortArgs { id } = a;
+    {
     tokio::task::spawn_blocking(move || {
         let path = our_sessions_dir().join(format!("{}.json", id));
         if !path.exists() {
@@ -635,15 +698,24 @@ pub async fn session_effort(id: String) -> Result<Option<String>, String> {
     .await
     .map_err(|e| format!("session_effort task panicked: {}", e))?
 }
+}
 
 /// 读回会话绑定的供应商 id；没有元数据文件或没记过 → None（前端回落全局激活供应商）。
 /// 字段读取与 send_message 的元数据兜底共用 `our_session_provider_field` 同一口径；
 /// 读取失败降级为 None（与缺文件同语义，前端已 catch 兜底）。
-#[tauri::command]
-pub async fn session_provider(id: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || Ok(crate::commands::our_session_provider_field(&id)))
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionProviderArgs {
+    id: String,
+}
+
+async fn session_provider(_core: Arc<Core>, a: SessionProviderArgs) -> Result<Option<String>, String> {
+    let SessionProviderArgs { id } = a;
+    {
+    tokio::task::spawn_blocking(move || Ok(crate::session_store::our_session_provider_field(&id)))
         .await
         .map_err(|e| format!("session_provider task panicked: {}", e))?
+}
 }
 
 /// 发送前的身份漂移判定（桌面端与鸿蒙端共用）：本次将生效的 provider / model 与
@@ -688,14 +760,21 @@ fn compute_identity_drift(
     (provider_drift, model_drift)
 }
 
-#[tauri::command]
-pub async fn session_identity_drift(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionIdentityDriftArgs {
     id: String,
     provider_id: String,
     model: String,
-) -> Result<IdentityDrift, String> {
-    let last_provider = session_provider(id.clone()).await.unwrap_or(None);
-    let last_model = session_model(id).await.unwrap_or(None);
+}
+
+async fn session_identity_drift(core: Arc<Core>, a: SessionIdentityDriftArgs) -> Result<IdentityDrift, String> {
+    let SessionIdentityDriftArgs { id, provider_id, model } = a;
+    {
+    let last_provider = session_provider(core.clone(), SessionProviderArgs { id: id.clone() })
+        .await
+        .unwrap_or(None);
+    let last_model = session_model(core, SessionModelArgs { id }).await.unwrap_or(None);
     let (provider_drift, model_drift) = compute_identity_drift(
         last_provider.as_deref(),
         last_model.as_deref(),
@@ -709,21 +788,6 @@ pub async fn session_identity_drift(
         last_model,
     })
 }
-
-/// 会话进程是否存活（唯一权威来源：Rust 侧存活表，见 `AgentRuntimeManager::session_alive`）。
-///
-/// 远程端用它决定模型下拉的口径：
-///  - **存活** → 锁定会话自己的供应商。此时切到别的供应商的模型，请求会带着新模型名
-///    打到旧供应商的 baseUrl 上，直接 400（手机端报的 `glm` 送到 deepseek 就是这么来的）。
-///  - **未存活** → 跟随全局激活供应商，与桌面「有活进程才锁定」同一语义。
-///
-/// 此前远程端无从判断，只能无条件按全局算下拉，于是存活会话也被换成了别的供应商的模型。
-#[tauri::command]
-pub fn session_alive(
-    id: String,
-    runtime_mgr: State<'_, crate::runtime::AgentRuntimeManager>,
-) -> Result<bool, String> {
-    Ok(runtime_mgr.is_session_alive(&id))
 }
 
 /// List sessions for a specific workspace by its encoded key, without relying
@@ -733,37 +797,32 @@ pub fn session_alive(
 /// 同 `list_sessions`：扫目录 + 逐会话读 .jsonl/JSON 元数据是重同步 IO，必须
 /// async + spawn_blocking，否则堵主线程（诊断黑匣子实锤过同类命令 `session_jsonl_size`
 /// 堵死主线程 30s+，这个命令逻辑更重，是同一类风险，一并修）。
-#[tauri::command]
-pub async fn list_sessions_for_workspace(
-    app: tauri::AppHandle,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListSessionsForWorkspaceArgs {
     ws_key: String,
-) -> Result<Vec<Session>, String> {
-    // 远程工作区（WSL / SSH）：转录在目标机上。key 不能反解成路径（UNC 形态），查注册表。
-    let registered = crate::commands::workspace::registered_path_for_key(
-        &crate::commands::settings::load_state(),
-        &ws_key,
-    );
-    if let Some((host, posix)) = registered
-        .as_deref()
-        .and_then(crate::remote_workspace::path::parse)
+}
+
+async fn list_sessions_for_workspace(_core: Arc<Core>, a: ListSessionsForWorkspaceArgs) -> Result<Vec<Session>, String> {
+    let ListSessionsForWorkspaceArgs { ws_key } = a;
     {
-        return remote_sessions(&app, &host, &posix).await;
-    }
+    // 远程工作区（WSL / SSH）由前门的远程路由接管（remote_workspace::sessions）。
     tokio::task::spawn_blocking(move || list_sessions_for_workspace_blocking(ws_key))
         .await
         .map_err(|e| format!("list_sessions_for_workspace task panicked: {}", e))?
+}
 }
 
 fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, String> {
     let mut sessions: Vec<Session> = Vec::new();
 
     // 同 list_sessions_blocking：dot 归一匹配所有候选项目目录，合并扫描。
-    for proj_dir in super::resolve_project_dirs(&claude_projects_dir(), &ws_key) {
+    for proj_dir in crate::commands::workspace::resolve_project_dirs(&claude_projects_dir(), &ws_key) {
         scan_project_jsonl_sessions(&proj_dir, &mut sessions)?;
     }
 
     // Second pass: scan ~/.aide/claude/sessions/ for sessions with metadata but no .jsonl
-    let root = super::resolve_path_from_key(&ws_key).unwrap_or_default();
+    let root = crate::commands::workspace::resolve_path_from_key(&ws_key).unwrap_or_default();
     let root_normalized = normalize_path_for_compare(&root);
     let sessions_dir = claude_sessions_dir();
     if sessions_dir.exists() && !root.is_empty() {
@@ -837,17 +896,23 @@ fn normalize_path_for_compare(p: &str) -> String {
 /// returns IDs of sessions whose `startedAt > since_ms` that belong to the
 /// current workspace. Results are sorted newest-first so the caller can pick the
 /// first ID that isn't already mapped to an active PTY.
-#[tauri::command]
-pub async fn find_sessions_since(
-    workspace_state: State<'_, std::sync::Arc<WorkspaceState>>,
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FindSessionsSinceArgs {
     since_ms: u64,
-) -> Result<Vec<String>, String> {
+}
+
+async fn find_sessions_since(core: Arc<Core>, a: FindSessionsSinceArgs) -> Result<Vec<String>, String> {
+    let FindSessionsSinceArgs { since_ms } = a;
+    let workspace_state = core.workspace.clone();
+    {
     // 工作区根路径在主线程上取好（锁内一次 exists() stat，够轻），
     // 真正的重活（扫目录 + 逐个读 json 解析）整体搬进阻塞线程。
-    let root = project_root_for_commands(&workspace_state);
+    let root = workspace_state.root_for(None);
     tokio::task::spawn_blocking(move || find_sessions_since_blocking(root, since_ms))
         .await
         .map_err(|e| format!("find_sessions_since task panicked: {e}"))?
+}
 }
 
 fn find_sessions_since_blocking(root: PathBuf, since_ms: u64) -> Result<Vec<String>, String> {
@@ -904,6 +969,38 @@ fn find_sessions_since_blocking(root: PathBuf, since_ms: u64) -> Result<Vec<Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── 旧签名的测试薄壳：用例按「命令 = 普通 async fn」写，这里转调表内处理器 ──
+    async fn create_session(id: String, name: String) -> Result<Session, String> {
+        super::create_session(crate::test_core(std::sync::Arc::new(crate::NullSink)), CreateSessionArgs { id, name }).await
+    }
+    async fn delete_session(id: String) -> Result<(), String> {
+        super::delete_session(crate::test_core(std::sync::Arc::new(crate::NullSink)), DeleteSessionArgs { id }).await
+    }
+    async fn rename_session(id: String, name: String) -> Result<(), String> {
+        super::rename_session(crate::test_core(std::sync::Arc::new(crate::NullSink)), RenameSessionArgs { id, name }).await
+    }
+    async fn auto_rename_session(id: String, name: String) -> Result<bool, String> {
+        super::auto_rename_session(crate::test_core(std::sync::Arc::new(crate::NullSink)), AutoRenameSessionArgs { id, name }).await
+    }
+    async fn set_session_meta(id: String, provider: MetaField, model: MetaField, effort: MetaField) -> Result<(), String> {
+        super::set_session_meta(crate::test_core(std::sync::Arc::new(crate::NullSink)), SetSessionMetaArgs { id, provider, model, effort }).await
+    }
+    async fn set_session_workspace(id: String, ws_path: MetaField, ws_key: MetaField) -> Result<(), String> {
+        super::set_session_workspace(crate::test_core(std::sync::Arc::new(crate::NullSink)), SetSessionWorkspaceArgs { id, ws_path, ws_key }).await
+    }
+    async fn session_workspace(id: String) -> Result<Option<crate::session_store::SessionWorkspaceRef>, String> {
+        super::session_workspace(crate::test_core(std::sync::Arc::new(crate::NullSink)), SessionWorkspaceArgs { id }).await
+    }
+    async fn session_model(id: String) -> Result<Option<String>, String> {
+        super::session_model(crate::test_core(std::sync::Arc::new(crate::NullSink)), SessionModelArgs { id }).await
+    }
+    async fn session_effort(id: String) -> Result<Option<String>, String> {
+        super::session_effort(crate::test_core(std::sync::Arc::new(crate::NullSink)), SessionEffortArgs { id }).await
+    }
+    async fn session_provider(id: String) -> Result<Option<String>, String> {
+        super::session_provider(crate::test_core(std::sync::Arc::new(crate::NullSink)), SessionProviderArgs { id }).await
+    }
 
     // ── 身份漂移判定（session_identity_drift 的纯函数核心）──
 

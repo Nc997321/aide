@@ -9,7 +9,6 @@ use serde_json::Value;
 use tauri::{AppHandle, Manager};
 
 use super::{parse, to_json, BoxFuture};
-use crate::commands::session::MetaField;
 use crate::commands::WorkspaceState;
 use crate::runtime::AgentRuntimeManager;
 use crate::settings::SettingsService;
@@ -259,50 +258,7 @@ pub fn btw_ask(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value
 
 // ── 会话管理与元数据 ──
 
-pub fn list_sessions(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
-        to_json(crate::commands::session::list_sessions(ws_state, app.clone()).await)
-    })
-}
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct WsKeyArgs {
-    ws_key: String,
-}
-
-pub fn list_sessions_for_workspace(
-    app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: WsKeyArgs = parse(params)?;
-        to_json(crate::commands::session::list_sessions_for_workspace(app, a.ws_key).await)
-    })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CreateSessionArgs {
-    id: String,
-    name: String,
-}
-
-pub fn create_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: CreateSessionArgs = parse(params)?;
-        // 与桌面同一实现（内部 spawn_blocking 落盘），这里 await 即可。
-        to_json(crate::commands::session::create_session(a.id, a.name).await)
-    })
-}
-
-pub fn delete_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdOnlyArgs = parse(params)?;
-        to_json(crate::commands::session::delete_session(a.id).await)
-    })
-}
 
 /// 仅 id 字段（session 元数据类命令共用形状）。
 #[derive(Deserialize)]
@@ -311,171 +267,15 @@ struct SessionIdOnlyArgs {
     id: String,
 }
 
-pub fn rename_session(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: CreateSessionArgs = parse(params)?;
-        to_json(crate::commands::session::rename_session(a.id, a.name).await)
-    })
-}
 
-pub fn auto_rename_session(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: CreateSessionArgs = parse(params)?;
-        to_json(crate::commands::session::auto_rename_session(a.id, a.name).await)
-    })
-}
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct LoadMessagesArgs {
-    session_id: String,
-    offset_bytes: Option<u64>,
-    limit: Option<u32>,
-}
-
-pub fn load_messages(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: LoadMessagesArgs = parse(params)?;
-        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
-        to_json(
-            crate::commands::session::load_messages(
-                ws_state,
-                app.clone(),
-                a.session_id,
-                a.offset_bytes,
-                a.limit,
-            )
-            .await,
-        )
-    })
-}
-
-pub fn session_last_event(
-    app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdArgs = parse(params)?;
-        let ws_state = app.state::<std::sync::Arc<WorkspaceState>>();
-        to_json(crate::commands::session::session_last_event(ws_state, app.clone(), a.session_id).await)
-    })
-}
-
-/// 会话元数据写入的**唯一**远程入口。
-///
-/// 三个字段都是 `MetaField` 三态（keep / clear / set），缺省 keep——远程端（OHO）
-/// 只写其中一个字段时其余原样保留。取代此前的 set_session_model / set_session_effort /
-/// set_session_provider 三个单字段命令：它们各写一遍 `<id>.json`，并发时互相覆盖。
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetSessionMetaArgs {
-    id: String,
-    #[serde(default)]
-    provider: MetaField,
-    #[serde(default)]
-    model: MetaField,
-    #[serde(default)]
-    effort: MetaField,
-}
-
-pub fn set_session_meta(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SetSessionMetaArgs = parse(params)?;
-        to_json(
-            crate::commands::session::set_session_meta(a.id, a.provider, a.model, a.effort).await,
-        )
-    })
-}
-
-pub fn session_workspace(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdOnlyArgs = parse(params)?;
-        to_json(crate::commands::session::session_workspace(a.id).await)
-    })
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct SetSessionWorkspaceArgs {
-    id: String,
-    /// 缺省 = keep（两字段都缺 = 什么都不改）。
-    #[serde(default)]
-    ws_path: MetaField,
-    #[serde(default)]
-    ws_key: MetaField,
-}
-
-pub fn set_session_workspace(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SetSessionWorkspaceArgs = parse(params)?;
-        to_json(
-            crate::commands::session::set_session_workspace(a.id, a.ws_path, a.ws_key).await,
-        )
-    })
-}
-
-pub fn session_model(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdOnlyArgs = parse(params)?;
-        to_json(crate::commands::session::session_model(a.id).await)
-    })
-}
-
-pub fn session_effort(_app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdOnlyArgs = parse(params)?;
-        to_json(crate::commands::session::session_effort(a.id).await)
-    })
-}
-
-pub fn session_provider(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        let a: SessionIdOnlyArgs = parse(params)?;
-        to_json(crate::commands::session::session_provider(a.id).await)
-    })
-}
-
-/// 发送前身份漂移判定（远程端复用桌面同一份规则，详见命令侧文档）。
-pub fn session_identity_drift(
-    _app: AppHandle,
-    params: Value,
-) -> BoxFuture<'static, Result<Value, String>> {
-    Box::pin(async move {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Args {
-            id: String,
-            provider_id: String,
-            model: String,
-        }
-        let a: Args = parse(params)?;
-        to_json(
-            crate::commands::session::session_identity_drift(a.id, a.provider_id, a.model).await,
-        )
-    })
-}
 
 /// 会话进程是否存活（远程端决定模型下拉口径的依据，详见命令侧文档）。
 pub fn session_alive(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: SessionIdOnlyArgs = parse(params)?;
         let runtime = app.state::<crate::runtime::AgentRuntimeManager>();
-        to_json(crate::commands::session::session_alive(a.id, runtime))
+        to_json(crate::commands::session_runtime::session_alive(a.id, runtime))
     })
 }
 

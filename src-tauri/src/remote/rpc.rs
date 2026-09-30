@@ -49,6 +49,10 @@ pub fn dispatch(app: AppHandle, command: &str, params: Value) -> Option<BoxFutur
     if !CORE_EXPOSED.contains(&command) {
         return None;
     }
+    // 过渡期：落在远程工作区的会话命令向 aide-host 取（与桌面 IPC 的 routes 同一判定）
+    if let Some(route) = crate::remote_workspace::sessions::route(&app, command, &params) {
+        return Some(Box::pin(crate::remote_workspace::sessions::run(app, route)));
+    }
     let run = aide_core::lookup(command)?;
     Some(Box::pin(async move {
         use tauri::Manager;
@@ -85,6 +89,24 @@ static CORE_EXPOSED: &[&str] = &[
     // 日常模式归属：工作区列表把它滤掉了，远程端要进「日常」只能单独问这条（只读）。
     "daily_workspace",
     "is_workspace_trusted",
+    // ── 会话管理与元数据（远程工作区的会话由 dispatch 先经 remote_workspace::sessions 路由）──
+    "list_sessions",
+    "list_sessions_for_workspace",
+    "create_session",
+    "delete_session",
+    "rename_session",
+    "auto_rename_session",
+    "load_messages",
+    "session_last_event",
+    "session_model",
+    "session_effort",
+    "session_provider",
+    // 工作区归属：共享闭包（useChatSession 的 ensureWorkspaceKnown /
+    // persistWorkspaceIfDirty）被动调用，PWA 与鸿蒙都走它——按收录原则必须登记。
+    "session_workspace",
+    "set_session_workspace",
+    "session_identity_drift",
+    "set_session_meta",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -106,27 +128,7 @@ static REGISTRY: &[(&str, Handler)] = &[
     // ── 后台任务快照（远程对账：打开会话/重连时回填 bgTasks）──
     ("list_bg_tasks", handlers::list_bg_tasks),
     // ── 会话管理与元数据 ──
-    ("list_sessions", handlers::list_sessions),
-    (
-        "list_sessions_for_workspace",
-        handlers::list_sessions_for_workspace,
-    ),
-    ("create_session", handlers::create_session),
-    ("delete_session", handlers::delete_session),
-    ("rename_session", handlers::rename_session),
-    ("auto_rename_session", handlers::auto_rename_session),
-    ("load_messages", handlers::load_messages),
-    ("session_last_event", handlers::session_last_event),
-    ("session_model", handlers::session_model),
-    ("session_effort", handlers::session_effort),
-    ("session_provider", handlers::session_provider),
-    // 工作区归属：共享闭包（useChatSession 的 ensureWorkspaceKnown /
-    // persistWorkspaceIfDirty）被动调用，PWA 与鸿蒙都走它——按收录原则必须登记。
-    ("session_workspace", handlers::session_workspace),
-    ("set_session_workspace", handlers::set_session_workspace),
     ("session_alive", handlers::session_alive),
-    ("session_identity_drift", handlers::session_identity_drift),
-    ("set_session_meta", handlers::set_session_meta),
     // ── 工作区与信任 ──
     ("get_active_workspace", handlers::get_active_workspace),
     ("trust_workspace", handlers::trust_workspace),
