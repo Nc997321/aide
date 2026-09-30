@@ -696,8 +696,8 @@ onMounted(() => {
 .kb-upgrade {
   display: flex;
   flex-wrap: wrap;
-  align-items: baseline;
-  gap: 10px;
+  align-items: center;
+  gap: 8px 10px;
   padding: 10px 20px;
   font-size: 12px;
   line-height: 1.7;
@@ -705,14 +705,19 @@ onMounted(() => {
   background: var(--aide-accent-subtle);
   flex: none;
 }
+/* 说明独占一行，命令 + 复制在下一行——挤在一行时命令会被面板边缘切掉 */
+.kb-upgrade-text { flex: 1 1 100%; min-width: 0; }
 .kb-upgrade-text b { font-weight: 600; color: var(--aide-text-primary); }
 .kb-upgrade-cmd {
+  flex: 0 1 auto;
+  min-width: 0;
   padding: 2px 8px;
   border-radius: var(--aide-radius-sm);
   background: var(--aide-surface-default);
   font-family: var(--aide-font-mono);
   font-size: 11.5px;
   color: var(--aide-text-primary);
+  overflow-wrap: anywhere; /* 窄面板下折行，不溢出 */
   user-select: all; /* 复制按钮失效时，点一下能全选带走 */
 }
 

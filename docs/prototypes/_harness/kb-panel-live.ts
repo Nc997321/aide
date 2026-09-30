@@ -9,6 +9,7 @@
  *   ?empty=1   空空间（看空态）
  *   ?gate=1    凭据失效（看登录兜底页）
  *   ?html=1    默认选中网页条目
+ *   ?old=1     服务端报 0.4.0（没有 version 字段）——看「该升级了」那条提示
  *   ?live=1    **不拦 fetch**：面板连真实服务（默认 127.0.0.1:18788，隔离冒烟栈），
  *              从登录页开始走真实链路。真组件 → 真服务 → 真取件地址，是端到端那一种。
  *   ?w=1400&h=860  面板尺寸（默认 1400×860，接近真实主区）
@@ -150,6 +151,18 @@ const mockFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<
   const path = url.pathname;
   const method = (init?.method ?? "GET").toUpperCase();
 
+  // ?old=1：假装服务端是 0.4.0（那时还没有 version 字段）——看「该升级了」那条提示
+  if (path === "/api/health") {
+    return q.get("old")
+      ? json({ status: "ok", service: "aide-knowledge", parsers: [], tokenizer: "jieba-rs" })
+      : json({
+          status: "ok",
+          service: "aide-knowledge",
+          version: "0.5.0",
+          parsers: [],
+          tokenizer: "jieba-rs",
+        });
+  }
   if (path === "/api/auth/status") return json({ initialized: true });
   if (path === "/api/auth/me") {
     if (q.get("gate")) return json({ error: "unauthorized", message: "登录已过期" }, 401);
