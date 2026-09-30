@@ -1,18 +1,14 @@
-//! Qwen（千问，阿里云百炼）kind：catalog 预置 base_url（Anthropic 兼容端点），
-//! auth_token 认证（Authorization: Bearer / ANTHROPIC_AUTH_TOKEN），仅 test_connection。
-//! 模型档位默认值由 catalog defaults 提供，前端建草稿时预填。
+//! Kimi kind：catalog 预置 base_url，auth_token 认证（Authorization: Bearer），仅 test_connection。
 
 use super::{PresetStrategy, ProviderStrategy};
-use crate::runtime::provider::{catalog::catalog_find, ProviderKind};
+use crate::provider::{catalog::catalog_find, ProviderKind};
 
 pub fn strategy() -> Box<dyn ProviderStrategy> {
-    let base_url = catalog_find(ProviderKind::Qwen)
+    let base_url = catalog_find(ProviderKind::Kimi)
         .map(|p| p.base_url.clone())
-        .unwrap_or_else(|| {
-            "https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic".to_string()
-        });
+        .unwrap_or_else(|| "https://api.kimi.com/coding/".to_string());
     Box::new(PresetStrategy {
-        kind: ProviderKind::Qwen,
+        kind: ProviderKind::Kimi,
         base_url,
     })
 }
@@ -20,12 +16,12 @@ pub fn strategy() -> Box<dyn ProviderStrategy> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderConfig, ProviderModelMappings};
+    use crate::provider::{ProviderConfig, ProviderModelMappings};
 
     fn cfg() -> ProviderConfig {
         ProviderConfig {
             id: "x".into(),
-            kind: ProviderKind::Qwen,
+            kind: ProviderKind::Kimi,
             name: "".into(),
             icon: "".into(),
             base_url: "".into(),
@@ -42,21 +38,21 @@ mod tests {
     }
 
     #[test]
-    fn qwen_env_vars_uses_catalog_base_url_and_auth_token() {
+    fn kimi_env_vars_uses_catalog_base_url() {
         let env = strategy().env_vars(&cfg());
         assert_eq!(
             env.get("ANTHROPIC_BASE_URL"),
-            Some(&"https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic".to_string())
+            Some(&"https://api.kimi.com/coding/".to_string())
         );
         assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN"), Some(&"k".to_string()));
         assert!(
             env.get("ANTHROPIC_API_KEY").is_none(),
-            "Qwen 走 Bearer（ANTHROPIC_AUTH_TOKEN），不应注入 x-api-key"
+            "Kimi 走 Bearer，不应注入 x-api-key"
         );
     }
 
     #[test]
-    fn qwen_actions_only_test_connection() {
+    fn kimi_actions_only_test_connection() {
         let a = strategy().actions();
         assert_eq!(a.len(), 1);
         assert_eq!(a[0].name, "test_connection");

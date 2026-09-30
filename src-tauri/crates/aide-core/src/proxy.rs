@@ -17,11 +17,18 @@ use std::process::Command;
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 
-use super::our_config_dir;
+use std::sync::Arc;
+
+use crate::commands::NoArgs;
+use crate::paths::our_config_dir;
+use crate::registry::Command as HostCommand;
+use crate::{command, Core};
+
+pub static COMMANDS: &[HostCommand] = &[command!("detect_available_proxy", detect_available_proxy)];
 
 /// 完整探测链：app settings（显式配置最优先）→ env → git 全局配置 → 常见本地端口。
 /// 每层先验证 TCP 可达再返回。返回 `http://host:port` 形式的代理 URL。
-pub(crate) fn detect_proxy() -> Option<String> {
+pub fn detect_proxy() -> Option<String> {
     if let Some(proxy) = settings_proxy() {
         return Some(proxy);
     }
@@ -31,7 +38,7 @@ pub(crate) fn detect_proxy() -> Option<String> {
 /// 自动探测（不含用户显式配置）：`HTTPS_PROXY`/`HTTP_PROXY` env → git 全局配置 →
 /// 常见本地端口。设置面板「检测到可用代理」提示用它——只报告本机自动可用的代理，
 /// 用户已配置的 settings 值不重复提示。
-pub(crate) fn detect_proxy_auto() -> Option<String> {
+pub fn detect_proxy_auto() -> Option<String> {
     // 1. 环境变量（验证可达）
     for var in &["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
         if let Ok(val) = std::env::var(var) {
@@ -101,12 +108,11 @@ fn settings_proxy_at(path: &std::path::Path) -> Option<String> {
 /// 探测本机自动可用的代理（不含用户已配置值），供设置面板「一键填入」提示。
 /// async + spawn_blocking：最多 6 次 300ms TCP 探测 + 1 次 git spawn，最坏约 2s，
 /// 不能堵主线程（同步 command 禁止重 IO）。
-#[tauri::command]
-pub async fn detect_available_proxy() -> Option<String> {
-    tokio::task::spawn_blocking(detect_proxy_auto)
+async fn detect_available_proxy(_: Arc<Core>, _: NoArgs) -> Result<Option<String>, String> {
+    Ok(tokio::task::spawn_blocking(detect_proxy_auto)
         .await
         .ok()
-        .flatten()
+        .flatten())
 }
 
 /// 把 `detect_proxy()` 检测到的代理作为 git 全局 `-c http.proxy/https.proxy` 选项加到
@@ -119,7 +125,7 @@ pub async fn detect_available_proxy() -> Option<String> {
 /// 之前只有 `git_clone` 应用代理、`run_git` 不应用，导致源列表能拉取而插件安装/更新
 /// 直连 github 挂死（前端更新按钮无 updating 态指示，spawn_blocking 一直阻塞 → 表现为
 /// 「点击更新完全没有反应」）。两条路径必须一致走代理。
-pub(crate) fn apply_git_proxy(cmd: &mut Command) {
+pub fn apply_git_proxy(cmd: &mut Command) {
     if let Some(ref proxy) = detect_proxy() {
         cmd.arg("-c").arg(format!("http.proxy={}", proxy));
         cmd.arg("-c").arg(format!("https.proxy={}", proxy));

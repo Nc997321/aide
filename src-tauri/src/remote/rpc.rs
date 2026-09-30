@@ -67,9 +67,15 @@ pub fn dispatch(app: AppHandle, command: &str, params: Value) -> Option<BoxFutur
 /// 已迁入 aide-core 的远程可用命令（**只登记名字**：白名单仍是这里，实现是 core 命令表）。
 /// 收录原则同 [`REGISTRY`]。命令迁入 core 后，把它从 REGISTRY 挪到这里并删掉手写包装。
 static CORE_EXPOSED: &[&str] = &[
-    // ── 设置 ──
+    // ── 设置与供应商 ──
     "get_settings",
     "set_settings",
+    "get_providers",
+    "set_providers",
+    "get_active_provider_id",
+    "set_active_provider_id",
+    "get_provider_catalog",
+    "refresh_models",
 ];
 
 /// 白名单目录——读这张表即可审计远程暴露面（每行：命令名 → 包装器）。
@@ -122,13 +128,6 @@ static REGISTRY: &[(&str, Handler)] = &[
     ("is_workspace_trusted", handlers::is_workspace_trusted),
     ("trust_workspace", handlers::trust_workspace),
     ("untrust_workspace", handlers::untrust_workspace),
-    // ── 供应商（设置本体已迁入 core，见 CORE_EXPOSED）──
-    ("get_providers", handlers::get_providers),
-    ("set_providers", handlers::set_providers),
-    ("get_active_provider_id", handlers::get_active_provider_id),
-    ("set_active_provider_id", handlers::set_active_provider_id),
-    ("get_provider_catalog", handlers::get_provider_catalog),
-    ("refresh_models", handlers::refresh_models),
     (
         "claude_credentials_exist",
         handlers::claude_credentials_exist,

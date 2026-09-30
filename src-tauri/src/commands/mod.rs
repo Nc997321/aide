@@ -13,8 +13,8 @@ pub mod migration;
 pub mod notifications;
 pub mod onboarding;
 pub mod permissions;
-pub mod provider;
-pub mod proxy;
+/// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
+pub use aide_core::proxy;
 pub mod recent;
 pub mod remote;
 pub mod run_configs;

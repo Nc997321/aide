@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{mappings_to_env, ProviderConfig, ProviderModelMappings};
+use crate::provider::{mappings_to_env, ProviderConfig, ProviderModelMappings};
 
 use super::{ActionDef, ActionResult, ConnectionStatus, ProviderStrategy};
 
@@ -24,8 +24,8 @@ const LARGE_FALLBACK: &[&str] = &[
 pub struct SystemDefaultStrategy;
 
 impl ProviderStrategy for SystemDefaultStrategy {
-    fn kind(&self) -> crate::runtime::provider::ProviderKind {
-        crate::runtime::provider::ProviderKind::SystemDefault
+    fn kind(&self) -> crate::provider::ProviderKind {
+        crate::provider::ProviderKind::SystemDefault
     }
 
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String> {
@@ -104,7 +104,7 @@ impl ProviderStrategy for SystemDefaultStrategy {
 /// 调 Anthropic GET /v1/models，按省钱档映射返回 mappings。纯逻辑（不写盘）。
 /// 认证：优先 cfg.api_key/auth_token，否则进程 env 兜底。
 pub fn refresh_models_blocking(cfg: &ProviderConfig) -> Result<ProviderModelMappings, String> {
-    use crate::commands::proxy::detect_proxy;
+    use crate::proxy::detect_proxy;
     use std::time::Duration;
 
     let api_key = if !cfg.api_key.is_empty() {
@@ -221,7 +221,7 @@ fn parse_version(id: &str) -> Vec<u64> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+    use crate::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
 
     fn sd_cfg() -> ProviderConfig {
         ProviderConfig {

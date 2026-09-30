@@ -13,6 +13,8 @@ pub mod app_settings;
 pub mod commands;
 pub mod paths;
 pub mod policy;
+pub mod provider;
+pub mod proxy;
 pub mod registry;
 pub mod settings;
 pub mod workspace;

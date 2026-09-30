@@ -1,10 +1,30 @@
-use crate::runtime::provider::ProviderSettings as _;
+use std::sync::Arc;
+
+use serde::Deserialize;
 use serde_json::Value;
 
-use crate::runtime::provider::strategy::{
+use crate::registry::Command;
+use crate::{command, Core};
+
+use crate::provider::strategy::{
     strategy_for, ActionResult, ConnectionStatus, ProviderStrategy,
 };
-use crate::runtime::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+use crate::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+
+pub static COMMANDS: &[Command] = &[
+    command!("get_providers", get_providers),
+    command!("set_providers", set_providers),
+    command!("get_active_provider_id", get_active_provider_id),
+    command!("set_active_provider_id", set_active_provider_id),
+    command!("test_provider_connection", test_provider_connection),
+    command!("cpa_probe_port", cpa_probe_port),
+    command!("cpa_open_management", cpa_open_management),
+    command!("cpa_login_status", cpa_login_status),
+    command!("view_anthropic_quota", view_anthropic_quota),
+    command!("refresh_models", refresh_models),
+    command!("refresh_system_default_models", refresh_system_default_models),
+    command!("get_provider_catalog", get_provider_catalog),
+];
 
 fn find_provider(
     service: &crate::settings::SettingsService,
@@ -34,11 +54,14 @@ pub struct LoginStatusResult {
     pub detail: String,
 }
 
-#[tauri::command]
-pub async fn get_providers(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<Vec<crate::runtime::provider::ProviderConfigView>, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetProvidersArgs {
+}
+
+async fn get_providers(core: Arc<Core>, a: GetProvidersArgs) -> Result<Vec<crate::provider::ProviderConfigView>, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         service
             .list_provider_views()
@@ -48,12 +71,15 @@ pub async fn get_providers(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn set_providers(
-    providers: Vec<crate::runtime::provider::ProviderConfigInput>,
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetProvidersArgs {
+    providers: Vec<crate::provider::ProviderConfigInput>,
+}
+
+async fn set_providers(core: Arc<Core>, a: SetProvidersArgs) -> Result<(), String> {
+    let SetProvidersArgs { providers } = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         service
             .save_provider_inputs(providers)
@@ -63,11 +89,14 @@ pub async fn set_providers(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn get_active_provider_id(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<String, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetActiveProviderIdArgs {
+}
+
+async fn get_active_provider_id(core: Arc<Core>, a: GetActiveProviderIdArgs) -> Result<String, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         service
             .active_provider_id()
@@ -77,12 +106,15 @@ pub async fn get_active_provider_id(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn set_active_provider_id(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetActiveProviderIdArgs {
     provider_id: String,
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<(), String> {
-    let service = service.inner().clone();
+}
+
+async fn set_active_provider_id(core: Arc<Core>, a: SetActiveProviderIdArgs) -> Result<(), String> {
+    let SetActiveProviderIdArgs { provider_id } = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         service
             .mutate_scope_blocking(crate::settings::SettingsScope::User, None, |document| {
@@ -98,12 +130,15 @@ pub async fn set_active_provider_id(
     .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-pub async fn test_provider_connection(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TestProviderConnectionArgs {
     provider_id: String,
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<ConnectionStatus, String> {
-    let service = service.inner().clone();
+}
+
+async fn test_provider_connection(core: Arc<Core>, a: TestProviderConnectionArgs) -> Result<ConnectionStatus, String> {
+    let TestProviderConnectionArgs { provider_id } = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = find_provider(&service, &provider_id)?;
         strategy_for(cfg.kind).test_connection(&cfg)
@@ -112,11 +147,14 @@ pub async fn test_provider_connection(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn cpa_probe_port(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<PortProbeResult, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpaProbePortArgs {
+}
+
+async fn cpa_probe_port(core: Arc<Core>, a: CpaProbePortArgs) -> Result<PortProbeResult, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = service
             .list_runtime_providers()
@@ -126,7 +164,7 @@ pub async fn cpa_probe_port(
             .unwrap_or_else(|| {
                 service
                     .resolve_active_runtime_provider()
-                    .unwrap_or_else(|_| crate::runtime::provider::system_default_provider())
+                    .unwrap_or_else(|_| crate::provider::system_default_provider())
             });
         match strategy_for(ProviderKind::CpaGpt).run_action(&cfg, "probe_port")? {
             ActionResult::PortProbe { alive, detail } => Ok(PortProbeResult { alive, detail }),
@@ -137,11 +175,14 @@ pub async fn cpa_probe_port(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn cpa_open_management(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<String, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpaOpenManagementArgs {
+}
+
+async fn cpa_open_management(core: Arc<Core>, a: CpaOpenManagementArgs) -> Result<String, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = service
             .list_runtime_providers()
@@ -151,7 +192,7 @@ pub async fn cpa_open_management(
             .unwrap_or_else(|| {
                 service
                     .resolve_active_runtime_provider()
-                    .unwrap_or_else(|_| crate::runtime::provider::system_default_provider())
+                    .unwrap_or_else(|_| crate::provider::system_default_provider())
             });
         match strategy_for(ProviderKind::CpaGpt).run_action(&cfg, "open_management")? {
             ActionResult::OpenUrl(u) => Ok(u),
@@ -162,11 +203,14 @@ pub async fn cpa_open_management(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn cpa_login_status(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<LoginStatusResult, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CpaLoginStatusArgs {
+}
+
+async fn cpa_login_status(core: Arc<Core>, a: CpaLoginStatusArgs) -> Result<LoginStatusResult, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = service
             .list_runtime_providers()
@@ -176,7 +220,7 @@ pub async fn cpa_login_status(
             .unwrap_or_else(|| {
                 service
                     .resolve_active_runtime_provider()
-                    .unwrap_or_else(|_| crate::runtime::provider::system_default_provider())
+                    .unwrap_or_else(|_| crate::provider::system_default_provider())
             });
         match strategy_for(ProviderKind::CpaGpt).run_action(&cfg, "codex_login_status")? {
             ActionResult::LoginStatus { logged_in, detail } => {
@@ -189,11 +233,14 @@ pub async fn cpa_login_status(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn view_anthropic_quota(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<serde_json::Value, String> {
-    let service = service.inner().clone();
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ViewAnthropicQuotaArgs {
+}
+
+async fn view_anthropic_quota(core: Arc<Core>, a: ViewAnthropicQuotaArgs) -> Result<serde_json::Value, String> {
+    let _ = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = service
             .resolve_active_runtime_provider()
@@ -208,12 +255,15 @@ pub async fn view_anthropic_quota(
     .map_err(|e| e.to_string())?
 }
 
-#[tauri::command]
-pub async fn refresh_models(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshModelsArgs {
     provider_id: String,
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<ProviderModelMappings, String> {
-    let service = service.inner().clone();
+}
+
+async fn refresh_models(core: Arc<Core>, a: RefreshModelsArgs) -> Result<ProviderModelMappings, String> {
+    let RefreshModelsArgs { provider_id } = a;
+    let service = core.settings.clone();
     tokio::task::spawn_blocking(move || {
         let cfg = find_provider(&service, &provider_id)?;
         let strat: Box<dyn ProviderStrategy> = strategy_for(cfg.kind);
@@ -234,17 +284,31 @@ pub async fn refresh_models(
 }
 
 /// deprecated：用 refresh_models("__system_default__") 代替。
-#[tauri::command]
-pub async fn refresh_system_default_models(
-    service: tauri::State<'_, std::sync::Arc<crate::settings::SettingsService>>,
-) -> Result<ProviderModelMappings, String> {
-    refresh_models("__system_default__".to_string(), service).await
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefreshSystemDefaultModelsArgs {
 }
 
-#[tauri::command]
-pub fn get_provider_catalog(
-) -> Result<Vec<crate::runtime::provider::catalog::CatalogPreset>, String> {
-    Ok(crate::runtime::provider::catalog::catalog().to_vec())
+async fn refresh_system_default_models(core: Arc<Core>, a: RefreshSystemDefaultModelsArgs) -> Result<ProviderModelMappings, String> {
+    let _ = a;
+    refresh_models(
+        core,
+        RefreshModelsArgs {
+            provider_id: "__system_default__".to_string(),
+        },
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetProviderCatalogArgs {
+}
+
+async fn get_provider_catalog(core: Arc<Core>, a: GetProviderCatalogArgs) -> Result<Vec<crate::provider::catalog::CatalogPreset>, String> {
+    let _ = a;
+    let _ = core;
+    Ok(crate::provider::catalog::catalog().to_vec())
 }
 
 #[cfg(test)]
@@ -288,7 +352,7 @@ mod tests {
     fn save_provider_model_mappings_updates_named_provider_entry() {
         let service = test_service("named-entry");
         // Seed two providers at once (save_provider_inputs replaces the entire array)
-        use crate::runtime::provider::ProviderConfigInput;
+        use crate::provider::ProviderConfigInput;
         use crate::settings::SecretMutation;
         service
             .save_provider_inputs(vec![
@@ -374,7 +438,7 @@ mod tests {
     fn active_provider_snake_case_fallback() {
         let service = test_service("snake-fallback");
         // Seed providers so we can resolve them (save_provider_inputs replaces the entire array)
-        use crate::runtime::provider::ProviderConfigInput;
+        use crate::provider::ProviderConfigInput;
         use crate::settings::SecretMutation;
         service
             .save_provider_inputs(vec![
@@ -440,7 +504,7 @@ mod tests {
     #[test]
     fn active_provider_camel_case_preferred_over_snake_case() {
         let service = test_service("camel-preferred");
-        use crate::runtime::provider::ProviderConfigInput;
+        use crate::provider::ProviderConfigInput;
         use crate::settings::SecretMutation;
         service
             .save_provider_inputs(vec![

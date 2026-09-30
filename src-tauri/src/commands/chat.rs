@@ -1,4 +1,3 @@
-use crate::runtime::provider::ProviderSettings as _;
 use crate::commands::settings::{public_settings, DEFAULT_OUTPUT_STYLE};
 use crate::commands::{project_root_for_commands, WorkspaceState};
 use crate::runtime::env::build_runtime_env_vars;

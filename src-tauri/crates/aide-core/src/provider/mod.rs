@@ -8,7 +8,7 @@ pub mod strategy;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
 
-use crate::runtime::provider::catalog::{catalog_find, resolve_preset_identity};
+use crate::provider::catalog::{catalog_find, resolve_preset_identity};
 
 /// Provider 类型判别。预置 kind 的 base_url/name/icon 由 catalog 派生、不入 config.json。
 /// `#[default] Custom` 让缺 `kind` 字段的旧配置反序列化成 Custom（迁移后不会缺）。
@@ -190,7 +190,7 @@ impl ProviderConfig {
         // 此前 view() 输出 known_models=Vec::new()，前端只能用 default-models.json 兜底；
         // 改后：catalog 是单一真源，default-models.json 整个文件可删。
         let known_models = if self.kind == ProviderKind::SystemDefault {
-            crate::runtime::provider::catalog::catalog_find(self.kind)
+            crate::provider::catalog::catalog_find(self.kind)
                 .map(|p| p.models.clone())
                 .unwrap_or_default()
         } else {
@@ -308,47 +308,8 @@ pub fn system_default_provider() -> ProviderConfig {
     }
 }
 
-/// 供应商配置读写（`SettingsService` 上的供应商视图）。扩展 trait：设置服务住在
-/// aide-core，供应商层待 Host 的 HTTPS 端口定案后整体迁入（见 docs/host-model.md）。
-pub trait ProviderSettings {
-    fn list_provider_views(
-        &self,
-    ) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError>;
-    fn resolve_runtime_provider(
-        &self,
-        id: &str,
-    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
-    fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError>;
-    fn resolve_active_runtime_provider(
-        &self,
-    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
-    fn list_runtime_providers(
-        &self,
-    ) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError>;
-    fn save_provider_model_mappings(
-        &self,
-        id: &str,
-        mappings: &ProviderModelMappings,
-    ) -> Result<(), crate::settings::SettingsError>;
-    fn resolve_runtime_provider_from_values(
-        &self,
-        values: &serde_json::Value,
-        id: &str,
-    ) -> Result<ProviderConfig, crate::settings::SettingsError>;
-    fn save_provider_inputs(
-        &self,
-        inputs: Vec<ProviderConfigInput>,
-    ) -> Result<(), crate::settings::SettingsError>;
-    #[cfg(test)]
-    fn save_provider_input_for_test(
-        &self,
-        id: &str,
-        secret: &str,
-    ) -> Result<(), crate::settings::SettingsError>;
-}
-
-impl ProviderSettings for crate::settings::SettingsService {
-    fn list_provider_views(
+impl crate::settings::SettingsService {
+    pub fn list_provider_views(
         &self,
     ) -> Result<Vec<ProviderConfigView>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
@@ -382,7 +343,7 @@ impl ProviderSettings for crate::settings::SettingsService {
             .collect()
     }
 
-    fn resolve_runtime_provider(
+    pub fn resolve_runtime_provider(
         &self,
         id: &str,
     ) -> Result<ProviderConfig, crate::settings::SettingsError> {
@@ -390,7 +351,7 @@ impl ProviderSettings for crate::settings::SettingsService {
         self.resolve_runtime_provider_from_values(&values, id)
     }
 
-    fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError> {
+    pub fn active_provider_id(&self) -> Result<String, crate::settings::SettingsError> {
         let values = &self.effective_document_blocking(None)?.values;
         // camelCase first (canonical), then snake_case fallback for legacy config.json keys
         // that were copied as-is by run_legacy_migration.
@@ -402,7 +363,7 @@ impl ProviderSettings for crate::settings::SettingsService {
         Ok(id.to_string())
     }
 
-    fn resolve_active_runtime_provider(
+    pub fn resolve_active_runtime_provider(
         &self,
     ) -> Result<ProviderConfig, crate::settings::SettingsError> {
         let doc = self.effective_document_blocking(None)?;
@@ -417,7 +378,7 @@ impl ProviderSettings for crate::settings::SettingsService {
 
     /// Returns all providers WITH secrets resolved (for action paths that may need creds).
     /// Mirrors `list_provider_views` but builds `ProviderConfig` with api_key/auth_token.
-    fn list_runtime_providers(
+    pub fn list_runtime_providers(
         &self,
     ) -> Result<Vec<ProviderConfig>, crate::settings::SettingsError> {
         let values = self.effective_document_blocking(None)?.values;
@@ -447,7 +408,7 @@ impl ProviderSettings for crate::settings::SettingsService {
 
     /// Persist model_mappings for a single provider entry. Mutates the `providers[]` entry
     /// whose id matches. If no matching entry, no-op (does NOT create a top-level key).
-    fn save_provider_model_mappings(
+    pub fn save_provider_model_mappings(
         &self,
         id: &str,
         mappings: &ProviderModelMappings,
@@ -502,7 +463,7 @@ impl ProviderSettings for crate::settings::SettingsService {
         Ok(provider)
     }
 
-    fn save_provider_inputs(
+    pub fn save_provider_inputs(
         &self,
         inputs: Vec<ProviderConfigInput>,
     ) -> Result<(), crate::settings::SettingsError> {
@@ -578,7 +539,7 @@ impl ProviderSettings for crate::settings::SettingsService {
     }
 
     #[cfg(test)]
-    fn save_provider_input_for_test(
+    pub fn save_provider_input_for_test(
         &self,
         id: &str,
         secret: &str,
@@ -822,8 +783,8 @@ static MIGRATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// `providers` / `system_default_model_mappings` 都是设置体系接管的 key，消费方是
 /// 紧随其后的设置迁移（把 legacy 导入 settings.json）与 snake_case 兜底读取。
 pub fn ensure_migrated() -> Result<(), String> {
-    use crate::commands::config_path;
-    use crate::commands::settings::{load_legacy_config, save_legacy_config};
+    use crate::paths::config_path;
+    use crate::app_settings::{load_legacy_config, save_legacy_config};
     let _guard = MIGRATE_LOCK.lock().map_err(|e| e.to_string())?;
     let mut config = load_legacy_config();
     if config.is_null() {
@@ -847,7 +808,6 @@ pub fn ensure_migrated() -> Result<(), String> {
 mod secret_boundary_tests {
     use std::sync::Arc;
 
-    use super::ProviderSettings as _;
 
     use crate::settings::{MemorySecretStore, SettingsPaths, SettingsService};
 

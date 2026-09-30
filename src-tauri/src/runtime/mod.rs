@@ -13,7 +13,8 @@ pub mod env;
 #[cfg(windows)]
 pub mod job_object;
 pub mod lsp_agent;
-pub mod provider;
+/// 供应商层住在 aide-core（Host 自持）；保留 `crate::runtime::provider` 路径。
+pub use aide_core::provider;
 mod pump;
 pub mod remote_lane;
 pub use pump::Lane;

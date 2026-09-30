@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{mappings_to_env, ProviderConfig};
+use crate::provider::{mappings_to_env, ProviderConfig};
 
 use super::{ActionDef, ActionResult, ConnectionStatus, ProviderStrategy};
 
@@ -21,8 +21,8 @@ const SMALL_FALLBACK: &[&str] = &[
 pub struct CpaGptStrategy;
 
 impl ProviderStrategy for CpaGptStrategy {
-    fn kind(&self) -> crate::runtime::provider::ProviderKind {
-        crate::runtime::provider::ProviderKind::CpaGpt
+    fn kind(&self) -> crate::provider::ProviderKind {
+        crate::provider::ProviderKind::CpaGpt
     }
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String> {
         let mut env = HashMap::new();
@@ -121,7 +121,7 @@ fn probe_cpa_port() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+    use crate::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
 
     fn cpa_cfg() -> ProviderConfig {
         ProviderConfig {

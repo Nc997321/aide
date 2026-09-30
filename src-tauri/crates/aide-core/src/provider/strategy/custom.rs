@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{provider_to_env_vars, ProviderConfig};
+use crate::provider::{provider_to_env_vars, ProviderConfig};
 
 use super::{ConnectionStatus, ProviderStrategy};
 
@@ -20,8 +20,8 @@ const SMALL_FALLBACK: &[&str] = &[
 ];
 
 impl ProviderStrategy for CustomStrategy {
-    fn kind(&self) -> crate::runtime::provider::ProviderKind {
-        crate::runtime::provider::ProviderKind::Custom
+    fn kind(&self) -> crate::provider::ProviderKind {
+        crate::provider::ProviderKind::Custom
     }
     fn env_vars(&self, cfg: &ProviderConfig) -> HashMap<String, String> {
         provider_to_env_vars(cfg) // 复用既有直映函数，保证回归一致
@@ -30,14 +30,14 @@ impl ProviderStrategy for CustomStrategy {
         SMALL_FALLBACK
     }
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String> {
-        crate::runtime::provider::strategy::common_test_connection(cfg, None)
+        crate::provider::strategy::common_test_connection(cfg, None)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+    use crate::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
 
     fn cfg() -> ProviderConfig {
         ProviderConfig {
@@ -64,7 +64,7 @@ mod tests {
         let p = cfg();
         assert_eq!(
             CustomStrategy.env_vars(&p),
-            crate::runtime::provider::provider_to_env_vars(&p)
+            crate::provider::provider_to_env_vars(&p)
         );
     }
 

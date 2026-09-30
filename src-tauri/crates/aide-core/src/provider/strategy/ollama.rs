@@ -1,7 +1,7 @@
 //! Ollama kind：catalog 预置 base_url，auth_token 认证（Authorization: Bearer），仅 test_connection。
 
 use super::{PresetStrategy, ProviderStrategy};
-use crate::runtime::provider::{catalog::catalog_find, ProviderKind};
+use crate::provider::{catalog::catalog_find, ProviderKind};
 
 pub fn strategy() -> Box<dyn ProviderStrategy> {
     let base_url = catalog_find(ProviderKind::Ollama)
@@ -16,7 +16,7 @@ pub fn strategy() -> Box<dyn ProviderStrategy> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::provider::{ProviderConfig, ProviderModelMappings};
+    use crate::provider::{ProviderConfig, ProviderModelMappings};
 
     fn cfg() -> ProviderConfig {
         ProviderConfig {

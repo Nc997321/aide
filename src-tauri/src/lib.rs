@@ -24,7 +24,6 @@ use std::path::PathBuf;
 
 use commands::file_assoc::PendingOpenFile;
 use commands::WorkspaceState;
-use runtime::provider::ProviderSettings as _;
 use tauri::{Emitter, Manager};
 
 fn init_logging() {
@@ -245,19 +244,6 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::selfcheck::selfcheck_on_startup(app.handle());
 
-            // 注入 release 资源目录给 provider catalog 加载器（dev 走 CARGO_MANIFEST_DIR）
-            #[cfg(not(debug_assertions))]
-            {
-                use tauri::Manager;
-                if let Ok(res_dir) = app.path().resource_dir() {
-                    let catalog_dir = res_dir.join("agent-runtime");
-                    crate::runtime::provider::catalog::set_resource_dir(catalog_dir);
-                    // CodeGraph 本地 ONNX 模型不再由主进程加载：runner 进程
-                    // 拉起时经 env（AIDE_CODEGRAPH_MODEL_DIR）注入同一资源
-                    // 目录（见 codegraph::proxy::spawn_runner）。
-                }
-            }
-
             // CodeGraph RPC 代理挂上 AppHandle（runner 路径/资源目录/settings
             // 访问都要它；manage 先于 setup，只能此处补挂）。
             {
@@ -429,7 +415,6 @@ pub fn run() {
             commands::workspace::is_workspace_trusted,
             commands::workspace::trust_workspace,
             commands::workspace::untrust_workspace,
-            commands::proxy::detect_available_proxy,
             commands::settings::notify_send,
             commands::settings::session_notification_info,
             commands::permissions::get_permission_settings,
@@ -477,18 +462,6 @@ pub fn run() {
             commands::customizations::delete_skill_script,
             commands::customizations::test_mcp_connection,
             // Provider commands
-            commands::provider::get_providers,
-            commands::provider::set_providers,
-            commands::provider::get_active_provider_id,
-            commands::provider::set_active_provider_id,
-            commands::provider::test_provider_connection,
-            commands::provider::cpa_probe_port,
-            commands::provider::cpa_open_management,
-            commands::provider::cpa_login_status,
-            commands::provider::view_anthropic_quota,
-            commands::provider::refresh_models,
-            commands::provider::refresh_system_default_models,
-            commands::provider::get_provider_catalog,
             // Marketplace commands
             commands::marketplace::install::fetch_marketplace,
             commands::marketplace::install::install_plugin,

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::runtime::provider::{
+use crate::provider::{
     mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings,
 };
 
@@ -132,16 +132,16 @@ pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
     match kind {
         ProviderKind::Custom => Box::new(custom::CustomStrategy),
         ProviderKind::SystemDefault => {
-            Box::new(crate::runtime::provider::strategy::system_default::SystemDefaultStrategy)
+            Box::new(crate::provider::strategy::system_default::SystemDefaultStrategy)
         }
         ProviderKind::CpaGpt => {
-            Box::new(crate::runtime::provider::strategy::cpa_gpt::CpaGptStrategy)
+            Box::new(crate::provider::strategy::cpa_gpt::CpaGptStrategy)
         }
-        ProviderKind::Ollama => crate::runtime::provider::strategy::ollama::strategy(),
-        ProviderKind::Kimi => crate::runtime::provider::strategy::kimi::strategy(),
-        ProviderKind::DeepSeek => crate::runtime::provider::strategy::deepseek::strategy(),
-        ProviderKind::Zhipu => crate::runtime::provider::strategy::zhipu::strategy(),
-        ProviderKind::Qwen => crate::runtime::provider::strategy::qwen::strategy(),
+        ProviderKind::Ollama => crate::provider::strategy::ollama::strategy(),
+        ProviderKind::Kimi => crate::provider::strategy::kimi::strategy(),
+        ProviderKind::DeepSeek => crate::provider::strategy::deepseek::strategy(),
+        ProviderKind::Zhipu => crate::provider::strategy::zhipu::strategy(),
+        ProviderKind::Qwen => crate::provider::strategy::qwen::strategy(),
     }
 }
 
@@ -151,7 +151,7 @@ pub(crate) fn common_test_connection(
     cfg: &ProviderConfig,
     base_url_override: Option<&str>,
 ) -> Result<ConnectionStatus, String> {
-    use crate::commands::proxy::detect_proxy;
+    use crate::proxy::detect_proxy;
     use std::time::Duration;
 
     let base_url = base_url_override

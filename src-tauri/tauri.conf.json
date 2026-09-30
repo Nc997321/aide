@@ -21,7 +21,6 @@
     "resources": {
       "../agent-sidecar/dist/aide-agent*": "agent-runtime/",
       "../agent-sidecar/default-permission-modes.json": "agent-runtime/default-permission-modes.json",
-      "resources/provider-catalog.json": "agent-runtime/provider-catalog.json",
       "remote-kit/*": "remote-kit/",
       "codegraph-dist/*": "codegraph/",
     "resources/codegraph-model/model.onnx": "codegraph-model/model.onnx",
