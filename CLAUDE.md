@@ -83,7 +83,7 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 **一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
 
 - **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层），远程由 `aide-host serve` 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令/迁移按 docs/host-model.md §4。**禁止再开平行分派**（Tauri 薄包装 + aide-host 手写分派那种两份）。
-- **Host 自持状态住 `aide_core::Core`**（`WorkspaceState` 已迁入，Tauri 以 `Arc` 共享同一实例）；Core 需要的宿主能力（发事件、资源路径…）一律经 Core 字段注入，**aide-core 禁止依赖 Tauri**，且与 aide-host 同守纯 Rust 无 C 依赖。
+- **Host 自持状态住 `aide_core::Core`**（`WorkspaceState` 已迁入，Tauri 以 `Arc` 共享同一实例）；Core 需要的宿主能力（发事件、资源路径…）一律经 Core 字段注入，**aide-core 禁止依赖 Tauri**，且与 aide-host 同守「无系统 C 库、单静态二进制」约束。
 - **只有一套模型**：P1（窗口连 WSL Host）落地时删除下面「远程工作区」的逐命令路由与路径翻译，不许两种「远程」并存。
 
 
@@ -98,7 +98,7 @@ GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 
 - **agent 车道**：会话按工作区归属绑定车道（`runtime/remote_lane.rs`），事件泵与本机同一条（`runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
 - **插件 / 用户扩展：桌面是唯一真相源**（`remote_workspace/mirror.rs`）：目标机只有按内容哈希命名的只读镜像 `~/.aide/host/ext/<hash>/`，路径随 send 的 `extensions` 字段下发（只有远程车道附，客户端从不发）；**不许在远程开第二个安装入口，也不许把目标机的 `~/.aide/claude` 当扩展来源**。远程用不了的扩展必须经 `notification` 如实上报，不静默消失。
 - **不同步 OAuth 凭据到目标机**（refresh token 轮换会互相顶掉；服务器可能多人共用）。官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`；API Key 类供应商随 send 下发，无需登录。
-- 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须保持**纯 Rust 无 C 依赖**（一个静态二进制跑遍任意发行版）。
+- 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须是**不依赖任何系统 C 库的单个静态二进制**（一个二进制跑遍任意发行版、目标机零安装）：crate 自带源码的 C/汇编（如 rustls 的 ring）允许，静态编入；需要目标机装 `.so` / 头文件 / pkg-config 的依赖（libdbus、openssl-sys 动态链接等）一律禁止。（2026-09-30 由「纯 Rust 无 C」修订：Host 要发 HTTPS，rustls 经 ring 带 C；约束的目的——静态、零安装——不变。）
 
 ## 架构红线：可替换技术必须藏在端口后面
 

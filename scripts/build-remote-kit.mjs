@@ -6,8 +6,10 @@
 //   --optional：构建失败只警告不退出（dev 启动链用：没有交叉编译条件的机器照样能跑桌面，
 //   只是连不了远程工作区；release 不带它——安装包缺套件必须当场失败）。
 //
-// 交叉编译策略（host 是纯 Rust、无 C 依赖，musl 目标可静态链接）：
-//   - Linux 宿主：x86_64 原生 `cargo build --target x86_64-unknown-linux-musl`；
+// 交叉编译策略（host 不依赖任何系统 C 库；随 crate 源码自带的 C/汇编——如 rustls 的 ring——
+// 静态编进去，musl 目标产出单个静态二进制）：
+//   - Linux 宿主：x86_64 原生 `cargo build --target x86_64-unknown-linux-musl`（crate 自带的 C
+//     用 musl-gcc，没有就用系统 gcc——ring 这类自足 C 不碰 libc 头，实测静态链接可用）；
 //     aarch64 需要 cargo-zigbuild（没有就跳过并提示）。
 //   - Windows / macOS 宿主：有 cargo-zigbuild 就用它编两个架构；否则 Windows 上若有
 //     WSL，把 x86_64 的构建委托给 WSL 里的 cargo（与 Linux 宿主同一命令）。
@@ -46,6 +48,13 @@ function ensureTarget(triple) {
   }
 }
 
+/** x86_64 musl 目标的 C 编译器（给 crate 自带的 C/汇编用）：musl-gcc 优先，否则系统 gcc。 */
+function muslCcEnv() {
+  if (has("x86_64-linux-musl-gcc")) return {};
+  const cc = has("musl-gcc") ? "musl-gcc" : "gcc";
+  return { CC_x86_64_unknown_linux_musl: cc };
+}
+
 function output(triple) {
   return join(tauriDir, "target", triple, profile, "aide-host");
 }
@@ -63,6 +72,8 @@ function buildViaWsl(triple) {
     "set -e",
     'if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi',
     `rustup target add ${triple} >/dev/null 2>&1 || true`,
+    // crate 自带的 C（ring）：musl 交叉编译器优先，否则系统 gcc（同 muslCcEnv）
+    "if ! command -v x86_64-linux-musl-gcc >/dev/null; then export CC_x86_64_unknown_linux_musl=$(command -v musl-gcc || echo gcc); fi",
     `cd '${wslPath}'`,
     `cargo build ${profileArgs.join(" ")} -p aide-host --target ${triple}`,
     "",
@@ -79,7 +90,10 @@ for (const { triple, dir } of TARGETS) {
   try {
     if (native) {
       ensureTarget(triple);
-      run("cargo", ["build", ...profileArgs, "-p", "aide-host", "--target", triple], { cwd: tauriDir });
+      run("cargo", ["build", ...profileArgs, "-p", "aide-host", "--target", triple], {
+        cwd: tauriDir,
+        env: { ...process.env, ...muslCcEnv() },
+      });
     } else if (zig) {
       ensureTarget(triple);
       run("cargo", ["zigbuild", ...profileArgs, "-p", "aide-host", "--target", triple], { cwd: tauriDir });

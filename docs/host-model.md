@@ -38,7 +38,7 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 
 - **`crates/aide-core`**：Tauri 无关。`Core` 持有 Host 自持状态（活动工作区等）与事件出口 `EventSink`；`registry` 是命令表 = Host 的全部能力面（可审计）。命令名 = 前端 invoke 名，参数 = invoke 原样 JSON。处理器一律 async，阻塞 IO 经 `blocking` 离开异步线程。
 - **本机前门** `src-tauri/src/host_door.rs`：invoke 链 `routes::intercept → host_door::dispatch → Tauri 命令表`。已迁入 core 的命令不写 `#[tauri::command]`、不进 `generate_handler!`。事件出口 `TauriSink` = `app.emit`。
-- **远程前门** `aide-host serve`：`invoke` 方法查同一张表；二进制结果包成 `{"$bytes": b64}`。aide-host 以 musl 静态链接嵌入 aide-core，故 **aide-core 与 aide-host 同守「纯 Rust 无 C 依赖」**。
+- **远程前门** `aide-host serve`：`invoke` 方法查同一张表；二进制结果包成 `{"$bytes": b64}`。aide-host 以 musl 静态链接嵌入 aide-core，故 **aide-core 与 aide-host 同守「不依赖系统 C 库、单静态二进制」**（crate 自带的 C/汇编如 ring 可静态编入，2026-09-30 定）。
 - **agent 引擎**（Node sidecar）仍是 Host 的子进程，stdin/stdout 协议不变。
 
 ### 事件契约（待兑现）
@@ -53,7 +53,7 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 | P0-2 | 文件监听迁入（首个经 `EventSink` 推事件的能力）：`file_tree_watch` 成为 core 命令；aide-host 的通知帧 = Core 事件原样外送，专用 `watch` 方法删除（协议 v2，桌面握手强校验版本） | ✅ 2026-09-30 |
 | P0-3a | 地基迁入：Host 数据目录布局（`paths`）、分层设置服务（`settings`，密钥端口 `SecretStore`：桌面 = OS 钥匙串，远程 = 内存）、`app_settings` + state.json、权限策略（`policy`）、JDK 扫描；`get_settings` / `set_settings` / `scan_jdks` / `resolve_jdk` 成为 core 命令；手机远程 RPC 白名单新增 `CORE_EXPOSED`（只登记名字，执行走 core 表） | ✅ 2026-09-30 |
 | P0-3b | 前端命令按模块迁入（定制项 / 会话存储 / 工作区注册表 / 最近 / 通知 / 迁移 / 运行配置 / 记忆观测…）；远程 RPC 包装逐条挪进 `CORE_EXPOSED` | |
-| P0-3c | 供应商层迁入：**先定 Host 的 HTTPS 端口**（ureq+rustls 经 ring 带 C/汇编，违反 aide-host 纯 Rust 约束）；过渡期供应商视图是桌面扩展 trait `ProviderSettings` | |
+| P0-3c | 供应商层迁入（HTTPS = ureq + rustls，ring 静态编入——2026-09-30 定：约束改为「不依赖系统 C 库」）；删除桌面扩展 trait `ProviderSettings` | |
 | P0-4 | 长寿状态迁入 Core：agent runtime / PTY / LSP manager / automation；`AppHandle` 在后端只剩 GUI 能力 | |
 | P1 | 窗口连 WSL Host：GUI 泛化转发全部 invoke + 事件，Host 原生路径直出前端；删除 `routes.rs` 与路径翻译 | |
 | P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |

@@ -4,8 +4,8 @@ version = "0.8.0"
 edition = "2021"
 description = "Aide Host core: the command table and host state behind every front door (desktop in-process, aide-host on WSL / SSH). No Tauri dependency."
 
-# 与 aide-host 同一约束：纯 Rust、无 C 依赖（aide-host 以 musl 静态链接嵌入本 crate）。
-# 新增依赖前先确认这一点。
+# 与 aide-host 同一约束：不依赖任何系统 C 库（aide-host 以 musl 静态链接嵌入本 crate）；
+# crate 自带的 C/汇编静态编入可以。新增依赖前先确认这一点。
 [dependencies]
 aide-workspace = { path = "../aide-workspace" }
 serde = { version = "1", features = ["derive"] }

@@ -4,8 +4,9 @@ version = "0.8.0"
 edition = "2021"
 description = "Aide remote workspace host: runs on a WSL distro / SSH server (no GUI needed) and serves the desktop app over stdio JSON-RPC (workspace ops via aide-workspace + the agent runtime)."
 
-# 纯 Rust、无 C 依赖：要能以 x86_64/aarch64-unknown-linux-musl 静态链接，
-# 一个二进制跑遍任意发行版（目标机不装任何东西）。新增依赖前先确认这一点。
+# 不依赖任何系统 C 库：以 x86_64/aarch64-unknown-linux-musl 静态链接，一个二进制跑遍任意
+# 发行版（目标机不装任何东西）。crate 自带的 C/汇编（ring）静态编入可以；要目标机装 .so /
+# 头文件 / pkg-config 的依赖不行。新增依赖前先确认这一点。
 [dependencies]
 aide-workspace = { path = "../aide-workspace" }
 aide-core = { path = "../aide-core" }
