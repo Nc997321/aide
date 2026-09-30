@@ -11,6 +11,7 @@ use std::time::Duration;
 
 use aide_host::protocol::{
     HelloInfo, InvokeParams, Notification, Request, Response, METHOD_HELLO, METHOD_INVOKE,
+    PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -114,6 +115,14 @@ impl HostConnection {
             .await
             .map_err(|_| format!("{} 握手超时", conn.host.label()))??;
         conn.info = serde_json::from_value(hello).map_err(|e| format!("hello 解析失败：{e}"))?;
+        if conn.info.protocol != PROTOCOL_VERSION {
+            return Err(format!(
+                "{} 上的 aide-host 协议版本 {} 与桌面（{}）不一致，请重新连接以重装远程套件",
+                conn.host.label(),
+                conn.info.protocol,
+                PROTOCOL_VERSION
+            ));
+        }
         Ok(Arc::new(conn))
     }
 

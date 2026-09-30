@@ -6,7 +6,8 @@
 //!
 //! - 请求（桌面 → host）：`{"id":1,"method":"invoke","params":{…}}`
 //! - 响应（host → 桌面）：`{"id":1,"ok":<value>}` 或 `{"id":1,"err":"…"}`
-//! - 通知（host → 桌面）：`{"event":"file-tree-changed","payload":[…]}`
+//! - 通知（host → 桌面）：`{"event":"file-tree-changed","payload":[…]}`——Host 核心
+//!   （aide-core `EventSink`）发出的**任何**事件都以这一帧送达，事件名 / payload 原样。
 //!
 //! 路径：本协议里的路径**一律是目标机原生路径**（POSIX）。桌面侧的远程路径形态
 //! （`\\wsl.localhost\<distro>\…` / `\\aide-ssh\<alias>\…`）只存在于桌面，翻译在
@@ -22,12 +23,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-/// 不兼容变更时递增。桌面在 `hello` 里比对，不等 = 视为需要重装 host。
-pub const PROTOCOL_VERSION: u32 = 1;
+/// 不兼容变更时递增。桌面在 `hello` 里比对，不等 = 拒绝连接（套件按内容哈希安装，
+/// 正常路径下两端必然同版本；不等说明装错了东西，要大声失败而不是半通不通）。
+///
+/// v2（2026-09-30）：删除 `watch` 方法——文件监听改为 aide-core 命令 `file_tree_watch`
+/// （经 `invoke`），事件经通知帧回推。
+pub const PROTOCOL_VERSION: u32 = 2;
 
 pub const METHOD_HELLO: &str = "hello";
 pub const METHOD_INVOKE: &str = "invoke";
-pub const METHOD_WATCH: &str = "watch";
 
 /// 二进制结果的包装键：`{"$bytes":"<base64>"}`（如 `read_file_binary`）。桌面据此
 /// 还原成 `tauri::ipc::Response` 原始字节。
@@ -76,13 +80,6 @@ pub struct InvokeParams {
     #[serde(default)]
     pub args: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub root: Option<String>,
-}
-
-/// `watch`：文件树监听重定向（`None` = 停表）。事件以 `file-tree-changed` 通知回推。
-#[derive(Debug, Serialize, Deserialize)]
-pub struct WatchParams {
-    #[serde(default)]
     pub root: Option<String>,
 }
 

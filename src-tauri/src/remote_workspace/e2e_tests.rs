@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aide_host::protocol::{AgentInit, Notification, METHOD_WATCH};
+use aide_host::protocol::{AgentInit, Notification};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -76,7 +76,7 @@ async fn wsl_install_connect_workspace_ops_and_agent() {
     assert_eq!(listing[0]["name"], json!("hello.txt"));
 
     // ── 监听：改动应在防抖窗口后以通知回推 ──
-    conn.call(METHOD_WATCH, json!({"root": dir})).await.expect("watch");
+    conn.invoke("file_tree_watch", json!({"root": dir}), None).await.expect("watch");
     conn.invoke("write_file_content", json!({"path": format!("{dir}/b.txt"), "content": "x"}), None)
         .await
         .unwrap();
@@ -89,7 +89,7 @@ async fn wsl_install_connect_workspace_ops_and_agent() {
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
     assert!(got, "no file-tree-changed notification from target");
-    conn.call(METHOD_WATCH, json!({"root": Value::Null})).await.unwrap();
+    conn.invoke("file_tree_watch", json!({"root": ""}), None).await.unwrap();
 
     // ── git / 搜索（可选：需要目标机上的仓库）──
     if let Some(repo) = env("AIDE_E2E_REPO") {

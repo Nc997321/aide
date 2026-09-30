@@ -15,6 +15,7 @@ pub mod workspace;
 
 use std::sync::Arc;
 
+use aide_workspace::watch::FileWatchService;
 use serde_json::Value;
 
 pub use registry::{lookup, Reply};
@@ -36,15 +37,26 @@ impl EventSink for NullSink {
 pub struct Core {
     /// 活动工作区（全局单例语义沿用桌面现状；按会话的归属走命令参数 `cwd`）。
     pub workspace: Arc<WorkspaceState>,
+    /// 文件树监听（同一时刻只盯一个根：一个窗口一棵树）。
+    pub(crate) watch: FileWatchService,
     events: Arc<dyn EventSink>,
 }
 
 impl Core {
     pub fn new(workspace: Arc<WorkspaceState>, events: Arc<dyn EventSink>) -> Arc<Self> {
-        Arc::new(Self { workspace, events })
+        Arc::new(Self {
+            workspace,
+            watch: FileWatchService::default(),
+            events,
+        })
     }
 
     pub fn emit(&self, event: &str, payload: Value) {
         self.events.emit(event, payload);
+    }
+
+    /// 事件出口本身（给长寿的后台线程持有——持 `Arc<Core>` 会让 Core 与它的线程互相引用）。
+    pub fn events(&self) -> Arc<dyn EventSink> {
+        Arc::clone(&self.events)
     }
 }

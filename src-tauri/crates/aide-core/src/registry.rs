@@ -31,7 +31,11 @@ pub struct Command {
 }
 
 /// 各能力模块的分表。新模块迁入 = 这里加一项。
-static TABLES: &[&[Command]] = &[crate::commands::fs::COMMANDS, crate::commands::git::COMMANDS];
+static TABLES: &[&[Command]] = &[
+    crate::commands::fs::COMMANDS,
+    crate::commands::git::COMMANDS,
+    crate::commands::watch::COMMANDS,
+];
 
 pub fn lookup(name: &str) -> Option<Handler> {
     TABLES

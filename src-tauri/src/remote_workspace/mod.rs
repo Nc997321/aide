@@ -31,7 +31,8 @@ mod e2e_tests;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use aide_host::protocol::{Notification, WatchParams, METHOD_WATCH};
+use aide_host::protocol::Notification;
+use aide_workspace::watch::EVENT_NAME as FILE_TREE_CHANGED;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex as TokioMutex;
@@ -219,9 +220,8 @@ impl RemoteWorkspaces {
             if wanted.is_none() && !c.is_alive() {
                 continue;
             }
-            let params = serde_json::to_value(WatchParams { root: wanted.clone() })
-                .map_err(|e| e.to_string())?;
-            if let Err(e) = c.call(METHOD_WATCH, params).await {
+            let args = serde_json::json!({ "root": wanted.clone().unwrap_or_default() });
+            if let Err(e) = c.invoke("file_tree_watch", args, None).await {
                 if wanted.is_some() {
                     return Err(e);
                 }
@@ -230,8 +230,7 @@ impl RemoteWorkspaces {
         if let Some((host, p)) = root {
             // 该主机尚未建连（上面没遍历到）：建连后再下发
             let c = self.connection(&host).await?;
-            let params = serde_json::to_value(WatchParams { root: Some(p) }).map_err(|e| e.to_string())?;
-            c.call(METHOD_WATCH, params).await?;
+            c.invoke("file_tree_watch", serde_json::json!({ "root": p }), None).await?;
         }
         Ok(())
     }
@@ -245,13 +244,13 @@ impl RemoteWorkspaces {
 /// host 通知 → 桌面事件（路径译回桌面形态后照原事件名 emit，前端无感）。
 fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
     match n.event.as_str() {
-        crate::filewatch::EVENT_NAME => {
+        FILE_TREE_CHANGED => {
             let dirs: Vec<String> = serde_json::from_value::<Vec<String>>(n.payload)
                 .unwrap_or_default()
                 .into_iter()
                 .map(|d| path::to_desktop(host, &d))
                 .collect();
-            let _ = app.emit(crate::filewatch::EVENT_NAME, dirs);
+            let _ = app.emit(FILE_TREE_CHANGED, dirs);
         }
         other => tracing::debug!(host = %host, "unhandled aide-host event {other}"),
     }

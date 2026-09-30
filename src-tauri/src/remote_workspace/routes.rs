@@ -334,11 +334,10 @@ async fn forward(app: AppHandle, fwd: Forward) -> Result<InvokeResponseBody, Str
                     .filter(|r| !r.is_empty())
                     .map(std::path::PathBuf::from),
             };
-            if let Some(local) = app.try_state::<Arc<crate::filewatch::FileWatchService>>() {
-                let local = local.inner().clone();
-                let app2 = app.clone();
+            if let Some(core) = app.try_state::<Arc<aide_core::Core>>() {
+                let core = core.inner().clone();
                 tokio::task::spawn_blocking(move || {
-                    crate::filewatch::retarget_local(&local, local_root.as_deref(), &app2)
+                    aide_core::commands::watch::retarget(&core, local_root.as_deref())
                 })
                 .await
                 .map_err(|e| e.to_string())??;

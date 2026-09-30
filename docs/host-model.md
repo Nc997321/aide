@@ -50,14 +50,14 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | P0-1 | aide-core 骨架（Core / EventSink / registry）+ fs / 搜索 / git 51 条命令迁入；桌面与 aide-host 共用，删除两份平行分派（Tauri 薄包装 + `git_dispatch.rs`） | ✅ 2026-09-30 |
-| P0-2 | 文件监听（首个用 EventSink 的能力）、会话转录、LSP 探测迁入 | |
-| P0-3 | 会话 / 设置 / 权限 / 定制项 / 运行配置…其余命令按模块迁入；`AppHandle` 在后端只剩 GUI 能力 | |
-| P0-4 | agent runtime / PTY / LSP manager / automation 这类长寿状态迁入 Core | |
+| P0-2 | 文件监听迁入（首个经 `EventSink` 推事件的能力）：`file_tree_watch` 成为 core 命令；aide-host 的通知帧 = Core 事件原样外送，专用 `watch` 方法删除（协议 v2，桌面握手强校验版本） | ✅ 2026-09-30 |
+| P0-3 | 前端命令按模块迁入（会话 / 设置 / 权限 / 定制项 / 运行配置…）；Core 按需获得 Host 路径（aide home / claude home / 资源目录） | |
+| P0-4 | 长寿状态迁入 Core：agent runtime / PTY / LSP manager / automation；`AppHandle` 在后端只剩 GUI 能力 | |
 | P1 | 窗口连 WSL Host：GUI 泛化转发全部 invoke + 事件，Host 原生路径直出前端；删除 `routes.rs` 与路径翻译 | |
 | P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |
 | P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |
 
-迁移期规则：远程工作区在 P1 之前仍走 `routes.rs`；aide-host 收到桌面解析好的 `root` 时注入为 core 命令的 `cwd` 参数。**表外命令遇远程路径一律大声拒绝**，绝不回落本机。
+迁移期规则：远程工作区在 P1 之前仍走 `routes.rs`。aide-host 里的 `transcript_*` / `lsp_detect` 等「桌面向 host 取原料」的内部命令**不迁入 core**——它们是逐命令转发模型的产物，P1 后会话命令与 LSP manager 本身跑在 Host 里，它们随 `routes.rs` 一起删除。aide-host 收到桌面解析好的 `root` 时注入为 core 命令的 `cwd` 参数。**表外命令遇远程路径一律大声拒绝**，绝不回落本机。
 
 ## 4. 新增 / 迁移一条命令
 

@@ -8,7 +8,6 @@ mod codegraph;
 pub mod commands;
 mod conversation;
 mod diagnostics;
-mod filewatch;
 mod host_door;
 mod lsp;
 mod policy;
@@ -172,10 +171,6 @@ pub fn run() {
                 }
             }
         })
-        // 工作区文件监听（filewatch.rs）：外部改动自动刷新文件树；
-        // Arc 包装——file_tree_watch 命令把 Arc clone 进 spawn_blocking
-        // （State 引用不能跨 spawn_blocking，CLAUDE.md 红线）
-        .manage(std::sync::Arc::new(filewatch::FileWatchService::default()))
         // CodeGraph 已进程隔离：主进程只持有 RPC 代理（runner 二进制由它
         // 惰性拉起，ONNX/向量库/tree-sitter 都不在 aide.exe 里）。
         .manage(std::sync::Arc::new(codegraph::CodeGraphService::new()))
@@ -515,7 +510,6 @@ pub fn run() {
             commands::clipboard::clipboard_read_files,
             commands::clipboard::clipboard_write_files,
             // Workspace FS watching: auto-refresh the file tree on external changes
-            filewatch::file_tree_watch,
             commands::clipboard::clipboard_read_image,
             // Stage an externally-dropped OS file to temp (drop-handler fallback
             // when WebView2 doesn't expose File.path)
