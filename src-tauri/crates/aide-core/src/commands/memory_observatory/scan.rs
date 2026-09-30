@@ -97,7 +97,7 @@ pub fn scan(workspace_key: &str) -> Result<ScanResult, String> {
 
 /// 跨项目全量扫描（P2 只读聚合）：遍历 projects 下所有含 memory/ 的项目目录。
 pub fn scan_all() -> Result<ScanAllResult, String> {
-    let projects = scan_projects_dir(&crate::commands::claude_projects_dir());
+    let projects = scan_projects_dir(&crate::paths::claude_projects_dir());
     let claude_md = fs::metadata(resolve::claude_md_path())
         .ok()
         .map(|m| ClaudeMdInfo {

@@ -365,7 +365,6 @@ pub fn run() {
             commands::file_assoc::unregister_open_with,
             commands::file_assoc::set_open_with_extensions,
             commands::filesystem::show_in_explorer,
-            commands::filesystem::detect_run_command,
             commands::session::list_sessions,
             automation::commands::list_automations,
             automation::commands::get_automation,
@@ -393,19 +392,9 @@ pub fn run() {
             commands::session::session_identity_drift,
             commands::session::load_messages,
             commands::session::session_last_event,
-            commands::session::load_session_changes,
-            commands::session::save_session_changes,
-            commands::session::append_session_change,
             commands::session::session_jsonl_size,
             commands::session::session_truncate_jsonl,
             commands::session::find_sessions_since,
-            commands::memory_observatory::memory_observatory_scan,
-            commands::memory_observatory::memory_observatory_read_file,
-            commands::memory_observatory::memory_observatory_snapshot,
-            commands::memory_observatory::memory_observatory_delete_file,
-            commands::memory_observatory::memory_observatory_events,
-            commands::memory_observatory::memory_observatory_scan_all,
-            commands::memory_observatory::memory_index_for_dir,
             // 工作区信任（Trusted Workspace）
             commands::workspace_trust::trust_workspace,
             commands::workspace_trust::untrust_workspace,
@@ -435,9 +424,6 @@ pub fn run() {
             commands::marketplace::set_marketplace_enabled,
             commands::marketplace::set_plugin_enabled,
             // Run configuration commands
-            commands::run_configs::list_run_configs,
-            commands::run_configs::save_run_configs,
-            commands::run_configs::detect_run_targets,
             // JDK registry (scan / resolve) — per-project JDK injection
             // Run process lifecycle commands
             commands::run_process::run_process_start,

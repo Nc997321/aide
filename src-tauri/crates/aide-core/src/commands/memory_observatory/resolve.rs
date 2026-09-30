@@ -6,7 +6,8 @@
 
 use std::path::PathBuf;
 
-use crate::commands::{claude_home, claude_projects_dir, our_config_dir, resolve_project_dirs};
+use crate::commands::workspace::resolve_project_dirs;
+use crate::paths::{claude_home, claude_projects_dir, our_config_dir};
 
 /// 当前工作区对应的所有 memory 目录（只保留实际存在的）。
 pub fn memory_dirs(workspace_key: &str) -> Vec<PathBuf> {

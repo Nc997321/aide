@@ -1,11 +1,28 @@
+
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize as _;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("list_run_configs", list_run_configs),
+    command!("save_run_configs", save_run_configs),
+    command!("detect_run_targets", detect_run_targets),
+    command!("detect_run_command", detect_run_command),
+];
+
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-use super::detectors::detect_run_targets as detect_targets;
-use super::our_config_dir;
+use aide_workspace::detect::markers::detect_run_targets as detect_targets;
+use crate::paths::our_config_dir;
 
-pub use super::detectors::RunTarget;
+pub use aide_workspace::detect::markers::RunTarget;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RunConfig {
@@ -32,9 +49,15 @@ fn configs_path(ws_key: &str) -> std::path::PathBuf {
         .join(format!("{}.json", encode_key(ws_key)))
 }
 
-#[tauri::command]
-pub fn list_run_configs(ws_key: String) -> Result<Vec<RunConfig>, String> {
-    let _trace = crate::diagnostics::trace_command("list_run_configs");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListRunConfigsArgs {
+    ws_key: String,
+}
+
+async fn list_run_configs(_core: Arc<Core>, a: ListRunConfigsArgs) -> Result<Vec<RunConfig>, String> {
+    let ListRunConfigsArgs { ws_key } = a;
+    blocking(move || -> Result<Vec<RunConfig>, String> {
     let path = configs_path(&ws_key);
     if !path.exists() {
         return Ok(Vec::new());
@@ -43,6 +66,7 @@ pub fn list_run_configs(ws_key: String) -> Result<Vec<RunConfig>, String> {
     let mut configs: Vec<RunConfig> = serde_json::from_str(&data).map_err(|e| e.to_string())?;
     migrate_per_config_java_home(&ws_key, &mut configs, &path);
     Ok(configs)
+}).await
 }
 
 /// 存量迁移（2026-08-08）：JDK 选择从 per-config（env.JAVA_HOME）升级为工作区级
@@ -58,9 +82,9 @@ fn migrate_per_config_java_home(ws_key: &str, configs: &mut [RunConfig], path: &
         .find(|s| !s.is_empty())
         .cloned();
     let Some(first_jh) = first_jh else { return };
-    let key = super::workspace::path_to_key(ws_key);
-    if super::workspace::workspace_jdk(&key).is_none() {
-        if let Err(e) = super::workspace::set_workspace_jdk(&key, &first_jh) {
+    let key = crate::commands::workspace::path_to_key(ws_key);
+    if crate::commands::workspace::workspace_jdk(&key).is_none() {
+        if let Err(e) = crate::commands::workspace::set_workspace_jdk(&key, &first_jh) {
             tracing::warn!("run_configs: migrate JAVA_HOME → workspace_jdk failed: {e}");
         }
     }
@@ -81,22 +105,57 @@ fn migrate_per_config_java_home(ws_key: &str, configs: &mut [RunConfig], path: &
     }
 }
 
-#[tauri::command]
-pub fn save_run_configs(ws_key: String, configs: Vec<RunConfig>) -> Result<(), String> {
-    let _trace = crate::diagnostics::trace_command("save_run_configs");
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRunConfigsArgs {
+    ws_key: String,
+    configs: Vec<RunConfig>,
+}
+
+async fn save_run_configs(_core: Arc<Core>, a: SaveRunConfigsArgs) -> Result<(), String> {
+    let SaveRunConfigsArgs { ws_key, configs } = a;
+    blocking(move || -> Result<(), String> {
     let path = configs_path(&ws_key);
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let data = serde_json::to_string_pretty(&configs).map_err(|e| e.to_string())?;
     fs::write(&path, data).map_err(|e| e.to_string())
+}).await
 }
 
-#[tauri::command]
-pub async fn detect_run_targets(cwd: String) -> Result<Vec<RunTarget>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectRunTargetsArgs {
+    cwd: String,
+}
+
+async fn detect_run_targets(_core: Arc<Core>, a: DetectRunTargetsArgs) -> Result<Vec<RunTarget>, String> {
+    let DetectRunTargetsArgs { cwd } = a;
+    {
     tokio::task::spawn_blocking(move || Ok(detect_targets(Path::new(&cwd))))
         .await
         .map_err(|e| format!("detect_run_targets task panicked: {}", e))?
+}
+}
+
+// ── Project run-command detection ──────────────────────────────────────────
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetectRunCommandArgs {
+    cwd: String,
+}
+
+async fn detect_run_command(_core: Arc<Core>, a: DetectRunCommandArgs) -> Result<Option<String>, String> {
+    let DetectRunCommandArgs { cwd } = a;
+    {
+    tokio::task::spawn_blocking(move || {
+        Ok(aide_workspace::detect::markers::detect_command_for_path(std::path::Path::new(&cwd)))
+    })
+    .await
+    .map_err(|e| format!("detect_run_command task panicked: {}", e))?
+}
 }
 
 #[cfg(test)]

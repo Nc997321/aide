@@ -1,7 +1,7 @@
-//! 本机外壳能力（用本机程序打开 / 在资源管理器中显示）与运行命令探测。
+//! 本机外壳能力（用本机程序打开 / 在资源管理器中显示）——GUI 侧能力，留在桌面。
 //! 文件读写 / 列目录 / 搜索是 Host 能力，已迁入 aide-core（`crates/aide-core/src/commands/fs.rs`）。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 #[cfg(windows)]
@@ -65,15 +65,4 @@ pub fn show_in_explorer(path: String) -> Result<(), String> {
             .map_err(|e| format!("Failed to open: {}", e))?;
     }
     Ok(())
-}
-
-// ── Project run-command detection ──────────────────────────────────────────
-
-#[tauri::command]
-pub async fn detect_run_command(cwd: String) -> Result<Option<String>, String> {
-    tokio::task::spawn_blocking(move || {
-        Ok(super::detectors::detect_command_for_path(Path::new(&cwd)))
-    })
-    .await
-    .map_err(|e| format!("detect_run_command task panicked: {}", e))?
 }

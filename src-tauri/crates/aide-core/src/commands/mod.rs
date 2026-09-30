@@ -5,12 +5,15 @@ pub mod customizations;
 pub mod git;
 pub mod jdk;
 pub mod knowledge;
+pub mod memory_observatory;
 pub mod migration;
 pub mod notifications;
 pub mod onboarding;
 pub mod provider;
 pub mod workspace;
 pub mod recent;
+pub mod run_configs;
+pub mod session_changes;
 pub mod watch;
 
 use serde::Deserialize;

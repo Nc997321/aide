@@ -1,10 +1,66 @@
-// 会话变更落盘域：变更面板每轮 captureChanges 的 append（O(1) 追加）与
-// revert 场景的全量 save / load。文件 `~/.aide/sessions/<id>-changes.json`
-// （JSONL，兼容旧 pretty 数组）。
+//! 会话变更落盘域：变更面板每轮 captureChanges 的 append（O(1) 追加）与
+//! revert 场景的全量 save / load。文件 `~/.aide/sessions/<id>-changes.json`
+//! （JSONL，兼容旧 pretty 数组）。
+
+#[allow(unused_imports)]
+use crate::registry::{blocking, Command as HostCommand};
+#[allow(unused_imports)]
+use crate::{command, Core};
+#[allow(unused_imports)]
+use serde::Deserialize;
+#[allow(unused_imports)]
+use std::sync::Arc;
+
+pub static COMMANDS: &[HostCommand] = &[
+    command!("load_session_changes", load_session_changes),
+    command!("save_session_changes", save_session_changes),
+    command!("append_session_change", append_session_change),
+];
 
 use std::fs;
 
-use crate::commands::{our_sessions_dir, ChangeRoundData};
+use serde::Serialize;
+
+use crate::paths::our_sessions_dir;
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ChangeFileData {
+    pub path: String,
+    #[serde(default = "default_status")]
+    pub status: String,
+    pub additions: u32,
+    pub deletions: u32,
+}
+
+fn default_status() -> String {
+    "M".to_string()
+}
+
+/// 一轮变更在 `<id>-changes.json` 里的一行。
+///
+/// **线上名一律 camelCase**（`rename_all`）：TS 侧 `ChangeRound` 是唯一消费者，而 Tauri
+/// 只转换**命令的参数名**、嵌套 struct 的字段名走 serde 原样。这里曾经没有 `rename_all`——
+/// `rewind_to` 与 TS 的 `rewindTo` 对不上，两个方向都**静默**失效（写盘被当未知键丢掉 →
+/// 恒 null；读回 TS 恒 undefined），历史轮的「撤回到此处」因此从不出现（2026-09-28 修）。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangeRoundData {
+    pub index: u32,
+    pub time: String,
+    pub files: Vec<ChangeFileData>,
+    /// 本轮回退锚点（.jsonl 字节位置）。`alias` 读改名之前落盘的 snake_case 键——
+    /// 老会话的回退锚点不能因为一次改名而丢。
+    #[serde(default, alias = "rewind_to")]
+    pub rewind_to: Option<u64>,
+    /// 本轮对应的用户提问（变更面板轮次标题用）；旧数据无此字段，默认空。
+    #[serde(default)]
+    pub prompt: Option<String>,
+    /// 「改前」引用：**该轮开轮时刻**会话工作区仓库的 HEAD 提交。
+    /// 旧数据 / 非 git 仓库 / 取失败都没有它 —— 消费端据此退回 HEAD 累计，不追溯。
+    #[serde(default)]
+    pub base_rev: Option<String>,
+}
+
 
 /// 每轮 Claude 回完都会调用一次（`useConversationChanges.captureChanges → save`），
 /// 把累积的全部 `rounds` 序列化落盘。同步版是 2026-07-08 第二次真实冻结的根因：
@@ -12,11 +68,19 @@ use crate::commands::{our_sessions_dir, ChangeRoundData};
 /// （杀软实时扫描/磁盘争抢时可拖到 27s）两段式堵死 Tauri 主线程，报告实锤 `pending`
 /// 单调涨 + `aide.exe` 首帧 100% CPU。和 `session_jsonl_size` 同一类反模式（见
 /// CLAUDE.md「同步 command 禁止重 IO」），一并改 async + spawn_blocking。
-#[tauri::command]
-pub async fn load_session_changes(session_id: String) -> Result<Vec<ChangeRoundData>, String> {
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LoadSessionChangesArgs {
+    session_id: String,
+}
+
+async fn load_session_changes(_core: Arc<Core>, a: LoadSessionChangesArgs) -> Result<Vec<ChangeRoundData>, String> {
+    let LoadSessionChangesArgs { session_id } = a;
+    {
     tokio::task::spawn_blocking(move || load_session_changes_blocking(session_id))
         .await
         .map_err(|e| format!("load_session_changes task panicked: {}", e))?
+}
 }
 
 /// changes 文件格式（2026-08-26 起）：
@@ -51,14 +115,20 @@ fn load_session_changes_blocking(session_id: String) -> Result<Vec<ChangeRoundDa
     Ok(rounds)
 }
 
-#[tauri::command]
-pub async fn save_session_changes(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveSessionChangesArgs {
     session_id: String,
     rounds: Vec<ChangeRoundData>,
-) -> Result<(), String> {
+}
+
+async fn save_session_changes(_core: Arc<Core>, a: SaveSessionChangesArgs) -> Result<(), String> {
+    let SaveSessionChangesArgs { session_id, rounds } = a;
+    {
     tokio::task::spawn_blocking(move || save_session_changes_blocking(session_id, rounds))
         .await
         .map_err(|e| format!("save_session_changes task panicked: {}", e))?
+}
 }
 
 /// 全量覆盖落盘（revertRound / revertSingleFile 等轮次变少/修改场景）：JSONL 每行一轮。
@@ -81,14 +151,20 @@ fn save_session_changes_blocking(
 
 /// 追加单轮（captureChanges 的常规路径）：O(1) append 一行，不重写整份文件。
 /// 前端用磁盘尾轮锚点保证只追加「磁盘之后的新轮」；revert 场景改走全量 save。
-#[tauri::command]
-pub async fn append_session_change(
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppendSessionChangeArgs {
     session_id: String,
     round: ChangeRoundData,
-) -> Result<(), String> {
+}
+
+async fn append_session_change(_core: Arc<Core>, a: AppendSessionChangeArgs) -> Result<(), String> {
+    let AppendSessionChangeArgs { session_id, round } = a;
+    {
     tokio::task::spawn_blocking(move || append_session_change_blocking(session_id, round))
         .await
         .map_err(|e| format!("append_session_change task panicked: {}", e))?
+}
 }
 
 fn append_session_change_blocking(
@@ -111,7 +187,7 @@ fn append_session_change_blocking(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::commands::ChangeFileData;
+    
 
     // ── changes 落盘：append（JSONL 追加）/ save（全量覆盖）/ load（双格式兼容）──
 

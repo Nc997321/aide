@@ -3,11 +3,9 @@
 // re-export 门面——外部（lib.rs / remote/rpc/handlers / automation）继续走
 // `commands::session::X`，路径经下方 pub use 保持不变。
 
-mod changes;
 mod history;
 mod jsonl;
 
-pub use changes::{append_session_change, load_session_changes, save_session_changes};
 pub use history::load_messages;
 pub use jsonl::{session_jsonl_size, session_last_event, session_truncate_jsonl};
 // 供自动化 RunRecord.summary 读取末条消息摘要（automation/scheduler.rs）
@@ -29,11 +27,6 @@ use super::{
 // tauri 的 __cmd__<name> 宏跟随 fn 的定义模块（不随 pub use 转发），而
 // lib.rs 的 generate_handler / remote handlers 按 `commands::session::X`
 // 引用命令——把跨文件命令的宏 item 逐个转发回来，保证注册路径不变。
-pub(crate) use changes::{
-    __cmd__append_session_change, __cmd__load_session_changes, __cmd__save_session_changes,
-    __tauri_command_name_append_session_change, __tauri_command_name_load_session_changes,
-    __tauri_command_name_save_session_changes,
-};
 pub(crate) use history::{__cmd__load_messages, __tauri_command_name_load_messages};
 pub(crate) use jsonl::{
     __cmd__session_jsonl_size, __cmd__session_last_event, __cmd__session_truncate_jsonl,

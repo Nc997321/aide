@@ -36,7 +36,7 @@ pub struct EventsResult {
 pub fn read_events(workspace_key: Option<&str>) -> Result<EventsResult, String> {
     read_events_inner(
         &resolve::events_log(),
-        &crate::commands::our_sessions_dir(),
+        &crate::paths::our_sessions_dir(),
         workspace_key,
     )
 }
