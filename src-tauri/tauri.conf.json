@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
-    "beforeDevCommand": "pnpm build:codegraph && pnpm build:sidecar:dev && pnpm dev"
+    "beforeDevCommand": "pnpm build:codegraph && pnpm build:sidecar:dev && pnpm build:remote-kit:dev && pnpm dev"
   },
   "app": {
     "windows": [],

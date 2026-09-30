@@ -2,7 +2,9 @@
 // → src-tauri/remote-kit/{aide-host-linux-x64, aide-host-linux-arm64, runtime.js}，随安装包分发（tauri.conf.json resources），桌面连接 WSL / SSH
 // 目标机时上传（见 src-tauri/src/remote_workspace/install.rs）。
 //
-// 用法：node scripts/build-remote-kit.mjs [--debug]
+// 用法：node scripts/build-remote-kit.mjs [--debug] [--optional]
+//   --optional：构建失败只警告不退出（dev 启动链用：没有交叉编译条件的机器照样能跑桌面，
+//   只是连不了远程工作区；release 不带它——安装包缺套件必须当场失败）。
 //
 // 交叉编译策略（host 是纯 Rust、无 C 依赖，musl 目标可静态链接）：
 //   - Linux 宿主：x86_64 原生 `cargo build --target x86_64-unknown-linux-musl`；
@@ -20,6 +22,7 @@ const tauriDir = join(root, "src-tauri");
 const kitDir = join(tauriDir, "remote-kit");
 const profile = process.argv.includes("--debug") ? "debug" : "release";
 const profileArgs = profile === "release" ? ["--release"] : [];
+const optional = process.argv.includes("--optional");
 
 const TARGETS = [
   { triple: "x86_64-unknown-linux-musl", dir: "linux-x64" },
@@ -107,6 +110,6 @@ copyFileSync(runtime, join(kitDir, "runtime.js"));
 
 if (!built.includes("linux-x64")) {
   console.error("✗ linux-x64 aide-host 未构建成功——远程工作区（WSL / 绝大多数服务器）将不可用");
-  process.exit(1);
+  process.exit(optional ? 0 : 1);
 }
 console.log(`✓ remote-kit → ${kitDir}（${built.join(", ")} + runtime.js）`);

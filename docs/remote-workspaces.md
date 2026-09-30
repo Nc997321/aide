@@ -99,6 +99,7 @@ Tauri v2 的 `invoke_handler` 是闭包——在命令表外包一层，所有�
 | Claude CLI | 桌面按需从 npm registry（npmjs → npmmirror）下载缓存 | `~/.aide/host/deps/claude-<sdk>-<plat>/claude` |
 | node | 目标机已有 ≥18 则用；否则桌面代下 | `~/.aide/host/deps/node-<ver>/` |
 
+构建：`pnpm release` 与 `pnpm tauri dev` 都会自动构建套件（dev 下失败只警告，不挡桌面启动），无需手动执行。
 `<ver>` = 应用版本 + host/runtime 内容哈希：开发期改了代码也会触发重装；旧版本目录自动清理。
 下载走桌面的代理设置（`commands::proxy::detect_proxy`），缓存在 `~/.aide/cache/remote-kit/`。
 
