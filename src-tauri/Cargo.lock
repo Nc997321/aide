@@ -79,7 +79,6 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "png 0.17.16",
- "portable-pty",
  "rand 0.8.6",
  "regex",
  "serde",
@@ -115,12 +114,14 @@ dependencies = [
  "base64 0.22.1",
  "dunce",
  "once_cell",
+ "portable-pty",
  "regex",
  "serde",
  "serde_json",
  "tokio",
  "tracing",
  "ureq",
+ "which",
 ]
 
 [[package]]

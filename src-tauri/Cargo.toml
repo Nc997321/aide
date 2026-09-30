@@ -45,7 +45,6 @@ serde_json = "1"
 # ANTHROPIC_AUTH_TOKEN → SDK 报 "Not logged in · Please run /login"。三个平台后端由
 # keyring 内部按编译目标自选，同时开启即可（未命中的平台编译为空）。
 keyring = { version = "3", features = ["windows-native", "apple-native", "linux-native-sync-persistent"] }
-portable-pty = "0.8"
 notify-rust = "4"
 # 工作区文件系统监听（filewatch.rs）：外部改动（资源管理器/cmd/其他编辑器）自动
 # 刷新文件树。Windows 后端 = ReadDirectoryChangesW。默认 feature 不含

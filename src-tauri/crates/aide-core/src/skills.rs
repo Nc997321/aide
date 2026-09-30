@@ -60,7 +60,7 @@ impl SkillProvider for ClaudeSkillProvider {
 
         // 1. 用户级：<claude_home>/skills/*/SKILL.md（claude_home 指向 Aide 自管理目录
         //    下的 claude/ 子目录，与 customizations.rs 的 skills_dir() 一致）
-        let user_skills = crate::commands::claude_home().join("skills");
+        let user_skills = crate::paths::claude_home().join("skills");
         skills.extend(scan_dir(&user_skills, "user", "claude"));
 
         // 2. 项目级：{cwd}/.aide/claude/skills/*/SKILL.md（Aide 约定：项目数据在 .aide/

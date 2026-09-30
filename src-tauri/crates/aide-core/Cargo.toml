@@ -18,6 +18,9 @@ base64 = "0.22"
 # HTTPS（供应商连接测试 / 模型刷新）：同步、无 async runtime；rustls 经 ring 静态编入（见上方约束）。
 ureq = { version = "2", features = ["json", "tls"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
+# 终端 PTY：Unix 走 libc openpty（musl 自带），Windows 走 ConPTY——不引入系统 C 库。
+portable-pty = "0.8"
+which = "7"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

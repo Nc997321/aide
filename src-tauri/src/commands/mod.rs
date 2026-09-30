@@ -17,9 +17,7 @@ pub use aide_core::commands::{
 };
 pub use aide_core::commands::session::Session;
 pub mod remote;
-pub mod run_process;
 pub mod settings;
-pub mod shell;
 
 use std::path::PathBuf;
 

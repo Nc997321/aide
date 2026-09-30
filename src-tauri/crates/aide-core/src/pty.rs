@@ -1,3 +1,6 @@
+//! 终端（PTY）：工作台终端与运行配置进程。输出由前端轮询 `poll_pty_output` 取走，
+//! 退出经 [`EventSink`] 发 `pty-exit`。
+
 use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
@@ -5,7 +8,8 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use tauri::{AppHandle, Emitter};
+
+use crate::EventSink;
 
 /// Per-session write-queue capacity. Bounded so a foreground process that
 /// stops reading its stdin (hung / busy-loop) can neither grow memory without
@@ -29,7 +33,7 @@ struct LaunchParams<'a> {
     /// spawn 失败报错用的人类可读名字（program / command）。
     label: &'a str,
     size: PtySize,
-    app_handle: AppHandle,
+    events: Arc<dyn EventSink>,
     payload_kind: ExitPayload,
 }
 
@@ -48,7 +52,7 @@ struct WaiterJob {
     child: Box<dyn Child + Send + Sync>,
     sessions: Arc<Mutex<HashMap<String, ShellSession>>>,
     sid: String,
-    app_handle: AppHandle,
+    events: Arc<dyn EventSink>,
     payload_kind: ExitPayload,
 }
 
@@ -111,7 +115,7 @@ impl ShellManager {
             child,
             sessions: self.sessions.clone(),
             sid: params.session_id.to_string(),
-            app_handle: params.app_handle,
+            events: params.events,
             payload_kind: params.payload_kind,
         });
         Ok(())
@@ -127,7 +131,7 @@ impl ShellManager {
         cwd: &PathBuf,
         rows: u16,
         cols: u16,
-        app_handle: AppHandle,
+        events: Arc<dyn EventSink>,
     ) -> Result<(), String> {
         let mut cmd = CommandBuilder::new(program);
         cmd.args(args);
@@ -143,7 +147,7 @@ impl ShellManager {
                 pixel_width: 0,
                 pixel_height: 0,
             },
-            app_handle,
+            events,
             payload_kind: ExitPayload::Plain,
         })
     }
@@ -164,7 +168,7 @@ impl ShellManager {
         env: &BTreeMap<String, String>,
         rows: u16,
         cols: u16,
-        app_handle: AppHandle,
+        events: Arc<dyn EventSink>,
     ) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         let (shell_bin, shell_args): (String, Vec<String>) = (
@@ -204,7 +208,7 @@ impl ShellManager {
                 pixel_width: 0,
                 pixel_height: 0,
             },
-            app_handle,
+            events,
             payload_kind: ExitPayload::Run,
         })
     }
@@ -338,7 +342,7 @@ fn spawn_waiter(job: WaiterJob) {
             mut child,
             sessions,
             sid,
-            app_handle,
+            events,
             payload_kind,
         } = job;
         let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
@@ -352,14 +356,15 @@ fn spawn_waiter(job: WaiterJob) {
                 serde_json::json!({ "session_id": &sid, "success": success }).to_string()
             }
         };
-        let _ = app_handle.emit("pty-exit", payload);
+        // 载荷沿用桌面既有形态：JSON **字符串**（前端按字符串 parse）。
+        events.emit("pty-exit", serde_json::Value::String(payload));
     });
 }
 
 /// 把 `<java_home>/bin` 前置到现有 `PATH`，使子进程解析 `java`/`mvn` 等命令时
 /// 优先命中该 JDK 的可执行文件。纯函数（无 IO），便于单测。
 /// `sep` 是平台路径分隔符：Windows `;`、Unix `:`。
-pub(crate) fn prepend_java_bin_to_path(java_home: &str, cur_path: &str, sep: &str) -> String {
+pub fn prepend_java_bin_to_path(java_home: &str, cur_path: &str, sep: &str) -> String {
     let bin = PathBuf::from(java_home).join("bin");
     match cur_path.is_empty() {
         false => format!("{}{}{}", bin.display(), sep, cur_path),

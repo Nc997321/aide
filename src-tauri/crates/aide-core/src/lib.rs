@@ -15,9 +15,11 @@ pub mod paths;
 pub mod policy;
 pub mod provider;
 pub mod proxy;
+pub mod pty;
 pub mod registry;
 pub mod session_store;
 pub mod settings;
+pub mod skills;
 pub mod workspace;
 
 use std::sync::Arc;
@@ -50,6 +52,8 @@ pub struct Core {
     pub settings: Arc<SettingsService>,
     /// 文件树监听（同一时刻只盯一个根：一个窗口一棵树）。
     pub(crate) watch: FileWatchService,
+    /// 终端 / 运行配置的 PTY 会话。
+    pub pty: pty::ShellManager,
     events: Arc<dyn EventSink>,
 }
 
@@ -63,6 +67,7 @@ impl Core {
             workspace,
             settings,
             watch: FileWatchService::default(),
+            pty: pty::ShellManager::new(),
             events,
         })
     }

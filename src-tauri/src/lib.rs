@@ -17,8 +17,6 @@ pub mod remote;
 pub(crate) mod remote_workspace;
 pub mod runtime;
 mod settings;
-mod shell;
-mod skills;
 
 use std::path::PathBuf;
 
@@ -64,7 +62,6 @@ pub fn run() {
         default_hook(info);
     }));
 
-    let shell_manager = shell::ShellManager::new();
     // state.json 播种（legacy config.json → state.json 一次性 key 搬迁）必须在
     // load_workspace_state 之前——它读的就是 state.json。幂等；失败保留 legacy
     // 文件，设置迁移清理时会重试。
@@ -89,6 +86,7 @@ pub fn run() {
     // 「工作区还在吗」注入远程感知判定：远程路径同步 stat 不了，按存在处理（Host 核心的
     // 根解析 / 工作区列表、桌面的会话 cwd 兜底共用这一判定）。
     aide_core::workspace::set_presence_check(remote_workspace::path::present);
+    aide_core::commands::terminal::set_remote_shell(remote_workspace::launcher::remote_shell);
     let workspace_state = std::sync::Arc::new(WorkspaceState::new());
     // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
     let settings_service = std::sync::Arc::new(settings::SettingsService::new(
@@ -149,7 +147,6 @@ pub fn run() {
                 )
                 .build(),
         )
-        .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
         .manage(std::sync::Arc::clone(&settings_service))
         .manage(runtime::AgentRuntimeManager::new())
@@ -157,7 +154,6 @@ pub fn run() {
         .manage(std::sync::Arc::new(
             runtime::bg_registry::BgTaskRegistry::default(),
         ))
-        .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
         .manage(std::sync::Arc::clone(&workspace_state))
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
@@ -354,11 +350,6 @@ pub fn run() {
             commands::browser::browser_bookmarks_remove,
             commands::browser::browser_bookmarks_import,
             commands::browser::browser_favicons,
-            commands::shell::pty_write,
-            commands::shell::pty_resize,
-            commands::shell::pty_kill,
-            commands::shell::poll_pty_output,
-            commands::shell::pty_spawn_shell,
             commands::filesystem::file_open,
             commands::file_assoc::consume_pending_open_file,
             commands::file_assoc::register_open_with,
@@ -399,8 +390,6 @@ pub fn run() {
             // Run configuration commands
             // JDK registry (scan / resolve) — per-project JDK injection
             // Run process lifecycle commands
-            commands::run_process::run_process_start,
-            commands::run_process::run_process_stop,
             // Clipboard paste (files / images) into the Claude TUI
             commands::clipboard::clipboard_read_files,
             commands::clipboard::clipboard_write_files,
@@ -426,7 +415,6 @@ pub fn run() {
             // Knowledge base runtime credentials
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
             // Plugin skills scanning
-            commands::shell::scan_plugin_skills,
             // Code graph
             codegraph::commands::codegraph_build_index,
             codegraph::commands::codegraph_goto_definition,
