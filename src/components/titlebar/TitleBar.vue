@@ -8,6 +8,7 @@ import ProviderSwitcher from "./ProviderSwitcher.vue";
 import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
+import { hostApi } from "@aide/sdk";
 import type { RunStatus } from "../../composables/useRunProcess";
 import type { RunConfig } from "../../types";
 
@@ -24,6 +25,17 @@ const props = defineProps<{
   // 当前工作区根路径（LSP 徽章/面板用）
   workspaceRoot?: string;
 }>();
+
+// 一个窗口 = 一个 Host：Host 窗口在品牌旁标出它连着哪台 Host（本机窗口不标）。
+const hostLabel = ref("");
+onMounted(async () => {
+  try {
+    const h = await hostApi.current();
+    if (h.key !== "local") hostLabel.value = h.label;
+  } catch {
+    /* 非桌面环境 / 连接未就绪：不标 */
+  }
+});
 
 const emit = defineEmits<{
   "open-palette": [];
@@ -145,6 +157,7 @@ function isRowRunning(cfg: RunConfig): boolean {
       <div class="titlebar-logo" data-tauri-drag-region>
         <AppLogo :size="15" />
         <span class="titlebar-logo-text">Aide</span>
+        <span v-if="hostLabel" class="titlebar-host" v-tooltip="`此窗口连着 ${hostLabel}：会话、文件、终端都在那台机器上`">{{ hostLabel }}</span>
       </div>
 
       <SidebarToggle
@@ -364,6 +377,17 @@ function isRowRunning(cfg: RunConfig): boolean {
   font-weight: 700;
   color: var(--aide-text-secondary);
   letter-spacing: 0.5px;
+}
+
+.titlebar-host {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  margin-left: 6px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
+  color: var(--aide-text-secondary);
+  white-space: nowrap;
 }
 
 .titlebar-sep {

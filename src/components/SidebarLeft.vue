@@ -13,7 +13,7 @@ import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api, openExternal } from "../api";
-import { parseRemotePath } from "@aide/sdk";
+import { hostApi, parseRemotePath } from "@aide/sdk";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
@@ -299,6 +299,17 @@ function switchWorkspace(ws: WorkspaceInfo) {
  *  唯一入口是文件树 path-bar 切换器（switchToWorkspaceByKey）。 */
 async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
   if (ws.missing) return false;
+  // 旧版登记的远程工作区（`\\wsl.localhost\…` / `\\aide-ssh.invalid\…`）：一个窗口 = 一个
+  // Host，它属于那台 Host → 在那台 Host 的窗口里打开，而不是在本机窗口里逐命令转发。
+  const remote = remoteOf(ws);
+  if (remote) {
+    try {
+      await hostApi.openWindow(remote.host, remote.posix);
+    } catch (e) {
+      console.warn("open host window failed", e);
+    }
+    return false;
+  }
   try {
     await api.setWorkspace(ws.key, ws.name);
   } catch (_e) {

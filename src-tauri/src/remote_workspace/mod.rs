@@ -255,6 +255,14 @@ impl RemoteWorkspaces {
 /// 否则按旧模型把路径译回桌面形态后广播（P1d 删除这一支）。
 fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
     if crate::host_window::has_windows(app, host) {
+        // Host 的 agent 要用内嵌浏览器（GUI 能力）：不转给前端，由桌面应答后经
+        // `agent_tool_result` 回到那台 Host 的 runtime。
+        if n.event == "chat-event" {
+            if let Some(req) = crate::browser::agent_bridge::parse_browser_query(&n.payload) {
+                crate::host_window::answer_browser_query(app, host, req);
+                return;
+            }
+        }
         crate::host_window::emit_to_host(app, host, &n.event, &n.payload);
         return;
     }

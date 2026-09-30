@@ -8,8 +8,10 @@ use std::process::Command;
 use std::os::windows::process::CommandExt;
 
 #[tauri::command]
-pub fn file_open(path: String) -> Result<(), String> {
+pub fn file_open(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("file_open");
+    // Host 窗口里的路径是 Host 原生路径：跨界到本机前先翻译（SSH 如实拒绝）
+    let path = crate::host_window::gui_path(&window, &path)?;
     #[cfg(target_os = "windows")]
     {
         let mut cmd = Command::new("cmd");
@@ -35,8 +37,9 @@ pub fn file_open(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub fn show_in_explorer(path: String) -> Result<(), String> {
+pub fn show_in_explorer(window: tauri::WebviewWindow, path: String) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("show_in_explorer");
+    let path = crate::host_window::gui_path(&window, &path)?;
     let p = PathBuf::from(&path);
     #[cfg(target_os = "windows")]
     {

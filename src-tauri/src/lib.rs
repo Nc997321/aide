@@ -343,7 +343,6 @@ pub fn run() {
             commands::clipboard::clipboard_read_image,
             // Stage an externally-dropped OS file to temp (drop-handler fallback
             // when WebView2 doesn't expose File.path)
-            commands::clipboard::stage_dropped_file,
             // Recent access
             // Chat (Agent SDK)
             // Knowledge base runtime credentials
@@ -373,6 +372,8 @@ pub fn run() {
             remote_workspace::remote_ws_host_of,
             host_window::open_host_window,
             host_window::current_host,
+            host_window::import_local_providers,
+            host_window::upload_local_files,
             ]);
             // Host 窗口转发 → 远程工作区拦截（旧模型，P1d 删）→ 本机 Host 命令表（aide-core）
             // → 其余 Tauri 命令。

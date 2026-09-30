@@ -43,6 +43,7 @@ import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/t
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
+import { HOST_OPEN_FOLDER_EVENT, hostApi } from "@aide/sdk";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed, provide } from "vue";
@@ -253,6 +254,15 @@ const onboarding = useOnboarding();
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: (() => void) | null = null;
 let unlistenOpenSessionFromNotification: (() => void) | null = null;
+let unlistenHostOpenFolder: (() => void) | null = null;
+/** 本窗口连着的远程 Host 的显示名；本机窗口为空（一个窗口 = 一个 Host）。 */
+const hostWindowLabel = ref("");
+void hostApi
+  .current()
+  .then((h) => {
+    if (h.key !== "local") hostWindowLabel.value = h.label;
+  })
+  .catch(() => {});
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -906,6 +916,18 @@ onMounted(async () => {
     );
   } catch (_) { /* best effort */ }
 
+  // Host 窗口（一个窗口 = 一个 Host）带着要打开的目录启动：`?openFolder=<Host 原生路径>`；
+  // 窗口已开着时同一请求经 host-open-folder 事件送达。与「打开目录」对话框确认同一条路。
+  try {
+    unlistenHostOpenFolder = await listen<string>(HOST_OPEN_FOLDER_EVENT, (e) => {
+      if (e.payload) void onOpenFolderConfirm(e.payload);
+    });
+  } catch (_) { /* best effort */ }
+  {
+    const folder = new URLSearchParams(window.location.search).get("openFolder");
+    if (folder) void onOpenFolderConfirm(folder);
+  }
+
   // 注册「查看」动作：市场更新通知点击 → 打开主区插件市场面板
   registerActionHandler("marketplace", () => openMarketplacePanel());
 
@@ -974,6 +996,7 @@ onUnmounted(() => {
   wb.dispose();
   unlistenOpenFile?.();
   unlistenOpenSessionFromNotification?.();
+  unlistenHostOpenFolder?.();
 });
 </script>
 
@@ -1126,9 +1149,13 @@ onUnmounted(() => {
             <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位。首次激活才挂（异步 chunk 不在启动时拉），
                  挂上后常驻——关面板/切 tab 只 setDisplayed(false)，页面、滚动位置与前进后退历史都留着。 -->
             <BrowserPanel
-              v-if="rightPanel.browserEverActive.value"
+              v-if="rightPanel.browserEverActive.value && !hostWindowLabel"
               v-show="rightTab === 'browser'"
             />
+            <!-- 内嵌浏览器目前挂在主窗口上，按窗口分属前（P1e）Host 窗口里如实说明，不在别的窗口里开页面 -->
+            <div v-if="hostWindowLabel" v-show="rightTab === 'browser'" class="host-browser-note">
+              内嵌浏览器暂只在本机窗口可用。此窗口连着 {{ hostWindowLabel }}。
+            </div>
           </div>
         </div>
         <ARailBar :tabs="rightTabs" :model-value="rightTab" :collapsed="rightCollapsed" @select="onRailSelect" />
@@ -1328,5 +1355,10 @@ onUnmounted(() => {
   flex-direction: column;
   flex: 1;
   min-height: 0;
+}
+.host-browser-note {
+  padding: 16px;
+  font-size: 12px;
+  color: var(--aide-text-muted);
 }
 </style>

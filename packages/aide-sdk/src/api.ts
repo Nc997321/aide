@@ -288,9 +288,14 @@ export const api = {
   clipboardReadImage(): Promise<string | null> {
     return getTransport().invoke("clipboard_read_image");
   },
-  // 外部拖入的 OS 文件落到临时目录，返回路径（仅当 WebView2 不暴露 File.path 时兜底）
+  // 外部拖入的 OS 文件落到**本窗口 Host** 的暂存目录，返回 Host 路径（WebView2 不暴露 File.path 时）
   stageDroppedFile(name: string, base64: string): Promise<string> {
     return getTransport().invoke("stage_dropped_file", { name, base64 });
+  },
+  /** GUI 这台机器上的文件路径（剪贴板文件 / 粘贴的截图 / 拖入带 File.path 的文件）→ 本窗口 Host
+   *  能看见的路径：本机窗口原样返回；Host 窗口把文件上传到 Host 暂存目录（一个窗口 = 一个 Host）。 */
+  uploadLocalFiles(paths: string[]): Promise<string[]> {
+    return getTransport().invoke("upload_local_files", { paths });
   },
 
   // 文件
@@ -947,6 +952,8 @@ export {
   resolveAgainstWorkspace,
 } from "./api/remoteWorkspace";
 export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remoteWorkspace";
+export { hostApi, HOST_OPEN_FOLDER_EVENT } from "./api/host";
+export type { CurrentHost } from "./api/host";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

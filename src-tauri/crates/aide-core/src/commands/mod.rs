@@ -21,6 +21,7 @@ pub mod recent;
 pub mod run_configs;
 pub mod session;
 pub mod session_changes;
+pub mod staging;
 pub mod terminal;
 pub mod watch;
 pub mod workspace_trust;

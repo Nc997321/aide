@@ -2,7 +2,7 @@
 import { computed, onMounted, ref, watch } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
-import { remoteWorkspaceApi, remoteDesktopPath, type RemoteTargets } from "@aide/sdk";
+import { hostApi, remoteWorkspaceApi, type CurrentHost, type RemoteTargets } from "@aide/sdk";
 import type { FileEntry } from "../types";
 
 const props = defineProps<{ visible: boolean }>();
@@ -14,34 +14,60 @@ const emit = defineEmits<{
 const path = ref("");
 const error = defineModel<string>("error", { default: "" });
 
-// ── 机器选择：本机 / WSL 发行版 / SSH 主机 ──
-// 远程工作区的 GUI 仍在本机；选中目标机后，下面的目录树经 IPC 拦截层列的是目标机的目录，
-// 选中的路径是桌面形态（\\wsl.localhost\… / \\aide-ssh.invalid\…），打开流程与本机完全相同。
+// ── 一个窗口 = 一个 Host ──
+// 本窗口连着的 Host 上的目录直接在这里选（Host 窗口列的就是 Host 自己的文件系统，路径是 Host
+// 原生路径）。别的机器（WSL 发行版 / SSH 主机）= 另一台 Host → 在它自己的窗口里打开。
 const LOCAL = "local";
+const host = ref<CurrentHost | null>(null);
 const machine = ref<string>(LOCAL);
 const targets = ref<RemoteTargets>({ wsl: [], ssh: [] });
 const customSsh = ref("");
 const showCustomSsh = ref(false);
-/** 远程连接阶段：idle → connecting → ready / failed */
-const phase = ref<"idle" | "connecting" | "ready" | "failed">("idle");
-const phaseDetail = ref("");
-const remoteRoots = ref<FileEntry[] | undefined>(undefined);
+const opening = ref(false);
 
-const machines = computed(() => [
-  { key: LOCAL, label: "本机" },
-  ...targets.value.wsl.map((d) => ({ key: `wsl:${d}`, label: `WSL: ${d}` })),
-  ...targets.value.ssh.map((h) => ({ key: `ssh:${h}`, label: `SSH: ${h}` })),
-]);
+/** 本窗口是 Host 窗口（连的不是本机）。 */
+const isHostWindow = computed(() => !!host.value && host.value.key !== LOCAL);
+/** 选中的是本窗口自己的 Host（在这里选目录），还是别的 Host（开它的窗口）。 */
+const isOwnHost = computed(() => machine.value === (host.value?.key ?? LOCAL));
 
-onMounted(loadTargets);
+const machines = computed(() => {
+  const own = { key: host.value?.key ?? LOCAL, label: host.value?.label ?? "本机" };
+  // Host 窗口里不列「本机」：本机 Host 就是主窗口，在那边打开即可
+  const others = [
+    ...targets.value.wsl.map((d) => ({ key: `wsl:${d}`, label: `WSL: ${d}` })),
+    ...targets.value.ssh.map((h) => ({ key: `ssh:${h}`, label: `SSH: ${h}` })),
+  ].filter((m) => m.key !== own.key);
+  return [own, ...others];
+});
+
+/** Host 窗口的目录起点：Host 家目录 + 根。本机窗口交给 DirTreePicker 自己的盘符 / 快捷根。 */
+const hostRoots = computed<FileEntry[] | undefined>(() =>
+  isHostWindow.value && host.value
+    ? [
+        { name: "Home", path: host.value.home, is_dir: true, children: null },
+        { name: "/", path: "/", is_dir: true, children: null },
+      ]
+    : undefined,
+);
+
+onMounted(init);
 watch(
   () => props.visible,
   (v) => {
-    if (v) void loadTargets();
+    if (v) void init();
   },
 );
 
-async function loadTargets() {
+async function init() {
+  try {
+    host.value = await hostApi.current();
+  } catch {
+    host.value = null;
+  }
+  if (machine.value === LOCAL && host.value) {
+    machine.value = host.value.key;
+    if (isHostWindow.value && !path.value) path.value = host.value.home;
+  }
   try {
     targets.value = await remoteWorkspaceApi.targets();
   } catch {
@@ -49,32 +75,9 @@ async function loadTargets() {
   }
 }
 
-async function selectMachine(key: string) {
-  if (machine.value === key && phase.value !== "failed") return;
+function selectMachine(key: string) {
   machine.value = key;
-  path.value = "";
   error.value = "";
-  remoteRoots.value = undefined;
-  if (key === LOCAL) {
-    phase.value = "idle";
-    return;
-  }
-  phase.value = "connecting";
-  phaseDetail.value = "";
-  try {
-    // 首次连接会把远程套件装到目标机（~/.aide/host），之后秒连
-    const st = await remoteWorkspaceApi.connect(key);
-    const home = st.home ?? remoteDesktopPath(key, "/");
-    remoteRoots.value = [
-      { name: "Home", path: home, is_dir: true, children: null },
-      { name: "/", path: remoteDesktopPath(key, "/"), is_dir: true, children: null },
-    ];
-    path.value = home;
-    phase.value = "ready";
-  } catch (e) {
-    phase.value = "failed";
-    phaseDetail.value = String(e);
-  }
 }
 
 function connectCustomSsh() {
@@ -86,10 +89,8 @@ function connectCustomSsh() {
   if (!targets.value.ssh.includes(h)) targets.value = { ...targets.value, ssh: [...targets.value.ssh, h] };
   showCustomSsh.value = false;
   customSsh.value = "";
-  void selectMachine(`ssh:${h}`);
+  selectMachine(`ssh:${h}`);
 }
-
-const pickerReady = computed(() => machine.value === LOCAL || phase.value === "ready");
 
 function close() {
   emit("update:visible", false);
@@ -97,6 +98,19 @@ function close() {
 }
 
 async function onConfirm() {
+  if (!isOwnHost.value) {
+    // 别的 Host：开（或聚焦）它的窗口，在那边选目录——首次会在目标机安装 Aide 组件
+    opening.value = true;
+    try {
+      await hostApi.openWindow(machine.value);
+      close();
+    } catch (e) {
+      error.value = String(e);
+    } finally {
+      opening.value = false;
+    }
+    return;
+  }
   if (!path.value.trim()) {
     error.value = "请选择或输入目录路径";
     return;
@@ -135,21 +149,18 @@ async function onConfirm() {
           </span>
         </div>
 
-        <div v-if="machine !== LOCAL && phase === 'connecting'" class="of-status">
-          正在连接 {{ machines.find((m) => m.key === machine)?.label }}…首次连接会在目标机安装 Aide 远程组件，可能需要一分钟。
+        <div v-if="!isOwnHost" class="of-status">
+          {{ machines.find((m) => m.key === machine)?.label }} 是另一台 Host，会在它自己的窗口里打开（一个窗口 = 一个
+          Host）。首次打开会在目标机安装 Aide 组件，可能需要一分钟；进度在新窗口里显示。
         </div>
-        <div v-else-if="phase === 'failed'" class="of-status failed">
-          <div>连接失败</div>
-          <pre>{{ phaseDetail }}</pre>
-          <button class="of-machine" @click="selectMachine(machine)">重试</button>
-        </div>
-
-        <DirTreePicker v-if="pickerReady" :key="machine" v-model="path" :roots="remoteRoots" />
+        <DirTreePicker v-else :key="machine" v-model="path" :roots="hostRoots" />
 
         <div v-if="error" class="of-error">{{ error }}</div>
         <div class="of-actions">
           <button class="of-btn cancel" @click="close">取消</button>
-          <button class="of-btn confirm" :disabled="!pickerReady" @click="onConfirm">打开并切换</button>
+          <button class="of-btn confirm" :disabled="opening" @click="onConfirm">
+            {{ isOwnHost ? "打开并切换" : "在新窗口中打开" }}
+          </button>
         </div>
       </div>
     </div>

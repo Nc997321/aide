@@ -794,7 +794,12 @@ async function handlePaste(e: ClipboardEvent) {
     // 同进程并发打开会互斥失败（粘贴偶发为空的真实根因），先 files 后 image。
     const filesRes = await api.clipboardReadFiles();
     const img = await api.clipboardReadImage();
-    const res = resolvePastePayload(filesRes.paths, img, peekFileClipboard(), plainText);
+    // 剪贴板里的文件与截图都在 GUI 这台机器上：先让它们进到本窗口的 Host（本机窗口原样）
+    const local = img ? [...filesRes.paths, img] : filesRes.paths;
+    const onHost = local.length ? await api.uploadLocalFiles(local) : [];
+    const hostFiles = img ? onHost.slice(0, -1) : onHost;
+    const hostImg = img ? (onHost[onHost.length - 1] ?? null) : null;
+    const res = resolvePastePayload(hostFiles, hostImg, peekFileClipboard(), plainText);
     await applyPasteResolution(res);
   } catch {
     if (plainText) insertAtCursor(plainText);
@@ -866,6 +871,7 @@ async function handleDrop(e: DragEvent) {
 
   const dropped = Array.from(dt.files ?? []);
   let paths: string[] = [];
+  const localPaths: string[] = [];
   let entry: ReturnType<typeof peekFileClipboard> = null;
 
   let stagedFailed = 0;
@@ -873,7 +879,7 @@ async function handleDrop(e: DragEvent) {
     for (const file of dropped) {
       const fp = (file as File & { path?: string }).path;
       if (typeof fp === "string" && fp) {
-        paths.push(fp);
+        localPaths.push(fp);
       } else {
         try {
           const buf = new Uint8Array(await file.arrayBuffer());
@@ -884,6 +890,15 @@ async function handleDrop(e: DragEvent) {
           stagedFailed++;
           console.warn("[ChatInputBox] 拖入文件暂存失败，已跳过:", e);
         }
+      }
+    }
+    // 带 File.path 的是 GUI 机器上的路径：进到本窗口的 Host（本机窗口原样）
+    if (localPaths.length) {
+      try {
+        paths.push(...(await api.uploadLocalFiles(localPaths)));
+      } catch (e) {
+        stagedFailed += localPaths.length;
+        console.warn("[ChatInputBox] 拖入文件上传到 Host 失败，已跳过:", e);
       }
     }
     if (stagedFailed > 0) showToast(`${stagedFailed} 个文件读取失败已跳过`, "danger");

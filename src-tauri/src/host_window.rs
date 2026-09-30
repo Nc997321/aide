@@ -90,9 +90,51 @@ pub fn emit_to_host(app: &AppHandle, host: &HostId, event: &str, payload: &Value
     }
 }
 
+/// Host 窗口里 agent 的内嵌浏览器查询。内嵌浏览器目前挂在主窗口上（`browser::facade` 的
+/// MAIN_WINDOW），按窗口分属是 P1e——在那之前**如实回错**，不让 agent 干等 15s 超时。
+pub fn answer_browser_query(
+    app: &AppHandle,
+    host: &HostId,
+    req: crate::browser::agent_bridge::BrowserQueryRequest,
+) {
+    use crate::browser::agent_bridge::{build_result_command, err_payload};
+    let payload = build_result_command(
+        &req.request_id,
+        err_payload(format!(
+            "内嵌浏览器暂只在本机窗口可用（此会话跑在 {}）",
+            host.label()
+        )),
+    );
+    let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
+    let host = host.clone();
+    tauri::async_runtime::spawn(async move {
+        let sent = async {
+            svc.connection(&host)
+                .await?
+                .invoke("agent_tool_result", serde_json::json!({ "payload": payload }), None)
+                .await
+        }
+        .await;
+        if let Err(e) = sent {
+            tracing::warn!(host = %host, "browser query reply failed: {e}");
+        }
+    });
+}
+
 /// 该 Host 当前是否有窗口连着（旧模型的桌面形态事件翻译据此让路，P1d 删除）。
 pub fn has_windows(app: &AppHandle, host: &HostId) -> bool {
     !app.state::<HostWindows>().windows_of(host).is_empty()
+}
+
+/// GUI 动作（用本机程序打开 / 在资源管理器中显示）要碰 Host 上的文件：显式跨界。
+/// 本机窗口原样；WSL Host 的原生路径译成桌面能开的 `\\wsl.localhost\…`；SSH Host 上的文件
+/// 本机根本摸不到——如实拒绝，不假装打开。
+pub fn gui_path(window: &WebviewWindow, path: &str) -> Result<String, String> {
+    match window.app_handle().state::<HostWindows>().host_of(window.label()) {
+        None => Ok(path.to_string()),
+        Some(host @ HostId::Wsl(_)) => Ok(crate::remote_workspace::path::to_desktop(&host, path)),
+        Some(host) => Err(format!("{} 上的文件无法在本机打开", host.label())),
+    }
 }
 
 /// 窗口关闭：解绑；该 Host 的最后一扇窗关了就断开连接（serve 退出，Host 上的 agent runtime /
@@ -108,17 +150,32 @@ pub fn on_window_destroyed(app: &AppHandle, label: &str) {
 }
 
 /// 打开（或聚焦）连着某台 Host 的窗口。连接 / 首次安装在后台开始，窗口里的第一批命令会
-/// 等它就绪；进度经 `remote-workspace-status` 事件可见。
+/// 等它就绪；进度经 `remote-workspace-status` 事件可见。`folder`（Host 原生路径）：窗口起来
+/// 后直接打开这个目录；窗口已开着则经 `host-open-folder` 事件交给它。
 #[tauri::command]
-pub async fn open_host_window(app: AppHandle, host: String) -> Result<String, String> {
+pub async fn open_host_window(
+    app: AppHandle,
+    host: String,
+    folder: Option<String>,
+) -> Result<String, String> {
     let id = HostId::parse_key(&host).ok_or_else(|| format!("非法主机标识：{host}"))?;
     let label = label_for(&id);
     if let Some(w) = app.get_webview_window(&label) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
+        if let Some(f) = folder {
+            let _ = app.emit_to(EventTarget::webview_window(&label), "host-open-folder", f);
+        }
         return Ok(label);
     }
+    let url = match &folder {
+        Some(f) => format!(
+            "index.html?openFolder={}",
+            percent_encoding::utf8_percent_encode(f, percent_encoding::NON_ALPHANUMERIC)
+        ),
+        None => "index.html".to_string(),
+    };
     // 先绑定再建窗：窗口一加载就可能发命令，那时绑定必须已在。
     app.state::<HostWindows>().bind(&label, &id);
     let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
@@ -133,7 +190,7 @@ pub async fn open_host_window(app: AppHandle, host: String) -> Result<String, St
     let built = tauri::WebviewWindowBuilder::new(
         &app,
         &label,
-        tauri::WebviewUrl::App("index.html".into()),
+        tauri::WebviewUrl::App(url.into()),
     )
     .title(format!("Aide — {}", id.label()))
     .inner_size(1400.0, 900.0)
@@ -194,9 +251,122 @@ pub async fn current_host(window: WebviewWindow) -> Result<CurrentHost, String> 
     }
 }
 
+/// 「从本机复制供应商」（Host 窗口里的显式动作）：本机的供应商连同密钥写进这台 Host。
+///
+/// 供应商按 Host 自持（2026-09-30 定）；跨界必须是用户看得见的一次动作，不做自动同步。
+/// 合并规则：按 id——本机有的覆盖 Host 同 id 的（含密钥），Host 独有的原样保留（密钥不动）；
+/// 不改 Host 的激活供应商。返回复制过去的条数。
+#[tauri::command]
+pub async fn import_local_providers(window: WebviewWindow) -> Result<usize, String> {
+    let app = window.app_handle();
+    let host = app
+        .state::<HostWindows>()
+        .host_of(window.label())
+        .ok_or("本机窗口不需要复制供应商")?;
+    let core = app.state::<Arc<aide_core::Core>>().inner().clone();
+    let local = tokio::task::spawn_blocking(move || core.settings.list_runtime_providers())
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
+    let local: Vec<Value> = local
+        .iter()
+        .map(|p| serde_json::to_value(p).map_err(|e| e.to_string()))
+        .collect::<Result<_, _>>()?;
+    let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
+    let conn = svc.connection(&host).await?;
+    let remote = conn.invoke("get_providers", serde_json::json!({}), None).await?;
+    let remote = remote.as_array().cloned().unwrap_or_default();
+    let (inputs, copied) = merge_provider_inputs(&remote, &local);
+    conn.invoke("set_providers", serde_json::json!({ "providers": inputs }), None)
+        .await?;
+    Ok(copied)
+}
+
+/// GUI 这台机器上的文件（剪贴板里复制的文件 / 粘贴的截图 / 从资源管理器拖进来的）进到本窗口
+/// 的 Host：本机窗口原样返回（Host 就是本机）；Host 窗口把每个文件读出来，写进 Host 的暂存
+/// 目录（core `stage_dropped_file`），返回 Host 路径——显式跨界，agent 只看得见 Host 上的文件。
+#[tauri::command]
+pub async fn upload_local_files(window: WebviewWindow, paths: Vec<String>) -> Result<Vec<String>, String> {
+    let app = window.app_handle();
+    let Some(host) = app.state::<HostWindows>().host_of(window.label()) else {
+        return Ok(paths);
+    };
+    let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
+    let conn = svc.connection(&host).await?;
+    let mut out = Vec::with_capacity(paths.len());
+    for p in paths {
+        let local = std::path::PathBuf::from(&p);
+        let name = local
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into());
+        let bytes = tokio::fs::read(&local)
+            .await
+            .map_err(|e| format!("读取本机文件失败 {p}: {e}"))?;
+        use base64::Engine as _;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(bytes);
+        let staged = conn
+            .invoke("stage_dropped_file", serde_json::json!({ "name": name, "base64": b64 }), None)
+            .await?;
+        out.push(staged.as_str().unwrap_or_default().to_string());
+    }
+    Ok(out)
+}
+
+/// 纯核：Host 现有供应商（视图，无密钥）+ 本机供应商（含密钥）→ `set_providers` 的整表输入。
+fn merge_provider_inputs(remote_views: &[Value], local: &[Value]) -> (Vec<Value>, usize) {
+    let id_of = |v: &Value| v.get("id").and_then(Value::as_str).unwrap_or("").to_string();
+    let local_ids: std::collections::HashSet<String> = local.iter().map(id_of).collect();
+    let unchanged = serde_json::json!({ "action": "unchanged" });
+    let secret = |v: &Value, key: &str| match v.get(key).and_then(Value::as_str) {
+        Some(s) if !s.is_empty() => serde_json::json!({ "action": "set", "value": s }),
+        _ => serde_json::json!({ "action": "unchanged" }),
+    };
+    let mut out = Vec::new();
+    for view in remote_views {
+        if local_ids.contains(&id_of(view)) {
+            continue;
+        }
+        let mut input = view.clone();
+        if let Some(o) = input.as_object_mut() {
+            o.retain(|k, _| k != "apiKeyConfigured" && k != "authTokenConfigured");
+            o.insert("apiKey".into(), unchanged.clone());
+            o.insert("authToken".into(), unchanged.clone());
+        }
+        out.push(input);
+    }
+    for p in local {
+        let mut input = p.clone();
+        if let Some(o) = input.as_object_mut() {
+            o.insert("apiKey".into(), secret(p, "apiKey"));
+            o.insert("authToken".into(), secret(p, "authToken"));
+        }
+        out.push(input);
+    }
+    (out, local.len())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn provider_import_merges_by_id_and_carries_local_secrets() {
+        let remote = vec![
+            serde_json::json!({"id": "host-only", "name": "H", "apiKeyConfigured": true}),
+            serde_json::json!({"id": "shared", "name": "old"}),
+        ];
+        let local = vec![serde_json::json!({"id": "shared", "name": "new", "apiKey": "sk-1"})];
+        let (inputs, copied) = merge_provider_inputs(&remote, &local);
+        assert_eq!(copied, 1);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0]["id"], "host-only");
+        assert_eq!(inputs[0]["apiKey"]["action"], "unchanged");
+        assert!(inputs[0].get("apiKeyConfigured").is_none());
+        assert_eq!(inputs[1]["name"], "new");
+        assert_eq!(inputs[1]["apiKey"], serde_json::json!({"action": "set", "value": "sk-1"}));
+        assert_eq!(inputs[1]["authToken"]["action"], "unchanged");
+    }
 
     #[test]
     fn labels_are_tauri_safe_and_distinct() {
