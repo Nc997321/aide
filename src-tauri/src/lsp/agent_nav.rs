@@ -282,6 +282,8 @@ pub async fn files_mentioning(
     let mask = crate::lsp::detector::KNOWN_SOURCE_EXTS
         .iter()
         .filter(|e| crate::lsp::detector::LanguageId::from_ext(e) == Some(lang))
+        // 远程的 TS 服务器不挂 Vue 插件：递 `.vue` 过去只换来一条 didOpen 失败，白占一个预热名额。
+        .filter(|e| !(access.is_remote() && **e == "vue"))
         .map(|e| format!("*.{e}"))
         .collect::<Vec<_>>()
         .join(",");

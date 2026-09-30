@@ -69,6 +69,38 @@ impl WorkspaceAccess {
         }
     }
 
+    /// agent 按名查询该问哪些语言的 server：本机 = 探到的语言；远程 = 探到的且目标机上
+    /// **真有服务器**、且远程支持的（没有服务器的语言每问一次就是一次注定失败的 spawn）。
+    ///
+    /// 短时缓存：按名查询与 grep 顺带作答一发就要一次，而探测是整仓有界遍历（远程还多一个
+    /// aide-host 往返）——真机上它和失败的 spawn 一起把 1.5s 的作答预算吃光了。
+    pub async fn queryable_languages(&self, root: &str) -> Vec<LanguageId> {
+        type Cache = std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<LanguageId>)>>;
+        static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
+        const TTL: std::time::Duration = std::time::Duration::from_secs(30);
+        let cache = CACHE.get_or_init(Default::default);
+        if let Some((at, langs)) = cache.lock().ok().and_then(|m| m.get(root).cloned()) {
+            if at.elapsed() < TTL {
+                return langs;
+            }
+        }
+        let langs = match self {
+            WorkspaceAccess::Local => self.detect_languages(root).await,
+            WorkspaceAccess::Remote { .. } => match self.remote_detect(root).await {
+                Ok((_, available)) => available
+                    .into_iter()
+                    .filter(|l| crate::lsp::manager::remote_supported(*l))
+                    .collect(),
+                // 连不上：不缓存，下一发再问（空表 = 本次 no_server）。
+                Err(_) => return vec![],
+            },
+        };
+        if let Ok(mut m) = cache.lock() {
+            m.insert(root.to_string(), (std::time::Instant::now(), langs.clone()));
+        }
+        langs
+    }
+
     /// 远程：探到的语言 + 其中目标机上真有服务器的（`lsp_detect`）。失败 → Err（调用方降级成空）。
     pub async fn remote_detect(&self, root: &str) -> Result<(Vec<LanguageId>, Vec<LanguageId>), String> {
         let posix = posix_of(root)?;

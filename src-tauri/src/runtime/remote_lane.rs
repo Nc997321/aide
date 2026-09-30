@@ -284,6 +284,7 @@ impl AgentRuntimeManager {
         // 连接凭据不在这里——它们随每条 send 的 env 下发，与本机车道同一路径。
         let mut env = HashMap::new();
         env.insert("AIDE_CLAUDE_EXE".to_string(), installed.claude_exe.clone());
+        env.extend(tool_switches(|k| std::env::var(k).ok()));
         // 代理：桌面探测到的代理（设置 → 环境 → git → 常见本地端口）作**兜底**下发——目标机
         // 登录环境里已有代理就用它自己的。回环地址按目标机网络改写（见 loopback_host_for）。
         let desktop_proxy = tokio::task::spawn_blocking(crate::commands::proxy::detect_proxy)
@@ -351,6 +352,26 @@ impl AgentRuntimeManager {
     }
 }
 
+/// 桌面进程环境里的工具开关（`AIDE_LSP_TOOLS=off` 这类逃生舱）原样带到目标机。
+///
+/// 本机车道的 sidecar 继承桌面进程环境，开关天然生效；远程车道的 runtime 起在目标机上，
+/// 环境只有 AgentInit 递过去的这些——不带过去，用户关掉的工具在 WSL / SSH 工作区里照样挂着
+/// （2026-09-30 真机：设了 `AIDE_LSP_TOOLS=off` 的对照轮里 aide-lsp 仍在）。
+const TOOL_SWITCHES: &[&str] = &[
+    "AIDE_LSP_TOOLS",
+    "AIDE_CODEGRAPH_TOOLS",
+    "AIDE_DOCX_TOOLS",
+    "AIDE_KB_TOOLS",
+    "AIDE_BROWSER_TOOLS",
+];
+
+fn tool_switches(get: impl Fn(&str) -> Option<String>) -> HashMap<String, String> {
+    TOOL_SWITCHES
+        .iter()
+        .filter_map(|k| get(k).map(|v| (k.to_string(), v)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -394,6 +415,13 @@ mod tests {
         assert_eq!(ev["input"]["content"], "/home/u/p/a.rs");
         assert_eq!(ev["dirs"][0], "\\\\wsl.localhost\\Debian\\home\\u\\lib");
         assert_eq!(ev["text"], "/home/u/p");
+    }
+
+    #[test]
+    fn tool_switches_travel_to_the_target() {
+        let env = tool_switches(|k| (k == "AIDE_LSP_TOOLS").then(|| "off".to_string()));
+        assert_eq!(env.len(), 1);
+        assert_eq!(env["AIDE_LSP_TOOLS"], "off");
     }
 
     fn proxy_env() -> Value {

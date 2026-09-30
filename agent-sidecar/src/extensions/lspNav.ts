@@ -251,21 +251,25 @@ export class LspNav {
     return out;
   }
 
-  /** 名字在某文件里的声明位置：结构里同名的最外层声明；结构拿不到就取第一处整词出现。 */
+  /** 名字在某文件里的声明位置：结构里同名的最外层声明；结构拿不到就取文本里的声明行
+   *  （没有声明行才取第一处整词出现）。**返回的列必须落在名字本身上**——落在 `async` /
+   *  `pub` / 文档注释上，查引用问的就是那个词（真机 2026-09-30：`sendMessage` 查成了
+   *  `async`，`start_run` 查成了注释里的 `manual`，后者回的是「确认没有引用」）。 */
   private async findInFile(file: string, name: string): Promise<{ line: number; character: number } | null> {
-    const nodes = await this.outlineOf(file);
+    const [nodes, lines] = await Promise.all([this.outlineOf(file), this.lines(file)]);
     const node = nodes
       ?.filter((n) => n.name === name || n.name.endsWith(`.${name}`))
       .sort((a, b) => a.depth - b.depth)[0];
-    if (node) return { line: node.line, character: node.column };
-    const lines = await this.lines(file);
-    if (!lines) return null;
-    const re = new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`);
-    for (let i = 0; i < lines.length; i++) {
-      const m = re.exec(lines[i]);
-      if (m) return { line: i + 1, character: m.index + m[1].length + 1 };
+    if (node) {
+      if (!lines || identifierAt(lines[node.line - 1] ?? "", node.column) === name) {
+        return { line: node.line, character: node.column };
+      }
+      // 结构给的是声明起点（或把文档注释算进范围）：在该声明的范围里找名字本身。
+      const hit = findName(lines, name, node.line, Math.max(node.line, node.end_line ?? node.line));
+      return hit ?? { line: node.line, character: node.column };
     }
-    return null;
+    if (!lines) return null;
+    return findDeclaration(lines, name) ?? findName(lines, name, 1, lines.length);
   }
 
   private async outlineOf(abs: string): Promise<OutlineNode[] | null> {
@@ -301,6 +305,45 @@ export class LspNav {
   private rel(abs: string): string {
     return displayPath(abs, this.deps.cwd);
   }
+}
+
+function wordRe(name: string): RegExp {
+  return new RegExp(`(^|[^\\w$])${name.replace(/\$/g, "\\$")}(?![\\w$])`);
+}
+
+/** `[from, to]` 行（1-based，含两端）里名字的第一处整词出现。 */
+export function findName(
+  lines: string[],
+  name: string,
+  from: number,
+  to: number,
+): { line: number; character: number } | null {
+  const re = wordRe(name);
+  for (let i = Math.max(1, from); i <= Math.min(lines.length, to); i++) {
+    const m = re.exec(lines[i - 1]);
+    if (m) return { line: i, character: m.index + m[1].length + 1 };
+  }
+  return null;
+}
+
+const DECL_BEFORE =
+  "(?:fn|function|class|struct|enum|trait|interface|type|const|let|var|def|mod|impl|func|val|object)";
+
+/** 文本里名字的声明行（关键字 + 名字，或行首 `名字(… {` 形状的方法声明）。 */
+export function findDeclaration(lines: string[], name: string): { line: number; character: number } | null {
+  const n = name.replace(/\$/g, "\\$");
+  const keyword = new RegExp(`\\b${DECL_BEFORE}\\*?\\s+${n}(?![\\w$])`);
+  const method = new RegExp(
+    `^\\s*(?:(?:pub(?:\\([^)]*\\))?|public|private|protected|static|async|override|readonly)\\s+)*${n}\\s*(?:<[^>]*>)?\\(.*\\{\\s*$`,
+  );
+  for (const re of [keyword, method]) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!re.test(lines[i])) continue;
+      const hit = findName([lines[i]], name, 1, 1);
+      if (hit) return { line: i + 1, character: hit.character };
+    }
+  }
+  return null;
 }
 
 /** 位置处的标识符（1-based 列）。列落在标识符之外时取该行第一个标识符。 */

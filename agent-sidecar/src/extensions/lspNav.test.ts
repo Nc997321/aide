@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { LspNav, columnOf, identifierAt, symbolName } from "./lspNav.js";
+import { LspNav, columnOf, findDeclaration, identifierAt, symbolName } from "./lspNav.js";
 import type { LspQueryResponse, LspTool } from "./lspClient.js";
 import type { OutlineNode } from "./lspFormat.js";
 
@@ -144,6 +144,31 @@ describe("参数补全：模型只记得一半时替它补另一半", () => {
     const { n, calls } = nav(() => ({ ok: true, status: "ready", results: [] }));
     await n.definition({ file: MOD, line: 3 });
     expect(calls.find((c) => c.tool === "definition")!.args).toEqual({ file: MOD, line: 3, character: 18 });
+  });
+
+  // 真机 2026-09-30：结构给的是声明起点 / 文档注释行，按那个列查引用 = 查 `async` / 注释里的词
+  //（后者回「确认没有引用」）。列必须挪到名字本身上。
+  it("{name, file} 结构位置不在名字上 → 在声明范围里找到名字本身", async () => {
+    const file = "/proj/src/sched.rs";
+    FILES[file] = ["impl S {", "    /// 发起一次运行。manual 触发时", "    pub async fn start_run(&self) {", "    }", "}"].join("\n");
+    OUTLINES[file] = [{ name: "start_run", kind: 6, line: 2, column: 5, start_line: 2, end_line: 4, depth: 1 }];
+    const { n, calls } = nav(() => ({ ok: true, status: "ready", results: [] }));
+    await n.references("references", { name: "start_run", file });
+    expect(calls.find((c) => c.tool === "references")!.args).toEqual({ file, line: 3, character: 18 });
+  });
+
+  it("{name, file} 结构没好 → 取声明行，不取第一处调用", async () => {
+    const file = "/proj/src/chat.ts";
+    FILES[file] = ["const x = sendMessage(1);", "export function other() {}", "  async function sendMessage(p: string) {", "}"].join("\n");
+    const { n, calls } = nav(() => ({ ok: true, status: "ready", results: [] }));
+    await n.references("references", { name: "sendMessage", file });
+    expect(calls.find((c) => c.tool === "references")!.args).toEqual({ file, line: 3, character: 18 });
+  });
+
+  it("findDeclaration：关键字声明与方法声明，调用语句不算", () => {
+    expect(findDeclaration(["  run(1);", "  run(x: number): void {"], "run")).toEqual({ line: 2, character: 3 });
+    expect(findDeclaration(["foo();"], "foo")).toBeNull();
+    expect(findDeclaration(["pub(crate) fn go() {}"], "go")).toEqual({ line: 1, character: 15 });
   });
 
   it("columnOf / identifierAt / symbolName", () => {

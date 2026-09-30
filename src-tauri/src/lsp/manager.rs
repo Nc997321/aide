@@ -14,7 +14,7 @@ use codegraph_core::ignore_dirs::ALWAYS_IGNORE_DIRS;
 
 // ── EnsureError ──
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum EnsureError {
     ServerNotFound,
     SpawnFailed(String),
@@ -176,13 +176,24 @@ impl ServerHandle {
 pub struct LspManager {
     handles: TokioMutex<HashMap<(String, LanguageId), Arc<ServerHandle>>>,
     spawn_lock: TokioMutex<()>,
+    /// 起不来的 (工作区, 语言) → 何时失败 + 当时的错误。冷却期内直接回同一个错，不再 spawn。
+    failures: TokioMutex<HashMap<(String, LanguageId), (std::time::Instant, EnsureError)>>,
 }
+
+/// 一台 server 起失败后多久内不再重试。
+///
+/// 为什么要它（2026-09-30 真机日志）：WSL 工作区探出了 Python、目标机上却没有
+/// pyright——每一发按名查询都去重拉一次，11 分钟握手失败 512 次；而 spawn 在全局
+/// `spawn_lock` 下串行，每次 ~250ms 把**所有语言**的查询一起堵住，grep 顺带作答
+/// 1.5s 的预算一次都没赶上。冷却期内同一个错直接回，装好 server 后最多等这么久就会被重新拉起。
+const SPAWN_FAILURE_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(60);
 
 impl LspManager {
     pub fn new() -> Self {
         Self {
             handles: TokioMutex::new(HashMap::new()),
             spawn_lock: TokioMutex::new(()),
+            failures: TokioMutex::new(HashMap::new()),
         }
     }
 
@@ -195,6 +206,15 @@ impl LspManager {
         app: &tauri::AppHandle,
         settings: &crate::commands::settings::AppSettings,
     ) -> Result<Arc<ServerHandle>, EnsureError> {
+        let key = (workspace.to_string(), lang);
+        // 快路径：活着的 server 不排 spawn_lock 的队（锁只为「同一时刻只 spawn 一台」，
+        // 拿已有句柄不该跟别的语言的 spawn 抢）。
+        if let Some(h) = self.get(workspace, lang).await {
+            return Ok(h);
+        }
+        if let Some(e) = self.recent_failure(&key).await {
+            return Err(e);
+        }
         let _g = tokio::time::timeout(SPAWN_LOCK_TIMEOUT, self.spawn_lock.lock())
             .await
             .map_err(|_| {
@@ -208,28 +228,55 @@ impl LspManager {
                 }
             }
         }
+        // 排队期间别人可能刚失败过（同一批并发查询）。
+        if let Some(e) = self.recent_failure(&key).await {
+            return Err(e);
+        }
         // dead 或不存在 → spawn 新的。
         // 远程工作区：服务器在**目标机**上解析（aide-host lsp 按登录 PATH 找），桌面的覆盖 /
         // 捆绑 / PATH 发现都是本机的东西，不适用。
         let src = if crate::remote_workspace::path::is_remote(workspace) {
-            if !remote_supported(lang) {
-                return Err(EnsureError::ServerNotFound);
-            }
-            ServerSource::Which {
-                binary: lang.server_binary().ok_or(EnsureError::ServerNotFound)?.to_string(),
+            match lang.server_binary().filter(|_| remote_supported(lang)) {
+                Some(binary) => ServerSource::Which { binary: binary.to_string() },
+                None => return Err(EnsureError::ServerNotFound),
             }
         } else {
-            registry::resolve(lang, settings, app).ok_or(EnsureError::ServerNotFound)?
+            match registry::resolve(lang, settings, app) {
+                Some(src) => src,
+                None => return Err(EnsureError::ServerNotFound),
+            }
         };
-        let handle = spawn_and_init(workspace, lang, &src, app, settings).await?;
-        self.handles
-            .lock()
-            .await
-            .insert((workspace.to_string(), lang), Arc::clone(&handle));
-        Ok(handle)
+        match spawn_and_init(workspace, lang, &src, app, settings).await {
+            Ok(handle) => {
+                self.failures.lock().await.remove(&key);
+                self.handles.lock().await.insert(key, Arc::clone(&handle));
+                Ok(handle)
+            }
+            Err(e) => {
+                self.failures
+                    .lock()
+                    .await
+                    .insert(key, (std::time::Instant::now(), e.clone()));
+                Err(e)
+            }
+        }
+    }
+
+    /// 冷却期内的上一次失败（过期的顺手清掉）。
+    async fn recent_failure(&self, key: &(String, LanguageId)) -> Option<EnsureError> {
+        let mut map = self.failures.lock().await;
+        match map.get(key) {
+            Some((at, e)) if at.elapsed() < SPAWN_FAILURE_COOLDOWN => Some(e.clone()),
+            Some(_) => {
+                map.remove(key);
+                None
+            }
+            None => None,
+        }
     }
 
     pub async fn kill_workspace(&self, workspace: &str) {
+        self.failures.lock().await.retain(|(w, _), _| w != workspace);
         let removed: Vec<Arc<ServerHandle>> = {
             let mut map = self.handles.lock().await;
             let keys: Vec<_> = map
@@ -1197,6 +1244,26 @@ pub(crate) mod tests {
             }
             table.lock().await.reject_all();
         });
+    }
+
+    /// 起不来的 server 冷却期内不再重拉（真机：每发查询重拉一次 Python，握手失败 512 次，
+    /// 全局 spawn_lock 下把所有语言的查询一起堵住）；关工作区清掉，过期自动失效。
+    #[tokio::test]
+    async fn spawn_failure_is_remembered_until_cooldown_or_kill() {
+        let m = LspManager::new();
+        let key = ("/w".to_string(), LanguageId::Python);
+        assert!(m.recent_failure(&key).await.is_none());
+        m.failures.lock().await.insert(
+            key.clone(),
+            (std::time::Instant::now(), EnsureError::HandshakeFailed("channel closed".into())),
+        );
+        assert!(matches!(m.recent_failure(&key).await, Some(EnsureError::HandshakeFailed(_))));
+        m.kill_workspace("/w").await;
+        assert!(m.recent_failure(&key).await.is_none(), "关工作区 = 下次重新试");
+        let stale = std::time::Instant::now() - SPAWN_FAILURE_COOLDOWN - std::time::Duration::from_secs(1);
+        m.failures.lock().await.insert(key.clone(), (stale, EnsureError::ServerNotFound));
+        assert!(m.recent_failure(&key).await.is_none(), "过了冷却期 = 重新试");
+        assert!(m.failures.lock().await.is_empty());
     }
 
     #[tokio::test]

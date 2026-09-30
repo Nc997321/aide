@@ -101,7 +101,7 @@ async fn target_languages(
     if let Some(file) = outline_file(args) {
         return crate::lsp::lang_from_ext_of(file).into_iter().collect();
     }
-    access.detect_languages(workspace_root).await
+    access.queryable_languages(workspace_root).await
 }
 
 /// 调用方给的时间预算（`budget_ms`），封顶于该步骤自己的默认预算。
@@ -301,7 +301,7 @@ async fn lookup_symbol(
     deadline: std::time::Instant,
 ) -> Result<SymbolLookup, AgentLspStatus> {
     let langs =
-        access.detect_languages(workspace_root).await;
+        access.queryable_languages(workspace_root).await;
     if langs.is_empty() {
         return Err(AgentLspStatus::NoServer);
     }
