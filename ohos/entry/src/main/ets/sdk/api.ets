@@ -6,6 +6,8 @@
  * REGISTRY）内且当前页面域实际消费的命令；新页面需要时对照上游同步补入。
  * 本文件已收录：list_sessions / list_sessions_for_workspace / list_workspaces
  * / get_active_workspace（工作区域配套：跟随槽位解析活动工作区真名）
+ * / daily_workspace（日常默认工作区身份：key 配会话列表、path 配 spawn 落点；
+ * 手机默认范围即日常，旧桌面无此 RPC 由调用方静默降级）
  * / load_messages / send_message / interrupt_session / permission_response
  * / auto_rename_session / create_session / stop_bg_task / list_bg_tasks
  * （后两者为远程对账配套：终止走 stop_bg_task，快照回填走 list_bg_tasks；
@@ -31,7 +33,7 @@
  */
 import { getTransport } from './transport';
 import {
-  Session, WorkspaceInfo, ActiveWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft,
+  Session, WorkspaceInfo, ActiveWorkspace, DailyWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft,
   ProviderConfigView, ModelOption, IdentityDrift, SendImage, SendDisplayBlock,
   Schedule, AutomationTask, AutomationTaskInput, RunRecord, RunStats
 } from './types';
@@ -131,6 +133,16 @@ export class AideApi {
   /** 桌面当前活动工作区（key 与 list_workspaces 同源；path = 解码路径）；null = 未设置。 */
   getActiveWorkspace(): Promise<ActiveWorkspace | null> {
     return getTransport().invoke<ActiveWorkspace | null>('get_active_workspace');
+  }
+
+  /**
+   * 日常默认工作区身份（<配置目录>/workspace 的注册键 + 路径；纯计算无 IO、
+   * 无参数、无副作用，不改变桌面活动工作区）。key → list_sessions_for_
+   * workspace；path → spawn 的 workspaceRoot。旧桌面无此 RPC：调用方
+   * 失败按「无日常」静默降级（每运行至多探测一次），行为与升级前一致。
+   */
+  dailyWorkspace(): Promise<DailyWorkspace> {
+    return getTransport().invoke<DailyWorkspace>('daily_workspace');
   }
 
   /** 历史分页读取：offsetBytes null = 从尾部取；limit = 页字节预算。 */

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端 · 「日常」工作区原型</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 26px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+  .page-head p a { color: var(--accent); }
+  .page-head p code {
+    font-family: Consolas, "Cascadia Code", monospace; font-size: 11px;
+    background: #F5F6FA; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px;
+  }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* 手机框（纯布景，中性深色边框） */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  /* ===== 说明卡 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+  .cover-card code {
+    font-family: Consolas, "Cascadia Code", monospace; font-size: 11px;
+    background: #F5F6FA; border: 1px solid var(--line); border-radius: 4px; padding: 0 5px;
+  }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端 · 「日常」工作区原型<small>手机默认就是日常 · 与桌面共用 · 旧桌面静默降级</small></h1>
+  <p>在 <b><a href="../remote/index.html">v3 底稿（../remote/index.html）</a></b> 之上加一层「日常」：桌面侧的默认工作区（<code>&lt;配置目录&gt;/workspace</code>）成为手机的<b>默认范围</b>——进屏即日常空态、发消息即落日常、思考档默认<b>快速</b>；「日常」行置顶工作区弹层（气泡图标 + 默认角标），<b>路径永不展示</b>。屏 B 用 <code>legacy=1</code> 模拟旧桌面：无 <code>daily_workspace</code> RPC，整个日常层不存在，行为与升级前完全一致。两屏是同一 <b>app.html</b> 的 iframe 实例，切换与档位跨屏同步（「日常」键同步到旧桌面屏会天然落空——那是它的特性，不是 bug）。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 A · 新桌面（默认日常） ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 A · 新桌面<span>升级后的手机：进屏即「日常」空态</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="daily-a" src="app.html?screen=chat&amp;demo=0&amp;id=daily-a" title="新桌面 · 默认日常"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"ws"}'>工作区弹层 ↗（日常置顶）</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"demo","action":"ef"}'>点思考档 ↗（默认快速）</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"demo","action":"sendhint"}'>在日常发条消息 ↓</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"demo","action":"new"}'>＋ 回到日常空态</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"pickws","key":"C--Users-heaven-IdeaProjects-aide"}'>切到 aide 工程区 ↗</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"pickws","key":"daily"}'>切回日常 ↗</button>
+      <button class="chip" data-target="daily-a" data-send='{"cmd":"pickws","key":"C--Users-heaven-IdeaProjects-aide","replay":true}'>工程区流式演示 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 B · 旧桌面（legacy 降级） ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 B · 旧桌面<span>legacy=1：无日常行，现状行为</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="daily-b" src="app.html?screen=chat&amp;legacy=1&amp;demo=0&amp;id=daily-b" title="旧桌面 · 降级现状"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="daily-b" data-send='{"cmd":"ws"}'>工作区弹层 ↗（没有日常行）</button>
+      <button class="chip" data-target="daily-b" data-send='{"cmd":"demo","action":"drawer"}'>打开抽屉 ↗</button>
+      <button class="chip" data-target="daily-b" data-send='{"cmd":"demo","action":"new"}'>＋ 新会话（发往 aide）</button>
+      <button class="chip" data-target="daily-b" data-send='{"cmd":"demo","action":"replay"}'>↻ 底稿流式演示</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · 产品规则 · 数据与协议 · 实施清单</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · v3 底稿的增量层</h4>
+      <ul>
+        <li><em>底稿不动</em>：连接屏 / 抽屉 / 供应商 / 三档思考全部沿用 <em><a href="../remote/index.html">../remote/index.html</a></em>（app.html 由底稿字节级复制后只加日常增量）。</li>
+        <li><em>进屏即日常</em>：新桌面初始 = 「日常」范围的空态新会话（不预载工程历史）；<code>demo=1</code> 显式要求时才切 aide 播底稿流式剧本。</li>
+        <li><em>弹层首行「日常」</em>：对话气泡头像（对齐桌面侧栏日常分区）+ 暖橙「默认」角标 + 定位副标题，<em>无路径行</em>。</li>
+        <li><em>工作区卡</em>：日常态显示「日常」+ 副标题占掉路径行；路径是内部概念，任何 UI 不出现。</li>
+        <li><em>空态与输入</em>：归属行「发消息即创建 · <em>日常对话</em>」（不点名工作区）；placeholder 换「今天帮你做些什么？」。</li>
+        <li><em>切范围 = 回范围默认档</em>：日常→快速，工程→均衡；跨屏同步同规。日常剧本走快速问答链路（无工具行，usage 尾注 effort low）。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>产品规则 · 判定 / 默认 / 降级</h4>
+      <ul>
+        <li><em>手机默认就是日常</em>：连接后浏览范围与发消息落点默认「日常」，<em>不是</em>「跟随桌面」。</li>
+        <li><em>显式选择让位</em>：用户切到某项目后，本次 App 运行内以选择为准；重启回落默认日常。</li>
+        <li><em>判定单一</em>：<code>isDailyKey(key)</code>，键与桌面注册同链（normalize → path_to_key），无第二套规则。</li>
+        <li><em>日常永不激活</em>：<code>daily_workspace</code> 纯查询身份，不改变桌面活动工作区；手机侧纯浏览。</li>
+        <li><em>旧桌面降级</em>：无该 RPC → 日常行不存在、默认回落第一个项目、零报错面；每次运行只探测一次，失败静默。</li>
+        <li><em>记忆优先</em>：会话内手动升档仍被记住（协议 session_effort），范围默认只在新建会话时生效。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>数据与协议 · 桌面侧已就绪</h4>
+      <ul>
+        <li>REGISTRY 已收录 <code>daily_workspace</code>（rpc.rs:89 + 回归测试 <code>registry_exposes_daily_workspace</code>），handler 纯转发 <code>commands::workspace::daily_workspace()</code>，<code>cargo test --lib</code> 921 全绿。</li>
+        <li>返回 <code>{ key, path }</code>：<em>key</em> → <code>list_sessions_for_workspace({wsKey})</code> 拉日常会话；<em>path</em> → 首条消息 <code>send({..., workspaceRoot: path})</code> 定落点。</li>
+        <li><code>list_workspaces</code> 服务端已剔除日常，手机端列表无需再滤。</li>
+        <li>纯计算无 IO、无参数、无副作用；不进 connection_fingerprint（不影响重连判定）。</li>
+        <li>单会话归属可用 <code>session_workspace</code> 比对，但<em>按需过筛</em>：本原型不新增该 RPC，用打开会话时的浏览范围即可判定。</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li><em>sdk/types.ets</em>：加 <code>DailyWorkspace { key, path }</code> DTO。</li>
+        <li><em>sdk/api.ets</em>：加 <code>dailyWorkspace(): Promise&lt;DailyWorkspace&gt;</code>，照 <code>listWorkspaces()</code> 形态；头注收录清单同步。</li>
+        <li><em>WorkspaceModel.ets</em>：daily 缓存 + <code>isDaily(key)</code> + 每运行探测一次（失败静默）+ 默认选中日常（userPicked 让位）+ <code>selectedRoot()</code>/<code>selectedDisplayName()</code> 日常特例（<em>最关键：root 必须回 dailyPath，否则 spawn 落回桌面活动工作区</em>）+ loadMetas 纳入 daily 键。</li>
+        <li><em>ChatDrawer.ets</em>：弹层首行（气泡 SVG + 默认角标 + 副标题、无路径）；工作区卡日常态。</li>
+        <li><em>ChatPage.ets</em>：空态归属行日常变体 + placeholder「今天帮你做些什么？」。</li>
+        <li><em>ChatModel.ets</em>：syncModelEffort 插日常判定（新会话看 selectedKey，已开会话复用 <code>store.spawnWsKey</code>=打开时范围），默认档 low；打开会话时 <code>spawnWsKey = sessionsModel.wsKey</code>。</li>
+        <li><em>会话列表</em>：默认范围拉 <code>list_sessions_for_workspace(dailyKey)</code>。</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳</h4>
+      <ul>
+        <li>空态 hero 两段切换（桌面形态）：手机以范围切换器承载模式，不加 hero</li>
+        <li>「跟随桌面」行入原型：已上线行为，最终版式 = 日常行置顶 + 跟随行 + 项目行，原型聚焦日常层</li>
+        <li>展示日常路径：内部目录永不进 UI（桌面铁律）</li>
+        <li>「任务」命名：桌面已否（语义过重），沿用「日常」</li>
+        <li>会话改归属 / 新建时选归属：日常即默认，无归属选择器</li>
+        <li>自动激活桌面日常：手机侧纯浏览，不写桌面状态</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：演示胶囊 → postMessage 遥控；sync 中继转发（pv / md / ef / ws）。
+   「日常」键（ws="daily"）同步到旧桌面屏会在其 applySync 的 wsList() 守卫处落空，
+   天然忽略——两屏各自的世界观自洽。 */
+const send = (id, msg) => document.getElementById(id).contentWindow.postMessage(msg, '*');
+const SCREENS = ['daily-a', 'daily-b'];
+
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  send(b.dataset.target, JSON.parse(b.dataset.send));
+}));
+
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    SCREENS.forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>

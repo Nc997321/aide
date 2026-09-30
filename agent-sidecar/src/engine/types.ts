@@ -519,7 +519,7 @@ export type SidecarCommand =
       output_style?: string;
       // 工作区信任标志：Rust 在 send_message / start_btw_session 里按 cwd 查
       // trustedWorkspaces 白名单后注入。true（或省略，向后兼容/测试）= 信任，
-      // 加载项目 CLAUDE.md / .claude/skills/ / .mcp.json；false = 受限模式，
+      // 加载项目 CLAUDE.md / .aide/claude/ / .mcp.json；false = 受限模式，
       // startLoop 据此跳过项目级自动配置。省略时 sidecar 按信任处理。
       trusted?: boolean;
       // 工作区级代码索引开关：Rust 按 cwd 查 state.json 的 codegraph_workspaces

@@ -1,4 +1,4 @@
-// skills 子域：~/.claude/skills/ 的插件技能清单与脚本子文件
+// skills 子域：~/.aide/claude/skills/ 的插件技能清单与脚本子文件
 // （read/write/delete script，文件名过 sanitize_script_filename 白名单）。
 use super::{extract_frontmatter_field, skills_dir, update_frontmatter_field, CustomizationItem};
 use std::fs;

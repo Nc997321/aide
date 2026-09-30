@@ -4,6 +4,7 @@
  * 过筛规则：仅收录当前页面域实际消费的类型；后续页面需要新类型时同步补入
  * （保持与上游字段/注释语义零偏差，serde camelCase 镜像）。
  * 本文件已收录：Session / WorkspaceInfo（会话列表页域）；
+ * DailyWorkspace（日常默认工作区身份域；daily_workspace 返回）；
  * HistoryBlock / ChatMessageItem / LoadMessagesResult（会话页历史域）；
  * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）；
  * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）；
@@ -31,6 +32,21 @@ export interface ActiveWorkspace {
   /** 编码键（与 WorkspaceInfo.key 同源，可直接对配列表）。 */
   key: string;
   /** 解码后的工作区路径（与 WorkspaceInfo.name 同构）。 */
+  path: string;
+}
+
+/**
+ * 日常默认工作区身份（daily_workspace 返回；对照桌面 commands::workspace::
+ * DailyWorkspace 的 serde camelCase 镜像）：桌面 <配置目录>/workspace 的
+ * 注册键与路径。key 与 list_workspaces 同链（normalize → path_to_key），
+ * 可直接喂 list_sessions_for_workspace；path 供 spawn 的 workspaceRoot
+ * 定落点。纯查询无副作用，不改变桌面活动工作区；桌面 list_workspaces
+ * 服务端已剔除日常，手机端列表无需再滤。
+ * 路径是内部概念，UI 永不展示（桌面 spec：
+ * docs/superpowers/specs/2026-09-20-daily-mode-design.md）。
+ */
+export interface DailyWorkspace {
+  key: string;
   path: string;
 }
 

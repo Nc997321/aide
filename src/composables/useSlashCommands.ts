@@ -11,7 +11,7 @@ export interface SlashCommandOption {
 
 /**
  * "/" 下拉框的命令发现与数据源切换：
- * - 会话未开始（sdkCommands 为 null）：用 Rust 本地扫描的 .claude/skills 富清单
+ * - 会话未开始（sdkCommands 为 null）：用 Rust 本地扫描的 .aide/claude/skills 富清单
  *   （含 description）兜底，workspacePath 变化时重新扫描。
  * - 一旦本次会话收到过 SDK 权威清单（sdkCommands 非 null）：单向切换为纯命令名，
  *   不再展示描述，也不会因为 workspacePath 之后再变化而回退到本地清单。
