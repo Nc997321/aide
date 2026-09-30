@@ -129,6 +129,11 @@ impl AgentRuntimeManager {
         mgr
     }
 
+    /// 本机 Runtime 进程是否已拉起（stdin 在手）。
+    pub fn is_running(&self) -> bool {
+        self.stdin.lock().unwrap().is_some()
+    }
+
     /// 幂等地启动 Runtime；应用冷启动与首个图片预检共享同一把启动锁。
     pub async fn ensure_runtime(
         &self,
@@ -168,6 +173,12 @@ impl AgentRuntimeManager {
             if let Some(path) = windows_path_with_git_usr_bin() {
                 cmd.env("PATH", path);
             }
+        }
+
+        // Host 给 sidecar 的进程级 env（远程 Host：桌面带过来的工具开关 / 代理兜底）；
+        // 在 provider 参数之前写，provider 同名键以 provider 为准。
+        for (k, v) in core.resources.agent_env() {
+            cmd.env(k, v);
         }
 
         // 透传 provider 连接参数（由调用方 build_runtime_env_vars 组好传入）
@@ -439,6 +450,23 @@ impl AgentRuntimeManager {
     pub fn clear_sent_commands(&self) {
         self.sent_commands.lock().unwrap().clear();
     }
+}
+
+/// Host 启动时拉起 Runtime：按当前激活供应商 + 代理设置组好进程 env（幂等，已在跑则不动）。
+/// 桌面 setup 与 `aide-host serve` 共用。
+pub async fn start_with_active_provider(core: &Arc<Core>) -> Result<(), String> {
+    let settings = core.settings.clone();
+    let (active, proxy) = crate::registry::blocking(move || {
+        let active = settings
+            .resolve_active_runtime_provider()
+            .map_err(|error| error.to_string())?;
+        let proxy = crate::app_settings::public_settings(&settings)?.proxy;
+        Ok((active, proxy))
+    })
+    .await
+    .map_err(|e| format!("unable to resolve initial provider settings: {e}"))?;
+    let env_vars = env::build_runtime_env_vars(&active, &proxy);
+    core.runtime.ensure_runtime(core, env_vars).await
 }
 
 fn emit_runtime_dead(core: &Core, tail_handle: &Arc<Mutex<VecDeque<String>>>, reason: &str) {

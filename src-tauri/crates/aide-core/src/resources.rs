@@ -22,6 +22,12 @@ pub trait HostResources: Send + Sync + 'static {
 
     /// 原生 claude CLI（经 `AIDE_CLAUDE_EXE` 递给 sidecar）；None = 不设。
     fn claude_exe(&self) -> Option<PathBuf>;
+
+    /// Host 额外给 sidecar 的进程级 env（在 provider 参数之前写入）。桌面 = 无（sidecar 继承
+    /// 桌面进程环境）；远程 Host = 桌面随连接带来的工具开关 / 代理兜底。
+    fn agent_env(&self) -> std::collections::HashMap<String, String> {
+        Default::default()
+    }
 }
 
 /// 什么随包资源都没有的 Host（测试 / 尚未随套件分发该组件的远程 Host）。

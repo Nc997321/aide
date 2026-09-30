@@ -31,6 +31,63 @@ pub async fn login_env() -> Option<HashMap<String, String>> {
     None
 }
 
+/// 同步版（`serve` 在建 tokio runtime **之前**调用：此时进程单线程，改进程环境是安全的）。
+/// 超时 15s 杀掉 shell，与异步版同一口径。
+pub fn login_env_blocking() -> Option<HashMap<String, String>> {
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/sh".into());
+    for flags in ["-lic", "-lc"] {
+        let script = format!("printf '\\n{ENV_MARKER}\\n'; env -0");
+        let Ok(mut child) = std::process::Command::new(&shell)
+            .arg(flags)
+            .arg(&script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        let mut stdout = child.stdout.take()?;
+        let reader = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
+            buf
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+        let finished = loop {
+            match child.try_wait() {
+                Ok(Some(_)) => break true,
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(20))
+                }
+                _ => break false,
+            }
+        };
+        if !finished {
+            let _ = child.kill();
+            let _ = child.wait();
+            continue;
+        }
+        if let Some(env) = reader.join().ok().and_then(|out| parse_env_dump(&out)) {
+            return Some(env);
+        }
+    }
+    None
+}
+
+/// Host 进程整体切到用户登录环境（PATH 里的 nvm / cargo / pyenv…）：agent、终端、语言服务器、
+/// git 都是它的子进程，都该看到与用户自己终端一致的工具链。**只准在单线程时调用**。
+pub fn apply_login_env() {
+    match login_env_blocking() {
+        Some(env) => {
+            for (k, v) in env {
+                std::env::set_var(k, v);
+            }
+        }
+        None => eprintln!("[aide-host] login shell env unavailable; using inherited env"),
+    }
+}
+
 fn parse_env_dump(bytes: &[u8]) -> Option<HashMap<String, String>> {
     let text = String::from_utf8_lossy(bytes);
     let marker = format!("\n{ENV_MARKER}\n");

@@ -448,6 +448,12 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // saves can broadcast `update_permission_policy` to this session.
     runtime_mgr.register_session_route(&session_id, Some(&cwd));
 
+    // Runtime 还没起来（Host 刚连上、首条消息先于后台拉起到达）：就地按激活供应商拉起，
+    // 而不是回一个「Runtime not spawned」。已在跑时这里只是一次内存判断。
+    if !runtime_mgr.is_running() {
+        crate::runtime::start_with_active_provider(&app).await?;
+    }
+
     // 旧模型远程工作区（过渡，P1 删除）：会话跑在目标机的 sidecar 上（车道）。路由器确保
     // 车道在、绑定会话、把命令里的桌面路径译成目标机路径；此后同会话的其它命令由
     // send_to_runtime 按绑定自动路由。本机工作区原样通过。

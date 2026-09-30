@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use aide_host::protocol::{
-    HelloInfo, InvokeParams, Notification, Request, Response, METHOD_HELLO, METHOD_INVOKE,
-    PROTOCOL_VERSION,
+    HelloInfo, InvokeParams, Notification, Request, Response, ServeInit, METHOD_HELLO,
+    METHOD_INVOKE, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -39,16 +39,23 @@ pub struct HostConnection {
 }
 
 impl HostConnection {
-    /// spawn 已构造好的 `aide-host serve` 命令并完成 `hello` 握手。
+    /// spawn 已构造好的 `aide-host serve` 命令，写首行 [`ServeInit`]，再完成 `hello` 握手。
     pub async fn start(
         host: HostId,
         mut cmd: tokio::process::Command,
+        init: &ServeInit,
         on_event: EventHandler,
     ) -> Result<Arc<Self>, String> {
         let mut child = cmd
             .spawn()
             .map_err(|e| format!("无法连接 {}：{e}", host.label()))?;
-        let stdin = child.stdin.take().ok_or("no stdin")?;
+        let mut stdin = child.stdin.take().ok_or("no stdin")?;
+        let mut line = serde_json::to_string(init).map_err(|e| e.to_string())?;
+        line.push('\n');
+        stdin
+            .write_all(line.as_bytes())
+            .await
+            .map_err(|e| format!("{} 初始化写入失败：{e}", host.label()))?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let stderr = child.stderr.take().ok_or("no stderr")?;
 

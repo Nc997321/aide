@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aide_host::protocol::{AgentInit, Notification};
+use aide_host::protocol::{AgentInit, Notification, ServeInit};
 use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
@@ -54,6 +54,7 @@ async fn wsl_install_connect_workspace_ops_and_agent() {
     let conn = HostConnection::start(
         host.clone(),
         cmd,
+        &ServeInit::default(),
         Arc::new(move |_h: &HostId, n: Notification| sink.lock().unwrap().push(n)),
     )
     .await
@@ -186,6 +187,7 @@ async fn wsl_remote_language_server_speaks_desktop_uris() {
     let conn = HostConnection::start(
         host.clone(),
         launcher::command(&host, &format!("exec {} serve", launcher::sh_quote(&inst.host_bin))).unwrap(),
+        &ServeInit::default(),
         Arc::new(|_h: &HostId, _n: Notification| {}),
     )
     .await
@@ -380,4 +382,97 @@ async fn wsl_extension_mirror_syncs_once_and_recovers_from_partial_upload() {
 
     let _ = install::run_script(&host, &format!("rm -rf {base}"), None).await;
     let _ = std::fs::remove_dir_all(&desk);
+}
+
+/// Host 模型（P1）：`aide-host serve` 本身就是完整 Host——前端的 `send_message` 原样发给它，
+/// agent runtime 跑在目标机上，chat-event 经通知帧回来。验证①Host 用自己的设置解析供应商、
+/// 自己拉起 sidecar ②Bash 工具在目标机上、按会话 cwd 执行 ③事件原样回到连接这一侧。
+///
+/// 隔离：serve 跑在一个临时 `HOME` 里（设置 / 密钥 / claude 数据都不碰你真实的 Host 配置），
+/// 登录态从 `AIDE_E2E_CLAUDE_CONFIG` 复制一份进去；node 按真实登录 shell 解析后经 ServeInit 给。
+#[tokio::test]
+#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）、pnpm build:remote-kit、AIDE_E2E_CLAUDE_CONFIG"]
+async fn wsl_host_serve_runs_a_chat_round() {
+    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
+    let cfg = env("AIDE_E2E_CLAUDE_CONFIG").expect("set AIDE_E2E_CLAUDE_CONFIG=<target claude home>");
+    let host = HostId::Wsl(distro);
+    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+
+    let home = format!("/tmp/aide-e2e-host-{}", std::process::id());
+    let prep = format!(
+        "rm -rf {h} && mkdir -p {h}/.aide/claude && cp {c}/.credentials.json {h}/.aide/claude/ && command -v node",
+        h = launcher::sh_quote(&home),
+        c = launcher::sh_quote(&cfg),
+    );
+    let out = launcher::command(&host, &format!("exec \"${{SHELL:-/bin/sh}}\" -lic {}", launcher::sh_quote(&prep)))
+        .unwrap()
+        .output()
+        .await
+        .expect("prepare host home");
+    let node = String::from_utf8_lossy(&out.stdout).lines().last().unwrap_or("").trim().to_string();
+    assert!(node.starts_with('/'), "node not found in login shell: {:?}", String::from_utf8_lossy(&out.stderr));
+
+    let host_env = install::host_env(&host, &inst).await;
+    let init = ServeInit {
+        env: host_env.env,
+        default_env: host_env.default_env,
+        node: Some(node),
+        claude_exe: Some(inst.claude_exe.clone()),
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Value>();
+    let cmd = launcher::command(
+        &host,
+        &format!("HOME={} exec {} serve", launcher::sh_quote(&home), launcher::sh_quote(&inst.host_bin)),
+    )
+    .unwrap();
+    let conn = HostConnection::start(
+        host.clone(),
+        cmd,
+        &init,
+        Arc::new(move |_h: &HostId, n: Notification| {
+            if n.event == "chat-event" {
+                let _ = tx.send(n.payload);
+            }
+        }),
+    )
+    .await
+    .expect("connect");
+
+    let cwd = env("AIDE_E2E_REPO").unwrap_or_else(|| conn.info.home.clone());
+    let sid = format!("e2e-host-{}", std::process::id());
+    conn.invoke(
+        "send_message",
+        json!({
+            "sessionId": sid,
+            "prompt": "Use the Bash tool to run `uname -s && pwd`, then reply with just DONE.",
+            "workspaceRoot": cwd,
+            "permissionMode": "bypassPermissions",
+        }),
+        None,
+    )
+    .await
+    .expect("send_message on the Host");
+
+    let mut tool_output = String::new();
+    let outcome = tokio::time::timeout(Duration::from_secs(240), async {
+        while let Some(ev) = rx.recv().await {
+            match ev["type"].as_str().unwrap_or("") {
+                "tool_result" => tool_output.push_str(ev["content"].as_str().unwrap_or("")),
+                "message_stop" => return Ok(()),
+                "session_dead" | "runtime_dead" | "error" => return Err(ev.to_string()),
+                _ => {}
+            }
+        }
+        Err("host connection closed".to_string())
+    })
+    .await
+    .expect("host chat turn timed out");
+    let _ = launcher::command(&host, &format!("rm -rf {}", launcher::sh_quote(&home)))
+        .unwrap()
+        .output()
+        .await;
+    outcome.expect("host chat turn failed");
+    println!("tool output: {tool_output}");
+    assert!(tool_output.contains("Linux"), "Bash did not run on the Host: {tool_output}");
+    assert!(tool_output.contains(&cwd), "cwd not honoured on the Host: {tool_output}");
 }

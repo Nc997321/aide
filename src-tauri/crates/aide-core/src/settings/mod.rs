@@ -24,7 +24,7 @@ pub use descriptors::{
 pub use schema::{
     PermissionEffect, PermissionSection, SettingsDocument, SettingsScope, StoredPermissionRule,
 };
-pub use secrets::{MemorySecretStore, SecretMutation, SecretStore};
+pub use secrets::{FileSecretStore, MemorySecretStore, SecretMutation, SecretStore};
 pub use store::{SettingsPaths, SettingsService};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

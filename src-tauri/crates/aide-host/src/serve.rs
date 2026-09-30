@@ -1,4 +1,7 @@
-//! `aide-host serve`：stdio JSON-RPC 主循环。
+//! `aide-host serve`：一个完整的 Host（aide-core），经 stdio JSON-RPC 连到一扇 GUI 窗口。
+//!
+//! 生命周期：首行 [`ServeInit`] → Host 起来（agent runtime / 自动化调度在后台拉起）→ 请求循环
+//! → stdin EOF（窗口断开）→ 收掉 runtime 子进程树后退出。
 //!
 //! 并发模型：每条请求独立 spawn（慢的全树搜索不堵住文件树的 list_directory）；
 //! 所有出站帧（响应 + 通知）经同一个 mpsc 串行写 stdout，保证一行一帧不交错；
@@ -7,11 +10,15 @@
 
 use std::sync::Arc;
 
-use aide_core::settings::{MemorySecretStore, SettingsPaths, SettingsService};
+use std::collections::HashMap;
+use std::path::PathBuf;
+
+use aide_core::resources::HostResources;
+use aide_core::settings::{FileSecretStore, SettingsPaths, SettingsService};
 use aide_core::{Core, EventSink, WorkspaceState};
 use aide_host::protocol::{
-    HelloInfo, InvokeParams, Notification, Request, Response, METHOD_HELLO, METHOD_INVOKE,
-    PROTOCOL_VERSION,
+    HelloInfo, InvokeParams, Notification, Request, Response, ServeInit, METHOD_HELLO,
+    METHOD_INVOKE, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,7 +45,75 @@ impl EventSink for NotifySink {
     }
 }
 
+/// 目标机上 Host 的随包资源：套件安装目录里的 sidecar（runtime.js，node 跑）+ 套件带的
+/// claude CLI。codegraph runner / 捆绑 LSP 还不随远程套件分发——如实报错 / 走登录 PATH。
+struct HostKit {
+    init: ServeInit,
+    install_dir: PathBuf,
+}
+
+impl HostResources for HostKit {
+    fn codegraph_runner(&self) -> Result<PathBuf, String> {
+        Err("代码索引暂不随远程 Host 分发".into())
+    }
+
+    fn codegraph_model_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn lsp_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn agent_runtime(&self) -> Result<(String, PathBuf), String> {
+        let runtime = self.install_dir.join("runtime").join("runtime.js");
+        if !runtime.is_file() {
+            return Err(format!("sidecar missing: {}", runtime.display()));
+        }
+        // 进程环境已是登录环境（main 里切过），`which` 看到的就是用户终端的 PATH。
+        let node = self.init.node.clone().unwrap_or_else(|| "node".into());
+        let node = crate::login::which(&node, None)
+            .ok_or_else(|| format!("找不到 node（{node}）：请在目标机上安装 Node.js"))?;
+        Ok((node, runtime))
+    }
+
+    fn claude_exe(&self) -> Option<PathBuf> {
+        self.init.claude_exe.as_ref().map(PathBuf::from)
+    }
+
+    fn agent_env(&self) -> HashMap<String, String> {
+        let mut env: HashMap<String, String> = self
+            .init
+            .default_env
+            .iter()
+            .filter(|(k, _)| std::env::var_os(k).is_none())
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        env.extend(self.init.env.clone());
+        env
+    }
+}
+
 pub async fn run() -> i32 {
+    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    let init: ServeInit = match lines.next_line().await {
+        Ok(Some(first)) => match serde_json::from_str(first.trim()) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("[aide-host] bad init line: {e}");
+                return 2;
+            }
+        },
+        _ => {
+            eprintln!("[aide-host] no init line");
+            return 2;
+        }
+    };
+    let install_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+
     let (tx, mut rx) = unbounded_channel::<String>();
 
     let writer = tokio::spawn(async move {
@@ -55,10 +130,19 @@ pub async fn run() -> i32 {
         Arc::new(WorkspaceState::new()),
         Arc::new(host_settings()),
         Arc::new(NotifySink(tx.clone())),
-        // 远程套件还不带 codegraph runner 等随包组件：如实报错（见 NoResources）。
-        Arc::new(aide_core::resources::NoResources),
+        Arc::new(HostKit { init, install_dir }),
     );
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
+    // agent runtime 与自动化调度：Host 一起来就拉起（与桌面本机 Host 同一时机）。起不来只留痕
+    // ——send 会如实报「Runtime not spawned」，其余命令照常可用。
+    {
+        let core = Arc::clone(&core);
+        tokio::spawn(async move {
+            if let Err(e) = aide_core::runtime::start_with_active_provider(&core).await {
+                eprintln!("[aide-host] agent runtime failed to start: {e}");
+            }
+        });
+    }
+    core.automation.start(&core);
     while let Ok(Some(line)) = lines.next_line().await {
         if line.trim().is_empty() {
             continue;
@@ -90,6 +174,9 @@ pub async fn run() -> i32 {
             }
         });
     }
+    // 窗口断开：收掉 agent runtime 与语言服务器（子进程树不随 serve 退出自动消亡）
+    core.runtime.kill_runtime().await;
+    core.lsp.kill_all().await;
     // 停掉监听线程（它经 NotifySink 持有 tx 的克隆，不停表 writer 永远等不到通道关闭）
     let _ = tokio::task::spawn_blocking(move || aide_core::commands::watch::retarget(&core, None)).await;
     drop(tx);
@@ -109,15 +196,16 @@ async fn handle(method: &str, params: Value, core: Arc<Core>) -> Result<Value, S
     }
 }
 
-/// 目标机上的设置：文件落目标机 `~/.aide/`；密钥只在内存（由桌面钥匙串随连接下发，
-/// 从不落目标机磁盘——服务器可能多人共用）。初始化失败只留痕：设置类命令会如实报
-/// NotInitialized，其余命令照常可用。
+/// 目标机上的设置：文件落目标机 `~/.aide/`；密钥落 `~/.aide/secrets.json`（0600）——供应商
+/// 按 Host 自持（2026-09-30 定），桌面可显式把本机供应商复制过来。初始化失败只留痕：设置类
+/// 命令会如实报 NotInitialized，其余命令照常可用。
 fn host_settings() -> SettingsService {
     let paths = SettingsPaths::new().unwrap_or_else(|e| {
         eprintln!("[aide-host] settings paths: {e}");
         SettingsPaths::for_test(aide_core::paths::our_config_dir())
     });
-    let service = SettingsService::new(paths, Arc::new(MemorySecretStore::default()));
+    let secrets = FileSecretStore::new(aide_core::paths::our_config_dir().join("secrets.json"));
+    let service = SettingsService::new(paths, Arc::new(secrets));
     if let Err(e) = service.initialize_blocking() {
         eprintln!("[aide-host] settings initialise failed: {e}");
     }

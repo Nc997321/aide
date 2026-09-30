@@ -28,7 +28,9 @@ use std::collections::HashMap;
 ///
 /// v2（2026-09-30）：删除 `watch` 方法——文件监听改为 aide-core 命令 `file_tree_watch`
 /// （经 `invoke`），事件经通知帧回推。
-pub const PROTOCOL_VERSION: u32 = 2;
+/// v3（2026-09-30）：`serve` 首行 [`ServeInit`]——serve 成为完整 Host（agent runtime /
+/// 自动化 / LSP 都在它里面），进程级环境随连接给。
+pub const PROTOCOL_VERSION: u32 = 3;
 
 pub const METHOD_HELLO: &str = "hello";
 pub const METHOD_INVOKE: &str = "invoke";
@@ -81,6 +83,24 @@ pub struct InvokeParams {
     pub args: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<String>,
+}
+
+/// `aide-host serve` 的首行：Host 进程级的设定（敏感值走 stdin 不走命令行——命令行在目标机
+/// `ps` 里对所有用户可见）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ServeInit {
+    /// 给 agent sidecar 的 env（桌面上的工具开关等），覆盖 Host 自己的同名值。
+    #[serde(default)]
+    pub env: HashMap<String, String>,
+    /// 兜底 env：只在 Host 登录环境**没有**该键时生效（如桌面探测到的代理）。
+    #[serde(default)]
+    pub default_env: HashMap<String, String>,
+    /// node 可执行文件；None = 登录 PATH 上的 `node`。
+    #[serde(default)]
+    pub node: Option<String>,
+    /// 原生 claude CLI（套件安装的那份）；None = 不设（SDK 自己找）。
+    #[serde(default)]
+    pub claude_exe: Option<String>,
 }
 
 /// `aide-host agent` 的首行：sidecar 的进程环境（provider 凭据等敏感值走这里而不是

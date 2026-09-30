@@ -59,7 +59,10 @@ GUI ─ stdio(wsl/ssh) ─▶ aide-host serve ─▶ 同一个 aide-core        
 | P0-4c | LSP 迁入 `Core::lsp`（20 条编辑器命令 + workspace_symbol）；事件经 `EventSink`、捆绑 server 经 `HostResources::lsp_dir`；旧模型远程 LSP 经过渡端口 `lsp::remote`（桌面 `remote_workspace/lsp_bridge.rs`） | ✅ 2026-09-30 |
 | P0-4d | agent runtime 迁入 `Core::runtime`（sidecar 进程 / 事件泵 / 会话表 / 后台任务表 / Windows Job Object）；chat（12）/ 权限（6）/ 信任（2）/ session_alive / 通知上下文 / 后台任务快照 / MCP 探活成为 core 命令。宿主端口：`runtime::ports::AgentHooks`（GUI 侧：内嵌浏览器查询 / 冻结诊断 / 自动化观测，桌面注入）与过渡端口 `LaneRouter` / `LaneAdapter`（旧模型远程车道，桌面 `remote_workspace/lanes.rs`）。权限模式默认表编译进二进制。手机 RPC 对应包装改为 `CORE_EXPOSED`（send_message 保留远程权限模式兜底的薄预处理） | ✅ 2026-09-30 |
 | P0-4e | automation（11）迁入 `Core::automation`：调度器常驻 Host，运行 / 蒸馏直接写 `Core::runtime`，自动化观测回到事件泵内部。系统通知改为 Host 事件 `system-notification`（`Core::notify`），由 GUI 前门弹出（桌面 = `TauriSink` 转系统通知）——Host 不弹窗、也不带 D-Bus | ✅ 2026-09-30 |
-| P1 | 窗口连 WSL Host：GUI 泛化转发全部 invoke + 事件，Host 原生路径直出前端；删除 `routes.rs` 与路径翻译 | |
+| P1a | `aide-host serve` 成为完整 Host：首行 `ServeInit`（协议 v3）；进程整体切到用户登录环境；`HostKit` 资源（套件里的 runtime.js + 登录 PATH 的 node + 套件的 claude CLI）；agent runtime 与自动化随 serve 起、随断开收；**供应商按 Host 自持**（2026-09-30 定），密钥落 Host 的 `~/.aide/secrets.json`（0600，`FileSecretStore`）；首条消息先于 runtime 拉起时 `send_message` 就地拉起。真机 e2e：前端同一个 `send_message` 发给 serve，Bash 在 WSL 上按会话 cwd 跑、chat-event 经通知帧回来 | ✅ 2026-09-30 |
+| P1b | 桌面「窗口 ↔ Host」绑定：Host 窗口的 core 命令泛化转发给该 Host 的 serve（二进制结果还原），GUI 命令留本机；Host 事件只投该窗口，本机 Host 事件不进 Host 窗口；窗口能力（capabilities）与关闭语义 | |
+| P1c | 前端：「在 WSL 中打开」= 开 Host 窗口；标题栏标 Host；Host 原生路径；「从本机复制供应商」显式动作；「在资源管理器中显示」对 WSL 路径做翻译、SSH 如实拒绝；粘贴截图 / 拖入本机文件 = 上传到 Host | |
+| P1d | 删除旧模型：`routes.rs`、车道（`lanes.rs` + `runtime::ports::{LaneRouter,LaneAdapter}`）、`lsp_bridge` / `lsp_pipe` + `lsp::remote`、`sessions.rs` 路由、扩展镜像 `mirror.rs`、终端远程钩子、aide-host 的 `agent` / `lsp` 模式与 `transcript_*` / `lsp_detect` 命令；docs/remote-workspaces.md 与 CLAUDE.md 红线改写 | |
 | P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |
 | P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |
 

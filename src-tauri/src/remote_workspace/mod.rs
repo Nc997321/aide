@@ -205,10 +205,18 @@ impl RemoteWorkspaces {
             host,
             &format!("exec {} serve", launcher::sh_quote(&inst.host_bin)),
         )?;
+        let host_env = install::host_env(host, &inst).await;
+        let init = aide_host::protocol::ServeInit {
+            env: host_env.env,
+            default_env: host_env.default_env,
+            node: inst.node.clone(),
+            claude_exe: Some(inst.claude_exe.clone()),
+        };
         let app_for_events = app.clone();
         HostConnection::start(
             host.clone(),
             cmd,
+            &init,
             Arc::new(move |h: &HostId, n: Notification| on_host_event(&app_for_events, h, n)),
         )
         .await

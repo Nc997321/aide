@@ -239,31 +239,13 @@ pub fn run() {
             // 启动持久 Agent Runtime（single persistent process，所有会话共享）
             // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
             // setup 闭包是同步的，不能直接调 spawn_runtime。
-            // Runtime 住 aide-core；GUI 侧钩子（内嵌浏览器 / 冻结诊断 / 自动化观测）先挂上。
+            // Runtime 住 aide-core；GUI 侧钩子（内嵌浏览器 / 冻结诊断）先挂上。
             let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
             core.runtime
                 .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
             tauri::async_runtime::spawn(async move {
-                {
-                    use crate::runtime::env::build_runtime_env_vars;
-                    let settings_service = core.settings.clone();
-                    let resolved = tokio::task::spawn_blocking(move || {
-                        let active = settings_service
-                            .resolve_active_runtime_provider()
-                            .map_err(|error| error.to_string())?;
-                        let proxy =
-                            crate::commands::settings::public_settings(&settings_service)?.proxy;
-                        Ok::<_, String>((active, proxy))
-                    })
-                    .await;
-                    let Ok(Ok((active, proxy))) = resolved else {
-                        eprintln!("[aide] unable to resolve initial provider settings");
-                        return;
-                    };
-                    let env_vars = build_runtime_env_vars(&active, &proxy);
-                    if let Err(e) = core.runtime.ensure_runtime(&core, env_vars).await {
-                        eprintln!("[aide] Agent Runtime 启动失败: {e}");
-                    }
+                if let Err(e) = aide_core::runtime::start_with_active_provider(&core).await {
+                    eprintln!("[aide] Agent Runtime 启动失败: {e}");
                 }
             });
 

@@ -15,6 +15,7 @@
 //! 旧版本目录在安装新版后清理。所有下载都在**桌面**进行（走桌面的代理设置），经
 //! wsl/ssh 管道流式上传——很多服务器出不了公网，但桌面能。
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -451,9 +452,77 @@ fn write_atomic(path: &Path, bytes: &[u8]) {
     }
 }
 
+/// 目标机 Host 进程给 sidecar 的环境：桌面上的工具开关原样带过去；桌面探测到的代理作
+/// **兜底**（目标机登录环境里已有代理就用它自己的），回环地址按目标机网络改写。
+pub struct HostEnv {
+    pub env: HashMap<String, String>,
+    pub default_env: HashMap<String, String>,
+    /// 桌面回环代理在目标机上的改写主机（见 [`loopback_host_for`]）；None = 丢弃。
+    pub loopback_host: Option<String>,
+}
+
+pub async fn host_env(host: &HostId, installed: &Installed) -> HostEnv {
+    let env = tool_switches(|k| std::env::var(k).ok());
+    // 桌面探测到的代理（设置 → 环境 → git → 常见本地端口）。
+    let desktop_proxy = tokio::task::spawn_blocking(aide_core::proxy::detect_proxy)
+        .await
+        .ok()
+        .flatten();
+    let mut default_env = HashMap::new();
+    let mut loopback_host = None;
+    if let Some(url) = desktop_proxy {
+        if let Some((h, port)) = proxy_host_port(&url) {
+            let target_url = if is_loopback_host(&h) {
+                loopback_host = loopback_host_for(host, installed, port).await;
+                loopback_host.as_deref().map(|lh| replace_proxy_host(&url, lh))
+            } else {
+                Some(url.clone())
+            };
+            if let Some(u) = target_url {
+                tracing::info!(host = %host, proxy = %u, "remote host: default proxy");
+                for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+                    default_env.insert(k.to_string(), u.clone());
+                }
+            }
+        }
+    }
+    HostEnv {
+        env,
+        default_env,
+        loopback_host,
+    }
+}
+
+/// 桌面进程环境里的工具开关（`AIDE_LSP_TOOLS=off` 这类逃生舱）原样带到目标机。
+///
+/// 本机车道的 sidecar 继承桌面进程环境，开关天然生效；远程车道的 runtime 起在目标机上，
+/// 环境只有随连接递过去的这些——不带过去，用户关掉的工具在 WSL / SSH 工作区里照样挂着
+/// （2026-09-30 真机：设了 `AIDE_LSP_TOOLS=off` 的对照轮里 aide-lsp 仍在）。
+const TOOL_SWITCHES: &[&str] = &[
+    "AIDE_LSP_TOOLS",
+    "AIDE_CODEGRAPH_TOOLS",
+    "AIDE_DOCX_TOOLS",
+    "AIDE_KB_TOOLS",
+    "AIDE_BROWSER_TOOLS",
+];
+
+fn tool_switches(get: impl Fn(&str) -> Option<String>) -> HashMap<String, String> {
+    TOOL_SWITCHES
+        .iter()
+        .filter_map(|k| get(k).map(|v| (k.to_string(), v)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_switches_travel_to_the_target() {
+        let env = tool_switches(|k| (k == "AIDE_LSP_TOOLS").then(|| "off".to_string()));
+        assert_eq!(env.len(), 1);
+        assert_eq!(env["AIDE_LSP_TOOLS"], "off");
+    }
 
     #[test]
     fn probe_parsing() {
