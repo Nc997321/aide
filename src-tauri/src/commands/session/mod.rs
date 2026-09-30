@@ -6,7 +6,6 @@
 mod changes;
 mod history;
 mod jsonl;
-mod transcript;
 
 pub use changes::{append_session_change, load_session_changes, save_session_changes};
 pub use history::load_messages;
@@ -47,7 +46,15 @@ pub(crate) use jsonl::{
 #[tauri::command]
 pub async fn list_sessions(
     workspace_state: State<'_, WorkspaceState>,
+    app: tauri::AppHandle,
 ) -> Result<Vec<Session>, String> {
+    let active_root = project_root_for_commands(&workspace_state);
+    if let Some((host, posix)) = active_root
+        .to_str()
+        .and_then(crate::remote_workspace::path::parse)
+    {
+        return remote_sessions(&app, &host, &posix).await;
+    }
     let encoded = match workspace_state.key.lock() {
         Ok(guard) => match guard.as_ref() {
             Some(key) => key.clone(),
@@ -59,6 +66,37 @@ pub async fn list_sessions(
     tokio::task::spawn_blocking(move || list_sessions_blocking(encoded, root))
         .await
         .map_err(|e| format!("list_sessions task panicked: {}", e))?
+}
+
+/// 远程工作区的会话列表：目标机给转录原料（id / CLI 元数据 / mtime），桌面叠加自己的
+/// 元数据（显示名、自动化标签过滤）——与本机列表同一口径。
+async fn remote_sessions(
+    app: &tauri::AppHandle,
+    host: &crate::remote_workspace::path::HostId,
+    posix_root: &str,
+) -> Result<Vec<Session>, String> {
+    let v = crate::remote_workspace::sessions::transcript_call(
+        app,
+        host,
+        "transcript_list",
+        serde_json::json!({ "root": posix_root }),
+    )
+    .await?;
+    let entries: Vec<aide_workspace::transcripts::TranscriptEntry> =
+        serde_json::from_value(v).map_err(|e| e.to_string())?;
+    let mut sessions: Vec<Session> = entries
+        .into_iter()
+        .filter(|e| !our_session_is_automation(&e.id))
+        .map(|e| Session {
+            name: our_session_name(&e.id)
+                .or(e.cli_name)
+                .unwrap_or_else(|| e.id.clone()),
+            timestamp: if e.started_at == 0 { e.mtime_ms } else { e.started_at },
+            id: e.id,
+        })
+        .collect();
+    sessions.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    Ok(sessions)
 }
 
 /// 扫描单个项目目录下的 .jsonl 会话并追加到 sessions（按 session id 去重——
@@ -703,7 +741,21 @@ pub fn session_alive(
 /// async + spawn_blocking，否则堵主线程（诊断黑匣子实锤过同类命令 `session_jsonl_size`
 /// 堵死主线程 30s+，这个命令逻辑更重，是同一类风险，一并修）。
 #[tauri::command]
-pub async fn list_sessions_for_workspace(ws_key: String) -> Result<Vec<Session>, String> {
+pub async fn list_sessions_for_workspace(
+    app: tauri::AppHandle,
+    ws_key: String,
+) -> Result<Vec<Session>, String> {
+    // 远程工作区（WSL / SSH）：转录在目标机上。key 不能反解成路径（UNC 形态），查注册表。
+    let registered = crate::commands::workspace::registered_path_for_key(
+        &crate::commands::settings::load_state(),
+        &ws_key,
+    );
+    if let Some((host, posix)) = registered
+        .as_deref()
+        .and_then(crate::remote_workspace::path::parse)
+    {
+        return remote_sessions(&app, &host, &posix).await;
+    }
     tokio::task::spawn_blocking(move || list_sessions_for_workspace_blocking(ws_key))
         .await
         .map_err(|e| format!("list_sessions_for_workspace task panicked: {}", e))?
@@ -775,33 +827,7 @@ fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, 
 // ── Internal helpers ──
 
 fn claude_session_meta(session_id: &str) -> Option<(String, u64)> {
-    let dir = claude_sessions_dir();
-    if !dir.exists() {
-        return None;
-    }
-    let read_dir = fs::read_dir(&dir).ok()?;
-    for entry in read_dir {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = entry.path();
-        if path.extension().map(|e| e == "json").unwrap_or(false) {
-            if let Ok(content) = fs::read_to_string(&path) {
-                if let Ok(v) = serde_json::from_str::<Value>(&content) {
-                    if v.get("sessionId").and_then(|s| s.as_str()) == Some(session_id) {
-                        let name = v
-                            .get("name")
-                            .and_then(|n| n.as_str())
-                            .unwrap_or("未命名")
-                            .to_string();
-                        let started_at = v.get("startedAt").and_then(|t| t.as_u64()).unwrap_or(0);
-                        return Some((name, started_at));
-                    }
-                }
-            }
-        }
-    }
-    None
+    aide_workspace::transcripts::cli_session_meta(&claude_sessions_dir(), session_id)
 }
 
 /// Normalize a filesystem path so two paths pointing to the same location

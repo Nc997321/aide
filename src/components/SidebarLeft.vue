@@ -13,6 +13,7 @@ import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
 import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api, openExternal } from "../api";
+import { parseRemotePath } from "@aide/sdk";
 import AToast from "../ui/AToast.vue";
 import AppLogo from "./AppLogo.vue";
 import AutomationSidebarSection from "./automation/AutomationSidebarSection.vue";
@@ -122,6 +123,11 @@ function workspaceLabel(ws: WorkspaceInfo): string {
   }
   const parts = ws.name.replace(/[/\\]+$/, "").split(/[/\\]/);
   return parts[parts.length - 1] || ws.name;
+}
+
+/** 远程工作区（WSL / SSH）的机器标签；本机工作区 → null。 */
+function remoteOf(ws: WorkspaceInfo) {
+  return ws.missing ? null : parseRemotePath(ws.name);
 }
 
 const filteredWorkspaces = computed(() => {
@@ -592,6 +598,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
             <path d="M2.5 16.8L12 21.6L21.5 16.8"/>
           </svg>
           <span class="ws-name" v-tooltip="ws.missing ? '' : workspaceLabel(ws)">{{ workspaceLabel(ws) }}</span>
+          <span v-if="remoteOf(ws)" class="ws-remote" v-tooltip="`${remoteOf(ws)!.label}  ${remoteOf(ws)!.posix}`">{{ remoteOf(ws)!.label }}</span>
           <!-- 右槽位：计数 ⇄ ⋯（hover 互换）；⋯ 与右键同一份 workspaceMenuItems -->
           <span class="ws-slot" @click.stop>
             <span v-if="!ws.missing && (sessionsByWorkspace[ws.key] ?? []).length > 0" class="ws-count">{{ (sessionsByWorkspace[ws.key] ?? []).length }}</span>
@@ -1106,6 +1113,19 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .workspace-item.active .ws-icon,
 .workspace-item.expanded .ws-icon {
   color: var(--aide-accent);
+}
+
+/* 远程工作区的机器标签（WSL / SSH）：名字后的小胶囊，名字优先收缩 */
+.ws-remote {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 5px;
+  margin-left: 4px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
+  color: var(--aide-text-muted);
+  white-space: nowrap;
 }
 
 .ws-name {

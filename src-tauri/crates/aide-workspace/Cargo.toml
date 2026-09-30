@@ -1,0 +1,17 @@
+[package]
+name = "aide-workspace"
+version = "0.8.0"
+edition = "2021"
+description = "Workspace operations (fs / search / git) shared by the desktop app and aide-host (remote workspaces). No Tauri dependency: the same code runs locally and on a remote target."
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "time", "process", "fs", "io-util"] }
+tracing = "0.1"
+ignore = "0.4"
+regex = "1"
+base64 = "0.22"
+encoding_rs = "0.8"
+notify = "8.2"
+

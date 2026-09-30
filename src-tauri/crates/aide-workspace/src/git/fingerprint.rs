@@ -1,14 +1,11 @@
 // git 目录指纹域：refs/HEAD/index/FETCH_HEAD 的 mtime 组合指纹，供
 // useGitWatcher 3s 轮询做轻量变更探测（只摸 mtime，不 spawn git）。
 // 持续高频的同步命令，埋 trace_command 便于诊断报告点名。
-use crate::commands::{project_root_for_commands, WorkspaceState};
-use tauri::State;
+
+use std::path::PathBuf;
 /// 每 3s 轮询一次（useGitWatcher.ts），递归遍历 `.git/refs`——持续高频的同步
 /// 命令，埋 trace_command 便于诊断报告点名（同批见 marketplace.rs 顶部注释）。
-#[tauri::command]
-pub fn git_fingerprint(workspace_state: State<'_, WorkspaceState>) -> Result<String, String> {
-    let _trace = crate::diagnostics::trace_command("git_fingerprint");
-    let root = project_root_for_commands(&workspace_state);
+pub fn git_fingerprint(root: PathBuf) -> Result<String, String> {
     let git_dir = root.join(".git");
     if !git_dir.exists() {
         return Ok(String::new());

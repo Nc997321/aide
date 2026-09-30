@@ -262,7 +262,7 @@ pub fn btw_ask(app: AppHandle, params: Value) -> BoxFuture<'static, Result<Value
 pub fn list_sessions(app: AppHandle, _params: Value) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let ws_state = app.state::<WorkspaceState>();
-        to_json(crate::commands::session::list_sessions(ws_state).await)
+        to_json(crate::commands::session::list_sessions(ws_state, app.clone()).await)
     })
 }
 
@@ -273,12 +273,12 @@ struct WsKeyArgs {
 }
 
 pub fn list_sessions_for_workspace(
-    _app: AppHandle,
+    app: AppHandle,
     params: Value,
 ) -> BoxFuture<'static, Result<Value, String>> {
     Box::pin(async move {
         let a: WsKeyArgs = parse(params)?;
-        to_json(crate::commands::session::list_sessions_for_workspace(a.ws_key).await)
+        to_json(crate::commands::session::list_sessions_for_workspace(app, a.ws_key).await)
     })
 }
 
@@ -343,6 +343,7 @@ pub fn load_messages(app: AppHandle, params: Value) -> BoxFuture<'static, Result
         to_json(
             crate::commands::session::load_messages(
                 ws_state,
+                app.clone(),
                 a.session_id,
                 a.offset_bytes,
                 a.limit,
@@ -359,7 +360,7 @@ pub fn session_last_event(
     Box::pin(async move {
         let a: SessionIdArgs = parse(params)?;
         let ws_state = app.state::<WorkspaceState>();
-        to_json(crate::commands::session::session_last_event(ws_state, a.session_id).await)
+        to_json(crate::commands::session::session_last_event(ws_state, app.clone(), a.session_id).await)
     })
 }
 

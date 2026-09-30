@@ -1,8 +1,8 @@
 // 分支域：列出（本地+远程合并排序）、新建（重名区分 BRANCH_EXISTS）、
 // 删除（未合并时 BRANCH_NOT_MERGED）、检出（origin/xxx 自动建跟踪分支）。
 use super::runtime::git_run_async;
-use crate::commands::{project_root_for_commands, WorkspaceState};
-use tauri::State;
+
+use std::path::PathBuf;
 use tracing::{error, info};
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct BranchInfo {
@@ -12,12 +12,10 @@ pub struct BranchInfo {
     pub is_remote: bool,
 }
 
-#[tauri::command]
 pub async fn git_create_branch(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     name: String,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("BRANCH_FAILED: Not a git repository".into());
     }
@@ -37,13 +35,11 @@ pub async fn git_create_branch(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_delete_branch(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     name: String,
     force: Option<bool>,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("DELETE_FAILED: Not a git repository".into());
     }
@@ -66,11 +62,9 @@ pub async fn git_delete_branch(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_branches(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<Vec<BranchInfo>, String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(root = %root.display(), "git_branches");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
@@ -126,12 +120,10 @@ pub async fn git_branches(
     Ok(branches)
 }
 
-#[tauri::command]
 pub async fn git_checkout(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     branch: String,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }

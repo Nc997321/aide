@@ -3,12 +3,12 @@
 // （N 次串行 spawn 每次启动 ~1s 的开销）；组装成 [`DiffPair`]（too_big /
 // binary / eol_only 短路）。build/assemble 尾段与 compare::git_diff_pair_refs 共用。
 use super::runtime::{git_run, git_run_blocking, GIT_LOCK, GIT_TIMEOUT};
-use crate::commands::{project_root_for, WorkspaceState};
+
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-use tauri::State;
+use std::path::PathBuf;
 // ── Diff pair：编辑器级 diff 查看器的数据层 ──
 
 /// 单侧超过此字节数 → 标 `too_big` 并给空文本，避免巨大 payload 跨 IPC。
@@ -492,15 +492,11 @@ fn batch_sides(blobs: Vec<Option<Vec<u8>>>, labels: SideLabels) -> DiffSides {
 }
 
 /// 编辑器级 diff 的两侧内容：`mode` 决定"跟谁比"（见 [`DiffMode`]）。
-#[tauri::command]
 pub async fn git_diff_pair(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     path: String,
     mode: DiffMode,
-    // 会话所属工作区；省略 = 当前活动工作区（见 `project_root_for` 的存在理由）
-    cwd: Option<String>,
 ) -> Result<DiffPair, String> {
-    let root = project_root_for(&workspace_state, cwd.as_deref());
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }

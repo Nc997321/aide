@@ -938,6 +938,15 @@ export const api = {
 
 export { permissionsApi } from "./api/permissions";
 export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
+export {
+  remoteWorkspaceApi,
+  REMOTE_WORKSPACE_STATUS_EVENT,
+  parseRemotePath,
+  isRemotePath,
+  remoteDesktopPath,
+  resolveAgainstWorkspace,
+} from "./api/remoteWorkspace";
+export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remoteWorkspace";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

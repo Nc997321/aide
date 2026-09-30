@@ -5,14 +5,14 @@
 //! 本模块只做「对比」这一新逻辑。
 
 use std::path::Path;
-use tauri::State;
+use std::path::PathBuf;
 use tracing::{error, info};
 
 use super::commits::{parse_commit_lines, CommitEntry};
 use super::diffpair::{assemble_diff_pair, show_blobs, DiffPair, DiffSides};
 use super::runtime::{git_run, git_run_blocking};
 use super::types::unquote_git_path;
-use crate::commands::{detect_git_branch, project_root_for_commands, WorkspaceState};
+use crate::{detect_git_branch};
 
 /// 对比中的一个文件差异项（文件级 diff 摘要，不含行内容）。
 #[derive(Debug, serde::Serialize, Clone)]
@@ -175,13 +175,11 @@ fn compare_files(root: &Path, base: &str, head: &str) -> Result<Vec<CompareFile>
 /// `ahead` = base 独有提交数（base 领先 head），`behind` = head 独有提交数。
 /// 提交列表各取最新 50 条；文件差异为两分支尖端的直比（`git diff base head`）。
 /// `head` 引用不存在时返回 `COMPARE_REF_MISSING`。
-#[tauri::command]
 pub async fn git_compare_branches(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     head: String,
     base: Option<String>,
 ) -> Result<CompareResult, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }
@@ -305,15 +303,13 @@ pub async fn git_compare_branches(
 /// 点击文件行时在 DiffViewer 查看行级差异。`old_path` 用于重命名场景：
 /// 当 `base:path` 不存在（文件在 head 新增或被改名）时回退取 `base:old_path`
 ///（重命名源）作为旧侧。标签为分支名（旧侧=base，新侧=head）。
-#[tauri::command]
 pub async fn git_diff_pair_refs(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     path: String,
     base: String,
     head: String,
     old_path: Option<String>,
 ) -> Result<DiffPair, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }

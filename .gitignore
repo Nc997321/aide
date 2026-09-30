@@ -53,6 +53,8 @@ agent-sidecar/coverage/
 
 # codegraph runner 打包暂存目录（scripts/build-codegraph.mjs 产物）
 src-tauri/codegraph-dist/
+# 远程工作区套件（pnpm build:remote-kit 产物）
+src-tauri/remote-kit/
 
 # WorkBuddy 本地数据（会话记忆/任务，不入库）
 .workbuddy/

@@ -3,11 +3,11 @@
 //! 与 [`super::runtime`] 共享 spawn helper（`pub(super)` 暴露）。按 `creatordate`
 //! 降序输出，前端再按主版本号分组。
 
-use tauri::State;
+use std::path::PathBuf;
 use tracing::{error, info};
 
 use super::runtime::{git_run, git_run_blocking};
-use crate::commands::{project_root_for_commands, WorkspaceState};
+
 
 /// 一个标签项。
 #[derive(Debug, serde::Serialize, Clone)]
@@ -27,9 +27,7 @@ pub struct TagEntry {
 
 /// 列出所有标签，按创建日期降序。annotated 标签取其指向的提交（`*objectname`），
 /// lightweight 标签直接取 `objectname`。空仓库或无标签返回空列表。
-#[tauri::command]
-pub async fn git_tags(workspace_state: State<'_, WorkspaceState>) -> Result<Vec<TagEntry>, String> {
-    let root = project_root_for_commands(&workspace_state);
+pub async fn git_tags(root: PathBuf) -> Result<Vec<TagEntry>, String> {
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }

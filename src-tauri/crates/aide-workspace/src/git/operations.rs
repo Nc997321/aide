@@ -2,12 +2,10 @@
 // checkout -- <path>（撤回文件）、discard all、reset（取消全部暂存）、
 // commit（含 amend 保留原信息）。变更面板的操作按钮走这组。
 use super::runtime::{git_run, git_run_async, git_run_blocking};
-use crate::commands::{project_root_for, project_root_for_commands, WorkspaceState};
-use tauri::State;
 
-#[tauri::command]
-pub async fn git_stage_all(workspace_state: State<'_, WorkspaceState>) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
+use std::path::PathBuf;
+
+pub async fn git_stage_all(root: PathBuf) -> Result<(), String> {
     if !root.join(".git").exists() {
         return Ok(());
     }
@@ -15,22 +13,18 @@ pub async fn git_stage_all(workspace_state: State<'_, WorkspaceState>) -> Result
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_stage_file(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     path: String,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     git_run_async(vec!["add".into(), "--".into(), path], root).await?;
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_unstage_file(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     path: String,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     git_run_async(
         vec!["restore".into(), "--staged".into(), "--".into(), path],
         root,
@@ -39,22 +33,15 @@ pub async fn git_unstage_file(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_revert_file(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     path: String,
-    // 会话所属工作区；省略 = 当前活动工作区。撤回是唯一的破坏性操作，
-    // 不传 cwd 会在用户当前所看的工作区里执行 `checkout --`，误回滚另一工作区的同名文件。
-    cwd: Option<String>,
 ) -> Result<(), String> {
-    let root = project_root_for(&workspace_state, cwd.as_deref());
     git_run_async(vec!["checkout".into(), "--".into(), path], root).await?;
     Ok(())
 }
 
-#[tauri::command]
-pub async fn git_discard_all(workspace_state: State<'_, WorkspaceState>) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
+pub async fn git_discard_all(root: PathBuf) -> Result<(), String> {
     let output = git_run_async(vec!["checkout".into(), "--".into(), ".".into()], root)
         .await
         .map_err(|e| format!("DISCARD_FAILED: {}", e))?;
@@ -65,9 +52,7 @@ pub async fn git_discard_all(workspace_state: State<'_, WorkspaceState>) -> Resu
     Ok(())
 }
 
-#[tauri::command]
-pub async fn git_unstage_all(workspace_state: State<'_, WorkspaceState>) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
+pub async fn git_unstage_all(root: PathBuf) -> Result<(), String> {
     let output = git_run_async(vec!["reset".into(), "HEAD".into()], root)
         .await
         .map_err(|e| format!("Failed to run git reset: {}", e))?;
@@ -78,13 +63,11 @@ pub async fn git_unstage_all(workspace_state: State<'_, WorkspaceState>) -> Resu
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_commit(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     message: String,
     amend: Option<bool>,
 ) -> Result<String, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
     }

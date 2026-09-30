@@ -1,9 +1,9 @@
 // transcript 纯解析域（functional core）：把 Claude CLI 落盘的 .jsonl 行
-// 重建为前端历史消息，不摸文件系统。分页 / 命令外壳在 super::history。
+// 重建为前端历史消息，不摸文件系统。分页在 super::history。
 
 use serde_json::Value;
 
-use crate::commands::{ChatMessageItem, HistoryBlock};
+use super::{ChatMessageItem, HistoryBlock};
 
 /// Agent/Task 是子代理调用（CC v2.1.63 把 Task 改名成 Agent，两个都认，跟
 /// agent-sidecar/src/subagents.ts 的 SUBAGENT_TOOL_NAMES 保持同一份清单——两边

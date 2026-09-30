@@ -111,6 +111,14 @@ pub fn pty_spawn_shell(
     shell: String,
 ) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("pty_spawn_shell");
+    // 远程工作区（WSL / SSH）：终端开在目标机上——PTY 里跑 `wsl.exe … sh` / `ssh -t …`，
+    // 在目标机的工作区目录下起用户的登录 shell。本机 shell 选项对它不适用。
+    if let Some((host, posix_cwd)) = crate::remote_workspace::path::parse(&cwd) {
+        let argv = crate::remote_workspace::launcher::terminal_argv(&host, &posix_cwd)?;
+        let args: Vec<&str> = argv[1..].iter().map(|s| s.as_str()).collect();
+        let local_cwd = crate::commands::user_home().unwrap_or_else(|| PathBuf::from("."));
+        return manager.spawn_shell(&session_id, &argv[0], &args, &local_cwd, rows, cols, app_handle);
+    }
     let program = resolve_shell(&shell)?;
     #[cfg(target_os = "windows")]
     let args = utf8_console_args(&program);

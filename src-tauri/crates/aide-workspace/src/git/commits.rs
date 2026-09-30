@@ -2,8 +2,8 @@
 // 与 compare::git_compare_branches 共用）+ git_show 单提交详情（元数据 + numstat）。
 use super::runtime::{git_run, git_run_async, git_run_blocking};
 use super::types::unquote_git_path;
-use crate::commands::{project_root_for_commands, DiffEntry, WorkspaceState};
-use tauri::State;
+use crate::{DiffEntry};
+use std::path::PathBuf;
 use tracing::{error, info};
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct CommitEntry {
@@ -42,14 +42,12 @@ pub(super) fn parse_commit_lines(stdout: &str) -> Vec<CommitEntry> {
     commits
 }
 
-#[tauri::command]
 pub async fn git_log(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     limit: Option<u32>,
     branch: Option<String>,
     skip: Option<u32>,
 ) -> Result<Vec<CommitEntry>, String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(root = %root.display(), ?limit, ?skip, "git_log");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
@@ -82,12 +80,10 @@ pub async fn git_log(
     Ok(commits)
 }
 
-#[tauri::command]
 pub async fn git_show(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     hash: String,
 ) -> Result<CommitDetail, String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(%hash, "git_show");
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());

@@ -1,7 +1,7 @@
 //! 仓库 HEAD 提交域：变更基线的"改前"引用。
 use super::runtime::{git_run, git_run_blocking};
-use crate::commands::{project_root_for, WorkspaceState};
-use tauri::State;
+
+use std::path::PathBuf;
 
 /// 读当前 HEAD 的提交 sha。**非 git 仓库 / unborn HEAD（还没提交过）→ `Ok(None)`**：
 /// 这两种都是合法状态（调用方据此"不记基线"，而不是报错）。
@@ -15,12 +15,9 @@ pub(super) fn read_head_rev(root: &std::path::Path) -> Result<Option<String>, St
 }
 
 /// 会话所属工作区的 HEAD sha（变更面板开轮时取一次；实测 ~101ms，放后台链上）。
-#[tauri::command]
 pub async fn git_head_rev(
-    workspace_state: State<'_, WorkspaceState>,
-    cwd: Option<String>,
+    root: PathBuf,
 ) -> Result<Option<String>, String> {
-    let root = project_root_for(&workspace_state, cwd.as_deref());
     if !root.join(".git").exists() {
         return Ok(None);
     }

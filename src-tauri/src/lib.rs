@@ -12,6 +12,8 @@ mod filewatch;
 mod lsp;
 mod policy;
 pub mod remote;
+// 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
+pub(crate) mod remote_workspace;
 pub mod runtime;
 mod settings;
 mod shell;
@@ -188,6 +190,7 @@ pub fn run() {
 
             // 远程控制网关：manage 需要 AppHandle，只能在 setup 内注册。
             // initialize_blocking 必须先于 public_settings（未初始化读会报 NotInitialized）。
+            remote_workspace::manage(app);
             app.manage(std::sync::Arc::new(remote::RemoteGateway::new(
                 app.handle().clone(),
             )));
@@ -338,7 +341,11 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // 远程工作区的 IPC 拦截层包在命令分派外面：参数里带远程路径的工作区命令在这里
+        // 转发给目标机（见 remote_workspace/routes.rs），其余原样交给命令表。
+        .invoke_handler({
+            let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
+                Box::new(tauri::generate_handler![
             commands::browser::browser_create,
             commands::browser::browser_navigate,
             commands::browser::browser_set_bounds,
@@ -637,7 +644,17 @@ pub fn run() {
             commands::remote::remote_set_enabled,
             commands::remote::remote_refresh_pairing_code,
             commands::remote::remote_revoke,
-        ])
+            remote_workspace::remote_ws_targets,
+            remote_workspace::remote_ws_connect,
+            remote_workspace::remote_ws_disconnect,
+            remote_workspace::remote_ws_statuses,
+            remote_workspace::remote_ws_host_of,
+            ]);
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| match remote_workspace::routes::intercept(invoke) {
+                Some(invoke) => commands(invoke),
+                None => true,
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

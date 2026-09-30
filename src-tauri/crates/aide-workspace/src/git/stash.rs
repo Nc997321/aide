@@ -1,13 +1,11 @@
 // stash 域：push / pop / list / apply / drop（错误码人话化 STASH_*）。
 use super::runtime::git_run_async;
-use crate::commands::{project_root_for_commands, WorkspaceState};
-use tauri::State;
-#[tauri::command]
+
+use std::path::PathBuf;
 pub async fn git_stash(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     message: Option<String>,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     let mut args = vec!["stash".to_string(), "push".to_string()];
     if let Some(m) = message {
         let m = m.trim().to_string();
@@ -26,12 +24,10 @@ pub async fn git_stash(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_stash_pop(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     index: Option<u32>,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     let mut args = vec!["stash".to_string(), "pop".to_string()];
     if let Some(i) = index {
         args.push(format!("stash@{{{}}}", i));
@@ -54,11 +50,9 @@ pub struct StashEntry {
     pub date: String,
 }
 
-#[tauri::command]
 pub async fn git_stash_list(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<Vec<StashEntry>, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }
@@ -93,12 +87,10 @@ pub async fn git_stash_list(
     Ok(entries)
 }
 
-#[tauri::command]
 pub async fn git_stash_apply(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     index: u32,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     let output = git_run_async(
         vec![
             "stash".into(),
@@ -116,12 +108,10 @@ pub async fn git_stash_apply(
     Ok(())
 }
 
-#[tauri::command]
 pub async fn git_stash_drop(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     index: u32,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     let output = git_run_async(
         vec![
             "stash".into(),

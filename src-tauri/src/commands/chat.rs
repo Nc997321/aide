@@ -363,7 +363,14 @@ pub async fn send_message(
     // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
     // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
-    cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
+    // 远程工作区（WSL / SSH）：LSP 探测会经 UNC 扫目标机目录（慢且无意义——远程会话不挂
+    // LSP 工具，见 remote_lane::translate_send_command），直接跳过。
+    let remote_host = crate::remote_workspace::path::parse(&cwd_str).map(|(h, _)| h);
+    cmd["lsp_languages"] = if remote_host.is_some() {
+        json!([])
+    } else {
+        json!(lsp_languages_for_send(&app, &cwd_str).await)
+    };
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the
@@ -381,6 +388,15 @@ pub async fn send_message(
     // Register/refresh the session's workspace route so future permission-rule
     // saves can broadcast `update_permission_policy` to this session.
     runtime_mgr.register_session_route(&session_id, Some(&cwd));
+
+    // 远程工作区：会话跑在目标机的 sidecar 上（车道）。先确保车道在（首次会安装远程
+    // 套件），再绑定会话、把命令里的桌面路径译成目标机路径。此后同会话的其它命令
+    // 由 send_to_runtime 按绑定自动路由。
+    if let Some(host) = remote_host {
+        runtime_mgr.ensure_remote_lane(&app, &host).await?;
+        runtime_mgr.bind_session_lane(&session_id, &host);
+        runtime_mgr.translate_for_lane(&host, &mut cmd);
+    }
 
     runtime_mgr.send_to_runtime(&cmd).await
 }
@@ -583,7 +599,9 @@ fn explicit_root(workspace_root: &Option<String>) -> Option<PathBuf> {
 /// 档案里的归属路径。目录不存在（换了机器 / 已删）等同没记——回落链继续往下走。
 fn recorded_root(session_id: &str) -> Option<PathBuf> {
     let p = PathBuf::from(crate::commands::our_session_workspace(session_id).path?);
-    p.is_dir().then_some(p)
+    // 远程工作区（WSL / SSH）无法同步 stat，按存在处理——否则会静默回落活动工作区
+    let remote = crate::remote_workspace::path::is_remote(&p.to_string_lossy());
+    (remote || p.is_dir()).then_some(p)
 }
 
 /// 会话工作目录：显式 workspace_root → 档案 wsPath → 当前活动工作区。

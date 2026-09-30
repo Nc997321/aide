@@ -56,6 +56,8 @@ dependencies = [
 name = "aide"
 version = "0.8.0"
 dependencies = [
+ "aide-host",
+ "aide-workspace",
  "arboard",
  "base64 0.22.1",
  "chrono",
@@ -100,6 +102,32 @@ dependencies = [
  "which",
  "windows 0.61.3",
  "winreg 0.55.0",
+]
+
+[[package]]
+name = "aide-host"
+version = "0.8.0"
+dependencies = [
+ "aide-workspace",
+ "base64 0.22.1",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "aide-workspace"
+version = "0.8.0"
+dependencies = [
+ "base64 0.22.1",
+ "encoding_rs",
+ "ignore",
+ "notify",
+ "regex",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

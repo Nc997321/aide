@@ -50,6 +50,11 @@ const IO_RE = new RegExp(
     String.raw`\bOpenOptions\b`,
     String.raw`\bFile::`,
     String.raw`\.metadata\(\)`,
+    // 工作区操作的实现住在 aide-workspace（与远程 aide-host 共用）：Tauri 命令只剩
+    // 一行转调，IO 藏在 crate 里——按调用入口认，否则薄包装会漏出守卫。
+    String.raw`\bfs_ops::`,
+    String.raw`\baide_workspace::`,
+    String.raw`\bgit::[a-z_]+::git_`,
   ].join("|"),
 );
 

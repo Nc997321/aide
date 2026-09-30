@@ -3,9 +3,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::AsyncWriteExt;
 use tokio::process::{Child, ChildStdin};
 use tokio::sync::Mutex as TokioMutex;
 pub mod bg_registry;
@@ -15,6 +14,9 @@ pub mod env;
 pub mod job_object;
 pub mod lsp_agent;
 pub mod provider;
+mod pump;
+pub mod remote_lane;
+pub use pump::Lane;
 use crate::runtime::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
 
@@ -68,6 +70,10 @@ pub struct AgentRuntimeManager {
     /// 见 `runtime/job_object.rs`。
     #[cfg(windows)]
     job: Mutex<Option<job_object::KillOnCloseJob>>,
+    /// 远程车道（WSL / SSH 目标机上的 sidecar），按主机一条。见 `remote_lane.rs`。
+    remote_lanes: Mutex<HashMap<crate::remote_workspace::path::HostId, remote_lane::RemoteLane>>,
+    /// 会话 → 远程车道绑定（`send_message` 登记）。不在表里 = 本机车道。
+    session_lanes: Mutex<HashMap<String, crate::remote_workspace::path::HostId>>,
 }
 
 impl AgentRuntimeManager {
@@ -88,6 +94,8 @@ impl AgentRuntimeManager {
             },
             #[cfg(windows)]
             job: Mutex::new(None),
+            remote_lanes: Mutex::new(HashMap::new()),
+            session_lanes: Mutex::new(HashMap::new()),
         }
     }
 
@@ -239,259 +247,39 @@ impl AgentRuntimeManager {
         *self.stdin.lock().unwrap() = Some(Arc::new(TokioMutex::new(stdin)));
         *self.child.lock().unwrap() = Some(Arc::new(TokioMutex::new(child)));
 
-        // stdout reader 任务
-        let app = app_handle.clone();
-        let killed_clone = Arc::clone(&self.killed);
-        let child_for_kill = self
-            .child
-            .lock()
-            .unwrap()
-            .as_ref()
-            .ok_or("child not set")?
-            .clone();
-
-        // codegraph agent 查询回写通道（reader 拦截 codegraph_query 后用它写回结果）。
-        let stdin_for_agent = self.stdin.lock().unwrap().as_ref().unwrap().clone();
-
-        // stderr 尾部缓冲
-        let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let tail_for_reader = Arc::clone(&stderr_tail);
-        let tail_for_stderr = Arc::clone(&stderr_tail);
-        let chat_events_tx = self.chat_events.clone();
-
-        tokio::spawn(async move {
-            let stderr_tail = tail_for_reader;
-            const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(15);
-            let mut reader = BufReader::new(stdout).lines();
-            let reason: &str = loop {
-                match tokio::time::timeout(HEARTBEAT_TIMEOUT, reader.next_line()).await {
-                    Ok(Ok(Some(line))) => {
-                        let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
-                            continue;
-                        };
-                        // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
-                        // 查询在独立任务里跑，不阻塞 reader 主循环——慢查询
-                        // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
-                        // 进程隔离后：查询经 CodeGraphService RPC 转给 runner 执行，
-                        // sidecar 协议解析/组装（codegraph_query → codegraph_result）留主进程。
-                        if let Some(req) =
-                            crate::codegraph::agent_bridge::parse_codegraph_query(&event)
-                        {
-                            use tauri::Manager;
-                            let app2 = app.clone();
-                            let stdin2 = stdin_for_agent.clone();
-                            tokio::spawn(async move {
-                                // 政策层输入：阈值按当前 settings 现解析（query-time，
-                                // 不缓存、不重建）；trusted 同理由主进程计算——
-                                // 信任是政策，runner 是机制。两者都是阻塞读，收进
-                                // spawn_blocking。
-                                let trust_root = req.project_root.clone();
-                                let app_for_policy = app2.clone();
-                                let (score_threshold, trusted) =
-                                    tokio::task::spawn_blocking(move || {
-                                        let score_threshold = app_for_policy
-                                            .try_state::<Arc<crate::settings::SettingsService>>()
-                                            .map(|s| {
-                                                crate::codegraph::query_score_threshold(s.inner())
-                                            })
-                                            .unwrap_or(0.35);
-                                        let trusted = crate::commands::workspace::is_path_trusted(
-                                            &trust_root,
-                                        );
-                                        (score_threshold, trusted)
-                                    })
-                                    .await
-                                    .unwrap_or((0.35, false));
-                                let body = match app2
-                                    .try_state::<Arc<crate::codegraph::CodeGraphService>>()
-                                {
-                                    Some(svc) => {
-                                        match svc
-                                            .agent_query(
-                                                &req.tool,
-                                                &req.args,
-                                                &req.project_root,
-                                                trusted,
-                                                score_threshold,
-                                            )
-                                            .await
-                                        {
-                                            Ok(v) => v,
-                                            Err(e) => serde_json::json!({
-                                                "ok": false, "status": "error",
-                                                "error": e,
-                                            }),
-                                        }
-                                    }
-                                    None => serde_json::json!({
-                                        "ok": false, "status": "error",
-                                        "error": "codegraph service unavailable",
-                                    }),
-                                };
-                                let payload = crate::codegraph::agent_bridge::build_result_command(
-                                    &req.request_id,
-                                    body,
-                                );
-                                if let Ok(mut line) = serde_json::to_string(&payload) {
-                                    line.push('\n');
-                                    let mut g = stdin2.lock().await;
-                                    let _ = g.write_all(line.as_bytes()).await;
-                                }
-                            });
-                            continue;
-                        }
-                        // agent LSP 查询：同 codegraph，是 Rust ↔ Runtime 的内部 request/response，
-                        // **不转发 Vue**。与 codegraph 的区别：查询本体**不跳 runner**——LspManager
-                        // 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
-                        // 「拦截 + 派发」，业务不内联（同 browser 的理由：本文件有 1000 行拆分线）。
-                        if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
-                            let app2 = app.clone();
-                            let stdin2 = stdin_for_agent.clone();
-                            tokio::spawn(async move {
-                                crate::runtime::lsp_agent::handle(app2, stdin2, req).await;
-                            });
-                            continue;
-                        }
-                        // 内嵌浏览器 agent 工具查询：同 codegraph，是 Rust ↔ Runtime 的内部
-                        // request/response，**不转发 Vue**。执行体在 `runtime/browser_agent.rs`
-                        // ——这里只做「拦截 + 派发」，业务不内联（也避免本文件撞 1000 行拆分线）。
-                        if let Some(req) = crate::browser::agent_bridge::parse_browser_query(&event)
-                        {
-                            let app_browser = app.clone();
-                            let stdin_browser = stdin_for_agent.clone();
-                            tokio::spawn(async move {
-                                crate::runtime::browser_agent::handle(
-                                    app_browser,
-                                    stdin_browser,
-                                    req,
-                                )
-                                .await;
-                            });
-                            continue;
-                        }
-                        // 心跳只喂看门狗，不转发前端
-                        if event.get("type").and_then(|t| t.as_str()) == Some("heartbeat") {
-                            continue;
-                        }
-                        // 诊断黑匣子：chat-event 出口按秒计量
-                        {
-                            use tauri::Manager;
-                            if let Some(diag) =
-                                app.try_state::<crate::diagnostics::DiagnosticsState>()
-                            {
-                                let event_type = event
-                                    .get("type")
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("unknown");
-                                // session_init 事件的 session_id 是 SDK 真实会话 ID，
-                                // 路由键在 _routing_id；其他事件的 session_id 即路由键。
-                                let sid = event
-                                    .get("_routing_id")
-                                    .or_else(|| event.get("session_id"))
-                                    .and_then(|s| s.as_str())
-                                    .unwrap_or("unknown");
-                                diag.record_chat_event(sid, event_type, line.len() as u64);
-                            }
-                        }
-                        // session_init 事件：SDK 的 session_id 是真实会话 ID，
-                        // _routing_id 是 SessionManager 的路由键（临时 key）。
-                        // 还原旧行为：session_id = 路由键（前端路由），sdk_session_id = 真 ID。
-                        if let Some(obj) = event.as_object_mut() {
-                            if obj.get("type").and_then(|t| t.as_str()) == Some("session_init") {
-                                if let Some(sdk_sid) = obj.get("session_id").cloned() {
-                                    obj.insert("sdk_session_id".to_string(), sdk_sid);
-                                }
-                                if let Some(routing_id) = obj.get("_routing_id").cloned() {
-                                    obj.insert("session_id".to_string(), routing_id);
-                                }
-                            }
-                        }
-                        crate::diagnostics::trace::record(
-                            "emit",
-                            event
-                                .get("type")
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("unknown"),
-                            "worker",
-                        );
-                        // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
-                        // 终态落盘在内部 spawn 出去做，不堵事件泵。
-                        if let Some(svc) =
-                            app.try_state::<std::sync::Arc<crate::automation::AutomationService>>()
-                        {
-                            svc.observe_chat_event(&event);
-                        }
-                        // 后台任务注册表：远程快照源（list_bg_tasks RPC）。桌面常驻
-                        // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
-                        // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。
-                        if let Some(reg) =
-                            app.try_state::<Arc<crate::runtime::bg_registry::BgTaskRegistry>>()
-                        {
-                            reg.feed(&event);
-                        }
-                        // 会话存活表：session_init 登记 / session_dead 移除。远程端
-                        // 判断「跟随全局还是锁定会话供应商」的唯一权威来源（前端的
-                        // useSessionState 在 Rust 侧拿不到）。
-                        if let Some(mgr) = app.try_state::<AgentRuntimeManager>() {
-                            let ety = event.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                            if ety == "session_init" || ety == "session_dead" {
-                                if let Some(sid) = event.get("session_id").and_then(|s| s.as_str())
-                                {
-                                    if ety == "session_init" {
-                                        mgr.mark_session_alive(sid);
-                                    } else {
-                                        mgr.mark_session_dead(sid);
-                                    }
-                                }
-                            }
-                        }
-                        let _ = chat_events_tx.send(event.clone());
-                        let _ = app.emit("chat-event", event);
-                    }
-                    Ok(Ok(None)) | Ok(Err(_)) => break "exit",
-                    Err(_) => break "heartbeat_timeout",
-                }
-            };
-
-            if reason == "heartbeat_timeout" {
-                emit_runtime_dead(&app, &stderr_tail, reason);
-                killed_clone.store(true, Ordering::Relaxed);
-                let mut c = child_for_kill.lock().await;
-                let _ = c.start_kill();
-            } else if !killed_clone.load(Ordering::Relaxed) {
-                emit_runtime_dead(&app, &stderr_tail, reason);
-            }
-        });
-
-        // stderr 只进日志与尾部缓冲
-        let tail_writer = tail_for_stderr;
-        tokio::spawn(async move {
-            let mut reader = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = reader.next_line().await {
-                if line.is_empty() {
-                    continue;
-                }
-                eprintln!("[runtime stderr] {}", line);
-                let mut buf = tail_writer.lock().unwrap();
-                if buf.len() >= 8 {
-                    buf.pop_front();
-                }
-                buf.push_back(line);
-            }
+        pump::start(pump::Pump {
+            app: app_handle,
+            lane: pump::Lane::Local,
+            stdout,
+            stderr,
+            stdin: self.stdin.lock().unwrap().as_ref().ok_or("stdin not set")?.clone(),
+            child: self.child.lock().unwrap().as_ref().ok_or("child not set")?.clone(),
+            killed: Arc::clone(&self.killed),
+            chat_events: self.chat_events.clone(),
         });
 
         Ok(())
     }
 
-    /// 所有命令写同一个 stdin（已带 session_id 字段，Runtime 内部路由）。
+    /// 命令按会话所在车道写入：绑定了远程车道的会话写那台主机的 sidecar，其余写本机
+    /// Runtime（命令都带 session_id 字段，Runtime 内部再按会话路由）。
     pub async fn send_to_runtime(&self, cmd: &Value) -> Result<(), String> {
         if self.test_mode {
             self.sent_commands.lock().unwrap().push(cmd.clone());
             return Ok(());
         }
-        let stdin = {
-            let guard = self.stdin.lock().unwrap();
-            guard.as_ref().ok_or("Runtime not spawned")?.clone()
+        let lane = cmd
+            .get("session_id")
+            .and_then(|s| s.as_str())
+            .and_then(|sid| self.lane_of(sid));
+        let stdin = match &lane {
+            Some(host) => self.remote_lane_stdin(host).ok_or_else(|| {
+                format!("{} 上的 agent 未运行（连接已断开？重新发送即可重连）", host.label())
+            })?,
+            None => {
+                let guard = self.stdin.lock().unwrap();
+                guard.as_ref().ok_or("Runtime not spawned")?.clone()
+            }
         };
         let mut line = serde_json::to_string(cmd).map_err(|e| e.to_string())?;
         line.push('\n');
@@ -545,6 +333,7 @@ impl AgentRuntimeManager {
             let mut c = child_arc.lock().await;
             let _ = c.start_kill();
         }
+        self.kill_remote_lanes().await;
     }
 
     /// 连接身份漂移检测：仅在新 session send 前调用。

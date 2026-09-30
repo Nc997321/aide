@@ -61,7 +61,8 @@ describe("ensureWindowsBashEnv", () => {
     expect(env.BASH_ENV).toBeUndefined();
   });
 
-  it("配置目录不可写：静默跳过，不抛异常", () => {
+  // 「Z: 盘不存在」只在 Windows 成立；posix 上它是相对路径，会在 cwd 真建出目录
+  it.skipIf(process.platform !== "win32")("配置目录不可写：静默跳过，不抛异常", () => {
     const env = { CLAUDE_CONFIG_DIR: "Z:\\不存在的盘符\\deep\\dir" } as Record<string, string>;
     expect(() => ensureWindowsBashEnv(env, "win32")).not.toThrow();
     expect(env.BASH_ENV).toBeUndefined();

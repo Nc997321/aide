@@ -7,7 +7,7 @@ edition = "2021"
 # `cargo build`（tauri dev/build 走的路径）默认只构建主包——runner 需显式
 # 构建：`cargo build -p codegraph-runner`（pnpm build:codegraph 封装）。
 [workspace]
-members = ["crates/codegraph-core", "crates/codegraph-runner"]
+members = ["crates/codegraph-core", "crates/codegraph-runner", "crates/aide-workspace", "crates/aide-host"]
 default-members = ["."]
 
 [dependencies]
@@ -103,6 +103,11 @@ rand = "0.8"
 #   DTO + stdio JSON-RPC 协议。只依赖 serde，红线：任何重依赖进来都会重新
 #   污染主进程二进制。
 codegraph-core = { path = "crates/codegraph-core" }
+# 工作区操作（fs / 搜索 / git）的唯一实现：桌面命令是它的薄包装，远程工作区的
+# aide-host 在目标机上跑同一份代码（见 src/remote_workspace/）。
+aide-workspace = { path = "crates/aide-workspace" }
+# 远程工作区的桌面 ↔ aide-host 协议类型与可转发命令清单（只用其 lib）
+aide-host = { path = "crates/aide-host" }
 lsp-types = "0.97.0"
 
 # Clipboard file-path reading is platform-specific; declare the platform-only

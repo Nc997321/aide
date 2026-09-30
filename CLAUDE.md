@@ -78,6 +78,18 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 
 **relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
+## 架构红线：远程工作区（WSL / SSH）——一份实现，两处运行
+
+GUI 永远在桌面；工作区可以住在无 GUI 的目标机（WSL 发行版 / SSH 服务器）。设计全文见 [docs/remote-workspaces.md](docs/remote-workspaces.md)。与上面的「远程控制」（手机遥控桌面）无关。
+
+- **工作区操作只有一份实现**：fs / 搜索 / git / 文件监听 / 会话转录读取在 Tauri 无关的 `src-tauri/crates/aide-workspace`；桌面 `#[tauri::command]` 是一行转调，目标机上的 `crates/aide-host` 分派到同一批函数。**禁止为远程再写第二份**；新代码需要工作区根就显式收 `root`，别在 crate 里认「活动工作区」。
+- **新增「按路径操作工作区文件」的命令 = 三处**：aide-workspace 实现 → `aide-host/src/commands.rs` 登记 + 分派 → `src-tauri/src/remote_workspace/routes.rs` 登记路径参数。缺一处，远程工作区里它就回落本机执行（跑错机器）。会在本机起进程操作工作区的命令（LSP / 索引 / 运行配置）遇到远程路径必须**拒绝**，不许回落。
+- **远程路径形态唯一真相源** `remote_workspace/path.rs`（`\\wsl.localhost\<distro>\…` / `\\aide-ssh.invalid\<alias>\…`）；前端 `@aide/sdk` 的 `parseRemotePath` 只做显示。
+- **「目录还在吗」一律 `remote_workspace::path::present`**：远程路径同步 stat 不了，按存在处理。对远程路径返回 false 会让会话 cwd 静默回落活动工作区——2026-09-18 事故的同一形态。
+- **agent 车道**：会话按工作区归属绑定车道（`runtime/remote_lane.rs`），事件泵与本机同一条（`runtime/pump.rs`）；事件里只译**结构化字段**的路径，不改模型正文（正文路径由前端 `resolveFileLinkPath` 按会话工作区解析）。进程级 env 走 `aide-host agent` 首行 stdin，不上命令行（目标机 `ps` 全员可见）。
+- **不同步 OAuth 凭据到目标机**（refresh token 轮换会互相顶掉；服务器可能多人共用）。官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`；API Key 类供应商随 send 下发，无需登录。
+- 远程套件：`pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；aide-host 必须保持**纯 Rust 无 C 依赖**（一个静态二进制跑遍任意发行版）。
+
 ## 架构红线：可替换技术必须藏在端口后面
 
 **凡是「有多个竞争实现」或「成熟度不确定」的第三方技术，一律不许在业务代码里直接引用。** 领域层只定义 trait（端口），实现放适配器层。判据：**这个技术点未来是否可能出现第二个实现，且切换只需替换一个文件？** 有 → 抽象；没有 → **不要抽象**（换 HTTP 框架/ORM 等于重写，抽象层是仪式感债务）。

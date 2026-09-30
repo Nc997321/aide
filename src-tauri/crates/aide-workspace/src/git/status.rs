@@ -3,8 +3,8 @@
 // 临时文件过滤与未跟踪行数统计）。
 use super::runtime::{git_run, git_run_async, git_run_blocking};
 use super::types::unquote_git_path;
-use crate::commands::{project_root_for, project_root_for_commands, DiffEntry, WorkspaceState};
-use tauri::State;
+use crate::{DiffEntry};
+use std::path::PathBuf;
 use tracing::{error, info};
 #[derive(Debug, serde::Serialize, Clone)]
 pub struct GitStatusEntry {
@@ -19,14 +19,9 @@ pub struct GitStatus {
     pub entries: Vec<GitStatusEntry>,
 }
 
-#[tauri::command]
 pub async fn git_diff_files(
-    workspace_state: State<'_, WorkspaceState>,
-    // 会话所属工作区；省略 = 当前活动工作区（见 `project_root_for` 的存在理由）。
-    // 变更归集必须传：否则后台会话固轮时会拍到用户当前所看的工作区。
-    cwd: Option<String>,
+    root: PathBuf,
 ) -> Result<Vec<DiffEntry>, String> {
-    let root = project_root_for(&workspace_state, cwd.as_deref());
     if !root.join(".git").exists() {
         return Ok(Vec::new());
     }
@@ -112,9 +107,7 @@ pub async fn git_diff_files(
     .await
 }
 
-#[tauri::command]
-pub async fn git_status(workspace_state: State<'_, WorkspaceState>) -> Result<GitStatus, String> {
-    let root = project_root_for_commands(&workspace_state);
+pub async fn git_status(root: PathBuf) -> Result<GitStatus, String> {
     info!(root = %root.display(), "git_status");
     if !root.join(".git").exists() {
         return Ok(GitStatus { entries: vec![] });

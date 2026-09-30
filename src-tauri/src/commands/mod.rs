@@ -34,13 +34,12 @@ use std::sync::Mutex;
 
 // ── Shared Types ──
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct FileEntry {
-    pub name: String,
-    pub path: String,
-    pub is_dir: bool,
-    pub children: Option<Vec<FileEntry>>,
-}
+// 工作区操作的共享类型与实现住在 aide-workspace（桌面与 aide-host 共用）。
+pub use aide_workspace::transcripts::{
+    find_jsonl_in as find_session_jsonl_in, ChatMessageItem, HistoryBlock, LastEventInfo,
+    LoadMessagesResult,
+};
+pub use aide_workspace::{detect_git_branch, DiffEntry, FileEntry, GrepMatch};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Session {
@@ -49,60 +48,8 @@ pub struct Session {
     pub timestamp: u64,
 }
 
-/// 历史消息里的一个内容块——`load_messages` 解析会话 `.jsonl` 时按原始顺序重建，
-/// 跟前端 `src/types/chat.ts` 的 `ContentBlock` 判别式联合镜像（`type` 字段一致）。
-/// 目前只重建 text/tool_call 两种；子代理（Agent/Task）调用和图片维持原有降级
-/// 行为——整段跳过，不出现在历史里（子代理内部的分步进度 Claude CLI 从不落盘，
-/// 做了也补不全，图片重建暂不在这次修复范围）。
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(tag = "type")]
-pub enum HistoryBlock {
-    #[serde(rename = "text")]
-    Text { text: String },
-    // 注意：容器级 rename_all 只管 tag（variant 名）大小写，不会顺带改变 variant
-    // 内部字段名——is_error → isError 必须在这个 variant 上单独再声明一次
-    // rename_all，否则会原样落盘成 snake_case，前端读不出来（已被回归测试
-    // history_block_serializes_to_the_shape_the_frontend_expects 坐实过一次）。
-    #[serde(rename = "tool_call", rename_all = "camelCase")]
-    ToolCall {
-        id: String,
-        name: String,
-        input: serde_json::Value,
-        /// 来自同一份 transcript 里稍后（也可能是更早，顺序不保证）出现的
-        /// tool_result；找不到匹配的 tool_use_id 时为 None（这次会话记录不全，
-        /// 或者本身就是最后一条尚未返回结果的调用）。
-        result: Option<String>,
-        is_error: Option<bool>,
-    },
-    /// 主线程思考块——Claude CLI 落盘的 assistant 消息 content 里的 thinking block。
-    /// text 可能空（provider 用 display=omitted 时 block 在但 text 空）；前端按非空
-    /// 才渲染思考区，空的不显示，故空值也照常保留以维持 block 顺序。
-    #[serde(rename = "thinking")]
-    Thinking { text: String },
-}
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ChatMessageItem {
-    pub role: String,
-    pub blocks: Vec<HistoryBlock>,
-    pub timestamp: u64,
-}
 
-/// `load_messages` 分页返回：消息页 + 下一页字节游标。
-/// `next_offset_bytes` = 页首真实 user 行的起始字节；0 = 已到文件头（无更早页）。
-/// 下一页从该字节继续往前读（不包含该行本身），页与页之间无重复。
-/// `end_offset_bytes` = 本页排他末尾字节（= 本次读取的 end，整读时为 file_len）——
-/// 前端页级回收（recycle）按 `(end_offset_bytes, end-start)` 确定性重取同一页。
-/// ⚠️ camelCase 必须（前端读 `result.nextOffsetBytes`）：缺了它前端拿到 undefined、
-/// tailOffset=undefined → hasMore 恒 false → 预览上滚取回永不触发（2026-08-26
-/// 诊断环实测定位，测试全用 mock 所以从未暴露）。
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct LoadMessagesResult {
-    pub messages: Vec<ChatMessageItem>,
-    pub next_offset_bytes: u64,
-    pub end_offset_bytes: u64,
-}
 
 #[derive(Debug, Serialize, Clone)]
 pub struct WorkspaceInfo {
@@ -118,28 +65,6 @@ pub struct ProjectInfo {
     pub branch: String,
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct DiffEntry {
-    pub path: String,
-    pub status: String,
-    pub additions: u32,
-    pub deletions: u32,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct GrepMatch {
-    pub file: String,
-    pub line: u32,
-    pub content: String,
-    pub match_type: String,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct LastEventInfo {
-    pub event_type: Option<String>,
-    pub stop_reason: Option<String>,
-    pub timestamp: Option<String>,
-}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChangeFileData {
@@ -200,7 +125,8 @@ impl WorkspaceState {
 pub fn project_root_for_commands(ws: &WorkspaceState) -> PathBuf {
     if let Ok(path_guard) = ws.path.lock() {
         if let Some(path) = path_guard.as_ref() {
-            if path.exists() {
+            // 远程工作区按存在处理（见 remote_workspace::path::present）
+            if crate::remote_workspace::path::present(path) {
                 return path.clone();
             }
         }
@@ -224,17 +150,6 @@ pub fn project_root_for(ws: &WorkspaceState, cwd: Option<&str>) -> PathBuf {
     }
 }
 
-pub fn detect_git_branch(root: &PathBuf) -> String {
-    let head = root.join(".git").join("HEAD");
-    if let Ok(content) = fs::read_to_string(&head) {
-        if let Some(line) = content.lines().next() {
-            if let Some(branch) = line.strip_prefix("ref: refs/heads/") {
-                return branch.to_string();
-            }
-        }
-    }
-    String::new()
-}
 
 // ── Path Helpers ──
 
@@ -407,35 +322,6 @@ pub fn state_path() -> PathBuf {
     our_config_dir().join("state.json")
 }
 
-/// Locate a session's transcript(s) by globally-unique session id.
-///
-/// Claude stores transcripts at `<claude_home>/projects/<encoded-cwd>/<id>.jsonl`
-/// and `claude --resume <id>` finds them by scanning **every** project folder
-/// for the id — the cwd encoding is irrelevant once you have the id. Aide must
-/// do the same: the folder name Claude actually used can differ from the
-/// cwd-encoding Aide would compute. Concretely observed: a Claude version
-/// encoded `.` as `-` (`C--...-chennong4-0`) while Aide keeps the dot
-/// (`C--...-chennong4.0`), so a cwd-based lookup pointed at the wrong folder
-/// and `delete_session` silently no-op'd, leaving the transcript behind for
-/// Claude to resume. Session ids are UUIDs and globally unique, so at most one
-/// project folder ever matches.
-///
-/// `projects_dir` is a parameter so the lookup is unit-testable against a
-/// temp dir; production callers pass `claude_projects_dir()`.
-pub fn find_session_jsonl_in(projects_dir: &std::path::Path, id: &str) -> Vec<PathBuf> {
-    let mut hits = Vec::new();
-    if let Ok(entries) = fs::read_dir(projects_dir) {
-        for entry in entries.flatten() {
-            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
-                let p = entry.path().join(format!("{}.jsonl", id));
-                if p.is_file() {
-                    hits.push(p);
-                }
-            }
-        }
-    }
-    hits
-}
 
 /// 会话转录可能存在的所有配置根（claude home）：全局 + 每个作用域的
 /// `scopes/<kind>/<id>/claude`（见 [`scoped_claude_home`]）。

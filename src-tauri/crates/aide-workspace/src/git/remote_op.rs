@@ -3,14 +3,12 @@
 // NETWORK_FAILURE / REJECTED 等）给前端 toast 人话提示。pull/fetch 的
 // stdout 解析为纯函数，配单测。
 use super::runtime::{git_run_async, git_run_async_timeout, GIT_NETWORK_TIMEOUT};
-use crate::commands::{detect_git_branch, project_root_for_commands, WorkspaceState};
-use tauri::State;
+use crate::{detect_git_branch};
+use std::path::PathBuf;
 use tracing::info;
-#[tauri::command]
 pub async fn git_remote_url(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<Option<String>, String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(root = %root.display(), "git_remote_url");
     if !root.join(".git").exists() {
         info!("git_remote_url: no .git, skip");
@@ -131,11 +129,9 @@ fn parse_fetch_output(stdout: &str) -> FetchPullOutcome {
     }
 }
 
-#[tauri::command]
 pub async fn git_pull(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<FetchPullOutcome, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("PULL_FAILED: Not a git repository".into());
     }
@@ -175,11 +171,9 @@ pub async fn git_pull(
     Ok(parse_pull_output(&String::from_utf8_lossy(&output.stdout)))
 }
 
-#[tauri::command]
 pub async fn git_fetch(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<FetchPullOutcome, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Err("FETCH_FAILED: Not a git repository".into());
     }
@@ -235,11 +229,9 @@ pub struct AheadBehind {
 
 /// `git rev-list --left-right --count @{upstream}...HEAD` →
 /// left = 仅远端（behind），right = 仅本地（ahead）。无 upstream 时全 0。
-#[tauri::command]
 pub async fn git_ahead_behind(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<AheadBehind, String> {
-    let root = project_root_for_commands(&workspace_state);
     if !root.join(".git").exists() {
         return Ok(AheadBehind {
             ahead: 0,
@@ -282,11 +274,9 @@ pub async fn git_ahead_behind(
     })
 }
 
-#[tauri::command]
 pub async fn git_unpushed_commits(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
 ) -> Result<Vec<String>, String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(root = %root.display(), "git_unpushed_commits");
     if !root.join(".git").exists() {
         return Ok(Vec::new());
@@ -340,12 +330,10 @@ pub async fn git_unpushed_commits(
     Ok(hashes)
 }
 
-#[tauri::command]
 pub async fn git_push(
-    workspace_state: State<'_, WorkspaceState>,
+    root: PathBuf,
     force: Option<bool>,
 ) -> Result<(), String> {
-    let root = project_root_for_commands(&workspace_state);
     info!(root = %root.display(), "git_push");
     if !root.join(".git").exists() {
         return Err("Not a git repository".into());
