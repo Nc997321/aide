@@ -26,12 +26,14 @@ const props = defineProps<{
   workspaceRoot?: string;
 }>();
 
-// 一个窗口 = 一个 Host：Host 窗口在品牌旁标出它连着哪台 Host（本机窗口不标）。
+// 一个窗口 = 一个 Host：品牌旁标出本窗口连着哪台 Host（本机也标，点它打开 Host 启动页）。
 const hostLabel = ref("");
+const isHostWindow = ref(false);
 onMounted(async () => {
   try {
     const h = await hostApi.current();
-    if (h.key !== "local") hostLabel.value = h.label;
+    hostLabel.value = h.label;
+    isHostWindow.value = h.key !== "local";
   } catch {
     /* 非桌面环境 / 连接未就绪：不标 */
   }
@@ -48,6 +50,7 @@ const emit = defineEmits<{
   "toggle-right": [];
   "open-workbench": [];
   "open-folder": [];
+  "open-hosts": [];
   "open-settings-providers": [];
 }>();
 
@@ -157,7 +160,13 @@ function isRowRunning(cfg: RunConfig): boolean {
       <div class="titlebar-logo" data-tauri-drag-region>
         <AppLogo :size="15" />
         <span class="titlebar-logo-text">Aide</span>
-        <span v-if="hostLabel" class="titlebar-host" v-tooltip="`此窗口连着 ${hostLabel}：会话、文件、终端都在那台机器上`">{{ hostLabel }}</span>
+        <button
+          v-if="hostLabel"
+          class="titlebar-host"
+          :class="{ remote: isHostWindow }"
+          v-tooltip="isHostWindow ? `此窗口连着 ${hostLabel}：会话、文件、终端都在那台机器上。点击切换 / 连接其它 Host` : '此窗口连着本机。点击连接其它 Host（WSL / SSH）'"
+          @click.stop="$emit('open-hosts')"
+        >{{ hostLabel }}</button>
       </div>
 
       <SidebarToggle
@@ -388,6 +397,18 @@ function isRowRunning(cfg: RunConfig): boolean {
   border: 1px solid var(--aide-border);
   color: var(--aide-text-secondary);
   white-space: nowrap;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+.titlebar-host:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+/* 远程 Host 窗口：用强调色标出「你不在本机」 */
+.titlebar-host.remote {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
 }
 
 .titlebar-sep {

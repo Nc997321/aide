@@ -35,6 +35,7 @@ import PermissionsPanel from "./components/permissions/PermissionsPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
 import HostConnectionBanner from "./components/HostConnectionBanner.vue";
+import HostLauncherDialog from "./components/HostLauncherDialog.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
 import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
@@ -43,8 +44,8 @@ import { useConversationChanges } from "./composables/useConversationChanges";
 import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/turnChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
-import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
-import { HOST_OPEN_FOLDER_EVENT } from "@aide/sdk";
+import { isDailyKey, dailyWorkspaceBind, ensureDailyWorkspace } from "@aide/sdk/utils/dailyWorkspace";
+import { HOST_OPEN_FOLDER_EVENT, hostApi } from "@aide/sdk";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed, provide } from "vue";
@@ -268,6 +269,7 @@ const runConfigsDialogVisible = ref(false);
 // ── Workspace dialogs ──
 const openFolderVisible = ref(false);
 const openFolderError = ref("");
+const hostLauncherVisible = ref(false);
 const removeWsVisible = ref(false);
 const removeWsTarget = ref<WorkspaceInfo | null>(null);
 
@@ -487,6 +489,21 @@ async function onSidebarWsChanged(path: string) {
 // Sync workbench terminal's active workspace when switching workspaces
 watch(activeWorkspaceKey, (k) => {
   if (k) wb.setActiveWorkspace(k);
+});
+
+// Host 启动页的「最近项目」：本窗口的 Host 每打开一个项目就记一笔（桌面自己记、Host 由窗口定）。
+// 日常工作区是每台 Host 自带的草稿目录而不是「项目」，不记。
+const samePath = (a: string, b: string) => a.replace(/[\\/]+$/, "").replace(/\\/g, "/") === b.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+watch(workspacePath, async (p) => {
+  if (!p) return;
+  try {
+    await ensureDailyWorkspace();
+    const daily = dailyWorkspaceBind()?.wsPath;
+    if (daily && samePath(daily, p)) return;
+    await hostApi.recordRecent(p);
+  } catch {
+    /* 只是个便利清单：记不上不打扰用户 */
+  }
 });
 
 // ── 文件树定位：FileWindow 按钮 → 切到文件标签 → 展开并高亮 ──
@@ -1014,12 +1031,14 @@ onUnmounted(() => {
       @toggle-left="onToggleLeft"
       @toggle-right="rightCollapsed = !rightCollapsed"
       @open-folder="onOpenFolder"
+      @open-hosts="hostLauncherVisible = true"
       @open-workbench="wb.toggle()"
       @open-settings-providers="openSettingsProviders"
     />
 
     <!-- Host 窗口：连接意外断开时如实说明并给「重新连接」；本机窗口不渲染 -->
     <HostConnectionBanner />
+    <HostLauncherDialog v-model:visible="hostLauncherVisible" />
 
     <div
       class="app-layout"

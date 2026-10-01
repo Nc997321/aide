@@ -1,6 +1,6 @@
 # Host 模型：后端整体跑在 Host 上，GUI 只是屏幕
 
-> 状态：P0、P1（含 P1e）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个。旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已整体删除（P1d）。下一步见 §3 的 P2c / P2d / P3。
+> 状态：P0、P1（含 P1e）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个。旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已整体删除（P1d）。下一步见 §3 的 P2d / P3。
 
 ## 1. 产品模型
 
@@ -65,7 +65,7 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 | P1e | 内嵌浏览器按窗口分属：`BrowserFacade::new(app, 窗口)` 作用域到调用窗口，注册表记每个视图的属主（别窗口的 id = 不存在，列表 / 读写 / 引擎 IO 都先认属主），`browser-nav/view/focus` 一律 `emit_to(属主窗口)`，前端 `useEmbeddedBrowser` 改窗口作用域监听，窗口销毁回收名下视图；Host 窗口里 agent 的 `browser_query` 在连着那台 Host 的窗口里执行（`browser_agent::answer`）、经 `agent_tool_result` 回到 Host；本机 Host 的 agent 用主窗口（`LOCAL_WINDOW`） | ✅ 2026-09-30 |
 | P2a | SSH 真机验证：安装 / serve 握手 / fs · 上传 · 监听 · git / Host 里的 rust-analyzer 经真实 SSH 全部通过（e2e 用例按 `AIDE_E2E_SSH` / `AIDE_E2E_WSL` 选目标）。**已知缺口：SSH 不转发桌面回环代理**（服务器到不了桌面的 127.0.0.1），目标机无直连网络时 agent 一轮会话 403——见下方「SSH 代理」 | ✅ 2026-09-30 |
 | P2b | 断线可见 + 手动重连：`HostConnection` 的 `on_closed` 回调 → 注册表把 Host 标成「已断开」（`dropped`），**不再静默懒重连**（重连 = 全新 serve，进行中的会话早已随旧 serve 收掉）；`remote-workspace-status` 事件 + 合成 `runtime_dead` 帧投给该 Host 的窗口；SDK 的 `runtime_dead` 处理收掉所有正忙会话（本机 runtime 死亡同样受益）；Host 窗口顶部状态条「重新连接」= 显式连接 + 重载窗口 | ✅ 2026-09-30 |
-| P2c | Host 选择启动页（各 Host 最近项目） | |
+| P2c | Host 启动页：标题栏的 Host 标签（本机窗口也有）点开 `HostLauncherDialog`——列本机 / WSL 发行版 / SSH 主机（含手输与用过的）、连接状态实时更新、各 Host 的最近项目，点一下进它的窗口（项目直接打开）。**最近项目是桌面自己记的**（`host_recents.rs`，`~/.aide/gui/host-recents.json`，GUI 数据不属于 Host）：App 的活动工作区一变就记一笔，Host 由**调用窗口**定、前端不传；不连接任何 Host 就能列。`open_host_window("local")` = 聚焦主窗口 | ✅ 2026-09-30 |
 | P2d | 断线重连保住 Host 上的会话 + 事件回放（需要常驻 Host，随 P3 的守护进程） | |
 | P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |
 

@@ -151,6 +151,17 @@ pub async fn open_host_window(
     host: String,
     folder: Option<String>,
 ) -> Result<String, String> {
+    // 本机 Host = 主窗口（进程内 core，没有连接可建）：聚焦它，必要时交给它一个目录。
+    if host == crate::host_recents::LOCAL_KEY {
+        let w = app.get_webview_window("main").ok_or("主窗口不存在")?;
+        let _ = w.unminimize();
+        let _ = w.show();
+        let _ = w.set_focus();
+        if let Some(f) = folder {
+            let _ = app.emit_to(EventTarget::webview_window("main"), "host-open-folder", f);
+        }
+        return Ok("main".to_string());
+    }
     let id = HostId::parse_key(&host).ok_or_else(|| format!("非法主机标识：{host}"))?;
     let label = label_for(&id);
     if let Some(w) = app.get_webview_window(&label) {

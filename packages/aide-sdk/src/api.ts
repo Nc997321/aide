@@ -950,7 +950,7 @@ export {
 } from "./api/remoteWorkspace";
 export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remoteWorkspace";
 export { hostApi, HOST_OPEN_FOLDER_EVENT } from "./api/host";
-export type { CurrentHost } from "./api/host";
+export type { CurrentHost, HostRecents, HostRecentProject } from "./api/host";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

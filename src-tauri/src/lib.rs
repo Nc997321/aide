@@ -7,6 +7,7 @@ pub mod commands;
 mod conversation;
 mod diagnostics;
 mod host_door;
+mod host_recents;
 mod host_window;
 pub mod remote;
 // 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
@@ -303,6 +304,9 @@ pub fn run() {
             remote_workspace::remote_ws_disconnect,
             remote_workspace::remote_ws_statuses,
             host_window::open_host_window,
+            host_recents::host_recents_record,
+            host_recents::host_recents_list,
+            host_recents::host_recents_forget,
             host_window::current_host,
             host_window::import_local_providers,
             host_window::upload_local_files,

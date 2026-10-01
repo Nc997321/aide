@@ -17,6 +17,21 @@ export interface CurrentHost {
   home: string;
 }
 
+/** 一台 Host 的最近项目（Host 启动页的数据源）。路径是该 Host 的原生路径。 */
+export interface HostRecentProject {
+  path: string;
+  /** 最近一次打开（毫秒时间戳） */
+  openedAt: number;
+}
+
+export interface HostRecents {
+  /** `local` / `wsl:Debian` / `ssh:devbox` */
+  host: string;
+  label: string;
+  /** 新到旧 */
+  projects: HostRecentProject[];
+}
+
 let current: Promise<CurrentHost> | null = null;
 
 export const hostApi = {
@@ -33,6 +48,18 @@ export const hostApi = {
   /** 打开（或聚焦）连着某台 Host 的窗口；`folder` = 窗口起来后直接打开的目录（Host 原生路径）。 */
   openWindow(host: string, folder?: string): Promise<string> {
     return getTransport().invoke("open_host_window", folder ? { host, folder } : { host });
+  },
+  /** 记一次「本窗口的 Host 打开了这个项目」（Host 由调用窗口定，不由前端传）。 */
+  recordRecent(path: string): Promise<void> {
+    return getTransport().invoke("host_recents_record", { path });
+  },
+  /** 各 Host 的最近项目，最近打开的 Host 在前。桌面自己记的，不连接任何 Host。 */
+  recents(): Promise<HostRecents[]> {
+    return getTransport().invoke("host_recents_list");
+  },
+  /** 从某台 Host 的最近项目里去掉一项（不动磁盘上的项目）。 */
+  forgetRecent(host: string, path: string): Promise<void> {
+    return getTransport().invoke("host_recents_forget", { host, path });
   },
   /** 「从本机复制供应商」：本机的供应商连同密钥写进当前窗口的 Host，返回复制条数。 */
   importLocalProviders(): Promise<number> {
