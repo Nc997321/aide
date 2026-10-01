@@ -43,6 +43,16 @@ pub async fn browser_views_list(window: Window) -> CmdResult<Vec<BrowserViewDto>
         .map_err(|e| e.to_string())
 }
 
+/// 当前画面快照（JPEG data URI）：面板在 HTML 浮层盖上来、原生视图要让位**之前**拍一张，菜单开着时用它
+/// 填住空出来的洞。CDP 调用等 COM 回调，必须离开 async 线程以外的主线程——套 `spawn_blocking`。
+#[tauri::command]
+pub async fn browser_snapshot(window: Window, id: String) -> CmdResult<String> {
+    let facade = facade(&window);
+    tokio::task::spawn_blocking(move || facade.snapshot(&id).map_err(|e| e.to_string()))
+        .await
+        .map_err(|e| format!("snapshot task failed: {e}"))?
+}
+
 /// 导航到新 URL（与当前相同则按重载处理）。
 #[tauri::command]
 pub async fn browser_navigate(

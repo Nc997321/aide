@@ -249,6 +249,7 @@ pub fn run() {
             commands::browser::browser_go_back,
             commands::browser::browser_go_forward,
             commands::browser::browser_close,
+            commands::browser::browser_snapshot,
             commands::browser::browser_bookmarks_list,
             commands::browser::browser_bookmarks_add,
             commands::browser::browser_bookmarks_remove,

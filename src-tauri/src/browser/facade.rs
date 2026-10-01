@@ -294,6 +294,24 @@ impl BrowserFacade {
         Ok(self.engine.eval(&id, script)?)
     }
 
+    /// 给视图拍一张当前画面（JPEG data URI）。用途：HTML 浮层盖在面板上、原生视图要让位时，面板用这张
+    /// 「定格画面」填住空出来的洞——否则洞里露出面板底色，页面看起来变灰了。
+    ///
+    /// ⚠️ **只能在视图还显示着的时候拍**：`Page.captureScreenshot` 依赖合成帧，隐藏的视图一帧都不合成，
+    /// 回包永远不来（见 `native.rs` 的超时说明）。调用方先拍、后让位。线程契约同 [`eval`](Self::eval)。
+    pub fn snapshot(&self, id_raw: &str) -> Result<String, FacadeError> {
+        let shot = self.call_cdp(
+            id_raw,
+            "Page.captureScreenshot",
+            &serde_json::json!({ "format": "jpeg", "quality": 70 }),
+        )?;
+        let data = shot
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| FacadeError::from(EngineError::CdpFailed("Page.captureScreenshot returned no image data".into())))?;
+        Ok(format!("data:image/jpeg;base64,{data}"))
+    }
+
     /// 裸 CDP 调用——agent **操作**页面的通道（真实输入事件 `Input.dispatchMouseEvent`、
     /// 文件上传 `DOM.setFileInputFiles`）。线程契约同 [`eval`](Self::eval)。
     ///

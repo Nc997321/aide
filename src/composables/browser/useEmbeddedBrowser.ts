@@ -130,6 +130,13 @@ export function useEmbeddedBrowser() {
     listViews(): Promise<BrowserViewDto[]> {
       return invoke<BrowserViewDto[]>("browser_views_list");
     },
+    /**
+     * 当前画面快照（JPEG data URI）。**必须在视图还显示着时调用**（隐藏的视图不合成帧，拍不出来）。
+     * 面板用它在 HTML 浮层盖上来的那段时间填住原生视图让出的洞。
+     */
+    snapshot(id: string): Promise<string> {
+      return invoke<string>("browser_snapshot", { id });
+    },
     goBack(id: string): Promise<BrowserViewDto> {
       return invoke<BrowserViewDto>("browser_go_back", { id });
     },

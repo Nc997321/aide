@@ -188,6 +188,104 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
   });
 });
 
+describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）", () => {
+  const SHOT = "data:image/jpeg;base64,/9j/AAA";
+
+  /** 在默认 invoke 实现上叠加 `browser_snapshot` 的行为。 */
+  function withSnapshot(impl: () => Promise<unknown>) {
+    const base = invokeMock.getMockImplementation()!;
+    invokeMock.mockImplementation(async (cmd: string, args?: unknown) =>
+      cmd === "browser_snapshot" ? impl() : base(cmd, args),
+    );
+  }
+
+  /** 调用顺序：snapshot 必须排在 set_displayed(false) 之前（隐藏的视图拍不出画面）。 */
+  function order(): string[] {
+    return invokeMock.mock.calls
+      .map((c) => (c[0] === "browser_set_displayed" ? `displayed:${(c[1] as { displayed: boolean }).displayed}` : c[0] as string))
+      .filter((c) => c === "browser_snapshot" || c.startsWith("displayed:"));
+  }
+
+  it("浮层打开：先拍快照、画面铺进洞里、再让位；浮层关掉：视图回来后才撤画面", async () => {
+    withSnapshot(async () => SHOT);
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-import").trigger("click");
+    await flushPromises();
+
+    expect(lastArgsOf("browser_snapshot")).toEqual([{ id: VIEW_ID }]);
+    expect(w.find(".bp-snapshot").attributes("src")).toBe(SHOT);
+    expect(order().slice(-2)).toEqual(["browser_snapshot", "displayed:false"]);
+
+    w.findComponent(FilePickerStub).vm.$emit("update:visible", false);
+    await flushPromises();
+
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: true }]);
+    expect(w.find(".bp-snapshot").exists()).toBe(false);
+  });
+
+  it("快照拍失败：不挡让位，洞里没有画面（退回灰洞），失败留痕", async () => {
+    withSnapshot(async () => {
+      throw "cdp unavailable";
+    });
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-import").trigger("click");
+    await flushPromises();
+
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
+    expect(w.find(".bp-snapshot").exists()).toBe(false);
+    expect(lastArgsOf("log_frontend_error")?.[0]).toEqual({
+      message: expect.stringContaining("snapshot view-1 failed: cdp unavailable"),
+    });
+  });
+
+  it("后端回的不是 data:image 就不进 <img>（不放行其他形态）", async () => {
+    withSnapshot(async () => "https://evil.example/x.png");
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-import").trigger("click");
+    await flushPromises();
+
+    expect(w.find(".bp-snapshot").exists()).toBe(false);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
+  });
+
+  it("快照还在路上浮层就关了：过期结果不落地，也不再让位", async () => {
+    let finish!: (v: string) => void;
+    withSnapshot(() => new Promise((r) => (finish = r as (v: string) => void)));
+    const w = mountPanel();
+    await openView(w);
+
+    await w.find(".bp-bm-import").trigger("click");
+    await flushPromises();
+    w.findComponent(FilePickerStub).vm.$emit("update:visible", false); // 快照尚未回来
+    await flushPromises();
+    finish(SHOT);
+    await flushPromises();
+
+    expect(w.find(".bp-snapshot").exists()).toBe(false);
+    // 从未让位（面板一直该显示着）：最后一次 displayed 调用只会是 true
+    expect(order().filter((c) => c === "displayed:false")).toHaveLength(0);
+  });
+
+  it("面板自己合上（不是浮层）：不拍快照（洞本来就看不见）", async () => {
+    withSnapshot(async () => SHOT);
+    const w = mountPanel();
+    await openView(w);
+
+    useRightPanel().select("browser"); // 折叠
+    await flushPromises();
+
+    expect(lastArgsOf("browser_snapshot")).toBeNull();
+    expect(w.find(".bp-snapshot").exists()).toBe(false);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
+  });
+});
+
 describe("收藏夹目录", () => {
   // 真机形状：顶层目录 → 二级目录，外加一条根级散条。
   const ROWS = [
