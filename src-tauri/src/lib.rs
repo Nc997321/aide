@@ -93,13 +93,10 @@ pub fn run() {
     // **改这里必须同时看那里**，只改一边就会把互踢放回来。
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        // 唤出主窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
+        // 唤出当前窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
         // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——set_focus
         // 对隐藏窗口无效。
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+        host_window::show_current_window(app);
         // 资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起：转发给首个实例。
         if let Some(p) = argv.get(1) {
             let _ = app.emit("open-file-preview", p.clone());
@@ -139,11 +136,17 @@ pub fn run() {
         // WebView 内容，空框仍钉在原地，观感比没动画更怪。要真收缩得 Rust
         // 侧逐帧 set_size/set_position（内容还被裁不是缩放），代价远大于收益。
         .on_window_event(|window, event| {
+            // 没有「主窗口」：所有窗口平等。关的是应用里**唯一**的一扇窗口 → 收进托盘（应用继续活着，
+            // 本机 Host 的会话 / 手机网关不断）；还有别的窗口 → 真关（Host 窗口关掉会断开那台 Host）。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                let app = window.app_handle();
+                if app.webview_windows().keys().all(|l| l == window.label()) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
+            }
+            if let tauri::WindowEvent::Focused(true) = event {
+                window.app_handle().state::<host_window::HostWindows>().note_focus(window.label());
             }
             // Host 窗口关掉 = 真关（不进托盘）：解绑，必要时断开那台 Host
             if let tauri::WindowEvent::Destroyed = event {
@@ -303,6 +306,7 @@ pub fn run() {
             remote_workspace::remote_ws_disconnect,
             remote_workspace::remote_ws_statuses,
             host_window::open_host_window,
+            host_window::switch_window_host,
             host_recents::host_recents_record,
             host_recents::host_recents_list,
             host_recents::host_recents_forget,
@@ -342,7 +346,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .show_menu_on_left_click(false)
         .tooltip("Aide")
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "show" => show_main_window(app),
+            "show" => host_window::show_current_window(app),
             "quit" => {
                 // 退出前必须收常驻子进程（Windows 无级联 kill）。清理是 async，
                 // 交给 tauri 的 async_runtime，收完再 exit(0)。
@@ -361,7 +365,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
                 ..
             } = event
             {
-                toggle_main_window(tray.app_handle());
+                toggle_current_window(tray.app_handle());
             }
         });
 
@@ -375,24 +379,13 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-/// 显示并聚焦主窗口（托盘「显示 Aide」与二次启动唤起共用）。
-fn show_main_window(app: &tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
-}
-
-/// 左键切换：已显示且聚焦 → 隐藏；否则显示并聚焦。
-fn toggle_main_window(app: &tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
+/// 左键切换：当前窗口已显示且聚焦 → 隐藏；否则显示并聚焦。
+fn toggle_current_window(app: &tauri::AppHandle) {
+    if let Some(w) = host_window::current_window(app) {
         if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
             let _ = w.hide();
         } else {
-            show_main_window(app);
+            host_window::show_current_window(app);
         }
     }
 }

@@ -32,8 +32,10 @@ const isOwnHost = computed(() => machine.value === (host.value?.key ?? LOCAL));
 
 const machines = computed(() => {
   const own = { key: host.value?.key ?? LOCAL, label: host.value?.label ?? "本机" };
-  // Host 窗口里不列「本机」：本机 Host 就是主窗口，在那边打开即可
+  // 没有「主窗口」：窗口连着谁是它当下的属性，所以远程窗口里「本机」也是一台普通的别的 Host
+  // （新窗口打开 / 把本窗口换回本机）
   const others = [
+    ...(own.key === LOCAL ? [] : [{ key: LOCAL, label: "本机" }]),
     ...targets.value.wsl.map((d) => ({ key: `wsl:${d}`, label: `WSL: ${d}` })),
     ...targets.value.ssh.map((h) => ({ key: `ssh:${h}`, label: `SSH: ${h}` })),
   ].filter((m) => m.key !== own.key);
@@ -97,20 +99,23 @@ function close() {
   error.value = "";
 }
 
-async function onConfirm() {
-  if (!isOwnHost.value) {
-    // 别的 Host：开（或聚焦）它的窗口，在那边选目录——首次会在目标机安装 Aide 组件
-    opening.value = true;
-    try {
-      await hostApi.openWindow(machine.value);
-      close();
-    } catch (e) {
-      error.value = String(e);
-    } finally {
-      opening.value = false;
-    }
-    return;
+/** 别的 Host：新开（或聚焦）它的窗口，或把本窗口换成它——两条路都在那边选目录，首次会在目标机安装 Aide 组件。 */
+async function openOtherHost(mode: "newWindow" | "thisWindow") {
+  opening.value = true;
+  error.value = "";
+  try {
+    if (mode === "newWindow") await hostApi.openWindow(machine.value);
+    else await hostApi.switchWindow(machine.value);
+    close();
+  } catch (e) {
+    error.value = String(e);
+  } finally {
+    opening.value = false;
   }
+}
+
+async function onConfirm() {
+  if (!isOwnHost.value) return openOtherHost("newWindow");
   if (!path.value.trim()) {
     error.value = "请选择或输入目录路径";
     return;
@@ -150,15 +155,18 @@ async function onConfirm() {
         </div>
 
         <div v-if="!isOwnHost" class="of-status">
-          {{ machines.find((m) => m.key === machine)?.label }} 是另一台 Host，会在它自己的窗口里打开（一个窗口 = 一个
-          Host）。首次打开会在目标机安装 Aide 组件，可能需要一分钟；进度在新窗口里显示。
+          {{ machines.find((m) => m.key === machine)?.label }} 是另一台 Host（一个窗口 = 一个 Host）：可以在新窗口里打开，
+          也可以把当前窗口换成它。首次打开会在目标机安装 Aide 组件，可能需要一分钟；进度在它的窗口里显示。
         </div>
         <DirTreePicker v-else :key="machine" v-model="path" :roots="hostRoots" />
 
         <div v-if="error" class="of-error">{{ error }}</div>
         <div class="of-actions">
           <button class="of-btn cancel" @click="close">取消</button>
-          <button class="of-btn confirm" :disabled="opening" @click="onConfirm">
+          <button v-if="!isOwnHost" class="of-btn cancel" :disabled="opening" data-testid="of-open-here" @click="openOtherHost('thisWindow')">
+            在此窗口中打开
+          </button>
+          <button class="of-btn confirm" :disabled="opening" data-testid="of-open-confirm" @click="onConfirm">
             {{ isOwnHost ? "打开并切换" : "在新窗口中打开" }}
           </button>
         </div>

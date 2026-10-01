@@ -17,16 +17,12 @@ pub fn notify_send(app: tauri::AppHandle, title: String, body: String, session_i
 
     #[cfg(windows)]
     {
-        use tauri::{Emitter, Manager};
+        use tauri::Emitter;
         let toast = tauri_winrt_notification::Toast::new("com.aide.app")
             .title(&title)
             .text2(&body)
             .on_activated(move |_args| {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.unminimize();
-                    let _ = w.set_focus();
-                }
+                crate::host_window::show_current_window(&app);
                 if let Some(ref id) = session_id {
                     let _ = app.emit("open-session-from-notification", id.clone());
                 }

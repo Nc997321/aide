@@ -84,7 +84,7 @@ relay（`relay-server/`）是**哑管道且不被信任**：只按 `device_id` �
 
 ## 架构红线：Host 模型——一张命令表，多个前门
 
-**一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆 / 供应商），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
+**一个 Host = 一整个 Aide 后端**（会话 / agent / 文件 / git / 终端 / LSP / 插件 / 记忆 / 供应商），GUI 只是连到某个 Host 的屏幕；**一个窗口 = 一个 Host**（本机 / WSL / SSH）。**没有「主窗口」一说**（2026-10-01 定）：窗口连着谁是它**当下的属性**，可以换（「在此窗口中打开」= `switch_window_host`：改绑 + 重载页面，旧 Host 没别的窗口了就断开）；标签（第一扇碰巧叫 `main`）只是身份，**禁止用标签判断「是不是本机」或「该唤起谁」**——要「哪扇窗口」一律问 `host_window::current_window`（最近获得焦点的）/ `local_window`（连着本机 Host 的；没有就新开一扇）。托盘 / 二次启动 / 通知点击都叫「当前窗口」；关的是应用里唯一一扇窗口 = 收进托盘，否则真关。设计与迁移阶梯见 [docs/host-model.md](docs/host-model.md)。
 
 - **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机窗口由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层）；Host 窗口由 `host_door::forward` 原样转发给那台 Host 的 `aide-host serve`，serve 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令按 docs/host-model.md §4。**禁止再开平行分派**。
 - **Host 自持状态住 `aide_core::Core`**；Core 需要的宿主能力一律经端口注入：事件 `EventSink`、随包资源 `HostResources`、GUI 侧能力 `runtime::ports::AgentHooks`（内嵌浏览器 / 冻结诊断）。**aide-core 禁止依赖 Tauri**，且与 aide-host 同守「无系统 C 库、单静态二进制」约束。Host 不弹系统通知：`Core::notify` 发 `system-notification` 事件，由 GUI 前门弹。

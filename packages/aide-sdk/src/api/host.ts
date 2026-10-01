@@ -49,6 +49,11 @@ export const hostApi = {
   openWindow(host: string, folder?: string): Promise<string> {
     return getTransport().invoke("open_host_window", folder ? { host, folder } : { host });
   },
+  /** 「在此窗口中打开」：把**本窗口**换成连另一台 Host（`local` = 换回本机），不另开窗口。
+   *  Rust 侧改绑 + 重载页面，成功后本页面会被重载（Promise 可能来不及 resolve）。 */
+  switchWindow(host: string, folder?: string): Promise<void> {
+    return getTransport().invoke("switch_window_host", folder ? { host, folder } : { host });
+  },
   /** 记一次「本窗口的 Host 打开了这个项目」（Host 由调用窗口定，不由前端传）。 */
   recordRecent(path: string): Promise<void> {
     return getTransport().invoke("host_recents_record", { path });

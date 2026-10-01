@@ -23,9 +23,13 @@ use crate::browser::agent_bridge::{
 use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavStateDto, OriginDto};
 use crate::browser::facade::{BrowserFacade, FacadeError};
 
-/// 本机 Host 的 agent 用哪个窗口的浏览器：主窗口（本机 Host 只连主窗口）。远程 Host 的 agent
-/// 用连着那台 Host 的窗口（`host_window::answer_browser_query`）。**窗口选择是策略，住在调用方**。
-pub const LOCAL_WINDOW: &str = "main";
+/// 本机 Host 的 agent 用哪个窗口的浏览器：此刻连着本机 Host 的窗口（`host_window::local_window`——
+/// 窗口可以换绑，主窗口不一定是本机）；一扇都没有时落回主窗口标签，由门面如实回「window not found」。
+/// 远程 Host 的 agent 用连着那台 Host 的窗口（`host_window::answer_browser_query`）。
+/// **窗口选择是策略，住在调用方**。
+pub fn local_window(app: &AppHandle) -> String {
+    crate::host_window::local_window(app).unwrap_or_else(|| "main".to_string())
+}
 
 /// 执行一条浏览器查询并回写结果（本机 Host：经 runtime 的 stdin）。
 pub async fn handle(
