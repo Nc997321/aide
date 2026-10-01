@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
-use tauri::{Manager, WebviewWindow};
+use tauri::{Manager, Window};
 
 use crate::host_window::HostWindows;
 use crate::remote_workspace::path::HostId;
@@ -139,7 +139,7 @@ fn now_ms() -> i64 {
 }
 
 /// 调用窗口连着的 Host 键：Host 窗口 = 它的 Host，其余 = 本机。
-fn host_key_of(window: &WebviewWindow) -> String {
+fn host_key_of(window: &Window) -> String {
     window
         .app_handle()
         .state::<HostWindows>()
@@ -150,7 +150,7 @@ fn host_key_of(window: &WebviewWindow) -> String {
 
 /// 记一次「本窗口的 Host 打开了这个项目」。Host 由调用窗口定。
 #[tauri::command]
-pub async fn host_recents_record(window: WebviewWindow, path: String) -> Result<(), String> {
+pub async fn host_recents_record(window: Window, path: String) -> Result<(), String> {
     if path.trim().is_empty() {
         return Ok(());
     }

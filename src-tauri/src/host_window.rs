@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Emitter, EventTarget, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, EventTarget, Manager, Window};
 
 use crate::remote_workspace::path::HostId;
 use crate::remote_workspace::RemoteWorkspaces;
@@ -120,7 +120,7 @@ pub fn answer_browser_query(
 /// GUI 动作（用本机程序打开 / 在资源管理器中显示）要碰 Host 上的文件：显式跨界。
 /// 本机窗口原样；WSL Host 的原生路径译成桌面能开的 `\\wsl.localhost\…`；SSH Host 上的文件
 /// 本机根本摸不到——如实拒绝，不假装打开。
-pub fn gui_path(window: &WebviewWindow, path: &str) -> Result<String, String> {
+pub fn gui_path(window: &Window, path: &str) -> Result<String, String> {
     match window.app_handle().state::<HostWindows>().host_of(window.label()) {
         None => Ok(path.to_string()),
         Some(HostId::Wsl(distro)) => Ok(crate::remote_workspace::path::wsl_desktop_path(&distro, path)),
@@ -231,7 +231,7 @@ pub struct CurrentHost {
 }
 
 #[tauri::command]
-pub async fn current_host(window: WebviewWindow) -> Result<CurrentHost, String> {
+pub async fn current_host(window: Window) -> Result<CurrentHost, String> {
     let app = window.app_handle();
     match app.state::<HostWindows>().host_of(window.label()) {
         None => Ok(CurrentHost {
@@ -261,7 +261,7 @@ pub async fn current_host(window: WebviewWindow) -> Result<CurrentHost, String> 
 /// 合并规则：按 id——本机有的覆盖 Host 同 id 的（含密钥），Host 独有的原样保留（密钥不动）；
 /// 不改 Host 的激活供应商。返回复制过去的条数。
 #[tauri::command]
-pub async fn import_local_providers(window: WebviewWindow) -> Result<usize, String> {
+pub async fn import_local_providers(window: Window) -> Result<usize, String> {
     let app = window.app_handle();
     let host = app
         .state::<HostWindows>()
@@ -290,7 +290,7 @@ pub async fn import_local_providers(window: WebviewWindow) -> Result<usize, Stri
 /// 的 Host：本机窗口原样返回（Host 就是本机）；Host 窗口把每个文件读出来，写进 Host 的暂存
 /// 目录（core `stage_dropped_file`），返回 Host 路径——显式跨界，agent 只看得见 Host 上的文件。
 #[tauri::command]
-pub async fn upload_local_files(window: WebviewWindow, paths: Vec<String>) -> Result<Vec<String>, String> {
+pub async fn upload_local_files(window: Window, paths: Vec<String>) -> Result<Vec<String>, String> {
     let app = window.app_handle();
     let Some(host) = app.state::<HostWindows>().host_of(window.label()) else {
         return Ok(paths);
