@@ -1,0 +1,107 @@
+{
+  "about": "Aide Link secure-channel byte-exact vectors. Reproduce `handshake` and `transport` from `inputs` with your Noise implementation (see docs/aide-link-protocol.md §3).",
+  "vectors": [
+    {
+      "handshake": {
+        "msg1_hex": "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f13198eabab6c1f370dfecc8f766a7239026c39d01a8ae2f99af4a533f8ca5fec69298c18b5daa25c6867fcd89573eb0bc983b8816a6c24a0772ba2e0aaa33cc225",
+        "msg2_hex": "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20bdd9c2346cccc916209e13ec268f7480",
+        "sc_init": {
+          "mode": "resume",
+          "msg": "e06Qm75//kTEZaIgA31gjuNYl9Me+XLwf3SJLLD3PxMZjqurbB83Df7Mj3ZqcjkCbDnQGori+Zr0pTP4yl/saSmMGLXaolxoZ/zYlXPrC8mDuIFqbCSgdyui4KqjPMIl",
+          "type": "sc_init",
+          "versions": [
+            1
+          ]
+        },
+        "sc_resp": {
+          "msg": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyC92cI0bMzJFiCeE+wmj3SA",
+          "type": "sc_resp",
+          "version": 1
+        }
+      },
+      "inputs": {
+        "device_id": "00112233445566778899aabbccddeeff",
+        "host_private_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "host_public_hex": "132c442be010fbd57e72603328aa76e71fccc1503aae219327d14d9c9993f472",
+        "initiator_ephemeral_private_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "phone_private_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "phone_public_hex": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+        "prologue_utf8": "aide-link/1:00112233445566778899aabbccddeeff",
+        "psk_hex": null,
+        "responder_ephemeral_private_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "name": "resume: Noise_IK",
+      "pairing_uri_psk_b64url": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+      "pattern": "Noise_IK_25519_ChaChaPoly_SHA256",
+      "transport": {
+        "host_to_phone": {
+          "plaintext_utf8": "{\"type\":\"hello_ok\",\"version\":1}",
+          "sc": {
+            "c": "rL9oLPz5BXCGDeKxq0cClIpUM6HxxShgjuGZBEaFw9Jre3mp1KKyvOpm6/9mlok=",
+            "last": true,
+            "type": "sc"
+          }
+        },
+        "phone_to_host": {
+          "plaintext_utf8": "{\"type\":\"hello\"}",
+          "sc": {
+            "c": "zgQ4T5i9YtybzKXOZj66AUL1EhbfrSY9F0ybV36DBG0=",
+            "last": true,
+            "type": "sc"
+          }
+        }
+      }
+    },
+    {
+      "handshake": {
+        "msg1_hex": "7b4e909bbe7ffe44c465a220037d608ee35897d31ef972f07f74892cb0f73f130d659365004007dbe8f6125401ccbb10a99020e2aa18532b6509473c402d5146d6cd16e1856547a9fb84b2c430aba1741f23c0e2c4ed5340fd10a84a0ac82d2f",
+        "msg2_hex": "0faa684ed28867b97f4a6a2dee5df8ce974e76b7018e3f22a1c4cf2678570f20faeb37c589db7a14081adc523203cfc5",
+        "sc_init": {
+          "mode": "pair",
+          "msg": "e06Qm75//kTEZaIgA31gjuNYl9Me+XLwf3SJLLD3PxMNZZNlAEAH2+j2ElQBzLsQqZAg4qoYUytlCUc8QC1RRtbNFuGFZUep+4SyxDCroXQfI8DixO1TQP0QqEoKyC0v",
+          "type": "sc_init",
+          "versions": [
+            1
+          ]
+        },
+        "sc_resp": {
+          "msg": "D6poTtKIZ7l/Smot7l34zpdOdrcBjj8iocTPJnhXDyD66zfFidt6FAga3FIyA8/F",
+          "type": "sc_resp",
+          "version": 1
+        }
+      },
+      "inputs": {
+        "device_id": "00112233445566778899aabbccddeeff",
+        "host_private_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+        "host_public_hex": "132c442be010fbd57e72603328aa76e71fccc1503aae219327d14d9c9993f472",
+        "initiator_ephemeral_private_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+        "phone_private_hex": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "phone_public_hex": "c306fb0ef2bf8b7f93bad98155fa37daec74db0c4cbeda6c6f1dba9d36558252",
+        "prologue_utf8": "aide-link/1:00112233445566778899aabbccddeeff",
+        "psk_hex": "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+        "responder_ephemeral_private_hex": "2222222222222222222222222222222222222222222222222222222222222222"
+      },
+      "name": "pair: Noise_IKpsk2",
+      "pairing_uri_psk_b64url": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo",
+      "pattern": "Noise_IKpsk2_25519_ChaChaPoly_SHA256",
+      "transport": {
+        "host_to_phone": {
+          "plaintext_utf8": "{\"type\":\"hello_ok\",\"version\":1}",
+          "sc": {
+            "c": "t89yoopgerIc2HFx600TUSwjzuRPoexG6VvH6uH4ak4l6eGe7nUkRQl+sjoE+Ns=",
+            "last": true,
+            "type": "sc"
+          }
+        },
+        "phone_to_host": {
+          "plaintext_utf8": "{\"type\":\"hello\"}",
+          "sc": {
+            "c": "IEImle3jGoA526uUm7aRpzDOGenUKAc+DVZc9zprLP0=",
+            "last": true,
+            "type": "sc"
+          }
+        }
+      }
+    }
+  ]
+}

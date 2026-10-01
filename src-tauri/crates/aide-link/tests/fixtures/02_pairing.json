@@ -1,73 +1,81 @@
 [
   {
-    "name": "pairing with the right code issues a token and authenticates the connection",
+    "name": "scanning the QR code pairs: the first valid frame confirms, and the phone can resume afterwards",
+    "channel": "none",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "pair", "code": "123456", "device": { "name": "Pixel" } } },
-      { "expect": { "type": "paired", "device_id": "dev-1", "token": "<string>",
-                    "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"] } },
-      { "send": { "type": "call", "id": 1, "method": "list_sessions", "params": {} } },
-      { "expect": { "type": "result", "id": 1, "value": ["s1", "s2"] } }
+      { "connection": "later" },
+      { "connect": { "mode": "resume", "as": "b" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } }
     ]
   },
   {
-    "name": "a wrong code is refused with a typed error, and the connection may retry",
+    "name": "the QR code is single-use: a second scan of the same code is refused",
+    "channel": "pair",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "pair", "code": "000000" } },
-      { "expect": { "type": "auth_error", "code": "bad_code", "message": "<string>" } },
-      { "send": { "type": "pair", "code": "123456" } },
-      { "expect": { "type": "paired" } }
+      { "connection": "second scan" },
+      { "connect": { "mode": "pair", "as": "stranger", "psk": "offer" } },
+      { "wire_expect": { "type": "sc_err", "code": "no_pairing_offer" } }
     ]
   },
   {
-    "name": "the stored token authenticates",
+    "name": "a wrong one-time secret never pairs, and does not burn the offer",
+    "channel": "none",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
-      { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed", "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"] } }
+      { "connect": { "mode": "pair", "as": "stranger", "psk": "wrong" } },
+      { "tick_secs": 20 },
+      { "wire_expect": { "type": "sc_err", "code": "timeout" } },
+      { "connection": "the real phone" },
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } }
     ]
   },
   {
-    "name": "a bad token is refused",
+    "name": "a handshake that is never confirmed does not pair the device",
+    "channel": "none",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
-      { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "wrong" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } }
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "connection": "other" },
+      { "connect": { "mode": "resume", "as": "b" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
     ]
   },
   {
-    "name": "five failed attempts on one connection end it",
+    "name": "single device: pairing a second phone kicks the first with bye superseded",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "x" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } },
-      { "send": { "type": "auth", "token": "x" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } },
-      { "send": { "type": "auth", "token": "x" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } },
-      { "send": { "type": "auth", "token": "x" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } },
-      { "send": { "type": "auth", "token": "x" } },
-      { "expect": { "type": "auth_error", "code": "bad_token" } },
-      { "expect": { "type": "bye", "code": "too_many_attempts" } },
-      { "expect_closed": true }
+      { "connection": "phone b" },
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "connection": "default" },
+      { "tick_secs": 1 },
+      { "expect": { "type": "bye", "code": "superseded", "message": "<string>" } },
+      { "expect_closed": true },
+      { "connection": "phone a again" },
+      { "connect": { "mode": "resume", "as": "a" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
     ]
   },
   {
-    "name": "nothing but handshake frames works before authentication",
+    "name": "link.unpair: the Host answers, ends the connection, and the phone can no longer resume",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "call", "id": 5, "method": "list_sessions", "params": {} } },
-      { "expect": { "type": "error", "id": 5, "code": "unauthenticated" } },
-      { "send": { "type": "subscribe", "sessions": null } },
-      { "expect": { "type": "error", "code": "unauthenticated" } }
+      { "send": { "type": "call", "id": 1, "method": "link.unpair", "params": {} } },
+      { "expect": { "type": "result", "id": 1, "value": null } },
+      { "expect": { "type": "bye", "code": "revoked" } },
+      { "expect_closed": true },
+      { "connection": "after" },
+      { "connect": { "mode": "resume", "as": "a" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
     ]
   }
 ]

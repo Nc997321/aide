@@ -78,7 +78,7 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 
 **relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
-**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：旧 v2（`src-tauri/src/remote/`，桌面网关）的继任者，手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳。**帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `catalog.rs` / `auth.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续（并收紧：配对码一次性 + 错 5 次作废）。迁移期间旧 v2 继续服务现有手机端，**不要在 v2 上再加能力**。
+**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：旧 v2（`src-tauri/src/remote/`，桌面网关）的继任者，手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳。**帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `catalog.rs` / `auth.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续；**配对靠扫二维码**（含 Host 公钥 + 一次性 psk），帧经 Noise 端到端加密、**中继不被信任**（没有配对码、没有 token，手机的静态密钥即凭据）——这是安全设计，别退回短码 / 明文。迁移期间旧 v2 继续服务现有手机端，**不要在 v2 上再加能力**。
 
 ## 架构红线：Host 模型——一张命令表，多个前门
 

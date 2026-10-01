@@ -3,6 +3,7 @@
 use std::collections::BTreeSet;
 
 use aide_link::frame::{ClientFrame, ErrorCode, HostFrame};
+use aide_link::secure::WireFrame;
 
 fn dts() -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/aide-link/frames.d.ts");
@@ -31,6 +32,7 @@ fn client_and_host_frame_types_match_the_typescript_declarations() {
     let src = dts();
     assert_eq!(frame_types(&src, "ClientFrame"), set(ClientFrame::TYPES));
     assert_eq!(frame_types(&src, "HostFrame"), set(HostFrame::TYPES));
+    assert_eq!(frame_types(&src, "WireFrame"), set(WireFrame::TYPES));
 }
 
 #[test]

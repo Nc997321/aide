@@ -23,20 +23,11 @@ pub const MAX_IN_FLIGHT: usize = 64;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientFrame {
-    /// 连接后的第一帧：声明自己会的协议版本。
+    /// 安全通道建立后的第一帧：自报家门（Host 据此认出客户端；版本已在 `sc_init` 协商）。
     Hello {
-        versions: Vec<u32>,
         #[serde(default)]
         client: ClientInfo,
     },
-    /// 首次配对：凭 Host 上显示的配对码换长期 token。
-    Pair {
-        code: String,
-        #[serde(default)]
-        device: DeviceInfo,
-    },
-    /// 已配对：凭 token 认证。
-    Auth { token: String },
     /// 调用一个 Host 方法（目录见 `link.describe`）。`id` 由客户端选，连接内在途唯一。
     Call {
         id: u64,
@@ -44,7 +35,7 @@ pub enum ClientFrame {
         #[serde(default)]
         params: Value,
     },
-    /// 订阅事件流（认证后才能订；再订一次 = 替换订阅）。
+    /// 订阅事件流（再订一次 = 替换订阅）。
     Subscribe {
         /// `null` = 全部会话；`[…]` = 只收这些会话的 `chat-event`（不带会话号的事件照常收）。
         #[serde(default)]
@@ -63,23 +54,13 @@ pub enum ClientFrame {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum HostFrame {
     HelloOk {
-        /// 选定的协议版本（客户端 `versions` 与 Host 支持的交集里最大的）。
+        /// 协商好的协议版本（`sc_init.versions` 与 Host 支持的交集里最大的）。
         version: u32,
         host: HostInfo,
-        /// 可用的认证方式：`pair`（配对码）/ `token`。
-        auth: Vec<String>,
+        /// 授予这台设备的方法组（见目录）。
+        granted: Vec<String>,
         limits: Limits,
     },
-    /// 协商失败；随后 Host 关闭连接。
-    HelloErr { code: ErrorCode, supported: Vec<u32> },
-    /// 配对成功：`device_id` 是这台 Host 在中继上的身份（客户端之后 `connect` 用），`token` 长期有效。
-    Paired {
-        device_id: String,
-        token: String,
-        granted: Vec<String>,
-    },
-    Authed { granted: Vec<String> },
-    AuthError { code: ErrorCode, message: String },
     /// `call` 的成功应答。
     Result { id: u64, value: Value },
     /// `call` 的失败应答（`id` 缺省 = 不对应任何 call 的协议级错误）。
@@ -114,14 +95,8 @@ pub struct ClientInfo {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub struct DeviceInfo {
-    #[serde(default)]
-    pub name: String,
-}
-
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HostInfo {
-    /// Host 在中继上的稳定身份（= `Paired.device_id`）。
+    /// Host 在中继上的稳定身份（`device_id`，二维码里的 `id`）。
     pub id: String,
     pub name: String,
     pub os: String,
@@ -168,12 +143,14 @@ pub struct Subscribed {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
-    // 握手 / 认证
+    // 安全通道握手
     UnsupportedVersion,
-    BadCode,
-    ExpiredCode,
-    BadToken,
-    TooManyAttempts,
+    /// 手机的静态密钥不是已配对的那把（或根本没配对）。
+    Unauthorized,
+    /// `pair` 模式但 Host 当前没有有效的配对二维码（过期 / 已被用掉 / 没生成）。
+    NoPairingOffer,
+    /// 握手消息无法按 Noise 解析 / 认证失败（含一次性密钥不对、连错了 Host）。
+    BadHandshake,
     // 调用
     Unauthenticated,
     UnknownMethod,
@@ -193,15 +170,13 @@ pub enum ErrorCode {
 
 impl ClientFrame {
     /// 全部客户端帧的 `type` 值（文档 / TypeScript 声明与之对账）。
-    pub const TYPES: &'static [&'static str] =
-        &["hello", "pair", "auth", "call", "subscribe", "unsubscribe", "ping", "pong"];
+    pub const TYPES: &'static [&'static str] = &["hello", "call", "subscribe", "unsubscribe", "ping", "pong"];
 }
 
 impl HostFrame {
     /// 全部 Host 帧的 `type` 值。
     pub const TYPES: &'static [&'static str] = &[
-        "hello_ok", "hello_err", "paired", "authed", "auth_error", "result", "error", "subscribed", "event", "ping",
-        "pong", "bye",
+        "hello_ok", "result", "error", "subscribed", "event", "ping", "pong", "bye",
     ];
 }
 
@@ -209,10 +184,9 @@ impl ErrorCode {
     /// 全部错误码（线上字面值）。
     pub const ALL: &'static [ErrorCode] = &[
         ErrorCode::UnsupportedVersion,
-        ErrorCode::BadCode,
-        ErrorCode::ExpiredCode,
-        ErrorCode::BadToken,
-        ErrorCode::TooManyAttempts,
+        ErrorCode::Unauthorized,
+        ErrorCode::NoPairingOffer,
+        ErrorCode::BadHandshake,
         ErrorCode::Unauthenticated,
         ErrorCode::UnknownMethod,
         ErrorCode::InvalidFrame,
@@ -257,8 +231,8 @@ mod tests {
     #[test]
     fn client_frames_have_the_documented_shape() {
         roundtrip(
-            ClientFrame::Hello { versions: vec![1], client: ClientInfo { name: "pwa".into(), version: "1".into(), platform: "web".into() } },
-            json!({"type":"hello","versions":[1],"client":{"name":"pwa","version":"1","platform":"web"}}),
+            ClientFrame::Hello { client: ClientInfo { name: "pwa".into(), version: "1".into(), platform: "web".into() } },
+            json!({"type":"hello","client":{"name":"pwa","version":"1","platform":"web"}}),
         );
         roundtrip(
             ClientFrame::Call { id: 7, method: "list_sessions".into(), params: json!({}) },
@@ -268,7 +242,6 @@ mod tests {
             ClientFrame::Subscribe { sessions: None, since: Some(Since { epoch: "e1".into(), seq: 42 }) },
             json!({"type":"subscribe","sessions":null,"since":{"epoch":"e1","seq":42}}),
         );
-        roundtrip(ClientFrame::Auth { token: "t".into() }, json!({"type":"auth","token":"t"}));
         roundtrip(ClientFrame::Ping { n: 1 }, json!({"type":"ping","n":1}));
     }
 
@@ -304,9 +277,7 @@ mod tests {
     #[test]
     fn type_tables_match_the_enums() {
         let client = [
-            ClientFrame::Hello { versions: vec![], client: ClientInfo::default() },
-            ClientFrame::Pair { code: String::new(), device: DeviceInfo::default() },
-            ClientFrame::Auth { token: String::new() },
+            ClientFrame::Hello { client: ClientInfo::default() },
             ClientFrame::Call { id: 0, method: String::new(), params: Value::Null },
             ClientFrame::Subscribe { sessions: None, since: None },
             ClientFrame::Unsubscribe,
@@ -314,11 +285,7 @@ mod tests {
             ClientFrame::Pong { n: 0 },
         ];
         let host = [
-            HostFrame::HelloOk { version: 1, host: HostInfo::default(), auth: vec![], limits: Limits::default() },
-            HostFrame::HelloErr { code: ErrorCode::Internal, supported: vec![] },
-            HostFrame::Paired { device_id: String::new(), token: String::new(), granted: vec![] },
-            HostFrame::Authed { granted: vec![] },
-            HostFrame::AuthError { code: ErrorCode::Internal, message: String::new() },
+            HostFrame::HelloOk { version: 1, host: HostInfo::default(), granted: vec![], limits: Limits::default() },
             HostFrame::Result { id: 0, value: Value::Null },
             HostFrame::error(None, ErrorCode::Internal, ""),
             HostFrame::Subscribed(Subscribed { epoch: String::new(), seq: 0, resumed: false, gap: false, replayed: 0 }),

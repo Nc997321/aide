@@ -12,6 +12,8 @@ fn fixtures() -> Vec<(String, Value)> {
         .filter_map(Result::ok)
         .map(|e| e.path())
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        // `noise_vectors.json` 是逐字节的密码学向量（另有测试），不是对话脚本
+        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().chars().next().is_some_and(|c| c.is_ascii_digit())))
         .collect();
     files.sort();
     files

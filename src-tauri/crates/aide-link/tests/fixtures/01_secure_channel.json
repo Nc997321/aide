@@ -1,0 +1,88 @@
+[
+  {
+    "name": "resume as the paired phone, then hello describes the Host",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "resume", "as": "a" } },
+      { "send": { "type": "hello", "client": { "name": "pwa", "version": "1", "platform": "web" } } },
+      { "expect": { "type": "hello_ok", "version": 1,
+                    "host": { "id": "00112233445566778899aabbccddeeff", "name": "fake-host", "os": "linux", "arch": "<string>", "version": "<string>" },
+                    "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"],
+                    "limits": { "max_frame_bytes": "<number>", "max_in_flight": "<number>" } } }
+    ]
+  },
+  {
+    "name": "the version is negotiated in sc_init: the highest common one wins",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "resume", "as": "a", "versions": [1, 99] } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok", "version": 1 } }
+    ]
+  },
+  {
+    "name": "no common version: sc_err, then the Host hangs up",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "resume", "as": "a", "versions": [99] } },
+      { "wire_expect": { "type": "sc_err", "code": "unsupported_version", "message": "<string>" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "an unknown phone cannot resume: sc_err unauthorized",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "resume", "as": "stranger" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "pairing without an open pairing offer is refused",
+    "channel": "none",
+    "offer": "none",
+    "steps": [
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "wire_expect": { "type": "sc_err", "code": "no_pairing_offer" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "the first frame must be sc_init",
+    "channel": "none",
+    "steps": [
+      { "wire_send": { "type": "sc", "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "last": true } },
+      { "wire_expect": { "type": "sc_err", "code": "protocol_error" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "garbage before the handshake is a protocol error",
+    "channel": "none",
+    "steps": [
+      { "wire_send": "not json at all" },
+      { "wire_expect": { "type": "sc_err", "code": "protocol_error" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "a handshake that never completes times out",
+    "channel": "none",
+    "steps": [
+      { "tick_secs": 20 },
+      { "wire_expect": { "type": "sc_err", "code": "timeout" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "tampered ciphertext ends the connection (the channel is no longer trusted)",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "wire_send": { "type": "sc", "c": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA", "last": true } },
+      { "wire_expect": { "type": "sc_err", "code": "bad_handshake" } },
+      { "expect_closed": true }
+    ]
+  }
+]

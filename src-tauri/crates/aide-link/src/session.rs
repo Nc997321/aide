@@ -1,10 +1,14 @@
-//! 一条客户端连接的协议状态机：握手 → 认证 → 调用 / 订阅，传输无关。
+//! 一条**已认证**连接上的 Link 协议状态机（传输 / 加密无关）：`hello` → 调用 / 订阅 / 心跳。
 //!
-//! 驱动方（传输适配器，如中继客户端）只做三件事：
-//! 1. 收到一条文本消息 → [`Session::on_text`]；
-//! 2. 隔一小段时间 → [`Session::on_tick`]（心跳、超时、凭据变化）；
-//! 3. 把 [`Session::new`] 时给的 `out` 通道里的 [`HostFrame`] 序列化成文本发出去，
-//!    [`Session::is_closed`] 为真（已发出 `bye` / `hello_err`）后在发完剩余帧后关连接。
+//! 认证发生在更低一层（[`crate::connection::Connection`] 里的 Noise 握手）：能走到这里的客户端
+//! 要么持有已配对的手机密钥，要么刚用二维码里的一次性密钥完成了配对——所以本状态机不再有
+//! 凭据帧。
+//!
+//! 驱动方（[`crate::connection::Connection`]）做三件事：
+//! 1. 收到一个解密后的 Link 帧文本 → [`Session::on_text`]；
+//! 2. 隔一小段时间 → [`Session::on_tick`]（心跳、超时、配对状态变化）；
+//! 3. 把 [`Session::new`] 时给的 `out` 通道里的 [`HostFrame`] 加密发出，[`Session::is_closed`]
+//!    为真（已发出 `bye`）后收尾。
 //!
 //! 并发：`call` 在独立任务里跑（慢命令不堵后续帧），应答经同一条 `out` 通道，所以无序到达是正常的
 //! （客户端按 `id` 对号）。
@@ -17,63 +21,59 @@ use serde_json::Value;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::watch;
 
-use crate::auth::{Change, Credentials};
 use crate::backend::{Backend, Subscription};
 use crate::catalog::{Catalog, LINK_DESCRIBE, LINK_UNPAIR};
-use crate::frame::{
-    ClientFrame, ErrorCode, HostFrame, Limits, MAX_FRAME_BYTES, MAX_IN_FLIGHT, SUPPORTED_VERSIONS,
-};
+use crate::frame::{ClientFrame, ErrorCode, HostFrame, Limits, MAX_FRAME_BYTES, MAX_IN_FLIGHT};
+use crate::identity::{Change, Identity};
 
 /// Host 在连接空闲这么久后主动发 `ping`。
 pub const PING_AFTER: Duration = Duration::from_secs(25);
 /// 超过这么久没收到客户端任何帧 → `bye{timeout}`。
 pub const DEAD_AFTER: Duration = Duration::from_secs(75);
-/// 单连接允许的认证失败次数。
-pub const MAX_AUTH_FAILURES: u32 = 5;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Stage {
     /// 还没收到 `hello`。
     New,
-    /// 已协商版本，未认证。
-    Greeted,
-    Authed,
+    Ready,
 }
 
 pub struct Session {
     backend: Arc<dyn Backend>,
-    creds: Arc<Credentials>,
+    identity: Arc<Identity>,
+    version: u32,
     out: UnboundedSender<HostFrame>,
     stage: Stage,
     closed: bool,
     sub: Option<Box<dyn Subscription>>,
     in_flight: Arc<AtomicUsize>,
-    auth_failures: u32,
     last_rx: Instant,
     last_ping: Instant,
     ping_n: u64,
-    /// 认证成功时的凭据代数 + 变化通道：之后 token 被顶替 / 撤销就踢本连接。
-    authed_gen: u64,
+    /// 建立连接时的配对状态代数 + 变化通道：之后被顶替 / 撤销就踢本连接。
+    established_gen: u64,
     changes: watch::Receiver<(u64, Change)>,
 }
 
 impl Session {
-    pub fn new(backend: Arc<dyn Backend>, creds: Arc<Credentials>, out: UnboundedSender<HostFrame>) -> Self {
+    /// `version` = 安全通道握手里协商好的协议版本。
+    pub fn new(backend: Arc<dyn Backend>, identity: Arc<Identity>, version: u32, out: UnboundedSender<HostFrame>) -> Self {
         let now = Instant::now();
-        let changes = creds.watch();
+        let changes = identity.watch();
+        let established_gen = identity.generation();
         Self {
             backend,
-            creds,
+            identity,
+            version,
             out,
             stage: Stage::New,
             closed: false,
             sub: None,
             in_flight: Arc::new(AtomicUsize::new(0)),
-            auth_failures: 0,
             last_rx: now,
             last_ping: now,
             ping_n: 0,
-            authed_gen: 0,
+            established_gen,
             changes,
         }
     }
@@ -95,7 +95,7 @@ impl Session {
         }
     }
 
-    /// 收到一条文本消息（一帧）。
+    /// 收到一个（已解密的）Link 帧。
     pub async fn on_text(&mut self, text: &str) {
         if self.closed {
             return;
@@ -104,14 +104,14 @@ impl Session {
         if text.len() > MAX_FRAME_BYTES {
             return self.close(ErrorCode::TooLarge, "frame exceeds the size limit");
         }
-        self.check_credentials();
+        self.check_pairing();
         if self.closed {
             return;
         }
         let frame: ClientFrame = match serde_json::from_str(text) {
             Ok(f) => f,
             Err(e) => {
-                // 握手前的乱码 = 不是我们的客户端，直接断；握手后只回错误、连接继续
+                // hello 之前的乱码 = 不是我们的客户端，直接断；之后只回错误、连接继续
                 if self.stage == Stage::New {
                     return self.close(ErrorCode::ProtocolError, "first frame must be `hello`");
                 }
@@ -119,40 +119,37 @@ impl Session {
             }
         };
         match (self.stage, frame) {
-            (Stage::New, ClientFrame::Hello { versions, .. }) => self.on_hello(&versions),
+            (Stage::New, ClientFrame::Hello { .. }) => {
+                self.stage = Stage::Ready;
+                self.send(HostFrame::HelloOk {
+                    version: self.version,
+                    host: self.backend.host(),
+                    granted: Catalog::granted(),
+                    limits: Limits { max_frame_bytes: MAX_FRAME_BYTES, max_in_flight: MAX_IN_FLIGHT },
+                });
+            }
             (Stage::New, _) => self.close(ErrorCode::ProtocolError, "first frame must be `hello`"),
-            (_, ClientFrame::Hello { .. }) => {
+            (Stage::Ready, ClientFrame::Hello { .. }) => {
                 self.send(HostFrame::error(None, ErrorCode::InvalidFrame, "already greeted"))
             }
             (_, ClientFrame::Ping { n }) => self.send(HostFrame::Pong { n }),
             (_, ClientFrame::Pong { .. }) => {}
-            (Stage::Greeted, ClientFrame::Pair { code, .. }) => self.on_pair(&code),
-            (Stage::Greeted, ClientFrame::Auth { token }) => self.on_auth(&token),
-            (Stage::Greeted, ClientFrame::Call { id, .. }) => {
-                self.send(HostFrame::error(Some(id), ErrorCode::Unauthenticated, "pair or auth first"))
-            }
-            (Stage::Greeted, ClientFrame::Subscribe { .. } | ClientFrame::Unsubscribe) => {
-                self.send(HostFrame::error(None, ErrorCode::Unauthenticated, "pair or auth first"))
-            }
-            (Stage::Authed, ClientFrame::Pair { .. } | ClientFrame::Auth { .. }) => {
-                self.send(HostFrame::error(None, ErrorCode::InvalidFrame, "already authenticated"))
-            }
-            (Stage::Authed, ClientFrame::Call { id, method, params }) => self.on_call(id, method, params),
-            (Stage::Authed, ClientFrame::Subscribe { sessions, since }) => {
+            (Stage::Ready, ClientFrame::Call { id, method, params }) => self.on_call(id, method, params),
+            (Stage::Ready, ClientFrame::Subscribe { sessions, since }) => {
                 // 再订 = 替换：先放掉旧的（要无缝请带 `since`）
                 self.sub = None;
                 self.sub = Some(self.backend.attach_events(self.out.clone(), sessions, since));
             }
-            (Stage::Authed, ClientFrame::Unsubscribe) => self.sub = None,
+            (Stage::Ready, ClientFrame::Unsubscribe) => self.sub = None,
         }
     }
 
-    /// 周期性维护：心跳 / 超时 / 凭据变化。驱动方约每秒调一次。
+    /// 周期性维护：心跳 / 超时 / 配对状态变化。驱动方约每秒调一次。
     pub fn on_tick(&mut self, now: Instant) {
         if self.closed {
             return;
         }
-        self.check_credentials();
+        self.check_pairing();
         if self.closed {
             return;
         }
@@ -166,75 +163,15 @@ impl Session {
         }
     }
 
-    /// 已认证的连接：凭据换代了（被新设备顶替 / 被撤销）就踢掉自己。
-    fn check_credentials(&mut self) {
-        if self.stage != Stage::Authed || self.creds.generation() == self.authed_gen {
+    /// 配对状态换代了（被新设备顶替 / 被撤销）就踢掉自己。
+    fn check_pairing(&mut self) {
+        if self.identity.generation() == self.established_gen {
             return;
         }
         let (_, change) = *self.changes.borrow();
         match change {
             Change::Superseded => self.close(ErrorCode::Superseded, "another device paired with this Host"),
             _ => self.close(ErrorCode::Revoked, "pairing was revoked"),
-        }
-    }
-
-    fn on_hello(&mut self, versions: &[u32]) {
-        let chosen = versions.iter().copied().filter(|v| SUPPORTED_VERSIONS.contains(v)).max();
-        match chosen {
-            Some(version) => {
-                self.stage = Stage::Greeted;
-                self.send(HostFrame::HelloOk {
-                    version,
-                    host: self.backend.host(),
-                    auth: vec!["pair".into(), "token".into()],
-                    limits: Limits { max_frame_bytes: MAX_FRAME_BYTES, max_in_flight: MAX_IN_FLIGHT },
-                });
-            }
-            None => {
-                self.send(HostFrame::HelloErr { code: ErrorCode::UnsupportedVersion, supported: SUPPORTED_VERSIONS.to_vec() });
-                self.closed = true;
-            }
-        }
-    }
-
-    fn auth_failed(&mut self, code: ErrorCode, message: &str) {
-        self.auth_failures += 1;
-        self.send(HostFrame::AuthError { code, message: message.to_string() });
-        if self.auth_failures >= MAX_AUTH_FAILURES {
-            self.close(ErrorCode::TooManyAttempts, "too many failed attempts");
-        }
-    }
-
-    fn on_pair(&mut self, code: &str) {
-        match self.creds.pair(code) {
-            Ok(token) => {
-                self.authed_gen = self.creds.generation();
-                self.stage = Stage::Authed;
-                self.send(HostFrame::Paired {
-                    device_id: self.creds.device_id().to_string(),
-                    token,
-                    granted: Catalog::granted(),
-                });
-            }
-            Err(c) => {
-                let msg = match c {
-                    ErrorCode::ExpiredCode => "配对码已过期",
-                    ErrorCode::TooManyAttempts => "配对码错误次数过多，已作废",
-                    ErrorCode::BadCode => "配对码无效",
-                    _ => "配对失败",
-                };
-                self.auth_failed(c, msg);
-            }
-        }
-    }
-
-    fn on_auth(&mut self, token: &str) {
-        if self.creds.verify(token) {
-            self.authed_gen = self.creds.generation();
-            self.stage = Stage::Authed;
-            self.send(HostFrame::Authed { granted: Catalog::granted() });
-        } else {
-            self.auth_failed(ErrorCode::BadToken, "token 无效");
         }
     }
 
@@ -245,11 +182,11 @@ impl Session {
         }
         if method == LINK_UNPAIR {
             self.send(HostFrame::Result { id, value: Value::Null });
-            if let Err(e) = self.creds.revoke() {
+            if let Err(e) = self.identity.revoke() {
                 tracing::warn!("link.unpair: revoke failed: {e}");
             }
-            // 凭据换代 → 紧跟在应答之后踢掉本连接（bye{revoked}）
-            self.check_credentials();
+            // 配对换代 → 紧跟在应答之后踢掉本连接（bye{revoked}）
+            self.check_pairing();
             return;
         }
         if Catalog::group_of(&method).is_none() {

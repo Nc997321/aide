@@ -1,11 +1,42 @@
 [
   {
+    "name": "the first Link frame must be hello",
+    "steps": [
+      { "send": { "type": "call", "id": 1, "method": "list_sessions", "params": {} } },
+      { "expect": { "type": "bye", "code": "protocol_error", "message": "<string>" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "ping is answered with the same n; a second hello is rejected but harmless",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "ping", "n": 41 } },
+      { "expect": { "type": "pong", "n": 41 } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "error", "code": "invalid_frame" } },
+      { "send": { "type": "ping", "n": 42 } },
+      { "expect": { "type": "pong", "n": 42 } }
+    ]
+  },
+  {
+    "name": "an idle client is pinged, and a silent one is dropped",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "tick_secs": 30 },
+      { "expect": { "type": "ping", "n": "<number>" } },
+      { "tick_secs": 80 },
+      { "expect": { "type": "bye", "code": "timeout" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
     "name": "results and failures are typed; unknown methods are refused",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed" } },
       { "send": { "type": "call", "id": 1, "method": "set_model", "params": { "sessionId": "s1", "model": "nope" } } },
       { "expect": { "type": "error", "id": 1, "code": "failed", "message": "model not found" } },
       { "send": { "type": "call", "id": 2, "method": "write_file_content", "params": { "path": "/etc/passwd", "content": "" } } },
@@ -21,10 +52,8 @@
   {
     "name": "send_message without a permissionMode gets the Host's remote default; an explicit one wins",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed" } },
       { "send": { "type": "call", "id": 1, "method": "send_message", "params": { "sessionId": "s1", "prompt": "hi" } } },
       { "expect": { "type": "result", "id": 1, "value": { "sessionId": "s1", "prompt": "hi", "permissionMode": "acceptEdits" } } },
       { "send": { "type": "call", "id": 2, "method": "send_message", "params": { "sessionId": "s1", "prompt": "hi", "permissionMode": "plan" } } },
@@ -36,10 +65,8 @@
   {
     "name": "calls run concurrently: a slow call does not block a fast one, answers arrive by id",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed" } },
       { "send": { "type": "call", "id": 1, "method": "load_messages", "params": { "sessionId": "s1" } } },
       { "send": { "type": "call", "id": 2, "method": "list_sessions", "params": {} } },
       { "expect": { "type": "result", "id": 2, "value": ["s1", "s2"] } },
@@ -49,10 +76,8 @@
   {
     "name": "link.describe is the machine-readable catalog",
     "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
+      { "send": { "type": "hello" } },
       { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed" } },
       { "send": { "type": "call", "id": 1, "method": "link.describe", "params": {} } },
       { "expect": { "type": "result", "id": 1, "value": {
           "version": 1,
@@ -63,19 +88,6 @@
             { "name": "system-notification", "session_routed": false },
             { "name": "permissions-changed", "session_routed": false }
           ] } } }
-    ]
-  },
-  {
-    "name": "link.unpair: the device removes itself; the Host answers, then ends the connection",
-    "steps": [
-      { "send": { "type": "hello", "versions": [1] } },
-      { "expect": { "type": "hello_ok" } },
-      { "send": { "type": "auth", "token": "test-token" } },
-      { "expect": { "type": "authed" } },
-      { "send": { "type": "call", "id": 1, "method": "link.unpair", "params": {} } },
-      { "expect": { "type": "result", "id": 1, "value": null } },
-      { "expect": { "type": "bye", "code": "revoked" } },
-      { "expect_closed": true }
     ]
   }
 ]

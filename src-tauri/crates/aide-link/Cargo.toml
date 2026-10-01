@@ -13,6 +13,13 @@ serde_json = "1"
 tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
 rand = "0.8"
 tracing = "0.1"
+# 安全通道：Noise（IK / IKpsk2，X25519 + ChaChaPoly + SHA256）。默认解析器 = 纯 Rust（RustCrypto），
+# 不引入任何系统 C 库，aide-host 的 musl 静态链接不受影响。
+snow = "0.9"
+base64 = "0.22"
+# X25519 公钥推导（snow 的默认解析器本来就带它，不新增第二份）
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+percent-encoding = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }
