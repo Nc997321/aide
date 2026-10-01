@@ -1,8 +1,10 @@
 //! 与一台目标机上 `aide-host serve` 的长连接：请求-响应 + 通知回推。
 //!
 //! 生命周期：连接由 [`super::RemoteWorkspaces`] 按主机懒建、复用；子进程退出（WSL
-//! 关机 / 网络断）→ 所有挂起请求立即以「连接已断开」失败，`alive` 置 false，下一次
-//! 调用由注册表重连。**不做静默重试**——远程操作失败必须让用户看见。
+//! 关机 / 网络断）→ 所有挂起请求立即以「连接已断开」失败，`alive` 置 false，并回调
+//! `on_closed`（注册表据此把这台 Host 标成「已断开」、通知它的窗口）。**不做静默重试、
+//! 也不静默重连**——重连会拉起全新的 serve（Host 上进行中的会话已随旧 serve 收掉），
+//! 必须由用户显式发起。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -26,6 +28,8 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(180);
 
 type Pending = Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>;
 pub type EventHandler = Arc<dyn Fn(&HostId, Notification) + Send + Sync>;
+/// 连接的子进程退出（stdout EOF）时调用一次，带可读的断开原因。
+pub type ClosedHandler = Arc<dyn Fn(&HostId, &str) + Send + Sync>;
 
 pub struct HostConnection {
     pub host: HostId,
@@ -45,6 +49,7 @@ impl HostConnection {
         mut cmd: tokio::process::Command,
         init: &ServeInit,
         on_event: EventHandler,
+        on_closed: ClosedHandler,
     ) -> Result<Arc<Self>, String> {
         let mut child = cmd
             .spawn()
@@ -99,6 +104,7 @@ impl HostConnection {
                 for (_, tx) in pending.lock().unwrap_or_else(PoisonError::into_inner).drain() {
                     let _ = tx.send(Err(msg.clone()));
                 }
+                on_closed(&host, &msg);
             });
         }
 

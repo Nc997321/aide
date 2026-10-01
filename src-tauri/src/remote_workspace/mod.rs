@@ -55,6 +55,10 @@ pub struct RemoteWorkspaces {
     /// 按主机的建连单飞锁：并发的首个请求只触发一次安装 + 握手。
     connecting: Mutex<HashMap<HostId, Arc<TokioMutex<()>>>>,
     status: Mutex<HashMap<HostId, HostStatus>>,
+    /// 连接**意外断开**的 Host → 断开原因。在表里 = 等用户显式重连：[`connection`](Self::connection)
+    /// 拒绝懒重连（重连 = 全新的 serve，Host 上进行中的会话早已随旧 serve 收掉，静默重连会让
+    /// 用户以为会话还在），只有 [`connect`](Self::connect) 与 [`disconnect`](Self::disconnect) 清它。
+    dropped: Mutex<HashMap<HostId, String>>,
 }
 
 impl RemoteWorkspaces {
@@ -92,12 +96,16 @@ impl RemoteWorkspaces {
             .collect()
     }
 
-    /// 取（必要时建立）到目标机的连接。首次会安装远程套件。
+    /// 取（必要时建立）到目标机的连接。首次会安装远程套件。**意外断开的 Host 不在这里重连**
+    /// （见 `dropped`）：如实报断开，由用户经 [`connect`](Self::connect) 显式重连。
     pub async fn connection(&self, host: &HostId) -> Result<Arc<HostConnection>, String> {
         if let Some(c) = self.conns.lock().await.get(host) {
             if c.is_alive() {
                 return Ok(Arc::clone(c));
             }
+        }
+        if let Some(reason) = self.dropped_reason(host) {
+            return Err(format!("{reason}。请重新连接"));
         }
         let gate = {
             let mut m = self.connecting.lock().unwrap_or_else(PoisonError::into_inner);
@@ -123,6 +131,34 @@ impl RemoteWorkspaces {
         }
     }
 
+    /// 用户显式（重新）连接：清掉「已断开」标记，丢掉死连接，走完整的建连流程。
+    pub async fn connect(&self, host: &HostId) -> Result<Arc<HostConnection>, String> {
+        self.dropped.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+        let stale = self.conns.lock().await.remove(host);
+        drop(stale);
+        self.connection(host).await
+    }
+
+    fn dropped_reason(&self, host: &HostId) -> Option<String> {
+        self.dropped.lock().unwrap_or_else(PoisonError::into_inner).get(host).cloned()
+    }
+
+    /// 连接的子进程退出。**只有「它仍是登记在册的那条、且确已死」才算意外断开**：用户主动
+    /// `disconnect`（连接已被摘掉）与已被新连接替换的旧连接都不算。返回是否记为意外断开
+    /// （调用方据此通知这台 Host 的窗口）。
+    pub async fn on_closed(&self, host: &HostId, reason: &str) -> bool {
+        let dead = matches!(self.conns.lock().await.get(host), Some(c) if !c.is_alive());
+        if !dead {
+            return false;
+        }
+        self.dropped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(host.clone(), reason.to_string());
+        self.set_status(host, "disconnected", Some(reason.to_string()), None);
+        true
+    }
+
     async fn establish(&self, host: &HostId) -> Result<Arc<HostConnection>, String> {
         let app = self.app()?.clone();
         self.set_status(host, "installing", None, None);
@@ -140,16 +176,19 @@ impl RemoteWorkspaces {
             claude_exe: Some(inst.claude_exe.clone()),
         };
         let app_for_events = app.clone();
+        let app_for_close = app.clone();
         HostConnection::start(
             host.clone(),
             cmd,
             &init,
             Arc::new(move |h: &HostId, n: Notification| on_host_event(&app_for_events, h, n)),
+            Arc::new(move |h: &HostId, reason: &str| on_host_closed(&app_for_close, h, reason)),
         )
         .await
     }
 
     pub async fn disconnect(&self, host: &HostId) {
+        self.dropped.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
         self.conns.lock().await.remove(host);
         self.set_status(host, "disconnected", None, None);
     }
@@ -167,6 +206,25 @@ fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
         }
     }
     crate::host_window::emit_to_host(app, host, &n.event, &n.payload);
+}
+
+/// serve 的子进程退出：登记为意外断开，并告诉这台 Host 的窗口——runtime 随 serve 一起没了，
+/// 不会再有 `session_dead` 来收掉正忙的会话，前端靠这一帧（与本机 runtime 死亡同一事件）收尾。
+fn on_host_closed(app: &AppHandle, host: &HostId, reason: &str) {
+    let app = app.clone();
+    let host = host.clone();
+    let reason = reason.to_string();
+    tauri::async_runtime::spawn(async move {
+        let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
+        if svc.on_closed(&host, &reason).await {
+            let payload = serde_json::json!({
+                "type": "runtime_dead",
+                "reason": "host_disconnected",
+                "detail": reason,
+            });
+            crate::host_window::emit_to_host(&app, &host, "chat-event", &payload);
+        }
+    });
 }
 
 // ── Tauri 命令（连接管理 UI） ─────────────────────────────────────────────────
@@ -198,7 +256,8 @@ pub async fn remote_ws_connect(
     svc: tauri::State<'_, Arc<RemoteWorkspaces>>,
 ) -> Result<HostStatus, String> {
     let id = HostId::parse_key(&host).ok_or_else(|| format!("非法主机标识：{host}"))?;
-    let c = svc.connection(&id).await?;
+    // 显式连接 = 也是「重新连接」的入口：清掉断开标记、丢掉死连接，从头建一条。
+    let c = svc.connect(&id).await?;
     Ok(HostStatus {
         host: id.key(),
         label: id.label(),
@@ -227,4 +286,49 @@ pub fn manage(app: &tauri::App) {
     let svc = Arc::new(RemoteWorkspaces::default());
     svc.attach(app.handle().clone());
     app.manage(svc);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 意外断开的 Host：`connection()` 拒绝静默重连并给出原因；显式 `connect()` 清掉标记、
+    /// 走到真正的建连（测试里没有 AppHandle，所以停在「未挂载」——证明过了闸门）。
+    #[tokio::test]
+    async fn dropped_host_is_not_reconnected_silently() {
+        let ws = RemoteWorkspaces::default();
+        let host = HostId::Wsl("Debian".into());
+        ws.dropped
+            .lock()
+            .unwrap()
+            .insert(host.clone(), "与 WSL: Debian 的连接已断开".into());
+
+        let err = ws.connection(&host).await.err().unwrap();
+        assert!(err.contains("已断开") && err.contains("请重新连接"), "{err}");
+        // 反复调用也不会悄悄重连
+        assert!(ws.connection(&host).await.err().unwrap().contains("请重新连接"));
+
+        let err = ws.connect(&host).await.err().unwrap();
+        assert!(err.contains("not attached"), "explicit connect must pass the gate: {err}");
+        assert!(ws.dropped_reason(&host).is_none(), "explicit connect clears the mark");
+    }
+
+    /// 用户主动断开 = 一次干净的重新开始：断开标记一并清掉。
+    #[tokio::test]
+    async fn disconnect_clears_the_dropped_mark() {
+        let ws = RemoteWorkspaces::default();
+        let host = HostId::Wsl("Debian".into());
+        ws.dropped.lock().unwrap().insert(host.clone(), "x".into());
+        ws.disconnect(&host).await;
+        assert!(ws.dropped_reason(&host).is_none());
+    }
+
+    /// 连接已被摘掉（主动断开）后迟到的 EOF 回调，不能被当成意外断开。
+    #[tokio::test]
+    async fn on_closed_ignores_connections_that_are_no_longer_registered() {
+        let ws = RemoteWorkspaces::default();
+        let host = HostId::Wsl("Debian".into());
+        assert!(!ws.on_closed(&host, "late EOF").await);
+        assert!(ws.dropped_reason(&host).is_none());
+    }
 }

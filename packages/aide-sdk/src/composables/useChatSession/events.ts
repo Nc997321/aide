@@ -200,7 +200,36 @@ function blocksFromDisplay(
   return mapped.length ? mapped : text ? [{ type: "text", text }] : [];
 }
 
+/**
+ * Agent 运行时整体没了（Rust 侧合成，无 session_id）：本机 runtime 进程退出，或远程 Host 的
+ * 连接断开（`reason: "host_disconnected"`，runtime 随 serve 一起收掉）。没有任何
+ * `session_dead` 会再来，所以在这里对**每个正忙的会话**走与 `session_dead` 同一套收尾——
+ * 否则流式气泡与忙碌态会永远挂着。闲置会话不动：它们没有进行中的轮次，下一条消息会重新拉起运行时。
+ */
+function handleRuntimeDead(e: Record<string, unknown>): void {
+  const { setSessionState } = useSessionState();
+  const reason = e["reason"] as string | undefined;
+  const detail = e["detail"] as string | undefined;
+  const label =
+    reason === "host_disconnected" ? "与 Host 的连接已断开，会话进程已终止" : "Agent 运行时已退出";
+  for (const [sid, store] of Object.entries(stores)) {
+    if (disposedSids.has(sid) || !store.isBusy) continue;
+    resetRuntimeState(store);
+    store.messages.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      blocks: [{ type: "text", text: detail ? `${label}\n${detail}` : label }],
+      timestamp: Date.now(),
+    });
+    setSessionState(sid, "stopped");
+  }
+}
+
 export function handleChatEvent(e: Record<string, unknown>): void {
+  if (e["type"] === "runtime_dead") {
+    handleRuntimeDead(e);
+    return;
+  }
   // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
   if (e["type"] === "builtin_hooks_manifest") {
     builtinHooks.value = (e["manifest"] as BuiltinHookManifest[]) ?? [];

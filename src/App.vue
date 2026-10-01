@@ -34,6 +34,7 @@ import { useCallHierarchy } from "./composables/useCallHierarchy";
 import PermissionsPanel from "./components/permissions/PermissionsPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
+import HostConnectionBanner from "./components/HostConnectionBanner.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
 import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
@@ -1016,6 +1017,9 @@ onUnmounted(() => {
       @open-workbench="wb.toggle()"
       @open-settings-providers="openSettingsProviders"
     />
+
+    <!-- Host 窗口：连接意外断开时如实说明并给「重新连接」；本机窗口不渲染 -->
+    <HostConnectionBanner />
 
     <div
       class="app-layout"

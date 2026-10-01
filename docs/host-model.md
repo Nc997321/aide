@@ -1,6 +1,6 @@
 # Host 模型：后端整体跑在 Host 上，GUI 只是屏幕
 
-> 状态：P0、P1（含 P1e）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个。旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已整体删除（P1d）。下一步见 §3 的 P2 / P3。
+> 状态：P0、P1（含 P1e）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个。旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已整体删除（P1d）。下一步见 §3 的 P2c / P2d / P3。
 
 ## 1. 产品模型
 
@@ -63,7 +63,10 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 | P1c | 前端与跨界动作：打开目录对话框——本窗口 Host 的目录就地选（Host 窗口列 Host 自己的文件系统），别的机器 =「在新窗口中打开」（`open_host_window`，可带 Host 原生目录，新窗口经 `?openFolder=` / `host-open-folder` 直接打开）；旧版登记的 `\\wsl.localhost\…` 工作区点开即进它的 Host 窗口；标题栏标 Host；终端 shell 名与 xterm 的 ConPTY 判定跟 Host 的系统走；供应商设置里「从本机复制供应商」（按 id 合并，本机覆盖同 id，含密钥）；「用本机程序打开 / 在资源管理器中显示」对 WSL 路径做翻译、SSH 如实拒绝；剪贴板文件 / 粘贴截图 / 拖入的本机文件经 `upload_local_files` 上传到 Host 暂存（`stage_dropped_file` 成为 core 命令）；Host 的 agent 用内嵌浏览器见 P1e | ✅ 2026-09-30 |
 | P1d | 删除旧模型：`routes.rs`、车道（`lanes.rs` + `runtime::ports::{LaneRouter,LaneAdapter}`）、`lsp_bridge` / `lsp_pipe` + `lsp::remote`、`sessions.rs` 路由、扩展镜像 `mirror.rs`、终端远程钩子、「目录还在吗」注入钩子、UNC 路径互译；aide-host 的 `agent` / `lsp` 模式与 `transcript_*` / `lsp_detect` 命令（协议 v4：`invoke` 去掉 `root`）。真机 e2e 改为全部经 serve：工作区操作 + 上传暂存、一轮真实会话、Host 里的 rust-analyzer（文档符号 + 跳定义）。旧版登记的 UNC 工作区条目点开进它的 Host 窗口 | ✅ 2026-09-30 |
 | P1e | 内嵌浏览器按窗口分属：`BrowserFacade::new(app, 窗口)` 作用域到调用窗口，注册表记每个视图的属主（别窗口的 id = 不存在，列表 / 读写 / 引擎 IO 都先认属主），`browser-nav/view/focus` 一律 `emit_to(属主窗口)`，前端 `useEmbeddedBrowser` 改窗口作用域监听，窗口销毁回收名下视图；Host 窗口里 agent 的 `browser_query` 在连着那台 Host 的窗口里执行（`browser_agent::answer`）、经 `agent_tool_result` 回到 Host；本机 Host 的 agent 用主窗口（`LOCAL_WINDOW`） | ✅ 2026-09-30 |
-| P2 | SSH Host、断线重连与事件回放、Host 选择启动页（各 Host 最近项目） | |
+| P2a | SSH 真机验证：安装 / serve 握手 / fs · 上传 · 监听 · git / Host 里的 rust-analyzer 经真实 SSH 全部通过（e2e 用例按 `AIDE_E2E_SSH` / `AIDE_E2E_WSL` 选目标）。**已知缺口：SSH 不转发桌面回环代理**（服务器到不了桌面的 127.0.0.1），目标机无直连网络时 agent 一轮会话 403——见下方「SSH 代理」 | ✅ 2026-09-30 |
+| P2b | 断线可见 + 手动重连：`HostConnection` 的 `on_closed` 回调 → 注册表把 Host 标成「已断开」（`dropped`），**不再静默懒重连**（重连 = 全新 serve，进行中的会话早已随旧 serve 收掉）；`remote-workspace-status` 事件 + 合成 `runtime_dead` 帧投给该 Host 的窗口；SDK 的 `runtime_dead` 处理收掉所有正忙会话（本机 runtime 死亡同样受益）；Host 窗口顶部状态条「重新连接」= 显式连接 + 重载窗口 | ✅ 2026-09-30 |
+| P2c | Host 选择启动页（各 Host 最近项目） | |
+| P2d | 断线重连保住 Host 上的会话 + 事件回放（需要常驻 Host，随 P3 的守护进程） | |
 | P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |
 
 
@@ -73,3 +76,11 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 2. 需要工作区根：参数收可选 `cwd`，用 `core.workspace.root_for(cwd)`（进程 cwd 类）或 `active_root()`（展示 / 索引类，绝不回退家目录）。
 3. 删掉桌面对应的 `#[tauri::command]` 与 `generate_handler!` 条目。aide-host 自动获得该命令。
 4. 需要 GUI 能力（弹窗、剪贴板、本机程序、内嵌浏览器）的不是 Host 命令：留在桌面，跨界处显式（见 `src/host_window.rs`）。
+
+## 5. SSH 代理（待拍板）
+
+WSL 窗口的 Host 能出网，是因为桌面把本机代理（loopback）改写成 WSL 默认网关地址注入 Host 环境；
+SSH 目标上没有通往桌面回环的路，`install::host_env` 只能丢弃 loopback 代理。目标机本身没有直连网络
+（或所在网络被 API 拒绝）时，Host 里的 agent 会因 403 / 超时起不来。可选做法：
+`ssh -R 127.0.0.1:<远端端口>:127.0.0.1:<本机代理端口>` 把代理反向转进目标机——注意目标机上的
+其他用户也能连到这个转发端口（共享服务器上是安全面扩大），且安装阶段（逐条 ssh）与 serve 长连接都要带。

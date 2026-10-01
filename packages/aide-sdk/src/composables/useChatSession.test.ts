@@ -469,6 +469,31 @@ describe("useChatSession per-session store", () => {
     expect(chat.isBusy.value).toBe(false);
   });
 
+  it("runtime_dead（无 session_id）收掉所有正忙的会话，闲置会话不动", async () => {
+    const { state } = useSessionState();
+    const busySid = ref<string | null>("uuid-a");
+    const busy = useChatSession(busySid);
+    const idleSid = ref<string | null>("uuid-b");
+    const idle = useChatSession(idleSid);
+    await flush();
+    await busy.sendMessage("q");
+    expect(busy.isBusy.value).toBe(true);
+    const idleBefore = state["uuid-b"];
+
+    emit({ type: "runtime_dead", reason: "host_disconnected", detail: "与 SSH: devbox 的连接已断开" });
+    await flush();
+
+    expect(busy.isBusy.value).toBe(false);
+    expect(state["uuid-a"]).toBe("stopped");
+    const last = busy.messages.value[busy.messages.value.length - 1];
+    const text = last.blocks.map((b) => ("text" in b ? b.text : "")).join("");
+    expect(text).toContain("连接已断开");
+    expect(text).toContain("SSH: devbox");
+    // 闲置会话：没有进行中的轮次，状态与消息都不被改写
+    expect(state["uuid-b"]).toBe(idleBefore);
+    expect(idle.messages.value).toHaveLength(0);
+  });
+
   it("并行工具调用的多条 permission_request 排队逐条确认，不互相覆盖（P0 并行权限卡死回归）", async () => {
     const { state } = useSessionState();
     const sid = ref<string | null>("uuid-a");

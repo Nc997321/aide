@@ -78,6 +78,7 @@ async fn host_install_connect_and_workspace_ops() {
         serve_cmd(&host, &inst, None),
         &serve_init(&host, &inst, None).await,
         Arc::new(move |_h: &HostId, n: Notification| sink.lock().unwrap().push(n)),
+        Arc::new(|_h: &HostId, _r: &str| {}),
     )
     .await
     .expect("connect");
@@ -156,6 +157,7 @@ async fn host_serve_runs_a_language_server() {
         serve_cmd(&host, &inst, None),
         &serve_init(&host, &inst, None).await,
         Arc::new(|_h: &HostId, _n: Notification| {}),
+        Arc::new(|_h: &HostId, _r: &str| {}),
     )
     .await
     .expect("connect");
@@ -272,6 +274,7 @@ async fn host_serve_runs_a_chat_round() {
                 let _ = tx.send(n.payload);
             }
         }),
+        Arc::new(|_h: &HostId, _r: &str| {}),
     )
     .await
     .expect("connect");
@@ -321,4 +324,57 @@ async fn host_serve_runs_a_chat_round() {
     println!("tool output: {tool_output}");
     assert!(tool_output.contains("Linux"), "Bash did not run on the Host: {tool_output}");
     assert!(tool_output.contains(&cwd), "cwd not honoured on the Host: {tool_output}");
+}
+
+/// 连接意外断开：serve 被杀（等同网络断 / 目标机重启）→ ①挂起与后续调用立即以「连接已断开」
+/// 失败 ②`on_closed` 恰好回调一次、带可读原因 ③`is_alive` 翻 false。注册表据 ②标记「已断开」、
+/// 拒绝静默重连（见 `RemoteWorkspaces::connection`），这里只验连接层的信号。
+#[tokio::test]
+#[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）与 pnpm build:remote-kit"]
+async fn host_connection_reports_an_unexpected_drop() {
+    let host = target();
+    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+
+    // serve 自己写下 pid 再 exec——杀的只能是**这条**连接的进程（`exec` 保持 pid 不变），
+    // 不会误伤同机别的 Host 窗口正在用的 serve。
+    let pid_file = format!("/tmp/aide-e2e-drop-{}.pid", std::process::id());
+    let serve = launcher::command(
+        &host,
+        &format!("echo $$ > {}; exec {} serve", launcher::sh_quote(&pid_file), launcher::sh_quote(&inst.host_bin)),
+    )
+    .unwrap();
+
+    let closed: Arc<Mutex<Vec<String>>> = Arc::default();
+    let sink = Arc::clone(&closed);
+    let conn = HostConnection::start(
+        host.clone(),
+        serve,
+        &serve_init(&host, &inst, None).await,
+        Arc::new(|_h: &HostId, _n: Notification| {}),
+        Arc::new(move |_h: &HostId, r: &str| sink.lock().unwrap().push(r.to_string())),
+    )
+    .await
+    .expect("connect");
+    assert!(conn.is_alive());
+    assert!(closed.lock().unwrap().is_empty(), "no callback while healthy");
+
+    // 杀掉**这条**连接的 serve（等同网络断 / 目标机重启）。
+    let kill = format!("kill -9 $(cat {pid}); rm -f {pid}", pid = launcher::sh_quote(&pid_file));
+    let out = launcher::command(&host, &kill).unwrap().output().await.expect("kill serve");
+    assert!(out.status.success(), "kill: {}", String::from_utf8_lossy(&out.stderr));
+
+    let mut waited = 0;
+    while conn.is_alive() && waited < 100 {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        waited += 1;
+    }
+    assert!(!conn.is_alive(), "connection should notice the drop");
+    // on_closed 在 pending 清完之后回调：再让出一拍
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let reasons = closed.lock().unwrap().clone();
+    assert_eq!(reasons.len(), 1, "on_closed fires exactly once: {reasons:?}");
+    assert!(reasons[0].contains("已断开"), "readable reason: {}", reasons[0]);
+
+    let err = conn.invoke("get_project_info", json!({})).await.unwrap_err();
+    assert!(err.contains("已断开"), "calls after the drop fail loudly: {err}");
 }
