@@ -1,6 +1,6 @@
 # Host 模型：后端整体跑在 Host 上，GUI 只是屏幕
 
-> 状态：P0、P1（含 P1e）、P2、P3a（Host 常驻守护进程）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个；远程 Host 是常驻守护进程，连接断了会话还在。下一步见 §3 的 P3b（手机直连 Host）。
+> 状态：P0、P1（含 P1e）、P2、P3a（Host 常驻守护进程）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个；远程 Host 是常驻守护进程，连接断了会话还在。手机直连 Host（Aide Link）已落地，旧桌面网关已退役；手机端迁移由手机端自己推进。
 
 ## 1. 产品模型
 
@@ -71,7 +71,7 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 | P2d / P3a | **Host 常驻守护进程**：`aide-host daemon`（一个用户一个，`flock` 单例，`~/.aide/host/daemon.sock` 0600）持有 Core；`serve` 退为桥（协议 v5）。事件中心 `hub.rs`：全局序号 + 环形缓冲（16MiB / 5 万条）+ 按会话订阅投递；断线重连带 `resume{daemon_id, seq}` 回放错过的事件（缓冲覆盖不到报 `gap`，守护进程换了报 `resumed:false`）。桌面 `RemoteWorkspaces`：桥断 → `reconnecting` 自动退避重连 → 无缝 / `resync`（会话在、界面需重载）/ 断开（Host 重启，会话已没）。空闲退出：无客户端且静默超 `AIDE_HOST_IDLE_SECS`（默认 30 分钟，chat 事件算动静）。真机 e2e：杀桥后接回同一守护进程、断线期间的事件回放、一轮真实会话经守护进程 | ✅ 2026-09-30 |
 | P3b-1 | **Aide Link 协议**（手机 ↔ Host）：`crates/aide-link`——帧（`frame.rs`）、暴露目录（`catalog.rs`，整张表即远程暴露面，`link.describe` 在线可查）、安全通道（`secure.rs`：Noise `IKpsk2` 配对 / `IK` 重连，X25519 + ChaChaPoly，帧分块加密，中继只见密文）、**扫二维码配对**（`identity.rs`：Host 密钥 + 一次性 32 字节 psk + 单设备手机公钥，没有配对码、没有 token）、协议栈 `connection.rs`（握手 → 加密 → 会话）+ 传输无关的会话状态机（`session.rs`：hello → call / subscribe（按会话 + `since` 续传）/ ping / bye）、Host 端口（`Backend` 语义）、参考客户端 `client.rs`。成文规约 [aide-link-protocol.md](aide-link-protocol.md) + TypeScript 声明 `aide-link/frames.d.ts`（对账测试）+ 28 条语言无关对话向量 + 逐字节 Noise 向量（`tests/fixtures/`，手机端可自测）。中继改为只按 `device_id` 路由（P3b-2 改 relay 的 register）。**手机端代码不动**，只交付协议；旧 v2 网关继续服务现有手机端 | ✅ 2026-09-30 |
 | P3b-2 | **Host 侧接入**：事件总线搬进 aide-core（`Core::bus`，`bus.rs`：编号 / 环形缓冲 / 按会话订阅 / 回放；`Core::new` 把前门的 `EventSink` 包一层，本机与远程 Host 共用，aide-host 的桥与 Link 都是总线消费者）；Link 网关在 aide-core（`link/`：`LinkService` 随 `host::start` 启动，身份 / 配对状态落 Host 密钥库，按设置里的 `remote.relayUrl` 出站注册，启用的 Host 不空闲退出；`CoreBackend` 接命令表——目录里每个方法都校验存在于命令表——与总线）；`link_status` / `link_set_enabled` / `link_create_offer`（含 SVG 二维码）/ `link_cancel_offer` / `link_revoke` 是 Host 命令（**不对手机开放**），Host 窗口设置面板的「手机连接」管**那台 Host**的网关；`get_active_workspace` 成为 core 命令；aide-link 传输适配器 `transport/{driver,direct,relay}`（中继适配器的 Connection 可重启——中继重新挂起 Host 连接而不通知）；中继 `register` 的配对码改为可选；本地测试 Host `aide-link/examples/test_host`；真守护进程 + 真中继 + 参考手机的端到端（扫码配对 → 调真实命令 → 撤销被踢） | ✅ 2026-10-01 |
-| P3b-3 | 退役旧 v2 网关（`src-tauri/src/remote/`）——待手机端迁到 Link 之后 | |
+| P3b-3 | **退役旧 v2 网关**（2026-10-01，用户拍板直接退役）：删除 `src-tauri/src/remote/`（auth / protocol / relay_client / rpc / handlers）、`commands/remote.rs` 与四条 `remote_*` Tauri 命令、v2 集成测试；设置里的 `remote.enabled` / `remote.deviceId` 删除（`relayUrl` / `permissionMode` 留给 Link）；`AgentRuntimeManager` 里只给旧网关用的 chat-event 广播通道删除（总线取代）；dev 构建不连中继的闸门挪到桌面前门、经 `LinkService::set_relay_allowed` 交给 Link（`LinkStatus.relaySuppressed` 让面板如实说明）；启动时清掉旧网关留在密钥库里的 `remote/token`；设置面板的旧「配对码 / 吊销设备」整段删除；中继（relay-server）删除配对码路由（`register.pairing_code` 忽略、`update_code` 不再识别、`connect{code}` 恒 `unknown_code`）。**手机端（remote-pwa / ohos / SDK `remote.ts`）未动**——它们说的是已退役的 v2，迁到 Aide Link 之前连不上 | ✅ 2026-10-01 |
 
 
 ## 4. 新增 / 迁移一条命令

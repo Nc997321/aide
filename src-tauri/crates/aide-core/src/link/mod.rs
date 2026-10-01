@@ -12,6 +12,7 @@
 pub mod backend;
 pub mod vault;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use aide_link::secure::{Endpoint, PairingOffer};
@@ -37,6 +38,9 @@ pub struct LinkStatus {
     pub relay_url: String,
     /// 此刻是否已在中继上注册（手机能找到这台 Host）。
     pub connected: bool,
+    /// 本构建被刻意挡住不连中继（桌面 dev 构建，见 [`LinkService::set_relay_allowed`]）。
+    /// 面板必须据此说明，否则「已启用」与「没连上」会同时出现在界面上。
+    pub relay_suppressed: bool,
     pub last_error: String,
     pub device_id: String,
     pub host_name: String,
@@ -65,14 +69,30 @@ struct Inner {
 }
 
 /// Host 的 Link 网关服务。`Core` 持有一份；`start` 前什么都不做。
-#[derive(Default)]
 pub struct LinkService {
     inner: Mutex<Inner>,
+    /// 前门是否允许本进程连中继（默认允许）。桌面 dev 构建关掉它：dev 与安装版共用同一份 Host 密钥库
+    /// （device_id 同源），双双注册会在中继上互踢。
+    relay_allowed: AtomicBool,
 }
+
+impl Default for LinkService {
+    fn default() -> Self {
+        Self { inner: Mutex::new(Inner::default()), relay_allowed: AtomicBool::new(true) }
+    }
+}
+
+/// 旧网关（桌面 v2）留在密钥库里的长期 token：协议已退役，留着只是一把没人用的钥匙，清掉。
+const LEGACY_SECRETS: &[&str] = &["remote/token", "remote/tokenIssuedAt"];
 
 impl LinkService {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 前门声明本进程是否允许连中继（须在 [`start`](Self::start) 之前）。
+    pub fn set_relay_allowed(&self, allowed: bool) {
+        self.relay_allowed.store(allowed, Ordering::Relaxed);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -81,6 +101,9 @@ impl LinkService {
 
     /// Host 启动时调用（`host::start`）：载入 / 生成身份；若上次是启用状态就接上中继。
     pub fn start(&self, core: &Arc<Core>) {
+        for key in LEGACY_SECRETS {
+            let _ = core.settings.secrets().delete(key);
+        }
         if let Err(e) = self.reconcile(core) {
             tracing::warn!("link: start failed: {e}");
         }
@@ -111,7 +134,7 @@ impl LinkService {
     fn reconcile(&self, core: &Arc<Core>) -> Result<(), String> {
         let enabled = self.is_enabled(core);
         let url = Self::relay_url(core);
-        let want = (enabled && !url.is_empty()).then_some(url);
+        let want = (enabled && !url.is_empty() && self.relay_allowed.load(Ordering::Relaxed)).then_some(url);
         let identity = self.identity(core)?; // 总是备好身份（状态面板要显示 device_id）
         let mut inner = self.lock();
         match (&inner.task, &want) {
@@ -141,6 +164,7 @@ impl LinkService {
             relay_configured: !url.is_empty(),
             relay_url: url,
             connected: inner.status.connected(),
+            relay_suppressed: !self.relay_allowed.load(Ordering::Relaxed),
             last_error: inner.status.last_error(),
             device_id: identity.device_id().to_string(),
             host_name: backend::host_name(),
@@ -239,6 +263,32 @@ mod tests {
         assert!(!core.link.status(&core).unwrap().offer_active);
         core.link.set_enabled(&core, false).unwrap();
         assert!(!core.link.status(&core).unwrap().enabled);
+    }
+
+    /// dev 构建的闸门：被挡住时即使启用也不连中继，并如实告诉面板（否则「已启用」却「没连上」）。
+    #[tokio::test]
+    async fn a_suppressed_build_never_registers_with_the_relay_and_says_so() {
+        let core = crate::test_core(Arc::new(NullSink));
+        core.link.set_relay_allowed(false);
+        set_relay(&core, "ws://127.0.0.1:1").await;
+        core.link.set_enabled(&core, true).unwrap();
+        let st = core.link.status(&core).unwrap();
+        assert!(st.enabled && st.relay_suppressed && !st.connected);
+        assert!(core.link.lock().task.is_none(), "no relay task may be running");
+        core.link.set_relay_allowed(true);
+        assert!(!core.link.status(&core).unwrap().relay_suppressed);
+        assert!(core.link.lock().task.is_some(), "allowed again → the gateway registers");
+    }
+
+    /// 旧网关留下的 token 在启动时清掉。
+    #[tokio::test]
+    async fn start_removes_the_legacy_gateway_secrets() {
+        let core = crate::test_core(Arc::new(NullSink));
+        core.settings.secrets().set("remote/token", "old").unwrap();
+        core.settings.secrets().set("remote/tokenIssuedAt", "1").unwrap();
+        core.link.start(&core);
+        assert!(core.settings.secrets().get("remote/token").unwrap().is_none());
+        assert!(core.settings.secrets().get("remote/tokenIssuedAt").unwrap().is_none());
     }
 
     #[tokio::test]

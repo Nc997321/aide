@@ -61,9 +61,6 @@ pub struct AgentRuntimeManager {
     /// stdin（单测里 stdin 永远 None）。生产恒为 false，`sent_commands` 保持空。
     test_mode: bool,
     sent_commands: Arc<Mutex<Vec<Value>>>,
-    /// chat-event 广播：worker 读 sidecar stdout 后同时推这里，网关订阅后经中继
-    /// 推给手机。前端路径（app.emit + poll 缓冲）不动，这是并行新增的扇出。
-    chat_events: tokio::sync::broadcast::Sender<Value>,
     /// Windows Job Object（`KILL_ON_JOB_CLOSE`）：sidecar 及其全部后代（claude.exe /
     /// rust-analyzer / tsserver）被收进这个作业，**句柄一关就由内核连根杀掉**——
     /// aide.exe 被强杀也收得干净。`kill_runtime` 显式 take 掉它，Runtime 重启不留旧树。
@@ -88,10 +85,6 @@ impl AgentRuntimeManager {
             session_alive: Mutex::new(HashSet::new()),
             test_mode: false,
             sent_commands: Arc::new(Mutex::new(Vec::new())),
-            chat_events: {
-                let (tx, _) = tokio::sync::broadcast::channel(1024);
-                tx
-            },
             #[cfg(windows)]
             job: Mutex::new(None),
             bg_tasks: bg_registry::BgTaskRegistry::default(),
@@ -221,7 +214,6 @@ impl AgentRuntimeManager {
             stdin: self.stdin.lock().unwrap().as_ref().ok_or("stdin not set")?.clone(),
             child: self.child.lock().unwrap().as_ref().ok_or("child not set")?.clone(),
             killed: Arc::clone(&self.killed),
-            chat_events: self.chat_events.clone(),
         });
 
         Ok(())
@@ -245,16 +237,6 @@ impl AgentRuntimeManager {
             .write_all(line.as_bytes())
             .await
             .map_err(|e| e.to_string())
-    }
-
-    /// 订阅 chat-event 流（网关事件转发用）。broadcast 语义：慢消费者丢最旧。
-    pub fn subscribe_chat_events(&self) -> tokio::sync::broadcast::Receiver<Value> {
-        self.chat_events.subscribe()
-    }
-
-    /// 测试缝合：向 chat-event 通道发送（集成测试无法驱动真实 worker）。
-    pub fn chat_events_sender(&self) -> tokio::sync::broadcast::Sender<Value> {
-        self.chat_events.clone()
     }
 
     /// 把 sidecar 收进 `KILL_ON_JOB_CLOSE` 的 Job Object（见 `runtime/job_object.rs`）。

@@ -3,8 +3,8 @@
 > 状态：**v1**（2026-10-01）——协议核心（帧 / 安全通道 / 目录 / 配对 / 状态机 / 一致性向量）在
 > `src-tauri/crates/aide-link`；Host 侧已接入（`aide-core` 的 Link 服务：本机 Host 与 aide-host 守护进程共用，
 > Host 设置面板里扫码配对，真 Host + 真中继端到端通过）。另有**本地测试 Host**（§12.1），手机端开发直连它即可。
-> 手机端按本文实现；在手机端迁移完成之前，旧协议 v2（`src-tauri/src/remote/`）原样继续服务现有的 PWA / 鸿蒙端，
-> 两者互不影响。
+> 手机端按本文实现。**旧协议 v2（桌面网关）已于 2026-10-01 退役删除**：现有的 PWA / 鸿蒙端说的是 v2，迁到本协议之前连不上
+> 任何 Host（它们的代码由手机端自己改，桌面侧没动）。
 >
 > **谁是真相源**：`crates/aide-link/src/frame.rs` + `secure.rs`（帧与握手）、`catalog.rs`（暴露目录）、
 > `tests/fixtures/`（对话向量 + 逐字节密码学向量）。本文是它们的叙述版；冲突时以代码和向量为准，并请把本文改对。
@@ -395,6 +395,8 @@ cargo run -p aide-link --features transport --example test_host -- \
 - `--relay <中继地址>`：改为出站注册到真中继，二维码写 `relay` 形态，用来联调经中继的路径。
 
 ## 13. 与旧协议 v2 的对照（给手机端迁移用）
+
+> 旧协议 v2 的 Host 端实现（`src-tauri/src/remote/`）已删除；要对照它的行为，最后存在于提交 `e612d9d0`（`git show e612d9d0:src-tauri/src/remote/protocol.rs`）。
 
 | v2（`src-tauri/src/remote/protocol.rs`） | Aide Link v1 |
 |---|---|

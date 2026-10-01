@@ -17,7 +17,7 @@ vi.mock("../composables/useSettings", () => ({
         apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
         dim: 768, model: "", format: "ollama",
       },
-      remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
+      remote: { relayUrl: "", permissionMode: "auto" },
       jdkRegistries: [], openWithExtensions: {},
     }),
     loaded: ref(true),
@@ -110,12 +110,15 @@ describe("SettingsPanel", () => {
     expect(labels[labels.length - 1]).toBe("关于");
   });
 
-  it("renders remote tab with pairing code and status", async () => {
+  it("renders the remote tab: Link pairing section + relay URL + permission mode; no legacy pairing code", async () => {
     mountPanel("remote");
     const text = document.body.textContent ?? "";
+    // 面板测试把子组件整体 stub 了：这里只证明「手机连接」区块挂在远程 tab 上（它自己的行为见 LinkPairingSection.test）
+    expect(document.body.querySelector("link-pairing-section-stub")).not.toBeNull();
     expect(text).toContain("中继 URL");
-    expect(text).toContain("配对码");
-    expect(text).toContain("未连接");
+    expect(text).toContain("远程会话权限模式");
+    expect(text).not.toContain("配对码（10 分钟有效）");
+    expect(text).not.toContain("吊销设备");
   });
 
   it("offers one-click apply when a live proxy is detected and settings empty", async () => {

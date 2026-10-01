@@ -10,7 +10,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::protocol::{
-    CODE_TTL_SECS, DESKTOP_PING_MAX_MISS, DESKTOP_PING_SECS, PHONE_SILENCE_SECS,
+    DESKTOP_PING_MAX_MISS, DESKTOP_PING_SECS, PHONE_SILENCE_SECS,
 };
 
 /// register 日志限频窗口（秒）：与 handler::DROP_LOG_WINDOW_SECS 同值。防注册
@@ -45,7 +45,6 @@ pub struct DeviceConn {
 /// 不依赖虚拟时钟与 IO 就绪的竞态（paused 下 advance 与帧处理顺序不可控）。
 #[derive(Clone, Copy)]
 pub struct LivenessCfg {
-    pub code_ttl: Duration,
     pub phone_silence: Duration,
     pub desktop_ping: Duration,
     pub ping_max_miss: u32,
@@ -54,7 +53,6 @@ pub struct LivenessCfg {
 impl Default for LivenessCfg {
     fn default() -> Self {
         Self {
-            code_ttl: Duration::from_secs(CODE_TTL_SECS),
             phone_silence: Duration::from_secs(PHONE_SILENCE_SECS),
             desktop_ping: Duration::from_secs(DESKTOP_PING_SECS),
             ping_max_miss: DESKTOP_PING_MAX_MISS,
@@ -62,20 +60,12 @@ impl Default for LivenessCfg {
     }
 }
 
-/// 配对码路由条目：码 → 设备 + 宣告时刻（TTL 惰性过期的判据）。
-/// 码路由是「桌面宣告的投影」：只经 register/update_code 进出，桥接结束不再删除
-/// （旧实装在 teardown 删光路由，导致桌面仍展示的未过期码会话一结束即失效）。
-struct CodeEntry {
-    device_id: String,
-    announced_at: Instant,
-}
-
-/// 路由表：device_id → 桌面连接（看守/桥接任务托管，经 claim 领回）；pairing_code → 设备。
+/// 路由表：device_id → Host 连接（看守/桥接任务托管，经 claim 领回）。**只按 device_id 路由**——不存在任何
+/// 配对码 / 配对秘密（配对在端到端加密的通道里完成，中继看不到）。
 /// 哑管道——不理解应用协议，只做路由 + 双向帧转发。
 #[derive(Default)]
 pub struct RelayState {
     pub devices: HashMap<String, DeviceConn>,
-    codes: HashMap<String, CodeEntry>,
     register_logs: HashMap<String, RegisterLog>,
     next_gen: u64,
     pub liveness: LivenessCfg,
@@ -103,43 +93,6 @@ impl RelayState {
         if self.devices.get(device_id).is_some_and(|c| c.gen == gen) {
             self.devices.remove(device_id);
         }
-    }
-
-    /// 宣告配对码路由（register / update_code 共用入口）：先清该设备旧码再插新码。
-    /// 同码 + 同设备重宣告保留原宣告时刻——TTL 对齐桌面码的生成时刻（auth.rs 600s），
-    /// 不被 relay 重连续期；跨设备码碰撞 last-wins：碰撞只造成路由混淆不越权
-    /// （配对终验在桌面 relay_client 的 validate），记档不特殊处理。
-    pub fn announce_code(&mut self, device_id: &str, code: &str) {
-        let kept_ts = self
-            .codes
-            .get(code)
-            .filter(|e| e.device_id == device_id)
-            .map(|e| e.announced_at);
-        self.codes.retain(|_, e| e.device_id != device_id);
-        let announced_at = kept_ts.unwrap_or_else(Instant::now);
-        self.codes.insert(
-            code.to_string(),
-            CodeEntry {
-                device_id: device_id.to_string(),
-                announced_at,
-            },
-        );
-    }
-
-    /// 撤掉某设备的全部码路由（该设备以无码方式重新注册 = Aide Link 的 Host）。
-    pub fn forget_code(&mut self, device_id: &str) {
-        self.codes.retain(|_, e| e.device_id != device_id);
-    }
-
-    /// 码 → 设备路由（TTL 惰性过期：查到即清，查不到留着也无害）。
-    pub fn lookup_code(&mut self, code: &str) -> Option<String> {
-        let entry = self.codes.get(code)?;
-        if entry.announced_at.elapsed() > self.liveness.code_ttl {
-            let code = code.to_string();
-            self.codes.remove(&code);
-            return None;
-        }
-        Some(entry.device_id.clone())
     }
 
     /// register 日志限频（按设备）：首条立即出（保留素指纹），窗口内静默计数，

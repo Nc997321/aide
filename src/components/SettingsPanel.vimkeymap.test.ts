@@ -24,7 +24,7 @@ vi.mock("../composables/useSettings", () => {
       apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
       dim: 768, model: "", format: "ollama",
     },
-    remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
+    remote: { relayUrl: "", permissionMode: "auto" },
     jdkRegistries: [], openWithExtensions: {},
   });
   (globalThis as { __vimSettings?: typeof settings }).__vimSettings = settings;

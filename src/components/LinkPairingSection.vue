@@ -24,6 +24,7 @@ const stateText = computed(() => {
   const s = status.value;
   if (!s) return "…";
   if (!s.enabled) return "未启用";
+  if (s.relaySuppressed) return "已启用，但本构建不连中继（dev 构建与安装版共用同一台设备身份，同时注册会在中继上互踢；要调试：先退出安装版，再用 AIDE_DEV_REMOTE=1 启动 dev）";
   return s.connected ? "已在中继上注册，手机可以连接" : "已启用，正在连接中继…";
 });
 

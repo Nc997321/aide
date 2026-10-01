@@ -15,16 +15,16 @@
 | 包管理 | pnpm（workspace：`packages/*` + `remote-pwa`；agent-sidecar 刻意不进 workspace：依赖在子目录独立 pnpm 安装，构建脚本经 `npm --prefix` 执行绕 pnpm stub） |
 | Rust 编译 | MSVC 工具链（VS Build Tools 2022） |
 | 共享 SDK | `packages/aide-sdk`（@aide/sdk）：types + api 门面 + transport + useChatSession 闭包，桌面与 remote-pwa 共用；TS 源码直出无构建链，改即生效 |
-| 鸿蒙端 | ArkTS（`ohos/`）：WS 客户端连 relay-server，远程协议 v2 的第三个前端；不进 pnpm workspace；SDK 走过筛副本（Vue-free 子集）+ 同步脚本，**改协议需三端同步**（remote.rs ↔ remote.ts ↔ ohos） |
+| 鸿蒙端 | ArkTS（`ohos/`）：WS 客户端连 relay-server；不进 pnpm workspace；SDK 走过筛副本（Vue-free 子集）+ 同步脚本。**手机端（remote-pwa / ohos / SDK 的 `remote.ts`）由手机端自己演进，桌面侧不替它改**；它们现在说的是已退役的旧协议 v2，迁到 Aide Link 之前连不上任何 Host（见下方「手机 ↔ Host」） |
 
 ## @aide/sdk：能力单一事实源
 
-桌面（Tauri IPC）与 remote-pwa（WS 远程）共用同一套能力实现，**禁止再开第二份平行实现**：
+桌面（Tauri IPC）与手机端共用同一套能力实现，**禁止再开第二份平行实现**：
 
 - **传输层** `AideTransport { invoke, listen }`（`packages/aide-sdk/src/transport.ts`）：桌面默认 TauriTransport，远端 `main.ts` 早期 `setTransport(new RemoteTransport(...))`。api 门面与闭包永远只调 `getTransport()`，**禁止在共享代码里直接 import `@tauri-apps/*`**。
 - **api 门面**（`api.ts` + `api/*`）：所有命令调用的唯一入口；闭包需要的命令必须收进门面（含 DTO 对象化），不写散 invoke。
-- **远程协议 v2**（`src-tauri/src/remote/`）：`rpc.rs` 的 REGISTRY 静态表 = 白名单 = 可审计暴露面；**已在 aide-core 命令表里的命令：`CORE_EXPOSED` 登记名字即可（零包装）**；只有需要远程专属预处理的（如 send_message 的远程权限模式兜底）或尚未迁入 core 的，才 REGISTRY 加一行 + `rpc/handlers.rs` 薄包装。收录原则：共享闭包被动调用 + PWA UI 必需。
-- **RemoteTransport.listen 只支持 `chat-event`**（远程网关只透传这一种）；其他事件名 no-op + console.warn。
+- **手机能调什么 = `crates/aide-link/src/catalog.rs` 的暴露目录**（整张表即可审计的远程暴露面，命令名 = Host 命令表里的命令，零包装；远程专属预处理如 send_message 的远程权限模式兜底只在目录的 `prepare` 一处）。收录原则：共享闭包被动调用 + 手机 UI 必需。旧的桌面网关 v2（`src-tauri/src/remote/`、REGISTRY / CORE_EXPOSED）已于 2026-10-01 **退役删除，不许复活**。
+- 手机端的传输（`RemoteTransport`、Aide Link 客户端）属手机端，协议见 `docs/aide-link-protocol.md`；Link 的事件目录只有 `chat-event` / `system-notification` / `permissions-changed`，其他事件手机收不到。
 - 共享代码搬动后桌面旧路径留 re-export 壳，测试 mock 边界一律指 `@aide/sdk/api`（不是 `@/api`——壳与包内模块实例不同，mock 壳会漏）。
 
 ## 架构红线：跨平台
@@ -47,7 +47,7 @@
 - **会话工作区归属是会话自持属性**：`wsPath`/`wsKey` 落 `~/.aide/sessions/<id>.json`，唯一读写入口 `set_session_workspace` / `session_workspace`（与身份字段分开但共用同一个加锁的合并写）。send 的 cwd 解析链只有三级：客户端 `workspaceRoot` → 档案 `wsPath`（须 `exists`）→ **活动工作区 + `tracing::warn`**；最后一级就是"跑错项目"的来源，**不许无声**。前端 `useSessionWorkspaces` 只是**可回种的缓存**（缺条目由 `ensureWorkspaceKnown` 从档案补，且绝不覆盖已有值），新增客户端 / 新功能一律走这条链，别再造第三份只读内存的来源。
   （已实锤事故 2026-09-18：归属只在内存里，关 tab / WebView 重载即失 → 静默回落活动工作区 → 进程 cwd、记忆目录、CLAUDE.md、转录落点全跑错项目。）
 - **用户气泡单一渲染来源**：三端都只认 sidecar 广播的 `user_message`，不本地渲染。已知代价（本地发送多一个 RTT 才出气泡）已接受，**禁止加"超时兜底本地渲染"**（jumpQueue 排队消息会误触发）。插队消息在 promote 时广播。
-- **事件到远程客户端全量转发无过滤**（`relay_client.rs` subscribe 即发）；白名单（REGISTRY）只管入站 invoke。
+- **事件到手机按订阅投递**（Aide Link 的 `subscribe`：可按会话过滤、`since` 续传；只送事件目录里公开的事件名）；入站调用由暴露目录挡。
 
 ### `display` 渲染描述通道
 
@@ -72,13 +72,13 @@ Java/jdtls 专属配置**只准**待在 `src-tauri/crates/aide-core/src/lsp/prof
 
 ## 架构红线：远程控制是单设备模型（刻意设计，改动前先确认）
 
-`remote/auth.rs` 的 `TokenStore` 只存单个 `remote/token`——**新设备配对 = 覆盖旧 token = 静默踢掉旧设备**。这是安全设计，不是缺陷。若要改成多设备共存必须意识到这是**安全降级**（配对码泄露后恶意设备静默共存），改前先跟用户确认。
+`aide-link` 的 `Identity` 只存**一把**已配对的手机公钥——**新设备配对 = 覆盖旧公钥 = 旧设备被踢（`bye{superseded}`）**。这是安全设计，不是缺陷。若要改成多设备共存必须意识到这是**安全降级**（二维码泄露后恶意设备静默共存），改前先跟用户确认。
 
-relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解析业务数据。agent 始终跑在**用户桌面**，桌面不在线 = `connect: device offline`。
+relay（`relay-server/`）是**哑管道且不被信任**：只按 `device_id` 做 WS 桥接，既不解析也读不懂业务数据（端到端加密）。agent 跑在 **Host** 上，Host 不在线 = `connect_error{device_offline}`。
 
-**relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
+**relay 层帧契约**（`register{device_id}` / `connect{device_id}` / keepalive / connect_error + 双向活体常量、supersede 与 opt-in 静默语义；旧的配对码路由已删除，`connect{code}` 恒 `unknown_code`）；**新增/改帧 = 改 `relay-server/src/protocol.rs` + `docs/aide-link-protocol.md` §2.2，并告知手机端**。
 
-**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：旧 v2（`src-tauri/src/remote/`，桌面网关）的继任者，手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳。**Host 端的网关实现在 `aide-core` 的 `link/`（`LinkService` 随 `host::start` 启动，本机 Host 与 aide-host 共用；`link_*` 命令是 Host 设置面板用的、不对手机开放）；协议本体、帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `catalog.rs` / `auth.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续；**配对靠扫二维码**（含 Host 公钥 + 一次性 psk），帧经 Noise 端到端加密、**中继不被信任**（没有配对码、没有 token，手机的静态密钥即凭据）——这是安全设计，别退回短码 / 明文。迁移期间旧 v2 继续服务现有手机端，**不要在 v2 上再加能力**。
+**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳（旧 v2 桌面网关已退役，Link 是唯一的手机协议）。**Host 端的网关实现在 `aide-core` 的 `link/`（`LinkService` 随 `host::start` 启动，本机 Host 与 aide-host 共用；`link_*` 命令是 Host 设置面板用的、不对手机开放）；协议本体、帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `secure.rs` / `catalog.rs` / `identity.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续；**配对靠扫二维码**（含 Host 公钥 + 一次性 psk），帧经 Noise 端到端加密、**中继不被信任**（没有配对码、没有 token，手机的静态密钥即凭据）——这是安全设计，别退回短码 / 明文。开发手机端可以直连本地测试 Host：`cargo run -p aide-link --features transport --example test_host`。
 
 ## 架构红线：Host 模型——一张命令表，多个前门
 

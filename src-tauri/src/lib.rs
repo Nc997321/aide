@@ -1,7 +1,7 @@
 // 内嵌浏览器子系统（骨架阶段：纯核心+领域类型+端口签名已落地并单测；adapter/命令待
 // 可视原型定 A/B 后填充）。私有模块，对外经 commands 暴露命令。
 mod browser;
-// commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
+// commands/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
 mod conversation;
@@ -9,8 +9,8 @@ mod diagnostics;
 mod host_door;
 mod host_recents;
 mod host_window;
-pub mod remote;
-// 远程工作区（WSL / SSH 目标机上的项目，GUI 留在桌面）。与上面的 remote（手机遥控桌面）无关。
+// 远程 Host（WSL / SSH 目标机上的整个后端，GUI 留在桌面）。手机连 Host 走 Aide Link（`aide-core` 的 `link/`），
+// 与它无关。
 pub(crate) mod remote_workspace;
 pub mod runtime;
 mod settings;
@@ -37,6 +37,21 @@ fn init_logging() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 本构建允不允许手机网关（Aide Link）连中继。
+///
+/// **dev 默认不连**（2026-09-19）：dev 与安装版共用 identifier（com.aide.app）与同一份 Host 密钥库
+/// （Link 的 device_id 同源），双双注册会在 relay 路由表上互踢——2026-09-18 实测 ~500 注册/秒、六天
+/// 6.5GB 日志，手机每次桥接几毫秒内被顶断。这与 `lib.rs` 里 single-instance 对 dev 的豁免是**一对**：
+/// 豁免让两个实例能并存，这条闸门保证并存时不会两个都去 relay 抢同一台设备身份。改一个必须改另一个。
+///
+/// dev 里确实要连真中继（调试远程链路）：先退出安装版，再用 `AIDE_DEV_REMOTE=1 pnpm tauri dev` 启动。
+fn relay_allowed_in_this_build() -> bool {
+    if !cfg!(debug_assertions) {
+        return true;
+    }
+    std::env::var("AIDE_DEV_REMOTE").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 pub fn run() {
     // 数据目录改名（~/.claude-code-desktop/ → ~/.aide/，原子 rename）必须在
     // init_logging / load_workspace_state 之前——它们都会触碰 ~/.aide/（建 log/、读
@@ -72,9 +87,9 @@ pub fn run() {
     //
     // dev 豁免（`#[cfg(not(debug_assertions))]`）是刻意保留的——开发期要与安装版
     // 并存。但它**与「dev 不连中继」是一对**：两个实例共用 identifier（com.aide.app）
-    // 与同一 settings.json（remote device_id 同源），双双注册会在 relay 上互踢——
+    // 与同一份 Host 密钥库（Link 的 device_id 同源），双双注册会在 relay 上互踢——
     // 2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，手机每次桥接几毫秒内被顶断。
-    // 所以豁免的另一半挡在 `remote/mod.rs` 的 relay_allowed_in_this_build()：
+    // 所以豁免的另一半挡在下面的 `relay_allowed_in_this_build()`（setup 里交给 Link 服务）：
     // **改这里必须同时看那里**，只改一边就会把互踢放回来。
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
@@ -150,23 +165,8 @@ pub fn run() {
                 .initialize_blocking()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
 
-            // 远程控制网关：manage 需要 AppHandle，只能在 setup 内注册。
-            // initialize_blocking 必须先于 public_settings（未初始化读会报 NotInitialized）。
+            // 远程 Host 连接：manage 需要 AppHandle，只能在 setup 内注册。
             remote_workspace::manage(app);
-            app.manage(std::sync::Arc::new(remote::RemoteGateway::new(
-                app.handle().clone(),
-            )));
-            // 设置开启则随 app 启动
-            {
-                let gateway = app.state::<std::sync::Arc<remote::RemoteGateway>>();
-                let service = app.state::<std::sync::Arc<settings::SettingsService>>();
-                let enabled = commands::settings::public_settings(service.inner())
-                    .map(|s| s.remote.enabled)
-                    .unwrap_or(false);
-                if enabled {
-                    gateway.start();
-                }
-            }
 
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
@@ -209,6 +209,8 @@ pub fn run() {
                 let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
                 core.runtime
                     .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
+                // 手机网关（Aide Link）：dev 构建默认不连中继，见 `relay_allowed_in_this_build`
+                core.link.set_relay_allowed(relay_allowed_in_this_build());
                 tauri::async_runtime::spawn(async move { aide_core::host::start(&core) });
             }
 
@@ -261,8 +263,8 @@ pub fn run() {
             // 工作区信任（Trusted Workspace）
             commands::settings::notify_send,
             commands::app::get_app_version,
-            // 托盘菜单「退出 Aide」的出口。刻意不进 remote RPC 白名单——远端
-            // PWA 不该有把桌面端进程干掉的能力。
+            // 托盘菜单「退出 Aide」的出口。刻意不在 Link 的暴露目录里——手机
+            // 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
             // Customization commands
             // Provider commands
@@ -295,10 +297,6 @@ pub fn run() {
             // 工作区级代码索引开关（每工作区默认关，右侧栏面板读写）
             // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
             commands::lsp_guide::open_lsp_install_guide,
-            commands::remote::remote_get_status,
-            commands::remote::remote_set_enabled,
-            commands::remote::remote_refresh_pairing_code,
-            commands::remote::remote_revoke,
             remote_workspace::remote_ws_targets,
             remote_workspace::remote_ws_connect,
             remote_workspace::remote_ws_disconnect,

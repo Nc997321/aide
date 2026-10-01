@@ -27,6 +27,7 @@ const base = {
   relayConfigured: true,
   relayUrl: "wss://relay.example",
   connected: false,
+  relaySuppressed: false,
   lastError: "",
   deviceId: "00112233445566778899aabbccddeeff",
   hostName: "devbox",
@@ -61,6 +62,12 @@ describe("LinkPairingSection", () => {
     expect(w.text()).toContain("devbox");
     expect(w.get('[data-testid="link-state"]').text()).toBe("未启用");
     expect(w.get('[data-testid="link-paired"]').text()).toBe("尚未配对");
+  });
+
+  it("dev 构建不连中继：如实说明，而不是一直显示「正在连接」", async () => {
+    statusMock.mockResolvedValue({ ...base, enabled: true, relaySuppressed: true });
+    const w = await mountIt();
+    expect(w.get('[data-testid="link-state"]').text()).toContain("不连中继");
   });
 
   it("没配中继地址：不能配对，并提示去填中继 URL", async () => {

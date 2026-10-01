@@ -7,7 +7,7 @@
 //! - 路径是 Host 原生路径，原样存、原样还给 `open_host_window`。
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 
 use serde::{Deserialize, Serialize};
@@ -108,7 +108,7 @@ impl HostRecents {
     }
 
     #[cfg(test)]
-    fn path(&self) -> &Path {
+    fn path(&self) -> &std::path::Path {
         &self.file
     }
 }

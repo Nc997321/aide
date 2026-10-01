@@ -14,7 +14,6 @@ import type {
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
-  RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
@@ -669,19 +668,6 @@ export const api = {
     return getTransport().invoke("set_settings", { settings });
   },
 
-  // 远程控制网关
-  remoteGetStatus(): Promise<RemoteStatus> {
-    return getTransport().invoke("remote_get_status");
-  },
-  remoteSetEnabled(enabled: boolean): Promise<void> {
-    return getTransport().invoke("remote_set_enabled", { enabled });
-  },
-  remoteRefreshPairingCode(): Promise<string> {
-    return getTransport().invoke("remote_refresh_pairing_code");
-  },
-  remoteRevoke(): Promise<void> {
-    return getTransport().invoke("remote_revoke");
-  },
 
   // JDK 注册表（机器级；工作区选哪个走 workspace_get/set_jdk）
   scanJdks(): Promise<JdkEntry[]> {

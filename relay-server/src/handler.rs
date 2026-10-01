@@ -96,21 +96,16 @@ pub async fn handle_conn(stream: TcpStream, state: SharedState) -> Result<(), St
                 .and_then(|s| s.as_str())
                 .ok_or("register: missing device_id")?
                 .to_string();
-            // 配对码可选：旧协议 v2 的桌面带码（码路由）；Aide Link 的 Host 不带——配对靠二维码里的
-            // device_id + 密钥，中继既不需要也不该知道任何配对秘密。
-            let code = v.get("pairing_code").and_then(|s| s.as_str());
-            // 顶替探测与码宣告同锁：探测必须落在 insert_device（park_device 内）
+            // 旧协议 v2 的 `pairing_code` 字段被忽略：码路由已删除，配对靠二维码里的 device_id + 密钥，
+            // 中继既不需要也不该知道任何配对秘密。
+            // 顶替探测：必须落在 insert_device（park_device 内）
             // 之前——旧登记被覆盖时其看守/桥接收 None 退出并丢弃连接，正是双实例
             // 互踢战争的形态，日志要能一眼看出。探测与 insert 非原子（跨锁窗口），
             // 日志用途可接受。码路由只经宣告进出（register 是首次宣告）；
             // 桥接收尾不再删路由。
             let superseded = {
-                let mut st = lock_recover(&state);
+                let st = lock_recover(&state);
                 let superseded = st.devices.contains_key(&device_id);
-                match code {
-                    Some(code) => st.announce_code(&device_id, code),
-                    None => st.forget_code(&device_id), // 同一设备改用无码注册：清掉它旧的码路由
-                }
                 superseded
             };
             park_device(&state, device_id.clone(), sink, stream);
@@ -139,7 +134,7 @@ async fn connect_arm(
     sink: &mut WsSink,
     stream: &mut WsStream,
 ) -> Result<(), String> {
-    let device_id = match resolve_device(state, v) {
+    let device_id = match resolve_device(v) {
         Ok(id) => id,
         Err(reason) => return reject_connect(sink, reason).await,
     };
@@ -155,28 +150,20 @@ async fn connect_arm(
     // 认领顶替（旧实装桥接期摘登记，重连一律 device offline）
     let (claim_tx, claim_rx) = mpsc::channel::<Claim>(1);
     let gen = lock_recover(state).insert_device(device_id.clone(), claim_tx);
-    let end = bridge(sink, stream, halves, claim_rx, state, &device_id).await;
+    let end = bridge(sink, stream, halves, claim_rx, state).await;
     finish_bridge(state, &device_id, gen, end);
     Ok(())
 }
 
-/// connect 首消息路由解析：码路由命中 → 设备 id；码未知/过期或凭据缺失 → 拒绝原因。
-fn resolve_device(
-    state: &SharedState,
-    v: &serde_json::Value,
-) -> Result<String, ConnectErrorReason> {
-    match v.get("code").and_then(|s| s.as_str()) {
-        Some(code) => state
-            .lock()
-            .unwrap()
-            .lookup_code(code)
-            .ok_or(ConnectErrorReason::UnknownCode),
-        None => v
-            .get("device_id")
-            .and_then(|s| s.as_str())
-            .map(str::to_string)
-            .ok_or(ConnectErrorReason::DeviceOffline),
+/// connect 首消息路由解析：只按 device_id；旧协议的 `connect{code}` 恒 unknown_code，缺 device_id → 拒绝。
+fn resolve_device(v: &serde_json::Value) -> Result<String, ConnectErrorReason> {
+    if v.get("code").is_some() {
+        return Err(ConnectErrorReason::UnknownCode);
     }
+    v.get("device_id")
+        .and_then(|s| s.as_str())
+        .map(str::to_string)
+        .ok_or(ConnectErrorReason::DeviceOffline)
 }
 
 /// 首消息阶段拒绝：原因帧 → 2s 超时 close。手机侧据此区分码错/离线，
@@ -241,8 +228,6 @@ async fn claim_device(state: &SharedState, device_id: &str) -> Result<Halves, St
 
 /// 看守任务：托管空闲的桌面连接。
 /// - 读到 Ping：tungstenite 已自动排好 Pong，下一轮 poll 读开始时 flush 出去；
-/// - 读到 update_code：桌面中途换码宣告，更新码路由（旧实装把中途帧当垃圾丢弃，
-///   「刷新配对码」后的新码对 relay 永远不存在）；
 /// - 读到 close / 出错 / 对端消失：连接完蛋，从路由表摘除自己；
 /// - 收到 connect 认领：把连接交还后退出。
 async fn device_watcher(
@@ -268,11 +253,8 @@ async fn device_watcher(
             }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Ping(_) | Message::Pong(_))) => {}
-                Some(Ok(Message::Text(t))) => match protocol::update_code_of(&t) {
-                    Some(code) => lock_recover(&state).announce_code(&device_id, &code),
-                    // 空闲期间不该有其他数据帧：丢弃，不掐连接
-                    None => idle_drop(&mut drop_log, &device_id),
-                },
+                // 空闲期间不该有数据帧：丢弃，不掐连接
+                Some(Ok(Message::Text(_))) => idle_drop(&mut drop_log, &device_id),
                 // 桌面优雅下线：close 应答已排队，刷出去再摘除登记
                 Some(Ok(Message::Close(_))) => {
                     let _ = tokio::time::timeout(Duration::from_secs(2), sink.flush()).await;
@@ -319,7 +301,6 @@ enum BridgeReason {
 ///   老客户端不启用，保持旧行为）；武装后任何帧重置时钟；超时 = 手机腿死；
 /// - 桌面腿：每 30s 发 Ping，Pong 消费不转发（旧实装把 Pong 转给手机），连 3 次
 ///   miss 判桌面腿死——合盖静默丢包不再劫持手机；
-/// - 桌面腿 update_code 消费（更新码路由）不转发；
 /// - 两腿解析失败/非控制帧一律原样转发（哑管道契约）。
 async fn bridge(
     phone_sink: &mut WsSink,
@@ -327,7 +308,6 @@ async fn bridge(
     halves: Halves,
     mut claim_rx: mpsc::Receiver<Claim>,
     state: &SharedState,
-    device_id: &str,
 ) -> BridgeEnd {
     let (mut d_sink, mut d_stream) = halves;
     let lv = lock_recover(state).liveness;
@@ -363,7 +343,7 @@ async fn bridge(
                 Step::End(r) => break r,
             },
             // 桌面腿读 → 转发给手机腿（forward = phone_sink）
-            msg = d_stream.next() => match desktop_frame(msg, phone_sink, &mut ping_miss, state, device_id).await {
+            msg = d_stream.next() => match desktop_frame(msg, phone_sink, &mut ping_miss).await {
                 Step::Continue => {}
                 Step::End(r) => break r,
             },
@@ -433,14 +413,12 @@ async fn phone_frame(
 }
 
 /// 桌面腿单帧处置（forward = 手机腿写侧）：Pong 清零 miss；Ping 不转发（自动 Pong
-/// 已排队）；Close/断流 → 桌面死（应答 loop 后刷）；update_code 消费更新码路由；
+/// 已排队）；Close/断流 → 桌面死（应答 loop 后刷）；
 /// 其余原样转发，转发写失败 = 手机腿死。
 async fn desktop_frame(
     msg: Option<Result<Message, WsError>>,
     forward: &mut WsSink,
     ping_miss: &mut u32,
-    state: &SharedState,
-    device_id: &str,
 ) -> Step {
     let m = match msg {
         Some(Ok(m)) => m,
@@ -454,23 +432,11 @@ async fn desktop_frame(
         Message::Ping(_) => Step::Continue,
         Message::Close(_) => Step::End(BridgeReason::DesktopGone),
         m => {
-            let code = match &m {
-                Message::Text(t) => protocol::update_code_of(t),
-                _ => None,
-            };
-            match code {
-                Some(code) => {
-                    lock_recover(state).announce_code(device_id, &code);
-                    Step::Continue
-                }
-                None => {
-                    // 生产路径：转发瞬间手机腿半死；集成测试无法确定性构造
-                    if forward.send(m).await.is_err() {
-                        Step::End(BridgeReason::PhoneDead)
-                    } else {
-                        Step::Continue
-                    }
-                }
+            // 生产路径：转发瞬间手机腿半死；集成测试无法确定性构造
+            if forward.send(m).await.is_err() {
+                Step::End(BridgeReason::PhoneDead)
+            } else {
+                Step::Continue
             }
         }
     }

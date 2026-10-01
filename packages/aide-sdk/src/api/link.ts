@@ -14,6 +14,8 @@ export interface LinkStatus {
   relayUrl: string;
   /** 此刻是否已在中继上注册（手机能找到这台 Host）。 */
   connected: boolean;
+  /** 本构建被刻意挡住不连中继（桌面 dev 构建）。面板必须说明，否则「已启用」与「没连上」会同时出现。 */
+  relaySuppressed: boolean;
   lastError: string;
   deviceId: string;
   hostName: string;

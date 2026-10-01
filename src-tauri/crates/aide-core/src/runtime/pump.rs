@@ -24,7 +24,6 @@ pub struct Pump {
     pub stdin: Arc<TokioMutex<ChildStdin>>,
     pub child: Arc<TokioMutex<Child>>,
     pub killed: Arc<AtomicBool>,
-    pub chat_events: tokio::sync::broadcast::Sender<Value>,
 }
 
 pub fn start(p: Pump) {
@@ -35,7 +34,6 @@ pub fn start(p: Pump) {
         stdin: stdin_for_agent,
         child: child_for_kill,
         killed: killed_clone,
-        chat_events: chat_events_tx,
     } = p;
     // stderr 尾部缓冲
     let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
@@ -136,7 +134,6 @@ pub fn start(p: Pump) {
                             }
                         }
                     }
-                    let _ = chat_events_tx.send(event.clone());
                     core.emit("chat-event", event);
                 }
                 Ok(Ok(None)) | Ok(Err(_)) => break "exit",

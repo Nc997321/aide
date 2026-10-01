@@ -180,32 +180,15 @@ export interface AppSettings {
   lsp?: { servers: Record<string, LspServerOverride> };
   /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */
   editor: EditorSettings;
-  /** 远程控制网关设置（手机 APP 经自建中继控制本机）。 */
+  /** 手机网关（Aide Link）设置：中继地址与远程会话默认权限模式。 */
   remote: RemoteSettings;
 }
 
-/** 远程控制网关设置。relayUrl 为自建中继地址（wss://…），permissionMode 决定
- *  远程会话的工具批准策略（auto / manual）。 */
+/** 手机网关设置。relayUrl 为自建中继地址（wss://…，手机与这台 Host 都经它相遇），permissionMode 决定
+ *  远程会话的工具批准策略（auto / manual）。启停与配对状态不在设置里（见 linkApi）。 */
 export interface RemoteSettings {
-  enabled: boolean;
   relayUrl: string;
-  deviceId: string;
   permissionMode: string;
-}
-
-/** 远程控制状态快照（对应后端 remote_get_status）。 */
-export interface RemoteStatus {
-  enabled: boolean;
-  relayUrl: string;
-  deviceId: string;
-  pairingCode: string | null;
-  connected: boolean;
-  /** true = 本构建被刻意挡住不连中继（dev 且未设 AIDE_DEV_REMOTE）。
-   *  面板必须据此说明，否则「已开启」与「没连上」会同时出现在界面上。 */
-  relaySuppressed: boolean;
-  tokenConfigured: boolean;
-  /** token 签发时刻（Unix 毫秒）。旧版签发的 token 无记录 → null。 */
-  tokenIssuedAt: number | null;
 }
 
 /** 代码编辑器设置。缩进字符固定为 Tab，缩进格数控制 Tab 显示列宽。 */

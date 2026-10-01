@@ -270,7 +270,8 @@ pub struct AppSettings {
     /// 代码编辑器设置（缩进等）。默认 4 空格缩进。前端 settings 管理；Rust 只存取。
     #[serde(default)]
     pub editor: EditorSettings,
-    /// 远程控制网关配置（手机 APP 远程控制桌面 aide）。
+    /// 手机网关（Aide Link）的设置：中继地址与远程会话默认权限模式。启停与配对状态不在设置里，在 Host 的密钥库
+    /// （`link/`）。旧版的 `enabled` / `deviceId` 随旧网关退役而删除（文件里残留的同名键被忽略）。
     #[serde(default)]
     pub remote: RemoteSettings,
 }
@@ -279,11 +280,7 @@ pub struct AppSettings {
 #[serde(rename_all = "camelCase")]
 pub struct RemoteSettings {
     #[serde(default)]
-    pub enabled: bool,
-    #[serde(default)]
     pub relay_url: String,
-    #[serde(default)]
-    pub device_id: String,
     #[serde(default = "default_remote_permission_mode")]
     pub permission_mode: String,
 }
@@ -294,9 +291,7 @@ pub struct RemoteSettings {
 impl Default for RemoteSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
             relay_url: String::new(),
-            device_id: String::new(),
             permission_mode: default_remote_permission_mode(),
         }
     }
