@@ -14,7 +14,7 @@ vi.mock("../composables/useSettings", () => ({
       recentLimit: 10,
       editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
       codegraphEmbedder: { apiKeyConfigured: false, backend: "fastembed", baseUrl: "", dim: 768, model: "", format: "ollama" },
-      remote: { relayUrl: "", permissionMode: "auto" },
+      remote: { permissionMode: "auto" },
       jdkRegistries: [], openWithExtensions: {},
     }),
     loaded: ref(true),

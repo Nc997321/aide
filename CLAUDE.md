@@ -74,6 +74,8 @@ Java/jdtls 专属配置**只准**待在 `src-tauri/crates/aide-core/src/lsp/prof
 
 `aide-link` 的 `Identity` 只存**一把**已配对的手机公钥——**新设备配对 = 覆盖旧公钥 = 旧设备被踢（`bye{superseded}`）**。这是安全设计，不是缺陷。若要改成多设备共存必须意识到这是**安全降级**（二维码泄露后恶意设备静默共存），改前先跟用户确认。
 
+**中继地址是产品内置的固定值**（`aide-core/src/link/mod.rs` 的 `DEFAULT_RELAY_URL` = `wss://relay.aideai.store`）：不是设置、UI 不展示不可改（旧 `settings.remote.relayUrl` 已删，不许复活）；唯一覆盖口是环境变量 `AIDE_RELAY_URL`（开发 / 自建 / 集成测试）。
+
 relay（`relay-server/`）是**哑管道且不被信任**：只按 `device_id` 做 WS 桥接，既不解析也读不懂业务数据（端到端加密）。agent 跑在 **Host** 上，Host 不在线 = `connect_error{device_offline}`。
 
 **relay 层帧契约**（`register{device_id}` / `connect{device_id}` / keepalive / connect_error + 双向活体常量、supersede 与 opt-in 静默语义；旧的配对码路由已删除，`connect{code}` 恒 `unknown_code`）；**新增/改帧 = 改 `relay-server/src/protocol.rs` + `docs/aide-link-protocol.md` §2.2，并告知手机端**。

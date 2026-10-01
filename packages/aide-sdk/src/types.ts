@@ -180,14 +180,13 @@ export interface AppSettings {
   lsp?: { servers: Record<string, LspServerOverride> };
   /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */
   editor: EditorSettings;
-  /** 手机网关（Aide Link）设置：中继地址与远程会话默认权限模式。 */
+  /** 手机网关（Aide Link）设置：远程会话默认权限模式（中继地址是产品内置的，不在设置里）。 */
   remote: RemoteSettings;
 }
 
-/** 手机网关设置。relayUrl 为自建中继地址（wss://…，手机与这台 Host 都经它相遇），permissionMode 决定
- *  远程会话的工具批准策略（auto / manual）。启停与配对状态不在设置里（见 linkApi）。 */
+/** 手机网关设置。permissionMode 决定远程会话的工具批准策略（auto / manual）。启停与配对状态不在设置里
+ *  （见 linkApi）；中继地址是产品内置的固定值，不可配置。 */
 export interface RemoteSettings {
-  relayUrl: string;
   permissionMode: string;
 }
 

@@ -9,9 +9,6 @@ import { getTransport } from "../transport";
 export interface LinkStatus {
   /** 是否启用（启用 = Host 出站注册到中继、等手机）。 */
   enabled: boolean;
-  /** 设置里是否配了中继地址（没配就没法配对 / 注册）。 */
-  relayConfigured: boolean;
-  relayUrl: string;
   /** 此刻是否已在中继上注册（手机能找到这台 Host）。 */
   connected: boolean;
   /** 本构建被刻意挡住不连中继（桌面 dev 构建）。面板必须说明，否则「已启用」与「没连上」会同时出现。 */
@@ -41,7 +38,7 @@ export const linkApi = {
   setEnabled(enabled: boolean): Promise<LinkStatus> {
     return getTransport().invoke("link_set_enabled", { enabled });
   },
-  /** 生成配对二维码（会自动启用网关；需要先配好中继地址）。 */
+  /** 生成配对二维码（会自动启用网关）。 */
   createOffer(): Promise<LinkOffer> {
     return getTransport().invoke("link_create_offer");
   },

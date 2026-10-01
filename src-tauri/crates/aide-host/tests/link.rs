@@ -93,14 +93,13 @@ fn invoke(b: &mut Bridge, cmd: &str, args: Value) -> Result<Value, String> {
 async fn a_real_host_pairs_a_phone_through_a_real_relay() {
     let relay_url = start_relay().await;
     let home = TempHome::new("link");
-    let mut host = Bridge::start(&home, None);
+    // 中继是内置的；集成测试经环境变量覆盖口把它指到本地中继
+    let mut host = Bridge::start_with_env(&home, None, &[("AIDE_RELAY_URL", relay_url.as_str())]);
     host.hello();
 
-    // 配置中继 → 生成配对二维码（Host 设置面板发的就是这两条命令）
-    invoke(&mut host, "set_settings", json!({ "settings": { "remote": { "relayUrl": relay_url } } })).unwrap();
+    // 生成配对二维码（Host 设置面板发的就是这条命令）
     let before = invoke(&mut host, "link_status", json!({})).unwrap();
     assert_eq!(before["enabled"], false);
-    assert_eq!(before["relayConfigured"], true);
 
     let offer_view = invoke(&mut host, "link_create_offer", json!({})).unwrap();
     assert!(offer_view["qrSvg"].as_str().unwrap().contains("<svg"));
@@ -183,6 +182,9 @@ async fn a_real_host_pairs_a_phone_through_a_real_relay() {
 #[test]
 fn an_enabled_link_keeps_the_daemon_alive_while_idle() {
     const FAST_IDLE: &[(&str, &str)] = &[("AIDE_HOST_IDLE_SECS", "1"), ("AIDE_HOST_IDLE_CHECK_SECS", "1")];
+    // 同上，再把中继指到连不上的本地口（不碰真中继）
+    const FAST_IDLE_LINK: &[(&str, &str)] =
+        &[("AIDE_HOST_IDLE_SECS", "1"), ("AIDE_HOST_IDLE_CHECK_SECS", "1"), ("AIDE_RELAY_URL", "ws://127.0.0.1:9")];
     let gone = |home: &TempHome| {
         let sock = home.path().join(".aide/host/daemon.sock");
         for _ in 0..80 {
@@ -203,9 +205,8 @@ fn an_enabled_link_keeps_the_daemon_alive_while_idle() {
 
     // 启用了 Link：同样的空闲条件，守护进程必须还在
     let home = TempHome::new("idle-link");
-    let mut host = Bridge::start_with_env(&home, None, FAST_IDLE);
+    let mut host = Bridge::start_with_env(&home, None, FAST_IDLE_LINK);
     host.hello();
-    invoke(&mut host, "set_settings", json!({ "settings": { "remote": { "relayUrl": "ws://127.0.0.1:9" } } })).unwrap();
     invoke(&mut host, "link_set_enabled", json!({"enabled": true})).unwrap();
     host.kill(); // 客户端全走了
     std::thread::sleep(Duration::from_secs(5)); // 远超空闲宽限 + 检查间隔

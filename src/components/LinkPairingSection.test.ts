@@ -24,8 +24,6 @@ import LinkPairingSection from "./LinkPairingSection.vue";
 
 const base = {
   enabled: false,
-  relayConfigured: true,
-  relayUrl: "wss://relay.example",
   connected: false,
   relaySuppressed: false,
   lastError: "",
@@ -68,13 +66,6 @@ describe("LinkPairingSection", () => {
     statusMock.mockResolvedValue({ ...base, enabled: true, relaySuppressed: true });
     const w = await mountIt();
     expect(w.get('[data-testid="link-state"]').text()).toContain("不连中继");
-  });
-
-  it("没配中继地址：不能配对，并提示去填中继 URL", async () => {
-    statusMock.mockResolvedValue({ ...base, relayConfigured: false, relayUrl: "" });
-    const w = await mountIt();
-    expect(w.get('[data-testid="link-pair"]').attributes("disabled")).toBeDefined();
-    expect(w.find('[data-testid="link-needs-relay"]').exists()).toBe(true);
   });
 
   it("点「配对手机」：显示二维码——只作为 <img> 的 data URL，绝不把 Host 给的 SVG 内联进 DOM", async () => {

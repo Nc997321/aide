@@ -279,8 +279,6 @@ pub struct AppSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RemoteSettings {
-    #[serde(default)]
-    pub relay_url: String,
     #[serde(default = "default_remote_permission_mode")]
     pub permission_mode: String,
 }
@@ -291,7 +289,6 @@ pub struct RemoteSettings {
 impl Default for RemoteSettings {
     fn default() -> Self {
         Self {
-            relay_url: String::new(),
             permission_mode: default_remote_permission_mode(),
         }
     }

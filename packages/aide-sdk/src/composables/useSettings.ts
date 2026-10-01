@@ -53,7 +53,6 @@ const defaults: AppSettings = {
   onboarded: false,
   editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
   remote: {
-    relayUrl: "",
     permissionMode: "auto",
   },
 };

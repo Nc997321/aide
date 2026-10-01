@@ -219,13 +219,12 @@ function removeVimBinding(mode: keyof VimBindings, index: number) {
 }
 
 // ── 手机连接 ──
-// 启停 / 配对 / 撤销在 LinkPairingSection（Host 自己的网关）；这里只剩两项设置：中继地址（手机与这台
-// Host 都经它相遇）与远程会话权限模式，走 update 落盘。
+// 启停 / 配对 / 撤销在 LinkPairingSection（Host 自己的网关）；这里只剩远程会话权限模式，走 update 落盘。
+// 中继地址是产品内置的固定值（aide-core `DEFAULT_RELAY_URL`），不是设置、不展示。
 const remotePermissionModeOptions = [
   { value: "auto", label: "自动模式（自动批准非危险工具）" },
   { value: "manual", label: "手动模式（不推荐远程使用）" },
 ];
-const remoteRelayUrl = ref(settings.remote.relayUrl);
 /** 旧值迁移：权限模式 id 由 `default` 更名为 `manual`（对齐 CLI 命名）。已存盘的
  *  "default" 读回来匹配不上新清单，映射成 manual，别让下拉显示空白。 */
 function normalizePermissionMode(v: string | undefined): string {
@@ -233,11 +232,6 @@ function normalizePermissionMode(v: string | undefined): string {
 }
 const remotePermissionMode = ref(normalizePermissionMode(settings.remote.permissionMode));
 
-function onRemoteRelayUrlChange(e: Event) {
-  const v = (e.target as HTMLInputElement).value;
-  remoteRelayUrl.value = v;
-  update({ remote: { ...settings.remote, relayUrl: v } });
-}
 function onRemotePermissionModeChange(v: string) {
   remotePermissionMode.value = v;
   update({ remote: { ...settings.remote, permissionMode: v } });
@@ -808,17 +802,6 @@ function onOverlayClick(e: MouseEvent) {
             <div v-else-if="activeTab === 'remote'" class="tab-remote">
               <!-- 手机扫码直连这台 Host（Aide Link，端到端加密） -->
               <LinkPairingSection />
-
-              <div class="settings-field">
-                <label class="field-label">中继 URL</label>
-                <input
-                  :value="remoteRelayUrl"
-                  class="text-input"
-                  placeholder="wss://relay.example.com"
-                  @change="onRemoteRelayUrlChange"
-                />
-                <span class="field-hint">自建中继服务器地址（wss://…）。手机与这台 Host 都经它相遇——端到端加密，中继只转发密文</span>
-              </div>
 
               <div class="settings-field">
                 <label class="field-label">远程会话权限模式</label>
