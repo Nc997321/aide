@@ -77,10 +77,10 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 3. 删掉桌面对应的 `#[tauri::command]` 与 `generate_handler!` 条目。aide-host 自动获得该命令。
 4. 需要 GUI 能力（弹窗、剪贴板、本机程序、内嵌浏览器）的不是 Host 命令：留在桌面，跨界处显式（见 `src/host_window.rs`）。
 
-## 5. SSH 代理（待拍板）
+## 5. SSH 代理（已拍板：不由 Aide 转发）
 
 WSL 窗口的 Host 能出网，是因为桌面把本机代理（loopback）改写成 WSL 默认网关地址注入 Host 环境；
-SSH 目标上没有通往桌面回环的路，`install::host_env` 只能丢弃 loopback 代理。目标机本身没有直连网络
-（或所在网络被 API 拒绝）时，Host 里的 agent 会因 403 / 超时起不来。可选做法：
-`ssh -R 127.0.0.1:<远端端口>:127.0.0.1:<本机代理端口>` 把代理反向转进目标机——注意目标机上的
-其他用户也能连到这个转发端口（共享服务器上是安全面扩大），且安装阶段（逐条 ssh）与 serve 长连接都要带。
+SSH 目标上没有通往桌面回环的路，`install::host_env` 丢弃 loopback 代理（对有直连网络的服务器这才是
+对的默认：留一个指向虚空的代理会把原本能直连的 Host 搞坏）。目标机需要代理时，由用户自己的 SSH 配置
+解决（`RemoteForward` 等，Aide 不替用户开反向转发——转发端口对目标机上的其他用户可见，是安全面的
+扩大，该由用户在自己的 `~/.ssh/config` 里明确选择）。
