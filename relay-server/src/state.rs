@@ -126,6 +126,11 @@ impl RelayState {
         );
     }
 
+    /// 撤掉某设备的全部码路由（该设备以无码方式重新注册 = Aide Link 的 Host）。
+    pub fn forget_code(&mut self, device_id: &str) {
+        self.codes.retain(|_, e| e.device_id != device_id);
+    }
+
     /// 码 → 设备路由（TTL 惰性过期：查到即清，查不到留着也无害）。
     pub fn lookup_code(&mut self, code: &str) -> Option<String> {
         let entry = self.codes.get(code)?;

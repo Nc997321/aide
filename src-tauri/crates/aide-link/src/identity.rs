@@ -21,7 +21,7 @@ use rand::Rng;
 use tokio::sync::watch;
 
 use crate::frame::ErrorCode;
-use crate::secure::{b64, unb64_32, Keypair, PairingOffer};
+use crate::secure::{b64, unb64_32, Endpoint, Keypair, PairingOffer};
 
 /// 配对二维码有效期。
 pub const OFFER_TTL: Duration = Duration::from_secs(600);
@@ -161,16 +161,16 @@ impl Identity {
         self.authorized_phone().is_some_and(|p| constant_time_eq(&p, phone_public))
     }
 
-    /// 生成配对二维码内容（替换掉任何尚未用掉的旧二维码）。`relay` 是手机该去连的中继地址。
-    pub fn create_offer(&self, relay: &str, name: &str) -> PairingOffer {
-        self.create_offer_at(relay, name, Instant::now(), SystemTime::now())
+    /// 生成配对二维码内容（替换掉任何尚未用掉的旧二维码）。`endpoint` 是手机该怎么够到这台 Host。
+    pub fn create_offer(&self, endpoint: Endpoint, name: &str) -> PairingOffer {
+        self.create_offer_at(endpoint, name, Instant::now(), SystemTime::now())
     }
 
-    fn create_offer_at(&self, relay: &str, name: &str, now: Instant, wall: SystemTime) -> PairingOffer {
+    fn create_offer_at(&self, endpoint: Endpoint, name: &str, now: Instant, wall: SystemTime) -> PairingOffer {
         let psk = random_32();
         *self.offer.lock().unwrap_or_else(PoisonError::into_inner) = Some(Offer { psk, expires_at: now + OFFER_TTL });
         PairingOffer {
-            relay: relay.to_string(),
+            endpoint,
             device_id: self.device_id.clone(),
             host_public: self.host.public,
             psk,
@@ -273,7 +273,7 @@ mod tests {
     fn the_offer_carries_everything_the_phone_needs_and_is_single_use() {
         let id = identity();
         assert!(id.offer_psk().is_none(), "no offer until one is created");
-        let offer = id.create_offer("wss://relay.example", "devbox");
+        let offer = id.create_offer(Endpoint::Relay("wss://relay.example".into()), "devbox");
         assert_eq!(offer.device_id, id.device_id());
         assert_eq!(offer.host_public, id.host_public());
         assert_eq!(id.offer_psk(), Some(offer.psk));
@@ -289,7 +289,7 @@ mod tests {
     fn a_wrong_or_expired_secret_never_pairs() {
         let id = identity();
         let t0 = Instant::now();
-        let offer = id.create_offer_at("wss://r", "n", t0, SystemTime::now());
+        let offer = id.create_offer_at(Endpoint::Relay("wss://r".into()), "n", t0, SystemTime::now());
         let phone = generate_keypair();
         assert_eq!(id.commit_pairing_at(&phone.public, &[0u8; 32], t0), Err(ErrorCode::NoPairingOffer));
         assert!(id.offer_active(), "a failed attempt does not burn the offer (that would be a DoS)");
@@ -306,10 +306,10 @@ mod tests {
         let id = identity();
         let mut rx = id.watch();
         let (a, b) = (generate_keypair(), generate_keypair());
-        let o = id.create_offer("r", "n");
+        let o = id.create_offer(Endpoint::Relay("r".into()), "n");
         id.commit_pairing(&a.public, &o.psk).unwrap();
         assert_eq!(rx.borrow_and_update().1, Change::None, "first pairing supersedes nobody");
-        let o = id.create_offer("r", "n");
+        let o = id.create_offer(Endpoint::Relay("r".into()), "n");
         id.commit_pairing(&b.public, &o.psk).unwrap();
         assert!(!id.is_authorized(&a.public));
         assert!(id.is_authorized(&b.public));
@@ -323,7 +323,7 @@ mod tests {
         let mut rx = id.watch();
         let a = generate_keypair();
         for _ in 0..2 {
-            let o = id.create_offer("r", "n");
+            let o = id.create_offer(Endpoint::Relay("r".into()), "n");
             id.commit_pairing(&a.public, &o.psk).unwrap();
         }
         assert_eq!(rx.borrow_and_update().1, Change::None);
@@ -334,7 +334,7 @@ mod tests {
         let id = identity();
         let mut rx = id.watch();
         let a = generate_keypair();
-        let o = id.create_offer("r", "n");
+        let o = id.create_offer(Endpoint::Relay("r".into()), "n");
         id.commit_pairing(&a.public, &o.psk).unwrap();
         id.revoke().unwrap();
         assert!(!id.is_authorized(&a.public));
@@ -345,8 +345,8 @@ mod tests {
     #[test]
     fn a_new_offer_replaces_the_old_one() {
         let id = identity();
-        let old = id.create_offer("r", "n");
-        let new = id.create_offer("r", "n");
+        let old = id.create_offer(Endpoint::Relay("r".into()), "n");
+        let new = id.create_offer(Endpoint::Relay("r".into()), "n");
         assert_ne!(old.psk, new.psk);
         let phone = generate_keypair();
         assert_eq!(id.commit_pairing(&phone.public, &old.psk), Err(ErrorCode::NoPairingOffer));

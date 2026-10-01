@@ -181,15 +181,31 @@ dependencies = [
 name = "aide-link"
 version = "0.8.0"
 dependencies = [
+ "aide-link",
+ "aide-relay",
  "base64 0.22.1",
+ "futures-util",
  "percent-encoding",
+ "qrcode",
  "rand 0.8.6",
  "serde",
  "serde_json",
  "snow",
  "tokio",
+ "tokio-tungstenite",
  "tracing",
  "x25519-dalek",
+]
+
+[[package]]
+name = "aide-relay"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
@@ -5439,6 +5455,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+dependencies = [
+ "image 0.25.10",
+]
+
+[[package]]
 name = "quick-xml"
 version = "0.37.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7404,6 +7429,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-rustls"
+version = "0.26.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c9cc2678c2cdd569ef8215e2afd7954ada2ae20b4fdd2c5fe6139a3b02d105db"
+dependencies = [
+ "rustls 0.23.41",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-stream"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7422,8 +7457,12 @@ checksum = "edc5f74e248dc973e0dbb7b74c7e0d6fcc301c694ff50049504004ef4d0cdcd9"
 dependencies = [
  "futures-util",
  "log",
+ "rustls 0.23.41",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls 0.26.6",
  "tungstenite",
+ "webpki-roots 0.26.11",
 ]
 
 [[package]]
@@ -7582,7 +7621,7 @@ dependencies = [
  "rustls-pemfile",
  "rustls-pki-types",
  "tokio",
- "tokio-rustls",
+ "tokio-rustls 0.25.0",
  "tokio-stream",
  "tower 0.4.13",
  "tower-layer",
@@ -7828,6 +7867,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.8.6",
+ "rustls 0.23.41",
+ "rustls-pki-types",
  "sha1",
  "thiserror 1.0.69",
  "utf-8",

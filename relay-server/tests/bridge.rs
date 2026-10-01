@@ -659,3 +659,29 @@ async fn desktop_ping_miss_evicts_bridge_and_notifies_phone() {
     expect_connect_error(&mut p_ws, "device_offline").await;
     expect_closed(&mut p_ws).await;
 }
+
+/// Aide Link 的 Host 无码注册（`pairing_code` 缺省）：只按 device_id 路由，中继不持有任何配对秘密；
+/// 同一设备此前登记过的码路由随之清掉（改用无码注册 = 不再可被码寻址）。
+#[tokio::test]
+async fn register_without_a_pairing_code_routes_by_device_id_only() {
+    let url = start_server().await;
+
+    // 先以旧方式带码注册，再以无码方式重新注册（同一 device_id）
+    let (mut old, _) = connect_async(&url).await.unwrap();
+    old.send(register("dev-link", "111222")).await.unwrap();
+    settle().await;
+    let (mut d_ws, _) = connect_async(&url).await.unwrap();
+    d_ws.send(Message::Text(r#"{"type":"register","device_id":"dev-link"}"#.into())).await.unwrap();
+    settle().await;
+
+    // 按 device_id 寻址：桥得通
+    let (mut p_ws, _) = connect_async(&url).await.unwrap();
+    p_ws.send(connect_device("dev-link")).await.unwrap();
+    p_ws.send(Message::Text("hello-link".into())).await.unwrap();
+    expect_text(&mut d_ws, "hello-link").await;
+
+    // 旧码不再能寻址到它
+    let (mut q_ws, _) = connect_async(&url).await.unwrap();
+    q_ws.send(connect_code("111222")).await.unwrap();
+    expect_connect_error(&mut q_ws, "unknown_code").await;
+}

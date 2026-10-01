@@ -24,6 +24,8 @@ pub mod identity;
 pub mod secure;
 pub mod session;
 pub mod testkit;
+#[cfg(feature = "transport")]
+pub mod transport;
 
 pub use identity::{Change, Identity, MemoryVault, Vault};
 pub use backend::{Backend, BoxFuture, Subscription};

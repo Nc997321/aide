@@ -277,13 +277,31 @@ impl Transport {
 
 // ── 配对二维码 ───────────────────────────────────────────────────────────────
 
+/// 手机怎么够到 Host。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Endpoint {
+    /// 经中继：连这个 WebSocket 地址，**先发中继层 `connect{device_id}`**，再说安全通道。URI 键 `relay`。
+    Relay(String),
+    /// 直连 Host 的 WebSocket（局域网 / Tailscale / 测试 Host）：连上即说安全通道，**不发**中继帧。URI 键 `direct`。
+    Direct(String),
+}
+
+impl Endpoint {
+    pub fn url(&self) -> &str {
+        match self {
+            Endpoint::Relay(u) | Endpoint::Direct(u) => u,
+        }
+    }
+}
+
 /// 二维码里的内容：手机据此知道「连谁、怎么连、信谁的公钥、用哪把一次性密钥」。
 ///
-/// 形如 `aide-link://pair?v=1&relay=wss%3A%2F%2F…&id=<32 hex>&pk=<43 b64url>&psk=<43 b64url>&n=<名字>&exp=<unix 秒>`。
+/// 形如 `aide-link://pair?v=1&relay=wss%3A%2F%2F…&id=<32 hex>&pk=<43 b64url>&psk=<43 b64url>&n=<名字>&exp=<unix 秒>`
+/// （直连时 `relay=` 换成 `direct=`，二者恰有一个）。
 /// `psk` 一次性、10 分钟有效；不要把它存起来或写进日志。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PairingOffer {
-    pub relay: String,
+    pub endpoint: Endpoint,
     pub device_id: String,
     pub host_public: [u8; 32],
     pub psk: [u8; 32],
@@ -296,9 +314,13 @@ const URI_PREFIX: &str = "aide-link://pair?";
 impl PairingOffer {
     pub fn to_uri(&self) -> String {
         use percent_encoding::{utf8_percent_encode, NON_ALPHANUMERIC};
+        let (key, url) = match &self.endpoint {
+            Endpoint::Relay(u) => ("relay", u),
+            Endpoint::Direct(u) => ("direct", u),
+        };
         format!(
-            "{URI_PREFIX}v=1&relay={}&id={}&pk={}&psk={}&n={}&exp={}",
-            utf8_percent_encode(&self.relay, NON_ALPHANUMERIC),
+            "{URI_PREFIX}v=1&{key}={}&id={}&pk={}&psk={}&n={}&exp={}",
+            utf8_percent_encode(url, NON_ALPHANUMERIC),
             self.device_id,
             b64(&self.host_public),
             b64(&self.psk),
@@ -311,13 +333,15 @@ impl PairingOffer {
         use percent_encoding::percent_decode_str;
         let query = uri.strip_prefix(URI_PREFIX).ok_or("not an aide-link pairing URI")?;
         let mut v = None;
-        let (mut relay, mut id, mut pk, mut psk, mut name, mut exp) = (None, None, None, None, None, None);
+        let (mut relay, mut direct, mut id, mut pk, mut psk, mut name, mut exp) =
+            (None, None, None, None, None, None, None);
         for pair in query.split('&') {
             let (k, val) = pair.split_once('=').ok_or("malformed query")?;
             let dec = || percent_decode_str(val).decode_utf8().map(|s| s.into_owned()).map_err(|e| e.to_string());
             match k {
                 "v" => v = Some(val.to_string()),
                 "relay" => relay = Some(dec()?),
+                "direct" => direct = Some(dec()?),
                 "id" => id = Some(val.to_string()),
                 "pk" => pk = Some(val.to_string()),
                 "psk" => psk = Some(val.to_string()),
@@ -333,8 +357,14 @@ impl PairingOffer {
         if device_id.len() != 32 || !device_id.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err("bad device id".into());
         }
+        let endpoint = match (relay, direct) {
+            (Some(r), None) => Endpoint::Relay(r),
+            (None, Some(d)) => Endpoint::Direct(d),
+            (None, None) => return Err("missing relay / direct endpoint".into()),
+            (Some(_), Some(_)) => return Err("both relay and direct given".into()),
+        };
         Ok(Self {
-            relay: relay.ok_or("missing relay")?,
+            endpoint,
             device_id,
             host_public: unb64_32(&pk.ok_or("missing pk")?).ok_or("bad pk")?,
             psk: unb64_32(&psk.ok_or("missing psk")?).ok_or("bad psk")?,
@@ -434,7 +464,7 @@ mod tests {
     fn pairing_uri_roundtrips_and_rejects_garbage() {
         let host = generate_keypair();
         let offer = PairingOffer {
-            relay: "wss://relay.example.com/aide?x=1&y=2".into(),
+            endpoint: Endpoint::Relay("wss://relay.example.com/aide?x=1&y=2".into()),
             device_id: DEV.into(),
             host_public: host.public,
             psk: [9u8; 32],
@@ -450,5 +480,10 @@ mod tests {
         }
         // 未知键向前兼容
         assert!(PairingOffer::parse(&format!("{uri}&future=1")).is_ok());
+        // 直连形态：键是 direct，往返不变；relay 与 direct 不能同时给
+        let direct = PairingOffer { endpoint: Endpoint::Direct("ws://192.168.1.20:8787/".into()), ..offer.clone() };
+        assert!(direct.to_uri().contains("&direct=") && !direct.to_uri().contains("&relay="));
+        assert_eq!(PairingOffer::parse(&direct.to_uri()).unwrap(), direct);
+        assert!(PairingOffer::parse(&format!("{uri}&direct=ws%3A%2F%2Fx")).is_err());
     }
 }

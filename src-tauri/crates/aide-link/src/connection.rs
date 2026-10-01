@@ -43,6 +43,9 @@ enum Stage {
 }
 
 pub struct Connection {
+    /// 可重启：同一条底层连接上允许先后出现多次握手（中继把空闲的 Host 连接「重新挂起」给下一次
+    /// 手机连接，而不告诉 Host 手机换了——新手机的 `sc_init` 就是唯一的信号）。直连 WebSocket 不开。
+    restartable: bool,
     backend: Arc<dyn Backend>,
     identity: Arc<Identity>,
     wire: UnboundedSender<WireFrame>,
@@ -53,7 +56,22 @@ pub struct Connection {
 
 impl Connection {
     pub fn new(backend: Arc<dyn Backend>, identity: Arc<Identity>, wire: UnboundedSender<WireFrame>) -> Self {
-        Self { backend, identity, wire, stage: Stage::Init, started: Instant::now(), pump: None }
+        Self { restartable: false, backend, identity, wire, stage: Stage::Init, started: Instant::now(), pump: None }
+    }
+
+    /// 允许在同一条连接上重新握手（见字段说明）。
+    pub fn restartable(mut self, yes: bool) -> Self {
+        self.restartable = yes;
+        self
+    }
+
+    /// 丢弃当前这次握手 / 会话，回到等 `sc_init` 的初始态（旧会话的订阅随之退掉）。
+    fn restart(&mut self) {
+        if let Some(p) = self.pump.take() {
+            p.abort();
+        }
+        self.stage = Stage::Init;
+        self.started = Instant::now();
     }
 
     pub fn is_closed(&self) -> bool {
@@ -78,13 +96,21 @@ impl Connection {
 
     /// 收到一条线上的文本消息。
     pub async fn on_wire_text(&mut self, text: &str) {
+        if text.len() > MAX_WIRE_TEXT {
+            if !(matches!(self.stage, Stage::Dead) || self.is_closed()) {
+                self.reject(ErrorCode::TooLarge, "wire message too large");
+            }
+            return;
+        }
+        let parsed = serde_json::from_str::<WireFrame>(text);
+        // 新的握手 = 新的一次连接（可重启时，任何阶段都从头来）
+        if self.restartable && matches!(parsed, Ok(WireFrame::ScInit { .. })) && !matches!(self.stage, Stage::Init) {
+            self.restart();
+        }
         if matches!(self.stage, Stage::Dead) || self.is_closed() {
             return;
         }
-        if text.len() > MAX_WIRE_TEXT {
-            return self.reject(ErrorCode::TooLarge, "wire message too large");
-        }
-        let Ok(frame) = serde_json::from_str::<WireFrame>(text) else {
+        let Ok(frame) = parsed else {
             return self.reject(ErrorCode::ProtocolError, "expected an sc_init / sc frame");
         };
         match (&mut self.stage, frame) {

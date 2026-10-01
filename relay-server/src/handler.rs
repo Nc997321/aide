@@ -96,10 +96,9 @@ pub async fn handle_conn(stream: TcpStream, state: SharedState) -> Result<(), St
                 .and_then(|s| s.as_str())
                 .ok_or("register: missing device_id")?
                 .to_string();
-            let code = v
-                .get("pairing_code")
-                .and_then(|s| s.as_str())
-                .ok_or("register: missing pairing_code")?;
+            // 配对码可选：旧协议 v2 的桌面带码（码路由）；Aide Link 的 Host 不带——配对靠二维码里的
+            // device_id + 密钥，中继既不需要也不该知道任何配对秘密。
+            let code = v.get("pairing_code").and_then(|s| s.as_str());
             // 顶替探测与码宣告同锁：探测必须落在 insert_device（park_device 内）
             // 之前——旧登记被覆盖时其看守/桥接收 None 退出并丢弃连接，正是双实例
             // 互踢战争的形态，日志要能一眼看出。探测与 insert 非原子（跨锁窗口），
@@ -108,7 +107,10 @@ pub async fn handle_conn(stream: TcpStream, state: SharedState) -> Result<(), St
             let superseded = {
                 let mut st = lock_recover(&state);
                 let superseded = st.devices.contains_key(&device_id);
-                st.announce_code(&device_id, code);
+                match code {
+                    Some(code) => st.announce_code(&device_id, code),
+                    None => st.forget_code(&device_id), // 同一设备改用无码注册：清掉它旧的码路由
+                }
                 superseded
             };
             park_device(&state, device_id.clone(), sink, stream);
