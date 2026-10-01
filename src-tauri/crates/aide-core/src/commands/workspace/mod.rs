@@ -17,6 +17,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("workspace_set_jdk", workspace_set_jdk),
     command!("list_workspaces", list_workspaces),
     command!("daily_workspace", daily_workspace),
+    command!("get_active_workspace", get_active_workspace),
     command!("set_workspace", set_workspace),
     command!("create_workspace", create_workspace),
     command!("remove_workspace", remove_workspace),
@@ -1020,4 +1021,22 @@ fn try_decode(prefix: &str, remaining: &str, sep: char) -> Option<String> {
     } else {
         None
     }
+}
+
+/// 活动工作区快照：key 与 `list_workspaces` 的 key 同源（编码键），path 为解码路径；未设置工作区
+/// 序列化为 null。纯状态读取、无 IO。远程客户端（手机）据此给「跟随桌面」槽位解析真名——
+/// 只读不写，活动工作区仍由 Host 自己管理。
+#[derive(serde::Serialize)]
+pub struct ActiveWorkspace {
+    pub key: String,
+    pub path: String,
+}
+
+async fn get_active_workspace(core: Arc<Core>, _: crate::commands::NoArgs) -> Result<Option<ActiveWorkspace>, String> {
+    let key = core.workspace.key.lock().map_err(|e| e.to_string())?.clone();
+    let path = core.workspace.path.lock().map_err(|e| e.to_string())?.clone();
+    Ok(match (key, path) {
+        (Some(key), Some(path)) => Some(ActiveWorkspace { key, path: path.to_string_lossy().to_string() }),
+        _ => None,
+    })
 }

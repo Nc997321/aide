@@ -49,6 +49,8 @@ pub fn prepare_workspace() -> WorkspaceState {
 ///
 /// 前门若要给 runtime 挂 GUI 侧钩子（`runtime.set_hooks`），须在调用本函数之前挂好。
 pub fn start(core: &Arc<Core>) {
+    // 手机网关：上次是启用状态就接上中继（身份没有就生成）
+    core.link.start(core);
     // 老 provider schema 迁移（幂等）——必须在 runtime 取 env 之前。
     if let Err(e) = crate::provider::ensure_migrated() {
         tracing::error!("provider schema migration failed: {e}（继续用旧配置）");

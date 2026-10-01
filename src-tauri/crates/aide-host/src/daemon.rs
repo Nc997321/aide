@@ -26,7 +26,7 @@ use crate::kit::HostKit;
 use crate::session::{serve_client, Daemon};
 
 const DEFAULT_IDLE_SECS: u64 = 1800;
-const IDLE_CHECK: Duration = Duration::from_secs(30);
+const DEFAULT_IDLE_CHECK_SECS: u64 = 30;
 
 /// 守护进程的落地目录（与按版本的安装目录同级）。
 fn host_dir() -> PathBuf {
@@ -56,6 +56,12 @@ async fn read_init() -> ServeInit {
         }),
         _ => ServeInit::default(),
     }
+}
+
+/// 空闲检查的间隔（`AIDE_HOST_IDLE_CHECK_SECS`，默认 30 秒；测试调小）。
+fn idle_check() -> Duration {
+    let secs = std::env::var("AIDE_HOST_IDLE_CHECK_SECS").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(DEFAULT_IDLE_CHECK_SECS);
+    Duration::from_secs(secs.max(1))
 }
 
 fn idle_grace() -> Duration {
@@ -130,7 +136,7 @@ pub async fn run() -> i32 {
     }
     let mut term = signal(SignalKind::terminate()).ok();
     let grace = idle_grace();
-    let mut tick = tokio::time::interval(IDLE_CHECK);
+    let mut tick = tokio::time::interval(idle_check());
 
     loop {
         tokio::select! {
@@ -144,7 +150,8 @@ pub async fn run() -> i32 {
             _ = daemon.shutdown.notified() => break,
             _ = async { match term.as_mut() { Some(t) => { t.recv().await; } None => std::future::pending().await } } => break,
             _ = tick.tick() => {
-                if core.bus.client_count() == 0 && core.bus.idle_for() >= grace {
+                // 启用了手机网关的 Host 要一直在：手机随时会来，不能因为「没有客户端」就退
+                if core.bus.client_count() == 0 && core.bus.idle_for() >= grace && !core.link.is_enabled(&core) {
                     eprintln!("[aide-host] idle for {}s with no clients; exiting", grace.as_secs());
                     break;
                 }

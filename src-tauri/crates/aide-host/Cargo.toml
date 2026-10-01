@@ -18,3 +18,10 @@ base64 = "0.22"
 [[bin]]
 name = "aide-host"
 path = "src/main.rs"
+
+[dev-dependencies]
+# 真 Host 端到端：真守护进程 + 真中继（进程内）+ 手机一侧的参考客户端
+aide-link = { path = "../aide-link", features = ["transport"] }
+aide-relay = { path = "../../../relay-server" }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

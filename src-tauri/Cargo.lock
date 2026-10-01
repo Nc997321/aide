@@ -145,6 +145,7 @@ dependencies = [
 name = "aide-core"
 version = "0.8.0"
 dependencies = [
+ "aide-link",
  "aide-workspace",
  "base64 0.22.1",
  "chrono",
@@ -155,6 +156,7 @@ dependencies = [
  "once_cell",
  "percent-encoding",
  "portable-pty",
+ "qrcode",
  "regex",
  "serde",
  "serde_json",
@@ -170,11 +172,15 @@ name = "aide-host"
 version = "0.8.0"
 dependencies = [
  "aide-core",
+ "aide-link",
+ "aide-relay",
  "base64 0.22.1",
+ "futures-util",
  "libc",
  "serde",
  "serde_json",
  "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]
