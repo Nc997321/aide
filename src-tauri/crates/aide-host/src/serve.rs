@@ -1,221 +1,206 @@
-//! `aide-host serve`：一个完整的 Host（aide-core），经 stdio JSON-RPC 连到一扇 GUI 窗口。
+//! `aide-host serve`：桌面一扇窗口（一台 Host 的一条连接）与**守护进程**之间的桥。
 //!
-//! 生命周期：首行 [`ServeInit`] → Host 起来（agent runtime / 自动化调度在后台拉起）→ 请求循环
-//! → stdin EOF（窗口断开）→ 收掉 runtime 子进程树后退出。
+//! 桌面 ↔ serve 的 stdio 协议不变（首行 [`ServeInit`]，随后 JSON-RPC）；serve 自己不持有
+//! Host——它连到常驻的 `aide-host daemon`（没有就拉起一个），attach 之后把两端的字节
+//! 原样对接。所以**这条桥断了不影响 Host**：桌面重连，凭首行里的 `resume` 把错过的事件
+//! 补回来，会话还在。
 //!
-//! 并发模型：每条请求独立 spawn（慢的全树搜索不堵住文件树的 list_directory）；
-//! 所有出站帧（响应 + 通知）经同一个 mpsc 串行写 stdout，保证一行一帧不交错；
-//! 通知 = Host 核心（aide-core）经 `EventSink` 发出的事件。
-//! stdin EOF = 桌面断开（wsl/ssh 管道关闭）→ 进程退出，监听线程随之消亡。
+//! 接入前先探守护进程（`hello`）：版本与本桥不符且它空闲（没有别的客户端）就让它退场、
+//! 拉起匹配的新版；它正忙就将就着接（协议一致即可），不打断别人的会话。
 
-use std::sync::Arc;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
-use std::collections::HashMap;
-use std::path::PathBuf;
-
-use aide_core::resources::HostResources;
-use aide_core::settings::{FileSecretStore, SettingsPaths, SettingsService};
-use aide_core::{Core, EventSink};
 use aide_host::protocol::{
-    HelloInfo, InvokeParams, Notification, Request, Response, ServeInit, METHOD_HELLO,
-    METHOD_INVOKE, PROTOCOL_VERSION,
+    HelloInfo, Request, Response, ServeInit, METHOD_ATTACH, METHOD_HELLO, METHOD_SHUTDOWN,
+    PROTOCOL_VERSION,
 };
-use serde_json::Value;
+use serde_json::{json, Value};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::net::UnixStream;
 
-use crate::dispatch;
+use crate::daemon;
 
-/// Host 核心的事件出口 = stdout 通知帧（与响应帧同一条串行写出通道）。
-struct NotifySink(UnboundedSender<String>);
+/// 守护进程从无到能连上的最长等待（含首次启动：数据迁移 / 恢复工作区）。
+const DAEMON_READY: Duration = Duration::from_secs(30);
+/// 握手里单次应答的等待上限。
+const REPLY_TIMEOUT: Duration = Duration::from_secs(10);
 
-impl EventSink for NotifySink {
-    fn emit(&self, event: &str, payload: Value) {
-        let n = Notification {
-            event: event.to_string(),
-            payload,
-        };
-        match serde_json::to_string(&n) {
-            // 发送失败 = 桌面已断开，进程即将随 stdin EOF 退出，无处可报
-            Ok(s) => {
-                let _ = self.0.send(s);
-            }
-            Err(e) => eprintln!("[aide-host] event {event} not serialisable: {e}"),
-        }
-    }
-}
+type Half = (BufReader<OwnedReadHalf>, OwnedWriteHalf);
 
-/// 目标机上 Host 的随包资源：套件安装目录里的 sidecar（runtime.js，node 跑）+ 套件带的
-/// claude CLI。codegraph runner / 捆绑 LSP 还不随远程套件分发——如实报错 / 走登录 PATH。
-struct HostKit {
-    init: ServeInit,
-    install_dir: PathBuf,
-}
-
-impl HostResources for HostKit {
-    fn codegraph_runner(&self) -> Result<PathBuf, String> {
-        Err("代码索引暂不随远程 Host 分发".into())
-    }
-
-    fn codegraph_model_dir(&self) -> Option<PathBuf> {
-        None
-    }
-
-    fn lsp_dir(&self) -> Option<PathBuf> {
-        None
-    }
-
-    fn agent_runtime(&self) -> Result<(String, PathBuf), String> {
-        let runtime = self.install_dir.join("runtime").join("runtime.js");
-        if !runtime.is_file() {
-            return Err(format!("sidecar missing: {}", runtime.display()));
-        }
-        // 进程环境已是登录环境（main 里切过），`which` 看到的就是用户终端的 PATH。
-        let node = self.init.node.clone().unwrap_or_else(|| "node".into());
-        let node = crate::login::which(&node, None)
-            .ok_or_else(|| format!("找不到 node（{node}）：请在目标机上安装 Node.js"))?;
-        Ok((node, runtime))
-    }
-
-    fn claude_exe(&self) -> Option<PathBuf> {
-        self.init.claude_exe.as_ref().map(PathBuf::from)
-    }
-
-    fn agent_env(&self) -> HashMap<String, String> {
-        let mut env: HashMap<String, String> = self
-            .init
-            .default_env
-            .iter()
-            .filter(|(k, _)| std::env::var_os(k).is_none())
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
-        env.extend(self.init.env.clone());
-        env
-    }
+enum Negotiated {
+    Ready(Half),
+    /// 旧版本守护进程已被要求退出：稍后重连新的。
+    Retired,
 }
 
 pub async fn run() -> i32 {
-    let mut lines = BufReader::new(tokio::io::stdin()).lines();
-    let init: ServeInit = match lines.next_line().await {
-        Ok(Some(first)) => match serde_json::from_str(first.trim()) {
-            Ok(i) => i,
-            Err(e) => {
-                eprintln!("[aide-host] bad init line: {e}");
-                return 2;
-            }
-        },
+    let mut stdin = BufReader::new(tokio::io::stdin());
+    let mut first = String::new();
+    match stdin.read_line(&mut first).await {
+        Ok(n) if n > 0 => {}
         _ => {
             eprintln!("[aide-host] no init line");
             return 2;
         }
+    }
+    let init: ServeInit = match serde_json::from_str(first.trim()) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("[aide-host] bad init line: {e}");
+            return 2;
+        }
     };
-    let install_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."));
 
-    let (tx, mut rx) = unbounded_channel::<String>();
+    let (mut from_daemon, mut to_daemon) = match connect(&init).await {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("[aide-host] {e}");
+            return 3;
+        }
+    };
 
-    let writer = tokio::spawn(async move {
-        let mut out = tokio::io::stdout();
-        while let Some(mut line) = rx.recv().await {
-            line.push('\n');
-            if out.write_all(line.as_bytes()).await.is_err() || out.flush().await.is_err() {
-                break; // 桌面已断开
+    // 对接两端；任何一边结束就收：桌面关了 stdin = 正常断开；守护进程那头没了 = 出错退出
+    // （桌面看到 EOF 会走断线重连）。
+    let up = async {
+        let _ = tokio::io::copy(&mut stdin, &mut to_daemon).await;
+        let _ = to_daemon.shutdown().await;
+        0
+    };
+    let down = async {
+        let _ = tokio::io::copy(&mut from_daemon, &mut tokio::io::stdout()).await;
+        eprintln!("[aide-host] daemon closed the connection");
+        4
+    };
+    tokio::select! { code = up => code, code = down => code }
+}
+
+/// 连上（必要时拉起）守护进程并完成 attach。
+async fn connect(init: &ServeInit) -> Result<Half, String> {
+    let sock = daemon::socket_path();
+    let deadline = Instant::now() + DAEMON_READY;
+    let mut spawned = false;
+    loop {
+        match UnixStream::connect(&sock).await {
+            Ok(stream) => match negotiate(stream, init).await? {
+                Negotiated::Ready(h) => return Ok(h),
+                Negotiated::Retired => {
+                    spawned = false;
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+            },
+            Err(_) => {
+                if !spawned {
+                    spawn_daemon(init).await?;
+                    spawned = true;
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
-    });
+        if Instant::now() > deadline {
+            return Err(format!(
+                "守护进程未能在 {}s 内就绪（日志：{}）",
+                DAEMON_READY.as_secs(),
+                daemon::log_path().display()
+            ));
+        }
+    }
+}
 
-    // Host 启动引导：与桌面本机 Host 同一份（aide_core::host）——数据迁移 / 日常目录 /
-    // 恢复活动工作区，然后 provider 迁移 / agent runtime / 自动化 / 内置插件。
-    let workspace = tokio::task::spawn_blocking(aide_core::host::prepare_workspace)
+async fn call(
+    r: &mut BufReader<OwnedReadHalf>,
+    w: &mut OwnedWriteHalf,
+    id: u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    let mut line = serde_json::to_string(&Request { id, method: method.into(), params }).map_err(|e| e.to_string())?;
+    line.push('\n');
+    w.write_all(line.as_bytes()).await.map_err(|e| e.to_string())?;
+    let mut buf = String::new();
+    tokio::time::timeout(REPLY_TIMEOUT, r.read_line(&mut buf))
         .await
-        .unwrap_or_default();
-    let core = Core::new(
-        Arc::new(workspace),
-        Arc::new(host_settings()),
-        Arc::new(NotifySink(tx.clone())),
-        Arc::new(HostKit { init, install_dir }),
-    );
-    aide_core::host::start(&core);
-    while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim().is_empty() {
-            continue;
+        .map_err(|_| format!("守护进程对 `{method}` 无应答"))?
+        .map_err(|e| e.to_string())?;
+    if buf.is_empty() {
+        return Err("守护进程在握手中途断开".into());
+    }
+    let resp: Response = serde_json::from_str(buf.trim()).map_err(|e| format!("守护进程应答无法解析：{e}"))?;
+    match (resp.ok, resp.err) {
+        (_, Some(e)) => Err(e),
+        (ok, None) => Ok(ok.unwrap_or(Value::Null)),
+    }
+}
+
+async fn negotiate(stream: UnixStream, init: &ServeInit) -> Result<Negotiated, String> {
+    let (r, mut w) = stream.into_split();
+    let mut r = BufReader::new(r);
+    let hello: HelloInfo =
+        serde_json::from_value(call(&mut r, &mut w, 1, METHOD_HELLO, Value::Null).await?).map_err(|e| e.to_string())?;
+
+    let current = hello.protocol == PROTOCOL_VERSION && hello.version == crate::VERSION;
+    if !current {
+        // 空闲的旧守护进程：让它退场，换匹配的新版。正忙的不打断——协议一致就将就着接。
+        if hello.clients == 0 {
+            match call(&mut r, &mut w, 2, METHOD_SHUTDOWN, json!({ "force": false })).await {
+                Ok(_) => return Ok(Negotiated::Retired),
+                Err(e) => eprintln!("[aide-host] old daemon refused to retire: {e}"),
+            }
         }
-        let req: Request = match serde_json::from_str(&line) {
-            Ok(r) => r,
-            Err(e) => {
-                eprintln!("[aide-host] bad frame: {e}");
-                continue;
-            }
-        };
-        let tx = tx.clone();
-        let core = Arc::clone(&core);
-        tokio::spawn(async move {
-            let resp = match handle(req.method.as_str(), req.params, core).await {
-                Ok(v) => Response {
-                    id: req.id,
-                    ok: Some(v),
-                    err: None,
-                },
-                Err(e) => Response {
-                    id: req.id,
-                    ok: None,
-                    err: Some(e),
-                },
-            };
-            if let Ok(s) = serde_json::to_string(&resp) {
-                let _ = tx.send(s);
-            }
+        if hello.protocol != PROTOCOL_VERSION {
+            return Err(format!(
+                "Host 守护进程是旧协议（{}，本套件 {}）且仍有客户端连着；请先关掉那些窗口，或在目标机上结束 aide-host daemon",
+                hello.protocol, PROTOCOL_VERSION
+            ));
+        }
+        eprintln!(
+            "[aide-host] daemon is {} (this kit is {}); busy, attaching anyway",
+            hello.version,
+            crate::VERSION
+        );
+    }
+    let params = serde_json::to_value(init).map_err(|e| e.to_string())?;
+    call(&mut r, &mut w, 3, METHOD_ATTACH, params).await?;
+    Ok(Negotiated::Ready((r, w)))
+}
+
+/// 拉起守护进程：独立会话（`setsid`，ssh / 终端断开不带走它）、stdio 全脱钩（否则 ssh 通道
+/// 会因它持有 fd 而收不了尾），日志进 `daemon.log`；首个客户端的 `ServeInit` 经 stdin 交给它。
+async fn spawn_daemon(init: &ServeInit) -> Result<(), String> {
+    use std::os::unix::process::CommandExt as _;
+    let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
+    let log = open_log(&daemon::log_path());
+    let mut cmd = tokio::process::Command::new(exe);
+    cmd.arg("daemon")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(log.map(std::process::Stdio::from).unwrap_or_else(std::process::Stdio::null))
+        .kill_on_drop(false);
+    // SAFETY：pre_exec 在 fork 后、exec 前只调 async-signal-safe 的 setsid。
+    unsafe {
+        cmd.as_std_mut().pre_exec(|| {
+            libc::setsid();
+            Ok(())
         });
     }
-    // 窗口断开：收掉 agent runtime 与语言服务器（子进程树不随 serve 退出自动消亡）
-    core.runtime.kill_runtime().await;
-    core.lsp.kill_all().await;
-    // 停掉监听线程（它经 NotifySink 持有 tx 的克隆，不停表 writer 永远等不到通道关闭）
-    let _ = tokio::task::spawn_blocking(move || aide_core::commands::watch::retarget(&core, None)).await;
-    drop(tx);
-    let _ = writer.await;
-    0
+    let mut child = cmd.spawn().map_err(|e| format!("无法拉起守护进程：{e}"))?;
+    if let Some(mut stdin) = child.stdin.take() {
+        let mut line = serde_json::to_string(init).map_err(|e| e.to_string())?;
+        line.push('\n');
+        let _ = stdin.write_all(line.as_bytes()).await;
+    }
+    // 不 wait：守护进程是孤儿，退出由它自己管
+    Ok(())
 }
 
-async fn handle(method: &str, params: Value, core: Arc<Core>) -> Result<Value, String> {
-    match method {
-        METHOD_HELLO => serde_json::to_value(hello()).map_err(|e| e.to_string()),
-        METHOD_INVOKE => {
-            let p: InvokeParams =
-                serde_json::from_value(params).map_err(|e| format!("invalid invoke: {e}"))?;
-            dispatch::invoke(core, p).await
-        }
-        other => Err(format!("aide-host: unknown method `{other}`")),
+/// 追加写的日志；超过 1MiB 就从头来（它只是排障线索，不值得无限长）。
+fn open_log(path: &Path) -> Option<std::fs::File> {
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
     }
-}
-
-/// 目标机上的设置：文件落目标机 `~/.aide/`；密钥落 `~/.aide/secrets.json`（0600）——供应商
-/// 按 Host 自持（2026-09-30 定），桌面可显式把本机供应商复制过来。初始化失败只留痕：设置类
-/// 命令会如实报 NotInitialized，其余命令照常可用。
-fn host_settings() -> SettingsService {
-    let paths = SettingsPaths::new().unwrap_or_else(|e| {
-        eprintln!("[aide-host] settings paths: {e}");
-        SettingsPaths::for_test(aide_core::paths::our_config_dir())
-    });
-    let secrets = FileSecretStore::new(aide_core::paths::our_config_dir().join("secrets.json"));
-    let service = SettingsService::new(paths, Arc::new(secrets));
-    if let Err(e) = service.initialize_blocking() {
-        eprintln!("[aide-host] settings initialise failed: {e}");
+    if std::fs::metadata(path).map(|m| m.len() > (1 << 20)).unwrap_or(false) {
+        let _ = std::fs::remove_file(path);
     }
-    service
-}
-
-fn hello() -> HelloInfo {
-    HelloInfo {
-        protocol: PROTOCOL_VERSION,
-        version: crate::VERSION.to_string(),
-        os: std::env::consts::OS.to_string(),
-        arch: std::env::consts::ARCH.to_string(),
-        home: std::env::var("HOME").unwrap_or_default(),
-        user: std::env::var("USER")
-            .or_else(|_| std::env::var("LOGNAME"))
-            .unwrap_or_default(),
-    }
+    std::fs::OpenOptions::new().create(true).append(true).open(path).ok()
 }

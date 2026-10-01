@@ -58,6 +58,29 @@ describe("HostConnectionBanner", () => {
     expect(w.find("button").text()).toBe("重新连接");
   });
 
+  it("自动重连中：只提示会话仍在、没有按钮；连回来后条自己消失", async () => {
+    const w = await mountBanner();
+    handlers[0]({ payload: status("reconnecting", "ssh: broken pipe") });
+    await flushPromises();
+    expect(w.find(".host-banner").exists()).toBe(true);
+    expect(w.text()).toContain("自动重新连接");
+    expect(w.text()).toContain("会话仍在运行");
+    expect(w.find("button").exists()).toBe(false);
+
+    handlers[0]({ payload: status("connected") });
+    await flushPromises();
+    expect(w.find(".host-banner").exists()).toBe(false);
+  });
+
+  it("重连上了但错过的更新补不齐：提示会话仍在，按钮是「重新加载」", async () => {
+    const w = await mountBanner();
+    handlers[0]({ payload: status("resync", "断线期间错过的更新太多") });
+    await flushPromises();
+    expect(w.text()).toContain("错过了部分更新");
+    expect(w.text()).not.toContain("会话已终止");
+    expect(w.find("button").text()).toBe("重新加载");
+  });
+
   it("只认本窗口 Host 的状态，别的 Host 的断开不影响", async () => {
     const w = await mountBanner();
     handlers[0]({ payload: { ...status("disconnected"), host: "wsl:Debian", label: "WSL: Debian" } });

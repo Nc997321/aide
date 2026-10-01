@@ -1,6 +1,6 @@
 # Host 模型：后端整体跑在 Host 上，GUI 只是屏幕
 
-> 状态：P0、P1（含 P1e）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个。旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已整体删除（P1d）。下一步见 §3 的 P2d / P3。
+> 状态：P0、P1（含 P1e）、P2、P3a（Host 常驻守护进程）已落地（2026-09-30）——本机与 WSL / SSH 都是 Host，一个窗口连一个；远程 Host 是常驻守护进程，连接断了会话还在。下一步见 §3 的 P3b（手机直连 Host）。
 
 ## 1. 产品模型
 
@@ -40,9 +40,11 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 - **远程前门** `aide-host serve`：首行 `ServeInit`（协议 v4），`invoke` 方法查同一张表；二进制结果包成 `{"$bytes": b64}`。serve 就是一个完整 Host：agent runtime / 自动化 / LSP 都在它里面，进程整体跑在用户登录环境里。aide-host 以 musl 静态链接嵌入 aide-core，故 **aide-core 与 aide-host 同守「不依赖系统 C 库、单静态二进制」**（crate 自带的 C/汇编如 ring 可静态编入，2026-09-30 定）。
 - **agent 引擎**（Node sidecar）仍是 Host 的子进程，stdin/stdout 协议不变。
 
-### 事件契约（待兑现）
+### 事件契约（P3a 兑现）
 
-多个窗口 / 手机可能连同一个 Host。事件必须**按会话订阅投递**（已删除的 headless 验收过这套语义：重复订阅先摘旧、断连自动摘除），不许沿用桌面现行的全量广播——那在多客户端下是泄露隐患。
+多个窗口 / 手机可能连同一个 Host。守护进程的事件中心（`crates/aide-host/src/hub.rs`）给每个事件编全局序号并留底，按**会话订阅投递**：`chat-event` 只送订阅了该会话的客户端，不带会话号的事件（文件变更 / LSP / 系统通知…）全送；默认订阅全部（桌面行为不变）；回放也按订阅过滤，受限订阅者重连看不到别的会话。本机进程内 Host 仍是桌面 `TauriSink` 的全量 `emit_to` 本机窗口（没有多客户端）。
+
+**常驻 Host 的生命周期**：窗口的最后一扇关掉 = 桥断开，守护进程**留着**（会话继续跑完，下次连上还在），无客户端且静默超过宽限才退。WSL 注意：Windows 在没有 `wsl.exe` 进程时会让发行版空闲关机（守护进程随之消失，重连时按「Host 重启」如实报断开）；要让 WSL Host 长驻需开 systemd 或自行保活。孤儿守护进程被 WSL 的 `/init` 收养、退出后留一个无害的僵尸，随虚拟机重启消失。
 
 ## 3. 迁移阶梯
 
@@ -66,8 +68,8 @@ Host 窗口 invoke ─ host_door::forward     │ Core: 工作区 · 设置 · r
 | P2a | SSH 真机验证：安装 / serve 握手 / fs · 上传 · 监听 · git / Host 里的 rust-analyzer 经真实 SSH 全部通过（e2e 用例按 `AIDE_E2E_SSH` / `AIDE_E2E_WSL` 选目标）。**已知缺口：SSH 不转发桌面回环代理**（服务器到不了桌面的 127.0.0.1），目标机无直连网络时 agent 一轮会话 403——见下方「SSH 代理」 | ✅ 2026-09-30 |
 | P2b | 断线可见 + 手动重连：`HostConnection` 的 `on_closed` 回调 → 注册表把 Host 标成「已断开」（`dropped`），**不再静默懒重连**（重连 = 全新 serve，进行中的会话早已随旧 serve 收掉）；`remote-workspace-status` 事件 + 合成 `runtime_dead` 帧投给该 Host 的窗口；SDK 的 `runtime_dead` 处理收掉所有正忙会话（本机 runtime 死亡同样受益）；Host 窗口顶部状态条「重新连接」= 显式连接 + 重载窗口 | ✅ 2026-09-30 |
 | P2c | Host 启动页：标题栏的 Host 标签（本机窗口也有）点开 `HostLauncherDialog`——列本机 / WSL 发行版 / SSH 主机（含手输与用过的）、连接状态实时更新、各 Host 的最近项目，点一下进它的窗口（项目直接打开）。**最近项目是桌面自己记的**（`host_recents.rs`，`~/.aide/gui/host-recents.json`，GUI 数据不属于 Host）：App 的活动工作区一变就记一笔，Host 由**调用窗口**定、前端不传；不连接任何 Host 就能列。`open_host_window("local")` = 聚焦主窗口 | ✅ 2026-09-30 |
-| P2d | 断线重连保住 Host 上的会话 + 事件回放（需要常驻 Host，随 P3 的守护进程） | |
-| P3 | 手机直连 Host（单设备 token 落点随之迁到 Host）、Host 常驻守护 | |
+| P2d / P3a | **Host 常驻守护进程**：`aide-host daemon`（一个用户一个，`flock` 单例，`~/.aide/host/daemon.sock` 0600）持有 Core；`serve` 退为桥（协议 v5）。事件中心 `hub.rs`：全局序号 + 环形缓冲（16MiB / 5 万条）+ 按会话订阅投递；断线重连带 `resume{daemon_id, seq}` 回放错过的事件（缓冲覆盖不到报 `gap`，守护进程换了报 `resumed:false`）。桌面 `RemoteWorkspaces`：桥断 → `reconnecting` 自动退避重连 → 无缝 / `resync`（会话在、界面需重载）/ 断开（Host 重启，会话已没）。空闲退出：无客户端且静默超 `AIDE_HOST_IDLE_SECS`（默认 30 分钟，chat 事件算动静）。真机 e2e：杀桥后接回同一守护进程、断线期间的事件回放、一轮真实会话经守护进程 | ✅ 2026-09-30 |
+| P3b | 手机直连 Host：网关（配对 / token / 中继）从桌面搬进 Host，作为事件中心的另一个客户端；手机↔Host 走**一份成文的协议**（手机端代码不由桌面侧改，只交付协议文档） | |
 
 
 ## 4. 新增 / 迁移一条命令

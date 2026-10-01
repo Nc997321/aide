@@ -1,10 +1,10 @@
-//! 与一台目标机上 `aide-host serve` 的长连接：请求-响应 + 通知回推。
+//! 与一台目标机上 `aide-host serve`（桥）的长连接：请求-响应 + 通知回推。桥背后是常驻的
+//! Host 守护进程，所以**这条连接断了 Host 还在**。
 //!
-//! 生命周期：连接由 [`super::RemoteWorkspaces`] 按主机懒建、复用；子进程退出（WSL
-//! 关机 / 网络断）→ 所有挂起请求立即以「连接已断开」失败，`alive` 置 false，并回调
-//! `on_closed`（注册表据此把这台 Host 标成「已断开」、通知它的窗口）。**不做静默重试、
-//! 也不静默重连**——重连会拉起全新的 serve（Host 上进行中的会话已随旧 serve 收掉），
-//! 必须由用户显式发起。
+//! 生命周期：连接由 [`super::RemoteWorkspaces`] 按主机懒建、复用；子进程退出（WSL 关机 /
+//! 网络断）→ 所有挂起请求立即以「连接已断开」失败，`alive` 置 false，并回调 `on_closed`。
+//! 连接记着守护进程身份与最后收到的事件序号（[`HostConnection::resume_token`]）——注册表凭它
+//! 重连，守护进程认得就把断线期间错过的事件补回来（会话原样在）；对不上才如实报「已断开」。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use aide_host::protocol::{
-    HelloInfo, InvokeParams, Notification, Request, Response, ServeInit, METHOD_HELLO,
-    METHOD_INVOKE, PROTOCOL_VERSION,
+    AttachInfo, HelloInfo, InvokeParams, Notification, Request, Resume, Response, ServeInit,
+    METHOD_HELLO, METHOD_INVOKE, PROTOCOL_VERSION,
 };
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -38,6 +38,8 @@ pub struct HostConnection {
     pending: Arc<Pending>,
     next_id: AtomicU64,
     alive: Arc<AtomicBool>,
+    /// 最后收到的 Host 事件序号（通知帧带的全局序号）。
+    last_seq: Arc<AtomicU64>,
     // 保活：drop 连接 = kill 子进程（kill_on_drop）
     _child: TokioMutex<Child>,
 }
@@ -66,6 +68,7 @@ impl HostConnection {
 
         let pending: Arc<Pending> = Arc::new(Mutex::new(HashMap::new()));
         let alive = Arc::new(AtomicBool::new(true));
+        let last_seq = Arc::new(AtomicU64::new(init.resume.as_ref().map_or(0, |r| r.seq)));
         let stderr_tail: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
 
         {
@@ -86,12 +89,13 @@ impl HostConnection {
         {
             let pending = Arc::clone(&pending);
             let alive = Arc::clone(&alive);
+            let last_seq = Arc::clone(&last_seq);
             let host = host.clone();
             let tail = Arc::clone(&stderr_tail);
             tokio::spawn(async move {
                 let mut lines = BufReader::new(stdout).lines();
                 while let Ok(Some(line)) = lines.next_line().await {
-                    dispatch_line(&host, &line, &pending, &on_event);
+                    dispatch_line(&host, &line, &pending, &last_seq, &on_event);
                 }
                 alive.store(false, Ordering::Relaxed);
                 let detail = tail.lock().unwrap_or_else(PoisonError::into_inner).join("\n");
@@ -110,18 +114,12 @@ impl HostConnection {
 
         let mut conn = HostConnection {
             host,
-            info: HelloInfo {
-                protocol: 0,
-                version: String::new(),
-                os: String::new(),
-                arch: String::new(),
-                home: String::new(),
-                user: String::new(),
-            },
+            info: HelloInfo::default(),
             stdin: TokioMutex::new(stdin),
             pending,
             next_id: AtomicU64::new(1),
             alive,
+            last_seq,
             _child: TokioMutex::new(child),
         };
         let hello = tokio::time::timeout(Duration::from_secs(30), conn.call(METHOD_HELLO, Value::Null))
@@ -137,6 +135,17 @@ impl HostConnection {
             ));
         }
         Ok(Arc::new(conn))
+    }
+
+    /// 断线重连的凭据（连的是守护进程时才有）：下次 attach 带上，错过的事件由它补回。
+    pub fn resume_token(&self) -> Option<Resume> {
+        let id = self.info.attach.as_ref().map(|a| a.daemon_id.clone()).filter(|d| !d.is_empty())?;
+        Some(Resume { daemon_id: id, seq: self.last_seq.load(Ordering::Relaxed) })
+    }
+
+    /// 本次 attach 的结果（是否接上了原来的守护进程、有无丢事件）。
+    pub fn attach_info(&self) -> Option<&AttachInfo> {
+        self.info.attach.as_ref()
     }
 
     pub fn is_alive(&self) -> bool {
@@ -196,7 +205,7 @@ impl HostConnection {
     }
 }
 
-fn dispatch_line(host: &HostId, line: &str, pending: &Pending, on_event: &EventHandler) {
+fn dispatch_line(host: &HostId, line: &str, pending: &Pending, last_seq: &AtomicU64, on_event: &EventHandler) {
     let Ok(v) = serde_json::from_str::<Value>(line) else {
         // 非协议行（理论上不会有：serve 模式不经登录 shell）只留痕
         tracing::debug!(host = %host, "[aide-host] non-json stdout: {line}");
@@ -204,6 +213,9 @@ fn dispatch_line(host: &HostId, line: &str, pending: &Pending, on_event: &EventH
     };
     if v.get("event").is_some() {
         if let Ok(n) = serde_json::from_value::<Notification>(v) {
+            if let Some(seq) = n.seq {
+                last_seq.fetch_max(seq, Ordering::Relaxed);
+            }
             on_event(host, n);
         }
         return;

@@ -18,7 +18,11 @@ export interface RemoteHostStatus {
   host: string;
   /** 显示名：`WSL: Debian` / `SSH: devbox` */
   label: string;
-  state: "connecting" | "installing" | "connected" | "error" | "disconnected" | "";
+  /**
+   * `reconnecting`：连接断了、正在自动重连（Host 上的会话还在）；
+   * `resync`：重连上了原来的 Host，但断线期间的更新已无法补齐（会话仍在，界面需重新加载）。
+   */
+  state: "connecting" | "installing" | "connected" | "error" | "disconnected" | "reconnecting" | "resync" | "";
   detail?: string;
   /** 目标机家目录（Host 原生路径），连接成功后才有。 */
   home?: string;

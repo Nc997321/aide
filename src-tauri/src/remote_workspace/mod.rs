@@ -23,7 +23,7 @@ mod e2e_tests;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use aide_host::protocol::Notification;
+use aide_host::protocol::{Notification, Resume};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::Mutex as TokioMutex;
@@ -39,7 +39,10 @@ pub const STATUS_EVENT: &str = "remote-workspace-status";
 pub struct HostStatus {
     pub host: String,
     pub label: String,
-    /// connecting | installing | connected | error | disconnected
+    /// connecting | installing | connected | error | disconnected | reconnecting | resync
+    ///
+    /// - `reconnecting`：连接断了，正在凭序号重连（Host 上的会话还在）
+    /// - `resync`：重连上了原来的 Host，但断线太久、错过的事件已被覆盖——会话仍在，界面需要重新加载
     pub state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
@@ -59,6 +62,34 @@ pub struct RemoteWorkspaces {
     /// 拒绝懒重连（重连 = 全新的 serve，Host 上进行中的会话早已随旧 serve 收掉，静默重连会让
     /// 用户以为会话还在），只有 [`connect`](Self::connect) 与 [`disconnect`](Self::disconnect) 清它。
     dropped: Mutex<HashMap<HostId, String>>,
+    /// 正在自动重连的 Host（连接断了、守护进程仍可能在）。在表里时 [`connection`](Self::connection)
+    /// 如实回「正在重新连接」，不另起一条会跟重连抢的连接；`connect` / `disconnect` 清它（=取消）。
+    reconnecting: Mutex<std::collections::HashSet<HostId>>,
+}
+
+/// 断线重连的退避（秒）：覆盖一次 ssh 网络抖动 / WSL 重启，之后放弃并如实报断开。
+const RESUME_BACKOFF_SECS: &[u64] = &[1, 2, 4, 8, 15, 30, 30];
+
+/// 连接断开后的去向（[`RemoteWorkspaces::on_closed`] 的结论）。
+pub enum Closed {
+    /// 不是登记在册的那条（主动断开 / 已被替换）：什么都不做。
+    Ignored,
+    /// 无法恢复（连的不是守护进程）：已标记断开，窗口需要收尾。
+    Dropped,
+    /// 守护进程可能还在：凭这个重连。
+    Resumable(Resume),
+}
+
+/// 一轮自动重连的结局。
+pub enum Resumed {
+    /// 接上了原来的 Host，事件无缝补齐：界面什么都不用做。
+    Seamless,
+    /// 接上了原来的 Host，但错过的事件已丢：会话在，界面需要重新加载（状态条提示）。
+    Resync,
+    /// 被取消（用户主动断开 / 显式重连接管）。
+    Cancelled,
+    /// 没接上原来的 Host（守护进程重启过 / 一直连不上）：会话已没，附原因。
+    Lost(String),
 }
 
 impl RemoteWorkspaces {
@@ -104,6 +135,9 @@ impl RemoteWorkspaces {
                 return Ok(Arc::clone(c));
             }
         }
+        if self.is_reconnecting(host) {
+            return Err(format!("与 {} 的连接已断开，正在重新连接…", host.label()));
+        }
         if let Some(reason) = self.dropped_reason(host) {
             return Err(format!("{reason}。请重新连接"));
         }
@@ -118,7 +152,7 @@ impl RemoteWorkspaces {
                 return Ok(Arc::clone(c));
             }
         }
-        match self.establish(host).await {
+        match self.establish(host, None).await {
             Ok(c) => {
                 self.set_status(host, "connected", None, Some(c.info.home.clone()));
                 self.conns.lock().await.insert(host.clone(), Arc::clone(&c));
@@ -134,9 +168,22 @@ impl RemoteWorkspaces {
     /// 用户显式（重新）连接：清掉「已断开」标记，丢掉死连接，走完整的建连流程。
     pub async fn connect(&self, host: &HostId) -> Result<Arc<HostConnection>, String> {
         self.dropped.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+        self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
         let stale = self.conns.lock().await.remove(host);
         drop(stale);
         self.connection(host).await
+    }
+
+    fn is_reconnecting(&self, host: &HostId) -> bool {
+        self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).contains(host)
+    }
+
+    fn mark_dropped(&self, host: &HostId, reason: &str) {
+        self.dropped
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .insert(host.clone(), reason.to_string());
+        self.set_status(host, "disconnected", Some(reason.to_string()), None);
     }
 
     fn dropped_reason(&self, host: &HostId) -> Option<String> {
@@ -144,22 +191,80 @@ impl RemoteWorkspaces {
     }
 
     /// 连接的子进程退出。**只有「它仍是登记在册的那条、且确已死」才算意外断开**：用户主动
-    /// `disconnect`（连接已被摘掉）与已被新连接替换的旧连接都不算。返回是否记为意外断开
-    /// （调用方据此通知这台 Host 的窗口）。
-    pub async fn on_closed(&self, host: &HostId, reason: &str) -> bool {
-        let dead = matches!(self.conns.lock().await.get(host), Some(c) if !c.is_alive());
-        if !dead {
-            return false;
+    /// `disconnect`（连接已被摘掉）与已被新连接替换的旧连接都不算。
+    ///
+    /// 连的是守护进程（带得出重连凭据）→ 转入「重连中」，由调用方跑 [`resume`](Self::resume)；
+    /// 否则直接标成已断开（需要用户显式重连）。
+    pub async fn on_closed(&self, host: &HostId, reason: &str) -> Closed {
+        let conn = self.conns.lock().await.get(host).cloned();
+        let Some(conn) = conn.filter(|c| !c.is_alive()) else {
+            return Closed::Ignored;
+        };
+        if let Some(token) = conn.resume_token() {
+            self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).insert(host.clone());
+            self.set_status(host, "reconnecting", Some(reason.to_string()), None);
+            return Closed::Resumable(token);
         }
-        self.dropped
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .insert(host.clone(), reason.to_string());
-        self.set_status(host, "disconnected", Some(reason.to_string()), None);
-        true
+        self.mark_dropped(host, reason);
+        Closed::Dropped
     }
 
-    async fn establish(&self, host: &HostId) -> Result<Arc<HostConnection>, String> {
+    /// 自动重连：退避重试，凭 `token` 接回原来的守护进程。结局见 [`Resumed`]。
+    /// 期间 [`connection`](Self::connection) 如实拒绝新请求（见 `reconnecting`）。
+    pub async fn resume(&self, host: &HostId, token: Resume) -> Resumed {
+        let mut last_err = String::new();
+        for secs in RESUME_BACKOFF_SECS {
+            tokio::time::sleep(std::time::Duration::from_secs(*secs)).await;
+            if !self.is_reconnecting(host) {
+                return Resumed::Cancelled;
+            }
+            match self.establish(host, Some(token.clone())).await {
+                Ok(c) => {
+                    // 建连途中用户可能已显式断开 / 重连：别再把这条塞进去
+                    if !self.is_reconnecting(host) {
+                        return Resumed::Cancelled;
+                    }
+                    let attach = c.attach_info().cloned();
+                    match attach {
+                        Some(a) if a.resumed => {
+                            self.conns.lock().await.insert(host.clone(), Arc::clone(&c));
+                            self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+                            if a.gap {
+                                self.set_status(
+                                    host,
+                                    "resync",
+                                    Some("断线期间错过的更新太多，已无法补齐".into()),
+                                    Some(c.info.home.clone()),
+                                );
+                                return Resumed::Resync;
+                            }
+                            tracing::info!(host = %host, replayed = a.replayed, "resumed Host connection");
+                            self.set_status(host, "connected", None, Some(c.info.home.clone()));
+                            return Resumed::Seamless;
+                        }
+                        // 接上的是另一个守护进程（Host 重启过）：旧会话已不存在，这条新连接
+                        // 也不要——用户显式重连时再从头建。
+                        _ => {
+                            self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+                            let reason = format!("{} 已重启，进行中的会话已终止", host.label());
+                            self.mark_dropped(host, &reason);
+                            return Resumed::Lost(reason);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::info!(host = %host, "resume attempt failed: {e}");
+                    last_err = e;
+                }
+            }
+        }
+        self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+        let reason = format!("无法重新连接 {}：{last_err}", host.label());
+        self.mark_dropped(host, &reason);
+        Resumed::Lost(reason)
+    }
+
+    async fn establish(&self, host: &HostId, resume: Option<Resume>) -> Result<Arc<HostConnection>, String> {
         let app = self.app()?.clone();
         self.set_status(host, "installing", None, None);
         let inst = install::ensure_installed(install::kit_dirs(&app), host).await?;
@@ -174,6 +279,8 @@ impl RemoteWorkspaces {
             default_env: host_env.default_env,
             node: inst.node.clone(),
             claude_exe: Some(inst.claude_exe.clone()),
+            resume,
+            subscribe: None,
         };
         let app_for_events = app.clone();
         let app_for_close = app.clone();
@@ -189,6 +296,7 @@ impl RemoteWorkspaces {
 
     pub async fn disconnect(&self, host: &HostId) {
         self.dropped.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
+        self.reconnecting.lock().unwrap_or_else(PoisonError::into_inner).remove(host);
         self.conns.lock().await.remove(host);
         self.set_status(host, "disconnected", None, None);
     }
@@ -208,19 +316,28 @@ fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
     crate::host_window::emit_to_host(app, host, &n.event, &n.payload);
 }
 
-/// serve 的子进程退出：登记为意外断开，并告诉这台 Host 的窗口——runtime 随 serve 一起没了，
-/// 不会再有 `session_dead` 来收掉正忙的会话，前端靠这一帧（与本机 runtime 死亡同一事件）收尾。
+/// serve（桥）的子进程退出。守护进程在 → 凭序号自动重连，成功则界面无感；否则（连的不是
+/// 守护进程 / Host 重启过 / 一直连不上）如实标成断开，并告诉这台 Host 的窗口——会话随 Host
+/// 一起没了，不会再有 `session_dead` 来收掉正忙的会话，前端靠 `runtime_dead` 这一帧收尾。
 fn on_host_closed(app: &AppHandle, host: &HostId, reason: &str) {
     let app = app.clone();
     let host = host.clone();
     let reason = reason.to_string();
     tauri::async_runtime::spawn(async move {
         let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
-        if svc.on_closed(&host, &reason).await {
+        let lost = match svc.on_closed(&host, &reason).await {
+            Closed::Ignored => None,
+            Closed::Dropped => Some(reason),
+            Closed::Resumable(token) => match svc.resume(&host, token).await {
+                Resumed::Lost(why) => Some(why),
+                Resumed::Seamless | Resumed::Resync | Resumed::Cancelled => None,
+            },
+        };
+        if let Some(detail) = lost {
             let payload = serde_json::json!({
                 "type": "runtime_dead",
                 "reason": "host_disconnected",
-                "detail": reason,
+                "detail": detail,
             });
             crate::host_window::emit_to_host(&app, &host, "chat-event", &payload);
         }
@@ -313,6 +430,38 @@ mod tests {
         assert!(ws.dropped_reason(&host).is_none(), "explicit connect clears the mark");
     }
 
+    /// 自动重连期间：新请求如实回「正在重新连接」（不另起一条会跟重连抢的连接）；用户显式
+    /// 重连 / 断开 = 取消这轮自动重连。
+    #[tokio::test]
+    async fn requests_during_auto_reconnect_wait_and_explicit_actions_cancel_it() {
+        let ws = RemoteWorkspaces::default();
+        let host = HostId::Wsl("Debian".into());
+        ws.reconnecting.lock().unwrap().insert(host.clone());
+
+        let err = ws.connection(&host).await.err().unwrap();
+        assert!(err.contains("正在重新连接"), "{err}");
+        assert!(ws.is_reconnecting(&host));
+
+        // 显式重连接管：清掉「重连中」（之后停在「未挂载」= 过了闸门）
+        let err = ws.connect(&host).await.err().unwrap();
+        assert!(err.contains("not attached"), "{err}");
+        assert!(!ws.is_reconnecting(&host));
+
+        ws.reconnecting.lock().unwrap().insert(host.clone());
+        ws.disconnect(&host).await;
+        assert!(!ws.is_reconnecting(&host));
+    }
+
+    /// 重连被取消后，`resume` 在下一次醒来就收手，不去碰已经由别人接管的连接。
+    #[tokio::test]
+    async fn resume_stops_when_cancelled() {
+        let ws = RemoteWorkspaces::default();
+        let host = HostId::Wsl("Debian".into());
+        // 不在「重连中」表里 = 已被取消
+        let out = ws.resume(&host, Resume { daemon_id: "d".into(), seq: 1 }).await;
+        assert!(matches!(out, Resumed::Cancelled));
+    }
+
     /// 用户主动断开 = 一次干净的重新开始：断开标记一并清掉。
     #[tokio::test]
     async fn disconnect_clears_the_dropped_mark() {
@@ -328,7 +477,7 @@ mod tests {
     async fn on_closed_ignores_connections_that_are_no_longer_registered() {
         let ws = RemoteWorkspaces::default();
         let host = HostId::Wsl("Debian".into());
-        assert!(!ws.on_closed(&host, "late EOF").await);
+        assert!(matches!(ws.on_closed(&host, "late EOF").await, Closed::Ignored));
         assert!(ws.dropped_reason(&host).is_none());
     }
 }

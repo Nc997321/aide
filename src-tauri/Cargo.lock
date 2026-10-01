@@ -136,6 +136,7 @@ version = "0.8.0"
 dependencies = [
  "aide-core",
  "base64 0.22.1",
+ "libc",
  "serde",
  "serde_json",
  "tokio",

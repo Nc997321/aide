@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use aide_host::protocol::{Notification, ServeInit};
+use aide_host::protocol::{Notification, ServeInit, METHOD_SHUTDOWN};
 use serde_json::{json, Value};
 
 use super::connection::HostConnection;
@@ -48,11 +48,20 @@ fn kit() -> Vec<PathBuf> {
 async fn serve_init(host: &HostId, inst: &install::Installed, node: Option<String>) -> ServeInit {
     let host_env = install::host_env(host, inst).await;
     ServeInit {
+        resume: None,
+        subscribe: None,
         env: host_env.env,
         default_env: host_env.default_env,
         node: node.or_else(|| inst.node.clone()),
         claude_exe: Some(inst.claude_exe.clone()),
     }
+}
+
+/// 收掉本次测试用到的守护进程（常驻 Host 不随连接退出）。非强制：还有别的客户端连着（比如
+/// 你正开着的 Aide 窗口）就留着它，不打断别人。
+async fn release_host(conn: &HostConnection) {
+    tokio::time::sleep(Duration::from_millis(500)).await; // 等先前断开的客户端被摘掉
+    let _ = conn.call(METHOD_SHUTDOWN, json!({ "force": false })).await;
 }
 
 fn serve_cmd(host: &HostId, inst: &install::Installed, home: Option<&str>) -> tokio::process::Command {
@@ -139,6 +148,7 @@ async fn host_install_connect_and_workspace_ops() {
     }
 
     conn.invoke("delete_file", json!({"path": dir})).await.expect("cleanup");
+    release_host(&conn).await;
 }
 
 /// LSP 跑在 Host 里（aide-core 的 LspManager，登录 PATH 解析服务器）：前端的同一批 LSP 命令
@@ -234,6 +244,7 @@ async fn host_serve_runs_a_language_server() {
     let _ = conn.invoke("lsp_shutdown_workspace", json!({"workspaceRoot": dir})).await;
     let _ = conn.invoke("untrust_workspace", json!({"path": dir})).await;
     let _ = conn.invoke("delete_file", json!({"path": dir})).await;
+    release_host(&conn).await;
     outcome.expect("language server on the Host");
 }
 
@@ -316,6 +327,9 @@ async fn host_serve_runs_a_chat_round() {
     })
     .await
     .expect("host chat turn timed out");
+    // 临时 HOME 里的守护进程：先让它退（强制——它只服务这个测试），再删它的数据
+    let _ = conn.call(METHOD_SHUTDOWN, json!({ "force": true })).await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
     let _ = launcher::command(&host, &format!("rm -rf {}", launcher::sh_quote(&home)))
         .unwrap()
         .output()
@@ -377,4 +391,97 @@ async fn host_connection_reports_an_unexpected_drop() {
 
     let err = conn.invoke("get_project_info", json!({})).await.unwrap_err();
     assert!(err.contains("已断开"), "calls after the drop fail loudly: {err}");
+
+    // 桥死了，Host（守护进程）还在：凭重连凭据接回**同一个**守护进程，会话原样在。
+    let token = conn.resume_token().expect("a daemon connection carries a resume token");
+    let mut init = serve_init(&host, &inst, None).await;
+    init.resume = Some(token);
+    let again = HostConnection::start(
+        host.clone(),
+        serve_cmd(&host, &inst, None),
+        &init,
+        Arc::new(|_h: &HostId, _n: Notification| {}),
+        Arc::new(|_h: &HostId, _r: &str| {}),
+    )
+    .await
+    .expect("reconnect");
+    let a = again.attach_info().expect("attach info");
+    assert!(a.resumed && !a.gap, "reconnected to the same Host without losing events: {a:?}");
+    assert_eq!(again.info.daemon_id, conn.info.daemon_id, "same daemon survived the bridge");
+    again.invoke("get_project_info", json!({})).await.expect("the resumed connection works");
+    release_host(&again).await;
+}
+
+/// 断线期间 Host 上发生的事件，重连后按序补回：A 在监听目录，A 的桥被杀；B 在 A 不在的时候改了
+/// 目录里的文件；C 带着 A 的重连凭据接入——必须收到 B 触发的 `file-tree-changed`（回放）。
+#[tokio::test]
+#[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）与 pnpm build:remote-kit"]
+async fn host_replays_events_missed_while_disconnected() {
+    let host = target();
+    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let noop_ev: super::connection::EventHandler = Arc::new(|_h: &HostId, _n: Notification| {});
+    let noop_closed: super::connection::ClosedHandler = Arc::new(|_h: &HostId, _r: &str| {});
+
+    let a = HostConnection::start(
+        host.clone(),
+        serve_cmd(&host, &inst, None),
+        &serve_init(&host, &inst, None).await,
+        Arc::clone(&noop_ev),
+        Arc::clone(&noop_closed),
+    )
+    .await
+    .expect("connect A");
+    let dir = format!("{}/.aide-e2e-replay-{}", a.info.home, std::process::id());
+    a.invoke("create_dir", json!({"parentPath": a.info.home, "name": dir.rsplit('/').next().unwrap()}))
+        .await
+        .expect("create_dir");
+    a.invoke("file_tree_watch", json!({"root": dir})).await.expect("watch");
+    let token = a.resume_token().expect("resume token");
+    drop(a); // 桥被杀（kill_on_drop），守护进程与监听都还在
+
+    // B：A 不在时发生的改动
+    let b = HostConnection::start(
+        host.clone(),
+        serve_cmd(&host, &inst, None),
+        &serve_init(&host, &inst, None).await,
+        Arc::clone(&noop_ev),
+        Arc::clone(&noop_closed),
+    )
+    .await
+    .expect("connect B");
+    b.invoke("write_file_content", json!({"path": format!("{dir}/missed.txt"), "content": "x"}))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(1500)).await; // 监听防抖，事件进了环
+    drop(b);
+
+    // C：带 A 的凭据
+    let events: Arc<Mutex<Vec<Notification>>> = Arc::default();
+    let sink = Arc::clone(&events);
+    let mut init = serve_init(&host, &inst, None).await;
+    init.resume = Some(token);
+    let c = HostConnection::start(
+        host.clone(),
+        serve_cmd(&host, &inst, None),
+        &init,
+        Arc::new(move |_h: &HostId, n: Notification| sink.lock().unwrap().push(n)),
+        noop_closed,
+    )
+    .await
+    .expect("connect C");
+    let info = c.attach_info().expect("attach info").clone();
+    assert!(info.resumed && !info.gap && info.replayed >= 1, "{info:?}");
+    let mut got = false;
+    for _ in 0..30 {
+        if events.lock().unwrap().iter().any(|n| n.event == "file-tree-changed") {
+            got = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(got, "the file-tree-changed that happened while A was away was replayed to C");
+
+    c.invoke("file_tree_watch", json!({"root": ""})).await.unwrap();
+    c.invoke("delete_file", json!({"path": dir})).await.expect("cleanup");
+    release_host(&c).await;
 }

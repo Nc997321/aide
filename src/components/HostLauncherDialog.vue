@@ -74,6 +74,8 @@ const STATE_TEXT: Record<string, string> = {
   installing: "安装中…",
   connected: "已连接",
   disconnected: "已断开",
+  reconnecting: "重新连接中…",
+  resync: "需要重新加载",
   error: "连接失败",
 };
 
@@ -224,7 +226,7 @@ function addCustomSsh() {
 .hl-badge.here { color: var(--aide-accent); border-color: var(--aide-accent); }
 .hl-badge.connected { color: var(--aide-success); border-color: var(--aide-success); }
 .hl-badge.disconnected, .hl-badge.error { color: var(--aide-danger); border-color: var(--aide-danger); }
-.hl-badge.connecting, .hl-badge.installing { color: var(--aide-warning); border-color: var(--aide-warning); }
+.hl-badge.connecting, .hl-badge.installing, .hl-badge.reconnecting, .hl-badge.resync { color: var(--aide-warning); border-color: var(--aide-warning); }
 .hl-open {
   font-size: 12px; padding: 3px 12px; border-radius: var(--aide-radius-md); cursor: pointer; font-family: inherit;
   border: 1px solid var(--aide-border); background: transparent; color: var(--aide-text-secondary);

@@ -1,9 +1,14 @@
 <script setup lang="ts">
 // Host 窗口的连接状态条：连接意外断开（或建连失败）时如实说出来，并给「重新连接」。
 //
-// 为什么重新连接 = 重载窗口：断线时 Host 上的 serve 随之收掉——进行中的会话、文件监听、终端、
-// 语言服务器都没了，新连接是一个全新的 Host 进程。窗口里各处持有的都是旧进程的状态，
-// 逐个修补必有遗漏；重载让所有消费方从新 Host 重新取（会话历史在 Host 磁盘上，不丢）。
+// 断线分三种（Rust 侧 `RemoteWorkspaces`，Host 是常驻守护进程）：
+// - `reconnecting`：正在自动重连，Host 上的会话还在——只提示，不给按钮；成功了条自己消失；
+// - `resync`：重连上了原来的 Host，但断线太久、错过的更新补不齐——会话在，界面状态不可信，
+//   提示重新加载；
+// - `disconnected` / `error`：连不回原来的 Host（它重启过 / 一直连不上）——会话已终止。
+//
+// 为什么「重新连接 / 重新加载」= 重载窗口：窗口里各处持有的都是旧状态，逐个修补必有遗漏；
+// 重载让所有消费方从 Host 重新取（会话历史在 Host 磁盘上，不丢）。
 //
 // 本机窗口恒不显示（本机 Host 在进程内，没有「连接」可断）。
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
@@ -21,8 +26,13 @@ const reconnecting = ref(false);
 const failure = ref("");
 let unlisten: (() => void) | null = null;
 
-const broken = computed(() => status.value?.state === "disconnected" || status.value?.state === "error");
-const visible = computed(() => !!hostKey.value && (broken.value || reconnecting.value));
+const state = computed(() => status.value?.state ?? "");
+const broken = computed(() => state.value === "disconnected" || state.value === "error");
+const autoReconnecting = computed(() => state.value === "reconnecting");
+const resync = computed(() => state.value === "resync");
+const visible = computed(
+  () => !!hostKey.value && (broken.value || autoReconnecting.value || resync.value || reconnecting.value),
+);
 const label = computed(() => status.value?.label ?? hostKey.value);
 const detail = computed(() => failure.value || status.value?.detail || "");
 const progress = computed(() => {
@@ -68,11 +78,15 @@ async function reconnect() {
   <div v-if="visible" class="host-banner" role="alert">
     <span class="host-banner-text">
       <template v-if="reconnecting">{{ progress }}</template>
+      <template v-else-if="autoReconnecting">与 {{ label }} 的连接已断开，正在自动重新连接…（Host 上的会话仍在运行）</template>
+      <template v-else-if="resync">与 {{ label }} 断线期间错过了部分更新（会话仍在运行）。重新加载窗口即可同步。</template>
       <template v-else>
         与 {{ label }} 的连接已断开<template v-if="detail">：{{ detail }}</template>。进行中的会话已终止，历史保留；重新连接会重载此窗口。
       </template>
     </span>
-    <button v-if="!reconnecting" class="host-banner-btn" type="button" @click="reconnect">重新连接</button>
+    <button v-if="!reconnecting && !autoReconnecting" class="host-banner-btn" type="button" @click="reconnect">
+      {{ resync ? "重新加载" : "重新连接" }}
+    </button>
   </div>
 </template>
 

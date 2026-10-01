@@ -27,10 +27,19 @@ use std::collections::HashMap;
 /// 自动化 / LSP 都在它里面），进程级环境随连接给。
 /// v4（2026-09-30）：删除旧模型——`invoke` 去掉 `root`（前端自带 `cwd`），删除 `agent` /
 /// `lsp` 两个独立通道与 `transcript_*` / `lsp_detect` 等桌面取原料的命令。
-pub const PROTOCOL_VERSION: u32 = 4;
+/// v5（2026-09-30）：Host 常驻（`aide-host daemon`），`serve` 退为连到它的桥——通知帧带全局
+/// 序号 `seq`，[`ServeInit::resume`] 凭它断线重连后回放；新增 `attach` / `subscribe` /
+/// `shutdown`；`hello` 带守护进程身份与当前连接的 [`AttachInfo`]。
+pub const PROTOCOL_VERSION: u32 = 5;
 
 pub const METHOD_HELLO: &str = "hello";
 pub const METHOD_INVOKE: &str = "invoke";
+/// 守护进程套接字上的第一个动作：登记为客户端（桥替桌面发，桌面不直接见到它）。
+pub const METHOD_ATTACH: &str = "attach";
+/// 改本连接的事件订阅：只收某些会话的 `chat-event`（其余事件照常全收）。
+pub const METHOD_SUBSCRIBE: &str = "subscribe";
+/// 让守护进程退出（桥在版本不符且守护进程空闲时用；将来「重启 Host」也走它）。
+pub const METHOD_SHUTDOWN: &str = "shutdown";
 
 /// 二进制结果的包装键：`{"$bytes":"<base64>"}`（如 `read_file_binary`）。桌面据此
 /// 还原成 `tauri::ipc::Response` 原始字节。
@@ -57,10 +66,14 @@ pub struct Response {
 pub struct Notification {
     pub event: String,
     pub payload: Value,
+    /// Host 全局事件序号（单调递增，守护进程发的帧都带）：客户端记下最后收到的，断线重连时
+    /// 经 [`Resume`] 要回错过的部分。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seq: Option<u64>,
 }
 
 /// `hello` 的结果：目标机画像。桌面用 `home` 推导默认目录，用 `version` 判定是否需要重装。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HelloInfo {
     pub protocol: u32,
     pub version: String,
@@ -68,6 +81,51 @@ pub struct HelloInfo {
     pub arch: String,
     pub home: String,
     pub user: String,
+    /// 守护进程身份（每次启动随机）：它变了 = Host 进程换了，上面的会话都没了。
+    #[serde(default)]
+    pub daemon_id: String,
+    /// 此刻连着守护进程的客户端数（含发起 `hello` 的这一个，若它已 attach）。
+    #[serde(default)]
+    pub clients: u32,
+    /// 本连接的接入结果（attach 之后的 `hello` 才有）。
+    #[serde(default)]
+    pub attach: Option<AttachInfo>,
+}
+
+/// 断线重连的凭据：上次连的是哪个守护进程、收到哪一号事件。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Resume {
+    pub daemon_id: String,
+    pub seq: u64,
+}
+
+/// 一次 attach 的结果。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AttachInfo {
+    pub daemon_id: String,
+    /// 带了 [`Resume`] 且守护进程还是原来那个（会话都在）。
+    pub resumed: bool,
+    /// 想回放但环形缓冲已覆盖不到（错过的事件有丢失）：会话仍在，界面需要重新同步。
+    pub gap: bool,
+    /// 守护进程当前的最新事件序号。
+    pub seq: u64,
+    /// 本次回放了多少条。
+    pub replayed: u64,
+}
+
+/// `subscribe` 的参数。`sessions = None` = 全收（默认）；`Some(列表)` = 只收这些会话的
+/// `chat-event`（不带会话号的事件——文件变更 / LSP / 系统通知…——照常全收）。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct SubscribeParams {
+    #[serde(default)]
+    pub sessions: Option<Vec<String>>,
+}
+
+/// `shutdown` 的参数：还有别的客户端连着时，只有 `force` 才退。
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct ShutdownParams {
+    #[serde(default)]
+    pub force: bool,
 }
 
 /// `invoke`：按前端 invoke 的命令名查 aide-core 命令表。`args` 是前端 invoke 的原始参数
@@ -81,7 +139,7 @@ pub struct InvokeParams {
 
 /// `aide-host serve` 的首行：Host 进程级的设定（敏感值走 stdin 不走命令行——命令行在目标机
 /// `ps` 里对所有用户可见）。
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ServeInit {
     /// 给 agent sidecar 的 env（桌面上的工具开关等），覆盖 Host 自己的同名值。
     #[serde(default)]
@@ -95,4 +153,11 @@ pub struct ServeInit {
     /// 原生 claude CLI（套件安装的那份）；None = 不设（SDK 自己找）。
     #[serde(default)]
     pub claude_exe: Option<String>,
+    /// 断线重连：带上次的守护进程身份与最后收到的事件序号，守护进程认得就回放错过的。
+    #[serde(default)]
+    pub resume: Option<Resume>,
+    /// attach 时的初始订阅：`None` = 全收（桌面）；`Some` = 只收这些会话的 `chat-event`
+    /// （回放也按它过滤）。
+    #[serde(default)]
+    pub subscribe: Option<Vec<String>>,
 }
