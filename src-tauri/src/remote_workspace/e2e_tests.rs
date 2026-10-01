@@ -1,11 +1,12 @@
-//! 真机端到端（默认 ignore）：Windows 桌面进程 → wsl.exe → 目标发行版上的 `aide-host serve`。
+//! 真机端到端（默认 ignore）：桌面进程 → `wsl.exe` / `ssh` → 目标机上的 `aide-host serve`。
+//! 目标由环境变量选：`AIDE_E2E_SSH=<~/.ssh/config 别名>` 走 SSH，否则 `AIDE_E2E_WSL=<发行版>` 走 WSL。
 //!
 //! 走生产同一条链：套件安装（install）→ serve 握手（connection，首行 ServeInit）→ 前端会发的
 //! 同一批 core 命令（fs / git / 监听 / 发消息 / LSP）原样发给 serve——即 Host 窗口里发生的事。
 //!
 //! 运行（Windows，先 `pnpm build:remote-kit`）：
 //! ```text
-//! set AIDE_E2E_WSL=Debian
+//! set AIDE_E2E_WSL=Debian                            （或 set AIDE_E2E_SSH=<别名>：免密登录，见 launcher）
 //! set AIDE_E2E_REPO=/home/<you>/programs/aide        （目标机上的一个 git 仓库）
 //! set AIDE_E2E_CLAUDE_CONFIG=/home/<you>/.claude     （目标机上已登录的 claude home，chat 轮次用）
 //! cargo test --lib remote_workspace::e2e_tests -- --ignored --nocapture --test-threads=1
@@ -24,6 +25,15 @@ use super::{install, launcher};
 
 fn env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|v| !v.is_empty())
+}
+
+/// 本次真机目标：`AIDE_E2E_SSH` 优先，其次 `AIDE_E2E_WSL`。两条传输对上层同构，同一批用例都跑。
+fn target() -> HostId {
+    match (env("AIDE_E2E_SSH"), env("AIDE_E2E_WSL")) {
+        (Some(alias), _) => HostId::Ssh(alias),
+        (None, Some(distro)) => HostId::Wsl(distro),
+        _ => panic!("set AIDE_E2E_SSH=<alias> or AIDE_E2E_WSL=<distro>"),
+    }
 }
 
 fn kit() -> Vec<PathBuf> {
@@ -51,10 +61,9 @@ fn serve_cmd(host: &HostId, inst: &install::Installed, home: Option<&str>) -> to
 }
 
 #[tokio::test]
-#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）与 pnpm build:remote-kit"]
-async fn wsl_install_connect_and_workspace_ops() {
-    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
-    let host = HostId::Wsl(distro);
+#[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）与 pnpm build:remote-kit"]
+async fn host_install_connect_and_workspace_ops() {
+    let host = target();
 
     // ── 安装（幂等：第二次运行应只做探测）──
     let t = std::time::Instant::now();
@@ -138,10 +147,9 @@ async fn wsl_install_connect_and_workspace_ops() {
 /// 用真实 HOME（语言服务器要在你的登录 PATH 上找，`rustup component add rust-analyzer`）：
 /// 临时工程先 `trust_workspace`（LSP 的信任门），收尾 `untrust_workspace` 撤掉。
 #[tokio::test]
-#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）、pnpm build:remote-kit 与目标机 rust-analyzer"]
-async fn wsl_host_serve_runs_a_language_server() {
-    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
-    let host = HostId::Wsl(distro);
+#[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）、pnpm build:remote-kit 与目标机 rust-analyzer"]
+async fn host_serve_runs_a_language_server() {
+    let host = target();
     let inst = install::ensure_installed(kit(), &host).await.expect("install");
     let conn = HostConnection::start(
         host.clone(),
@@ -234,11 +242,10 @@ async fn wsl_host_serve_runs_a_language_server() {
 /// 隔离：serve 跑在一个临时 `HOME` 里（设置 / 密钥 / claude 数据都不碰你真实的 Host 配置），
 /// 登录态从 `AIDE_E2E_CLAUDE_CONFIG` 复制一份进去；node 按真实登录 shell 解析后经 ServeInit 给。
 #[tokio::test]
-#[ignore = "真机：需要 WSL 发行版（AIDE_E2E_WSL）、pnpm build:remote-kit、AIDE_E2E_CLAUDE_CONFIG"]
-async fn wsl_host_serve_runs_a_chat_round() {
-    let distro = env("AIDE_E2E_WSL").expect("set AIDE_E2E_WSL=<distro>");
+#[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）、pnpm build:remote-kit、AIDE_E2E_CLAUDE_CONFIG"]
+async fn host_serve_runs_a_chat_round() {
     let cfg = env("AIDE_E2E_CLAUDE_CONFIG").expect("set AIDE_E2E_CLAUDE_CONFIG=<target claude home>");
-    let host = HostId::Wsl(distro);
+    let host = target();
     let inst = install::ensure_installed(kit(), &host).await.expect("install");
 
     let home = format!("/tmp/aide-e2e-host-{}", std::process::id());
