@@ -8,7 +8,6 @@
 
 mod daemon;
 mod dispatch;
-mod hub;
 mod kit;
 mod login;
 mod serve;

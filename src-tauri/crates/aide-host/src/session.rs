@@ -1,7 +1,7 @@
 //! 守护进程里**一条客户端连接**的请求循环：一行一帧的 JSON（协议见 `protocol.rs`），承载在
 //! 任意字节流上（Unix 套接字；测试里是内存管道）。
 //!
-//! 连接先要 `attach` 才能 `invoke` / `subscribe`——attach 把它登记进事件中心（[`Hub`]），
+//! 连接先要 `attach` 才能 `invoke` / `subscribe`——attach 把它登记进 Host 的事件总线（`Core::bus`），
 //! 之后 Host 的所有事件按它的订阅投递；`hello` 与 `shutdown` 不需要先 attach（桥在接入前
 //! 用它们探守护进程的版本、必要时让旧版本退场）。
 //!
@@ -10,6 +10,7 @@
 
 use std::sync::Arc;
 
+use aide_core::bus::{Attach, ClientId, Consumer, Event, Resume as BusResume};
 use aide_core::Core;
 use aide_host::protocol::{
     AttachInfo, HelloInfo, InvokeParams, Request, Response, ServeInit, ShutdownParams,
@@ -22,16 +23,38 @@ use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 use tokio::sync::Notify;
 
 use crate::dispatch;
-use crate::hub::{ClientId, Frame, Hub};
 use crate::kit::HostKit;
 
-/// 守护进程的共享状态：一份 Core、一个事件中心、一份随包资源。
+/// 一条出站帧（已序列化、不含换行）。
+pub type Frame = Arc<str>;
+
+/// 守护进程的共享状态：一份 Core（事件总线在 `core.bus`）、一份随包资源。
 pub struct Daemon {
     pub core: Arc<Core>,
-    pub hub: Arc<Hub>,
     pub kit: Arc<HostKit>,
     /// 有人要求退出（`shutdown`）时被唤醒；daemon 主循环等它。
     pub shutdown: Notify,
+}
+
+/// 桥这条连接的事件消费者：把总线事件序列化成通知帧（带 `seq`），经本连接的写端送出。
+struct BridgeConsumer(UnboundedSender<Frame>);
+
+impl Consumer for BridgeConsumer {
+    fn deliver(&self, ev: &Arc<Event>) -> bool {
+        #[derive(serde::Serialize)]
+        struct Notify<'a> {
+            event: &'a str,
+            payload: &'a Value,
+            seq: u64,
+        }
+        match serde_json::to_string(&Notify { event: &ev.name, payload: &ev.payload, seq: ev.seq }) {
+            Ok(line) => self.0.send(line.into()).is_ok(),
+            Err(e) => {
+                eprintln!("[aide-host] event {} not serialisable: {e}", ev.name);
+                true
+            }
+        }
+    }
 }
 
 fn frame(resp: &Response) -> Option<Frame> {
@@ -99,15 +122,23 @@ where
                 };
                 d.kit.update(ServeInit { resume: None, subscribe: None, ..init.clone() });
                 let id = req.id;
-                attached = Some(d.hub.attach(tx.clone(), init.resume.as_ref(), init.subscribe.clone(), |info| {
-                    let ok = serde_json::to_value(info).unwrap_or(Value::Null);
-                    serde_json::to_string(&Response { id, ok: Some(ok), err: None }).unwrap_or_default()
-                }));
+                let req = Attach {
+                    resume: init.resume.as_ref().map(|r| BusResume { epoch: r.daemon_id.clone(), seq: r.seq }),
+                    sessions: init.subscribe.clone(),
+                    allow: None,
+                };
+                let ack_tx = tx.clone();
+                let (cid, bus_info) = d.core.bus.attach(Arc::new(BridgeConsumer(tx.clone())), req, |info| {
+                    let ok = serde_json::to_value(wire_info(info)).unwrap_or(Value::Null);
+                    let line = serde_json::to_string(&Response { id, ok: Some(ok), err: None }).unwrap_or_default();
+                    let _ = ack_tx.send(line.into());
+                });
+                attached = Some((cid, wire_info(&bus_info)));
             }
             METHOD_SUBSCRIBE => {
                 let r = match (&attached, parse::<SubscribeParams>(req.params, "subscribe")) {
                     (Some((cid, _)), Ok(p)) => {
-                        d.hub.subscribe(*cid, p.sessions);
+                        d.core.bus.subscribe(*cid, p.sessions);
                         Ok(Value::Null)
                     }
                     (None, _) => Err("not attached".into()),
@@ -117,7 +148,7 @@ where
             }
             METHOD_SHUTDOWN => {
                 let force = parse::<ShutdownParams>(req.params, "shutdown").map(|p| p.force).unwrap_or(false);
-                let others = d.hub.client_count() - usize::from(attached.is_some());
+                let others = d.core.bus.client_count() - usize::from(attached.is_some());
                 if others > 0 && !force {
                     reply(&tx, req.id, Err(format!("还有 {others} 个客户端连着")));
                 } else {
@@ -141,8 +172,12 @@ where
         }
     }
     if let Some((id, _)) = attached {
-        d.hub.detach(id);
+        d.core.bus.detach(id);
     }
+}
+
+fn wire_info(i: &aide_core::bus::AttachInfo) -> AttachInfo {
+    AttachInfo { daemon_id: i.epoch.clone(), resumed: i.resumed, gap: i.gap, seq: i.seq, replayed: i.replayed }
 }
 
 fn hello(d: &Daemon, attached: Option<&(ClientId, AttachInfo)>) -> HelloInfo {
@@ -153,8 +188,8 @@ fn hello(d: &Daemon, attached: Option<&(ClientId, AttachInfo)>) -> HelloInfo {
         arch: std::env::consts::ARCH.to_string(),
         home: std::env::var("HOME").unwrap_or_default(),
         user: std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default(),
-        daemon_id: d.hub.daemon_id().to_string(),
-        clients: d.hub.client_count() as u32,
+        daemon_id: d.core.bus.epoch().to_string(),
+        clients: d.core.bus.client_count() as u32,
         attach: attached.map(|(_, info)| info.clone()),
     }
 }

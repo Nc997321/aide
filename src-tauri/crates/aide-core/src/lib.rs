@@ -10,6 +10,7 @@
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
 pub mod app_settings;
+pub mod bus;
 pub mod automation;
 pub mod lsp;
 pub mod codegraph;
@@ -71,6 +72,8 @@ pub struct Core {
     pub automation: Arc<automation::AutomationService>,
     /// 随包资源在哪（前门回答）。
     pub resources: Arc<dyn HostResources>,
+    /// Host 的事件总线：全部事件在这里编号、留底、按订阅投给前门 / 网关（见 `bus.rs`）。
+    pub bus: Arc<bus::Bus>,
     events: Arc<dyn EventSink>,
 }
 
@@ -81,6 +84,9 @@ impl Core {
         events: Arc<dyn EventSink>,
         resources: Arc<dyn HostResources>,
     ) -> Arc<Self> {
+        // 前门给的出口被总线包一层：事件先编号 / 留底，再交给前门
+        let bus = Arc::new(bus::Bus::new(bus::new_epoch()));
+        let events: Arc<dyn EventSink> = Arc::new(bus::Tee { bus: Arc::clone(&bus), inner: events });
         Arc::new(Self {
             codegraph: Arc::new(codegraph::CodeGraphService::new(
                 resources.clone(),
@@ -94,6 +100,7 @@ impl Core {
             settings,
             watch: FileWatchService::default(),
             pty: pty::ShellManager::new(),
+            bus,
             events,
         })
     }

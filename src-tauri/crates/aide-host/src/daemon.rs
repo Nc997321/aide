@@ -15,14 +15,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use aide_core::settings::{FileSecretStore, SettingsPaths, SettingsService};
-use aide_core::{Core, EventSink};
+use aide_core::{Core, NullSink};
 use aide_host::protocol::ServeInit;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::UnixListener;
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::sync::Notify;
 
-use crate::hub::Hub;
 use crate::kit::HostKit;
 use crate::session::{serve_client, Daemon};
 
@@ -67,20 +66,6 @@ fn idle_grace() -> Duration {
     Duration::from_secs(secs)
 }
 
-/// 每次启动随机的身份：客户端据此分辨「还是原来那个 Host」还是「重启过」。
-fn new_daemon_id() -> String {
-    use std::hash::{BuildHasher, Hasher};
-    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
-    h.write_u128(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0),
-    );
-    h.write_u32(std::process::id());
-    format!("{:016x}", h.finish())
-}
-
 pub async fn run() -> i32 {
     let init = read_init().await;
 
@@ -110,7 +95,6 @@ pub async fn run() -> i32 {
         .ok()
         .and_then(|p| p.parent().map(PathBuf::from))
         .unwrap_or_else(|| PathBuf::from("."));
-    let hub = Arc::new(Hub::new(new_daemon_id()));
     let kit = Arc::new(HostKit::new(init, install_dir));
 
     // Host 启动引导：与桌面本机 Host 同一份（aide_core::host）——数据迁移 / 日常目录 /
@@ -121,7 +105,7 @@ pub async fn run() -> i32 {
     let core = Core::new(
         Arc::new(workspace),
         Arc::new(host_settings()),
-        Arc::clone(&hub) as Arc<dyn EventSink>,
+        Arc::new(NullSink), // 事件走 Core 的总线；桥 / 网关各自作为消费者挂上去
         Arc::clone(&kit) as Arc<dyn aide_core::resources::HostResources>,
     );
     aide_core::host::start(&core);
@@ -136,9 +120,9 @@ pub async fn run() -> i32 {
         }
     };
     let _ = restrict(&sock, 0o600);
-    eprintln!("[aide-host] daemon {} listening on {}", hub.daemon_id(), sock.display());
+    eprintln!("[aide-host] daemon {} listening on {}", core.bus.epoch(), sock.display());
 
-    let daemon = Arc::new(Daemon { core: Arc::clone(&core), hub: Arc::clone(&hub), kit, shutdown: Notify::new() });
+    let daemon = Arc::new(Daemon { core: Arc::clone(&core), kit, shutdown: Notify::new() });
 
     // 断开终端 / ssh 会话不能带走守护进程；SIGTERM 走正常收尾
     if let Ok(mut hup) = signal(SignalKind::hangup()) {
@@ -160,7 +144,7 @@ pub async fn run() -> i32 {
             _ = daemon.shutdown.notified() => break,
             _ = async { match term.as_mut() { Some(t) => { t.recv().await; } None => std::future::pending().await } } => break,
             _ = tick.tick() => {
-                if hub.client_count() == 0 && hub.idle_for() >= grace {
+                if core.bus.client_count() == 0 && core.bus.idle_for() >= grace {
                     eprintln!("[aide-host] idle for {}s with no clients; exiting", grace.as_secs());
                     break;
                 }
