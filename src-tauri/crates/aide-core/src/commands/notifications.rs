@@ -123,11 +123,9 @@ pub struct LoadNotificationsArgs {
 
 async fn load_notifications(_core: Arc<Core>, a: LoadNotificationsArgs) -> Result<Vec<NotificationRecord>, String> {
     let _ = a;
-    {
     tokio::task::spawn_blocking(load_notifications_file)
         .await
         .map_err(|e| format!("load_notifications task panicked: {e}"))
-}
 }
 
 #[derive(Deserialize)]
@@ -138,11 +136,9 @@ pub struct SaveNotificationsArgs {
 
 async fn save_notifications(_core: Arc<Core>, a: SaveNotificationsArgs) -> Result<(), String> {
     let SaveNotificationsArgs { records } = a;
-    {
     tokio::task::spawn_blocking(move || save_notifications_file(records))
         .await
         .map_err(|e| format!("save_notifications task panicked: {e}"))?
-}
 }
 
 #[cfg(test)]

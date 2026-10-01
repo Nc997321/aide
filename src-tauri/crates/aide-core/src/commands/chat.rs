@@ -319,7 +319,6 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     let settings_service = core.settings.clone();
     // lsp_languages_for_path 需要资源端口解析捆绑 server（registry::resolve）。
     let app = core.clone();
-    {
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     // 工作目录必须真在：不在时 sidecar 起 claude 会 ENOENT，SDK 把它误报成「二进制与 libc 不匹配」
     // ——用户拿到一条完全错误的线索（2026-09-30 真机）。如实说是哪个目录不在。
@@ -446,7 +445,6 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
 
     runtime_mgr.send_to_runtime(&cmd).await
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -474,7 +472,6 @@ pub struct PermissionResponseArgs {
 async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Result<(), String> {
     let PermissionResponseArgs { session_id, id, approved, always, answers, next_mode, message, session_rules } = a;
     let runtime_mgr = &core.runtime;
-    {
     let mut cmd = json!({
         "cmd": "permission_response",
         "session_id": session_id,
@@ -496,7 +493,6 @@ async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Resu
     }
     runtime_mgr.send_to_runtime(&cmd).await
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -507,10 +503,8 @@ pub struct InterruptSessionArgs {
 async fn interrupt_session(core: Arc<Core>, a: InterruptSessionArgs) -> Result<(), String> {
     let InterruptSessionArgs { session_id } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "interrupt", "session_id": session_id });
     runtime_mgr.send_to_runtime(&cmd).await
-}
 }
 
 #[derive(Deserialize)]
@@ -523,10 +517,8 @@ pub struct StopBgTaskArgs {
 async fn stop_bg_task(core: Arc<Core>, a: StopBgTaskArgs) -> Result<(), String> {
     let StopBgTaskArgs { session_id, task_id } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "stop_bg_task", "session_id": session_id, "task_id": task_id });
     runtime_mgr.send_to_runtime(&cmd).await
-}
 }
 
 #[derive(Deserialize)]
@@ -539,10 +531,8 @@ pub struct SetModelArgs {
 async fn set_model(core: Arc<Core>, a: SetModelArgs) -> Result<bool, String> {
     let SetModelArgs { session_id, model } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "set_model", "session_id": session_id, "model": model });
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
-}
 }
 
 /// 模型切换成本确认（model_switch_confirm 弹窗）的用户决定：转发 sidecar 裁决挂起的
@@ -559,7 +549,6 @@ pub struct ModelSwitchConfirmDecisionArgs {
 async fn model_switch_confirm_decision(core: Arc<Core>, a: ModelSwitchConfirmDecisionArgs) -> Result<(), String> {
     let ModelSwitchConfirmDecisionArgs { session_id, confirm_id, approve } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({
         "cmd": "model_switch_confirm_decision",
         "session_id": session_id,
@@ -567,7 +556,6 @@ async fn model_switch_confirm_decision(core: Arc<Core>, a: ModelSwitchConfirmDec
         "approve": approve
     });
     runtime_mgr.send_to_runtime(&cmd).await
-}
 }
 
 /// 会话级 effort 切换（provider-agnostic 字符串档位，Claude sidecar 解释为
@@ -583,10 +571,8 @@ pub struct SetEffortArgs {
 async fn set_effort(core: Arc<Core>, a: SetEffortArgs) -> Result<bool, String> {
     let SetEffortArgs { session_id, effort } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "set_effort", "session_id": session_id, "effort": effort });
     runtime_mgr.send_to_runtime(&cmd).await.map(|_| true)
-}
 }
 
 #[derive(Deserialize)]
@@ -599,10 +585,8 @@ pub struct SetPermissionModeArgs {
 async fn set_permission_mode(core: Arc<Core>, a: SetPermissionModeArgs) -> Result<(), String> {
     let SetPermissionModeArgs { session_id, mode } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "set_permission_mode", "session_id": session_id, "mode": mode });
     runtime_mgr.send_to_runtime(&cmd).await
-}
 }
 
 #[derive(Deserialize)]
@@ -614,14 +598,12 @@ pub struct StopChatSessionArgs {
 async fn stop_chat_session(core: Arc<Core>, a: StopChatSessionArgs) -> Result<(), String> {
     let StopChatSessionArgs { session_id } = a;
     let runtime_mgr = &core.runtime;
-    {
     let cmd = json!({ "cmd": "session_stop", "session_id": session_id });
     let out = runtime_mgr.send_to_runtime(&cmd).await;
     // 不等 session_dead 事件就先落存活表：手机端点了停止就该立刻能换供应商，
     // 事件到达有 RTT（且进程已死时可能根本不来）。
     runtime_mgr.mark_session_dead(&session_id);
     out
-}
 }
 
 /// btw 侧问：走**存活的**主会话进程内的官方 side_question 控制通道，不起新进程
@@ -646,7 +628,6 @@ pub struct BtwAskArgs {
 async fn btw_ask(core: Arc<Core>, a: BtwAskArgs) -> Result<(), String> {
     let BtwAskArgs { session_id, question, history } = a;
     let runtime_mgr = &core.runtime;
-    {
     // session_id 是**主会话**路由键（btw 不再有独立会话 id）。
     let mut cmd = json!({
         "cmd": "btw_ask",
@@ -660,7 +641,6 @@ async fn btw_ask(core: Arc<Core>, a: BtwAskArgs) -> Result<(), String> {
         }
     }
     runtime_mgr.send_to_runtime(&cmd).await
-}
 }
 
 /// cwd 的取值来源（只服务两件事：回落留痕，以及纯核可单测）。

@@ -50,11 +50,9 @@ pub struct MemoryObservatoryScanArgs {
 
 async fn memory_observatory_scan(_core: Arc<Core>, a: MemoryObservatoryScanArgs) -> Result<scan::ScanResult, String> {
     let MemoryObservatoryScanArgs { workspace_key } = a;
-    {
     tokio::task::spawn_blocking(move || scan::scan(&workspace_key))
         .await
         .map_err(|e| format!("memory_observatory_scan task panicked: {e}"))?
-}
 }
 
 #[derive(Deserialize)]
@@ -66,7 +64,6 @@ pub struct MemoryObservatoryReadFileArgs {
 
 async fn memory_observatory_read_file(_core: Arc<Core>, a: MemoryObservatoryReadFileArgs) -> Result<String, String> {
     let MemoryObservatoryReadFileArgs { workspace_key, name } = a;
-    {
     tokio::task::spawn_blocking(move || {
         if name == CLAUDE_MD_ALIAS {
             return std::fs::read_to_string(resolve::claude_md_path())
@@ -82,7 +79,6 @@ async fn memory_observatory_read_file(_core: Arc<Core>, a: MemoryObservatoryRead
     .await
     .map_err(|e| format!("memory_observatory_read_file task panicked: {e}"))?
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -92,7 +88,6 @@ pub struct MemoryObservatorySnapshotArgs {
 
 async fn memory_observatory_snapshot(_core: Arc<Core>, a: MemoryObservatorySnapshotArgs) -> Result<snapshot::SnapshotDiff, String> {
     let MemoryObservatorySnapshotArgs { workspace_key } = a;
-    {
     tokio::task::spawn_blocking(move || {
         let scan = scan::scan(&workspace_key)?;
         let path = snapshot::snapshot_path_for(&workspace_key);
@@ -100,7 +95,6 @@ async fn memory_observatory_snapshot(_core: Arc<Core>, a: MemoryObservatorySnaps
     })
     .await
     .map_err(|e| format!("memory_observatory_snapshot task panicked: {e}"))?
-}
 }
 
 #[derive(Deserialize)]
@@ -112,7 +106,6 @@ pub struct MemoryObservatoryDeleteFileArgs {
 
 async fn memory_observatory_delete_file(_core: Arc<Core>, a: MemoryObservatoryDeleteFileArgs) -> Result<delete::DeleteResult, String> {
     let MemoryObservatoryDeleteFileArgs { workspace_key, name } = a;
-    {
     tokio::task::spawn_blocking(move || {
         let r = delete::delete_memory(&workspace_key, &name)?;
         events::append_deleted_event(&workspace_key, &name);
@@ -120,7 +113,6 @@ async fn memory_observatory_delete_file(_core: Arc<Core>, a: MemoryObservatoryDe
     })
     .await
     .map_err(|e| format!("memory_observatory_delete_file task panicked: {e}"))?
-}
 }
 
 #[derive(Deserialize)]
@@ -132,11 +124,9 @@ pub struct MemoryObservatoryEventsArgs {
 
 async fn memory_observatory_events(_core: Arc<Core>, a: MemoryObservatoryEventsArgs) -> Result<events::EventsResult, String> {
     let MemoryObservatoryEventsArgs { workspace_key } = a;
-    {
     tokio::task::spawn_blocking(move || events::read_events(workspace_key.as_deref()))
         .await
         .map_err(|e| format!("memory_observatory_events task panicked: {e}"))?
-}
 }
 
 /// P2 跨项目聚合：全量扫描 projects/*/memory/（只读）。
@@ -147,11 +137,9 @@ pub struct MemoryObservatoryScanAllArgs {
 
 async fn memory_observatory_scan_all(_core: Arc<Core>, a: MemoryObservatoryScanAllArgs) -> Result<scan::ScanAllResult, String> {
     let _ = a;
-    {
     tokio::task::spawn_blocking(scan::scan_all)
         .await
         .map_err(|e| format!("memory_observatory_scan_all task panicked: {e}"))?
-}
 }
 
 /// 按**目录**取该工作区的记忆索引原文（不是观测台 UI 要的）：供 `@目录` 的当轮注入
@@ -166,9 +154,7 @@ pub struct MemoryIndexForDirArgs {
 
 async fn memory_index_for_dir(_core: Arc<Core>, a: MemoryIndexForDirArgs) -> Result<Option<String>, String> {
     let MemoryIndexForDirArgs { dir } = a;
-    {
     tokio::task::spawn_blocking(move || index::for_dir(&dir))
         .await
         .map_err(|e| format!("memory_index_for_dir task panicked: {e}"))
-}
 }

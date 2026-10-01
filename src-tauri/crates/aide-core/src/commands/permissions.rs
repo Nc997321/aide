@@ -417,7 +417,6 @@ async fn get_permission_settings(core: Arc<Core>, a: GetPermissionSettingsArgs) 
     let GetPermissionSettingsArgs { project } = a;
     let settings = core.settings.clone();
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     tokio::task::spawn_blocking(move || {
@@ -425,7 +424,6 @@ async fn get_permission_settings(core: Arc<Core>, a: GetPermissionSettingsArgs) 
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 /// 写入成功后通知前端权限面板刷新。带新 revision（单调递增），前端按
@@ -451,13 +449,11 @@ async fn create_permission_rule(core: Arc<Core>, a: CreatePermissionRuleArgs) ->
     let settings = core.settings.clone();
     let runtime = &core.runtime;
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view = create_permission_rule_impl(service, runtime, scope, rule, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
-}
 }
 
 #[derive(Deserialize)]
@@ -475,14 +471,12 @@ async fn create_permission_rules(core: Arc<Core>, a: CreatePermissionRulesArgs) 
     let settings = core.settings.clone();
     let runtime = &core.runtime;
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view =
         create_permission_rules_impl(service, runtime, scope, rules, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
-}
 }
 
 #[derive(Deserialize)]
@@ -501,14 +495,12 @@ async fn update_permission_rule(core: Arc<Core>, a: UpdatePermissionRuleArgs) ->
     let settings = core.settings.clone();
     let runtime = &core.runtime;
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view =
         update_permission_rule_impl(service, runtime, scope, id, rule, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
-}
 }
 
 #[derive(Deserialize)]
@@ -526,13 +518,11 @@ async fn delete_permission_rule(core: Arc<Core>, a: DeletePermissionRuleArgs) ->
     let settings = core.settings.clone();
     let runtime = &core.runtime;
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = resolve_project_root(project, &workspace);
     let view = delete_permission_rule_impl(service, runtime, scope, id, project).await?;
     emit_permissions_changed(&app, &view);
     Ok(view)
-}
 }
 
 #[derive(Deserialize)]
@@ -545,7 +535,6 @@ async fn explain_permission_decision(core: Arc<Core>, a: ExplainPermissionDecisi
     let ExplainPermissionDecisionArgs { invocation } = a;
     let settings = core.settings.clone();
     let workspace = core.workspace.clone();
-    {
     let service = settings.clone();
     let project = current_project_root(&workspace);
     tokio::task::spawn_blocking(move || {
@@ -553,7 +542,6 @@ async fn explain_permission_decision(core: Arc<Core>, a: ExplainPermissionDecisi
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 #[cfg(test)]

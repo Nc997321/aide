@@ -31,7 +31,6 @@ async fn trust_workspace(core: Arc<Core>, a: TrustWorkspaceArgs) -> Result<usize
     let TrustWorkspaceArgs { path } = a;
     let settings = core.settings.clone();
     let runtime = &core.runtime;
-    {
     let key = trust_key_from_path(&path);
     let project = PathBuf::from(&path);
     let project_for_write = project.clone();
@@ -64,7 +63,6 @@ async fn trust_workspace(core: Arc<Core>, a: TrustWorkspaceArgs) -> Result<usize
         .await;
     Ok(added)
 }
-}
 
 
 /// 取消信任一个工作区（按路径）。对称删除自动写入的安全规则并广播，返回删除条数。
@@ -79,7 +77,6 @@ async fn untrust_workspace(core: Arc<Core>, a: UntrustWorkspaceArgs) -> Result<u
     let UntrustWorkspaceArgs { path } = a;
     let settings = core.settings.clone();
     let runtime = &core.runtime;
-    {
     let key = trust_key_from_path(&path);
     let project = PathBuf::from(&path);
     let project_for_write = project.clone();
@@ -108,6 +105,5 @@ async fn untrust_workspace(core: Arc<Core>, a: UntrustWorkspaceArgs) -> Result<u
         .broadcast_policy_change(SettingsScope::Local, Some(project.as_path()), &service)
         .await;
     Ok(removed)
-}
 }
 

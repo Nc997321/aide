@@ -84,41 +84,39 @@ async fn lsp_workspace_symbol(
         lang,
     } = a;
     let state = core.lsp.clone();
-    {
-        let lang_ids = resolve_query_languages(&lang, &workspace_root).await;
-        let mgr = state.0.lock().await;
-        let mut candidates = Vec::new();
-        // 一个语言都没答上（server 都没起来）时保持 NotReady——**空候选 + NotReady**
-        // 与「server 答了但确实没有」是可区分的两件事，这条区分就是本设计的全部意义。
-        let mut status = JumpStatus::NotReady;
-        for lang_id in lang_ids {
-            let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-                continue;
-            };
-            let params = serde_json::json!({ "query": query });
-            let outcome = h
-                .request(
-                    "workspace/symbol",
-                    params,
-                    crate::lsp::manager::DEFINITION_TIMEOUT,
-                )
-                .await?;
-            match outcome {
-                crate::lsp::manager::RequestOutcome::Ok(v) => {
-                    status = JumpStatus::Ok;
-                    candidates.extend(parse_workspace_symbols(&v, lang_id.id_str()));
-                }
-                crate::lsp::manager::RequestOutcome::Timeout => status = JumpStatus::Timeout,
-                crate::lsp::manager::RequestOutcome::NotReady => status = JumpStatus::NotReady,
-                // server 拒答（如 tsserver 未加载工程时的 `No Project.`）：**不是「没有候选」**。
-                crate::lsp::manager::RequestOutcome::ServerError(_) => {
-                    status = JumpStatus::NotReady
-                }
-                crate::lsp::manager::RequestOutcome::ServerGone => status = JumpStatus::Gone,
+    let lang_ids = resolve_query_languages(&lang, &workspace_root).await;
+    let mgr = state.0.lock().await;
+    let mut candidates = Vec::new();
+    // 一个语言都没答上（server 都没起来）时保持 NotReady——**空候选 + NotReady**
+    // 与「server 答了但确实没有」是可区分的两件事，这条区分就是本设计的全部意义。
+    let mut status = JumpStatus::NotReady;
+    for lang_id in lang_ids {
+        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+            continue;
+        };
+        let params = serde_json::json!({ "query": query });
+        let outcome = h
+            .request(
+                "workspace/symbol",
+                params,
+                crate::lsp::manager::DEFINITION_TIMEOUT,
+            )
+            .await?;
+        match outcome {
+            crate::lsp::manager::RequestOutcome::Ok(v) => {
+                status = JumpStatus::Ok;
+                candidates.extend(parse_workspace_symbols(&v, lang_id.id_str()));
             }
+            crate::lsp::manager::RequestOutcome::Timeout => status = JumpStatus::Timeout,
+            crate::lsp::manager::RequestOutcome::NotReady => status = JumpStatus::NotReady,
+            // server 拒答（如 tsserver 未加载工程时的 `No Project.`）：**不是「没有候选」**。
+            crate::lsp::manager::RequestOutcome::ServerError(_) => {
+                status = JumpStatus::NotReady
+            }
+            crate::lsp::manager::RequestOutcome::ServerGone => status = JumpStatus::Gone,
         }
-        Ok(LspSymbolSearchResult { status, candidates })
     }
+    Ok(LspSymbolSearchResult { status, candidates })
 }
 
 /// `lang` 显式给了就只查它（认不出的语言 → 空列表，即「什么都不查」）；

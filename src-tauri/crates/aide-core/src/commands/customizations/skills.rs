@@ -152,13 +152,11 @@ pub struct GetSkillContentArgs {
 
 async fn get_skill_content(_core: Arc<Core>, a: GetSkillContentArgs) -> Result<String, String> {
     let GetSkillContentArgs { id } = a;
-    {
     let path = skills_dir().join(&id).join("SKILL.md");
     if !path.exists() {
         return Err(format!("Skill '{}' not found", id));
     }
     fs::read_to_string(&path).map_err(|e| e.to_string())
-}
 }
 
 #[derive(Deserialize)]
@@ -318,10 +316,8 @@ pub struct ReadSkillScriptArgs {
 
 async fn read_skill_script(_core: Arc<Core>, a: ReadSkillScriptArgs) -> Result<String, String> {
     let ReadSkillScriptArgs { skill_id, filename } = a;
-    {
     let p = script_path(&skill_id, &filename)?;
     fs::read_to_string(&p).map_err(|e| e.to_string())
-}
 }
 
 /// 写入（或覆盖）skill 的脚本文件；scripts 目录不存在时自动创建。
@@ -335,13 +331,11 @@ pub struct WriteSkillScriptArgs {
 
 async fn write_skill_script(_core: Arc<Core>, a: WriteSkillScriptArgs) -> Result<(), String> {
     let WriteSkillScriptArgs { skill_id, filename, content } = a;
-    {
     let p = script_path(&skill_id, &filename)?;
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&p, content).map_err(|e| e.to_string())
-}
 }
 
 /// 删除 skill 的脚本文件；不存在视为成功。
@@ -354,13 +348,11 @@ pub struct DeleteSkillScriptArgs {
 
 async fn delete_skill_script(_core: Arc<Core>, a: DeleteSkillScriptArgs) -> Result<(), String> {
     let DeleteSkillScriptArgs { skill_id, filename } = a;
-    {
     let p = script_path(&skill_id, &filename)?;
     if p.exists() {
         fs::remove_file(&p).map_err(|e| e.to_string())?;
     }
     Ok(())
-}
 }
 
 #[cfg(test)]

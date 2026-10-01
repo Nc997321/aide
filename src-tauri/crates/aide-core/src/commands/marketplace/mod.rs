@@ -239,7 +239,6 @@ pub struct SetPluginEnabledArgs {
 async fn set_plugin_enabled(core: Arc<Core>, a: SetPluginEnabledArgs) -> Result<(), String> {
     let SetPluginEnabledArgs { marketplace, plugin, enabled } = a;
     let service = core.settings.clone();
-    {
     // 重 IO（settings 读写 + cache 目录扫描 + 清单落盘）→ spawn_blocking，不占主线程
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -255,7 +254,6 @@ async fn set_plugin_enabled(core: Arc<Core>, a: SetPluginEnabledArgs) -> Result<
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 // ── Commands ──
@@ -288,7 +286,6 @@ pub struct ListMarketplaceSourcesArgs {
 async fn list_marketplace_sources(core: Arc<Core>, a: ListMarketplaceSourcesArgs) -> Result<Vec<sources::SourceInfo>, String> {
     let _ = a;
     let service = core.settings.clone();
-    {
     // 读 settings.json → spawn_blocking，不占主线程
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<Vec<sources::SourceInfo>, String> {
@@ -323,7 +320,6 @@ async fn list_marketplace_sources(core: Arc<Core>, a: ListMarketplaceSourcesArgs
     .await
     .map_err(|e| e.to_string())?
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -335,7 +331,6 @@ pub struct SetMarketplaceEnabledArgs {
 async fn set_marketplace_enabled(core: Arc<Core>, a: SetMarketplaceEnabledArgs) -> Result<(), String> {
     let SetMarketplaceEnabledArgs { source_id, enabled } = a;
     let service = core.settings.clone();
-    {
     // settings 读写 → spawn_blocking，不占主线程
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -367,7 +362,6 @@ async fn set_marketplace_enabled(core: Arc<Core>, a: SetMarketplaceEnabledArgs) 
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 #[cfg(test)]

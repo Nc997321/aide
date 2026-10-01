@@ -628,11 +628,6 @@ fn collect_stderr(
     });
 }
 
-/// 远程工作区：经 `aide-host lsp` 在目标机上起服务器（登录 PATH 上找），stdio 套一层
-/// URI 翻译（`remote_workspace::lsp_pipe`）——之后对 LspManager 就是又一个 stdio 进程。
-///
-/// 目标机上没装该语言的服务器 → aide-host 退出码 127、stderr 说明试了什么；那几行随
-/// 握手失败的原因回到面板（与本机「找不到 server」同一条可见路径）。
 // ── spawn_test（mock）──
 
 #[cfg(test)]

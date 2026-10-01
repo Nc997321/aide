@@ -36,7 +36,6 @@ pub struct FetchMarketplaceArgs {
 
 async fn fetch_marketplace(_core: Arc<Core>, a: FetchMarketplaceArgs) -> Result<Vec<PluginEntry>, String> {
     let FetchMarketplaceArgs { source_id } = a;
-    {
     // async 命令不埋 trace_command（CLAUDE.md：async 的 spawn_blocking 任务不在主线程）
     tokio::task::spawn_blocking(move || -> Result<Vec<PluginEntry>, String> {
         let market_name = sources::default_market_name(&source_id)
@@ -91,7 +90,6 @@ async fn fetch_marketplace(_core: Arc<Core>, a: FetchMarketplaceArgs) -> Result<
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 /// 确保市场源仓库已克隆到缓存目录（缺失则浅克隆）。启动期内置插件安装与
@@ -668,14 +666,12 @@ pub struct InstallPluginArgs {
 async fn install_plugin(core: Arc<Core>, a: InstallPluginArgs) -> Result<(), String> {
     let InstallPluginArgs { source_id, plugin_name } = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         install_plugin_blocking(&service, &source_id, &plugin_name, None)
     })
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 /// 安装插件（阻塞实现，UI 命令与启动期内置插件安装共用）。
@@ -725,7 +721,6 @@ pub struct UninstallPluginArgs {
 async fn uninstall_plugin(core: Arc<Core>, a: UninstallPluginArgs) -> Result<(), String> {
     let UninstallPluginArgs { marketplace, plugin_name } = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let root = plugins_cache_root().join(&marketplace).join(&plugin_name);
@@ -742,7 +737,6 @@ async fn uninstall_plugin(core: Arc<Core>, a: UninstallPluginArgs) -> Result<(),
     .await
     .map_err(|e| e.to_string())?
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -752,7 +746,6 @@ pub struct RefreshMarketplaceArgs {
 
 async fn refresh_marketplace(_core: Arc<Core>, a: RefreshMarketplaceArgs) -> Result<(), String> {
     let RefreshMarketplaceArgs { source_id } = a;
-    {
     tokio::task::spawn_blocking(move || -> Result<(), String> {
         let repo = crate::commands::marketplace::sources::fixed_repo(&source_id).ok_or("未知源")?;
         let cache = crate::commands::marketplace::source_cache_dir(&source_id);
@@ -768,7 +761,6 @@ async fn refresh_marketplace(_core: Arc<Core>, a: RefreshMarketplaceArgs) -> Res
     .await
     .map_err(|e| e.to_string())?
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -780,7 +772,6 @@ pub struct UpdatePluginArgs {
 async fn update_plugin(core: Arc<Core>, a: UpdatePluginArgs) -> Result<(), String> {
     let UpdatePluginArgs { source_id, plugin_name } = a;
     let service = core.settings.clone();
-    {
     // 更新 = 用最新条目重装到新版本目录；旧版本目录保留 7 天 GC
     let service = service.clone();
     tokio::task::spawn_blocking(move || -> Result<(), String> {
@@ -800,7 +791,6 @@ async fn update_plugin(core: Arc<Core>, a: UpdatePluginArgs) -> Result<(), Strin
     .await
     .map_err(|e| e.to_string())?
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -810,7 +800,6 @@ pub struct ListInstalledPluginsArgs {
 async fn list_installed_plugins(core: Arc<Core>, a: ListInstalledPluginsArgs) -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
     let _ = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(
         move || -> Result<Vec<crate::commands::marketplace::InstalledPlugin>, String> {
@@ -882,7 +871,6 @@ async fn list_installed_plugins(core: Arc<Core>, a: ListInstalledPluginsArgs) ->
     )
     .await
     .map_err(|e| e.to_string())?
-}
 }
 
 #[cfg(test)]

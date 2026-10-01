@@ -114,13 +114,11 @@ pub struct GetAgentContentArgs {
 
 async fn get_agent_content(_core: Arc<Core>, a: GetAgentContentArgs) -> Result<String, String> {
     let GetAgentContentArgs { id } = a;
-    {
     let path = agents_dir().join(format!("{}.md", id));
     if !path.exists() {
         return Err(format!("Agent '{}' not found", id));
     }
     fs::read_to_string(&path).map_err(|e| e.to_string())
-}
 }
 
 #[derive(Deserialize)]

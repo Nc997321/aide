@@ -1,5 +1,5 @@
 //! 历史消息读取的命令外壳：定位会话转录（Host 的配置根），分页与解析在
-//! aide_workspace::transcripts。远程工作区的会话由桌面前门的远程路由接管。
+//! aide_workspace::transcripts。Host 窗口里会话住在那台 Host 的 aide-core 里，同一份实现。
 
 #[allow(unused_imports)]
 use crate::registry::{blocking, Command as HostCommand};
@@ -39,11 +39,9 @@ pub struct LoadMessagesArgs {
 
 async fn load_messages(_core: Arc<Core>, a: LoadMessagesArgs) -> Result<LoadMessagesResult, String> {
     let LoadMessagesArgs { session_id, offset_bytes, limit } = a;
-    {
     tokio::task::spawn_blocking(move || load_messages_blocking(session_id, offset_bytes, limit))
         .await
         .map_err(|e| format!("load_messages task panicked: {}", e))?
-}
 }
 
 fn load_messages_blocking(

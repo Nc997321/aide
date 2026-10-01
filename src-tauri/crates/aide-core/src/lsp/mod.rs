@@ -115,13 +115,11 @@ async fn lsp_detect_languages(
     a: LspDetectLanguagesArgs,
 ) -> Result<Vec<String>, String> {
     let LspDetectLanguagesArgs { workspace_root } = a;
-    {
-        // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：本机走 async 外壳不占
-        // tokio worker；远程工作区在目标机上探测（WorkspaceAccess）。
-        let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
-        let langs = access.detect_languages(&workspace_root).await;
-        Ok(langs.iter().map(|l| l.id_str().to_string()).collect())
-    }
+    // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：本机走 async 外壳不占
+    // tokio worker；远程工作区在目标机上探测（WorkspaceAccess）。
+    let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
+    let langs = access.detect_languages(&workspace_root).await;
+    Ok(langs.iter().map(|l| l.id_str().to_string()).collect())
 }
 
 #[derive(Deserialize)]
@@ -142,42 +140,40 @@ async fn lsp_ensure_server(
     let state = core.lsp.clone();
     let settings_service = core.settings.clone();
     let app = core.clone();
+    // 信任门（spec §5.3）：与 workspace_set_lsp_enabled 同一道门。即便
+    // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
+    // 自然消亡，不再 respawn。
+    if !crate::commands::workspace::is_path_trusted(&workspace_root) {
+        return Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("untrusted"),
+            error: None,
+        });
+    }
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("server_not_found"),
+            error: None,
+        });
+    };
+    let settings =
+        crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
+    let mgr = state.0.lock().await;
+    match mgr
+        .ensure_server(&workspace_root, lang_id, &app, &settings)
+        .await
     {
-        // 信任门（spec §5.3）：与 workspace_set_lsp_enabled 同一道门。即便
-        // lsp_enabled 被设过，未信任工作区也拒拉 server——untrust 后老 server
-        // 自然消亡，不再 respawn。
-        if !crate::commands::workspace::is_path_trusted(&workspace_root) {
-            return Ok(EnsureOutcome {
-                ok: false,
-                ready: false,
-                kind: Some("untrusted"),
-                error: None,
-            });
-        }
-        let Some(lang_id) = lang_from_id_str(&lang) else {
-            return Ok(EnsureOutcome {
-                ok: false,
-                ready: false,
-                kind: Some("server_not_found"),
-                error: None,
-            });
-        };
-        let settings =
-            crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
-        let mgr = state.0.lock().await;
-        match mgr
-            .ensure_server(&workspace_root, lang_id, &app, &settings)
-            .await
-        {
-            Ok(h) => Ok(EnsureOutcome {
-                ok: true,
-                // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
-                ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
-                kind: None,
-                error: None,
-            }),
-            Err(e) => Ok(ensure_err_to_outcome(e)),
-        }
+        Ok(h) => Ok(EnsureOutcome {
+            ok: true,
+            // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
+            ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
+            kind: None,
+            error: None,
+        }),
+        Err(e) => Ok(ensure_err_to_outcome(e)),
     }
 }
 
@@ -261,34 +257,32 @@ async fn lsp_did_open(core: Arc<Core>, a: LspDidOpenArgs) -> Result<(), String> 
     let state = core.lsp.clone();
     let settings_service = core.settings.clone();
     let app = core.clone();
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
+    let settings =
+        crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
+    let mgr = state.0.lock().await;
+    let h = match mgr
+        .ensure_server(&workspace_root, lang_id, &app, &settings)
+        .await
     {
-        let Some(lang_id) = lang_from_id_str(&lang) else {
-            return Ok(());
-        };
-        let settings =
-            crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
-        let mgr = state.0.lock().await;
-        let h = match mgr
-            .ensure_server(&workspace_root, lang_id, &app, &settings)
-            .await
-        {
-            Ok(h) => h,
-            Err(_) => return Ok(()),
-        };
-        // §5.4 排除集跳过
-        if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) {
-            return Ok(());
-        }
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        // 文档 languageId **由文件形态推**，不透明传前端那个字符串（它是服务 id）：
-        // `.vue` 要发 "vue"（TS 插件声明的 id）、`.tsx` 要发 "typescriptreact"，发错
-        // 前者 TLS 丢弃文档、后者按 TS 解析（见 `detector::document_lang_id`）。
-        let doc_lang = crate::lsp::detector::document_lang_id(&file_path, lang_id);
-        // 去重与通知组装都在 `open_doc` 里——与 agent 查询路径**共用同一份**（唯一区别是
-        // 来源标记）。这里标 `Editor`：用户真开着这个文件，它的诊断/通知该进 UI。
-        h.open_doc(&uri, doc_lang, text, crate::lsp::docs::DocOrigin::Editor)
-            .await
+        Ok(h) => h,
+        Err(_) => return Ok(()),
+    };
+    // §5.4 排除集跳过
+    if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) {
+        return Ok(());
     }
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    // 文档 languageId **由文件形态推**，不透明传前端那个字符串（它是服务 id）：
+    // `.vue` 要发 "vue"（TS 插件声明的 id）、`.tsx` 要发 "typescriptreact"，发错
+    // 前者 TLS 丢弃文档、后者按 TS 解析（见 `detector::document_lang_id`）。
+    let doc_lang = crate::lsp::detector::document_lang_id(&file_path, lang_id);
+    // 去重与通知组装都在 `open_doc` 里——与 agent 查询路径**共用同一份**（唯一区别是
+    // 来源标记）。这里标 `Editor`：用户真开着这个文件，它的诊断/通知该进 UI。
+    h.open_doc(&uri, doc_lang, text, crate::lsp::docs::DocOrigin::Editor)
+        .await
 }
 
 #[derive(Deserialize)]
@@ -311,28 +305,26 @@ async fn lsp_did_change(core: Arc<Core>, a: LspDidChangeArgs) -> Result<(), Stri
         version,
     } = a;
     let state = core.lsp.clone();
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    // 防御：前端漏发 did_open / 乱序时 OpenDocs::change 会 panic。未开 → 跳过，不崩。
     {
-        let Some(lang_id) = lang_from_id_str(&lang) else {
-            return Ok(());
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(());
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        // 防御：前端漏发 did_open / 乱序时 OpenDocs::change 会 panic。未开 → 跳过，不崩。
-        {
-            let docs = h.docs.lock().await;
-            if !docs.contains(&uri) {
-                return Ok(()); // doc not open (no preceding did_open) — skip, don't panic
-            }
+        let docs = h.docs.lock().await;
+        if !docs.contains(&uri) {
+            return Ok(()); // doc not open (no preceding did_open) — skip, don't panic
         }
-        let v = h.docs.lock().await.change(&uri, text.clone());
-        let _ = version; // Full 同步：用 docs 内部 version
-                         // 帧形状与 agent 路径共用（见 manager::did_change_notif）。
-        let notif = crate::lsp::manager::did_change_notif(&uri, v, &text);
-        h.transport.send(&notif).await.map_err(|e| e.to_string())
     }
+    let v = h.docs.lock().await.change(&uri, text.clone());
+    let _ = version; // Full 同步：用 docs 内部 version
+                     // 帧形状与 agent 路径共用（见 manager::did_change_notif）。
+    let notif = crate::lsp::manager::did_change_notif(&uri, v, &text);
+    h.transport.send(&notif).await.map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -350,22 +342,20 @@ async fn lsp_did_close(core: Arc<Core>, a: LspDidCloseArgs) -> Result<(), String
         lang,
     } = a;
     let state = core.lsp.clone();
-    {
-        let Some(lang_id) = lang_from_id_str(&lang) else {
-            return Ok(());
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(());
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        h.docs.lock().await.close(&uri);
-        let notif = serde_json::json!({
-            "jsonrpc":"2.0","method":"textDocument/didClose",
-            "params":{"textDocument":{"uri":uri}}
-        });
-        h.transport.send(&notif).await.map_err(|e| e.to_string())
-    }
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(());
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    h.docs.lock().await.close(&uri);
+    let notif = serde_json::json!({
+        "jsonrpc":"2.0","method":"textDocument/didClose",
+        "params":{"textDocument":{"uri":uri}}
+    });
+    h.transport.send(&notif).await.map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -387,37 +377,35 @@ async fn lsp_definition(core: Arc<Core>, a: LspDefinitionArgs) -> Result<LspJump
         word,
     } = a;
     let state = core.lsp.clone();
-    {
-        // lang 识别不出 → Ok+空（前端 fallback codegraph，与今天同）。
-        let lang = lang_from_ext_of(&file_path);
-        let Some(lang_id) = lang else {
-            return Ok(LspJumpResult {
-                status: JumpStatus::Ok,
-                results: vec![],
-            });
-        };
-        let mgr = state.0.lock().await;
-        // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback codegraph）。
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(LspJumpResult {
-                status: JumpStatus::NotReady,
-                results: vec![],
-            });
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = crate::lsp::jump::position_params(&uri, line, column);
-        let outcome = crate::lsp::jump::issue(
-            &h,
-            "textDocument/definition",
-            params,
-            crate::lsp::manager::DEFINITION_TIMEOUT,
-        )
-        .await?;
-        // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
-        // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
-        let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
-        Ok(LspJumpResult { status, results })
-    }
+    // lang 识别不出 → Ok+空（前端 fallback codegraph，与今天同）。
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::Ok,
+            results: vec![],
+        });
+    };
+    let mgr = state.0.lock().await;
+    // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback codegraph）。
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::NotReady,
+            results: vec![],
+        });
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = crate::lsp::jump::position_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/definition",
+        params,
+        crate::lsp::manager::DEFINITION_TIMEOUT,
+    )
+    .await?;
+    // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
+    // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
+    let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
+    Ok(LspJumpResult { status, results })
 }
 
 #[derive(Deserialize)]
@@ -439,36 +427,34 @@ async fn lsp_references(core: Arc<Core>, a: LspReferencesArgs) -> Result<LspJump
         word,
     } = a;
     let state = core.lsp.clone();
-    {
-        // 与 lsp_definition 同构（status 透传），仅 method 换为 textDocument/references
-        // （符号→使用点，方向与 definition 相反）。context.includeDeclaration=false：
-        // 查引用场景声明本身是噪声，前端另有自引用过滤兜底。
-        let lang = lang_from_ext_of(&file_path);
-        let Some(lang_id) = lang else {
-            return Ok(LspJumpResult {
-                status: JumpStatus::Ok,
-                results: vec![],
-            });
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(LspJumpResult {
-                status: JumpStatus::NotReady,
-                results: vec![],
-            });
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = crate::lsp::jump::references_params(&uri, line, column);
-        let outcome = crate::lsp::jump::issue(
-            &h,
-            "textDocument/references",
-            params,
-            crate::lsp::manager::DEFINITION_TIMEOUT,
-        )
-        .await?;
-        let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
-        Ok(LspJumpResult { status, results })
-    }
+    // 与 lsp_definition 同构（status 透传），仅 method 换为 textDocument/references
+    // （符号→使用点，方向与 definition 相反）。context.includeDeclaration=false：
+    // 查引用场景声明本身是噪声，前端另有自引用过滤兜底。
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::Ok,
+            results: vec![],
+        });
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(LspJumpResult {
+            status: JumpStatus::NotReady,
+            results: vec![],
+        });
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = crate::lsp::jump::references_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/references",
+        params,
+        crate::lsp::manager::DEFINITION_TIMEOUT,
+    )
+    .await?;
+    let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
+    Ok(LspJumpResult { status, results })
 }
 
 /// 调用层级（callHierarchy）结果包装：root = prepare 到的层级根（prepare 空 → None，
@@ -508,101 +494,99 @@ async fn lsp_call_hierarchy(
         direction,
     } = a;
     let state = core.lsp.clone();
-    {
-        let dir = match direction.as_str() {
-            "incoming" | "outgoing" => direction.as_str(),
-            _ => return Err(format!("invalid direction: {direction}")),
-        };
-        let lang = lang_from_ext_of(&file_path);
-        let Some(lang_id) = lang else {
-            return Ok(CallHierarchyResult {
-                status: JumpStatus::Ok,
-                root: None,
-                nodes: vec![],
-            });
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(CallHierarchyResult {
-                status: JumpStatus::NotReady,
-                root: None,
-                nodes: vec![],
-            });
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let prepare_params = serde_json::json!({
-            "textDocument":{"uri":uri},
-            "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-        });
-        let empty_result = |status: JumpStatus| CallHierarchyResult {
-            status,
+    let dir = match direction.as_str() {
+        "incoming" | "outgoing" => direction.as_str(),
+        _ => return Err(format!("invalid direction: {direction}")),
+    };
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(CallHierarchyResult {
+            status: JumpStatus::Ok,
             root: None,
             nodes: vec![],
-        };
-        // 1. prepare：拿层级根 item（原样 JSON——展开请求要带 data 回传 server）
-        let outcome = h
-            .request(
-                "textDocument/prepareCallHierarchy",
-                prepare_params,
-                crate::lsp::manager::DEFINITION_TIMEOUT,
-            )
-            .await?;
-        let prepare_value = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            crate::lsp::manager::RequestOutcome::Timeout => {
-                return Ok(empty_result(JumpStatus::Timeout))
-            }
-            crate::lsp::manager::RequestOutcome::NotReady => {
-                return Ok(empty_result(JumpStatus::NotReady))
-            }
-            // server 拒答：与「没就绪」同类——空结果不是「没有子节点」的证据。
-            crate::lsp::manager::RequestOutcome::ServerError(_) => {
-                return Ok(empty_result(JumpStatus::NotReady))
-            }
-            crate::lsp::manager::RequestOutcome::ServerGone => {
-                return Ok(empty_result(JumpStatus::Gone))
-            }
-        };
-        let items = crate::lsp::protocol::prepare_call_hierarchy_items(&prepare_value);
-        let Some(root_item) = items.into_iter().next() else {
-            // server 确认该位置不是可调用符号（类名/字段等）→ Ok + root None
-            return Ok(empty_result(JumpStatus::Ok));
-        };
-        let root = crate::lsp::protocol::call_hierarchy_item_to_node(&root_item, &workspace_root);
-        // 2. 方向展开：item 原样回传（保 data）
-        let call_params = serde_json::json!({"item": root_item});
-        let method = if dir == "outgoing" {
-            "callHierarchy/outgoingCalls"
-        } else {
-            "callHierarchy/incomingCalls"
-        };
-        let outcome = h
-            .request(method, call_params, crate::lsp::manager::DEFINITION_TIMEOUT)
-            .await?;
-        let (status, value) = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
-            crate::lsp::manager::RequestOutcome::Timeout => {
-                (JumpStatus::Timeout, serde_json::Value::Null)
-            }
-            crate::lsp::manager::RequestOutcome::NotReady => {
-                (JumpStatus::NotReady, serde_json::Value::Null)
-            }
-            // server 拒答：同 NotReady（空结果不是证据）。
-            crate::lsp::manager::RequestOutcome::ServerError(_) => {
-                (JumpStatus::NotReady, serde_json::Value::Null)
-            }
-            crate::lsp::manager::RequestOutcome::ServerGone => {
-                (JumpStatus::Gone, serde_json::Value::Null)
-            }
-        };
-        let nodes =
-            crate::lsp::protocol::call_hierarchy_calls_to_nodes(&value, dir, &workspace_root);
-        Ok(CallHierarchyResult {
-            status,
-            root: Some(root),
-            nodes,
-        })
-    }
+        });
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(CallHierarchyResult {
+            status: JumpStatus::NotReady,
+            root: None,
+            nodes: vec![],
+        });
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let prepare_params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let empty_result = |status: JumpStatus| CallHierarchyResult {
+        status,
+        root: None,
+        nodes: vec![],
+    };
+    // 1. prepare：拿层级根 item（原样 JSON——展开请求要带 data 回传 server）
+    let outcome = h
+        .request(
+            "textDocument/prepareCallHierarchy",
+            prepare_params,
+            crate::lsp::manager::DEFINITION_TIMEOUT,
+        )
+        .await?;
+    let prepare_value = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            return Ok(empty_result(JumpStatus::Timeout))
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            return Ok(empty_result(JumpStatus::NotReady))
+        }
+        // server 拒答：与「没就绪」同类——空结果不是「没有子节点」的证据。
+        crate::lsp::manager::RequestOutcome::ServerError(_) => {
+            return Ok(empty_result(JumpStatus::NotReady))
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            return Ok(empty_result(JumpStatus::Gone))
+        }
+    };
+    let items = crate::lsp::protocol::prepare_call_hierarchy_items(&prepare_value);
+    let Some(root_item) = items.into_iter().next() else {
+        // server 确认该位置不是可调用符号（类名/字段等）→ Ok + root None
+        return Ok(empty_result(JumpStatus::Ok));
+    };
+    let root = crate::lsp::protocol::call_hierarchy_item_to_node(&root_item, &workspace_root);
+    // 2. 方向展开：item 原样回传（保 data）
+    let call_params = serde_json::json!({"item": root_item});
+    let method = if dir == "outgoing" {
+        "callHierarchy/outgoingCalls"
+    } else {
+        "callHierarchy/incomingCalls"
+    };
+    let outcome = h
+        .request(method, call_params, crate::lsp::manager::DEFINITION_TIMEOUT)
+        .await?;
+    let (status, value) = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => (JumpStatus::Ok, v),
+        crate::lsp::manager::RequestOutcome::Timeout => {
+            (JumpStatus::Timeout, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::NotReady => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        // server 拒答：同 NotReady（空结果不是证据）。
+        crate::lsp::manager::RequestOutcome::ServerError(_) => {
+            (JumpStatus::NotReady, serde_json::Value::Null)
+        }
+        crate::lsp::manager::RequestOutcome::ServerGone => {
+            (JumpStatus::Gone, serde_json::Value::Null)
+        }
+    };
+    let nodes =
+        crate::lsp::protocol::call_hierarchy_calls_to_nodes(&value, dir, &workspace_root);
+    Ok(CallHierarchyResult {
+        status,
+        root: Some(root),
+        nodes,
+    })
 }
 
 #[derive(Deserialize)]
@@ -625,34 +609,32 @@ async fn lsp_completion(
         column,
     } = a;
     let state = core.lsp.clone();
-    {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(vec![]);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(vec![]);
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({
-            "textDocument":{"uri":uri},
-            "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-        });
-        let outcome = h
-            .request(
-                "textDocument/completion",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        // 向后兼容：非 Ok（timeout/notready/gone）映射 Null，parse 返空 = 旧行为；status 暂不透传。
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        let items = parse_completion_items(&result);
-        Ok(crate::lsp::protocol::completion_items_to_cm(&items))
-    }
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let outcome = h
+        .request(
+            "textDocument/completion",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    // 向后兼容：非 Ok（timeout/notready/gone）映射 Null，parse 返空 = 旧行为；status 暂不透传。
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    let items = parse_completion_items(&result);
+    Ok(crate::lsp::protocol::completion_items_to_cm(&items))
 }
 
 /// completionItem/resolve（语言无关，按扩展名分派到对应 server）：支持 resolve 的
@@ -677,31 +659,29 @@ async fn lsp_completion_resolve(
         item,
     } = a;
     let state = core.lsp.clone();
-    {
-        let empty = serde_json::json!({"detail": null, "documentation": null});
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(empty);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(empty);
-        };
-        let outcome = h
-            .request(
-                "completionItem/resolve",
-                item,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        Ok(serde_json::json!({
-            "detail": result.get("detail").and_then(|v| v.as_str()),
-            "documentation": crate::lsp::protocol::extract_documentation(result.get("documentation")),
-        }))
-    }
+    let empty = serde_json::json!({"detail": null, "documentation": null});
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(empty);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(empty);
+    };
+    let outcome = h
+        .request(
+            "completionItem/resolve",
+            item,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(serde_json::json!({
+        "detail": result.get("detail").and_then(|v| v.as_str()),
+        "documentation": crate::lsp::protocol::extract_documentation(result.get("documentation")),
+    }))
 }
 
 /// textDocument/signatureHelp（语言无关，按扩展名分派）：方法调用的参数提示。
@@ -726,32 +706,30 @@ async fn lsp_signature_help(
         column,
     } = a;
     let state = core.lsp.clone();
-    {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(serde_json::Value::Null);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(serde_json::Value::Null);
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({
-            "textDocument":{"uri":uri},
-            "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-        });
-        let outcome = h
-            .request(
-                "textDocument/signatureHelp",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        Ok(crate::lsp::protocol::signature_help_to_view(&result))
-    }
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(serde_json::Value::Null);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(serde_json::Value::Null);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let outcome = h
+        .request(
+            "textDocument/signatureHelp",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::signature_help_to_view(&result))
 }
 
 /// textDocument/semanticTokens/full（语言无关，按扩展名分派到对应 server）：
@@ -774,29 +752,27 @@ async fn lsp_semantic_tokens(
         file_path,
     } = a;
     let state = core.lsp.clone();
-    {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(vec![]);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(vec![]);
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({"textDocument": {"uri": uri}});
-        let outcome = h
-            .request(
-                "textDocument/semanticTokens/full",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        Ok(crate::lsp::protocol::semantic_tokens_to_view(&result))
-    }
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({"textDocument": {"uri": uri}});
+    let outcome = h
+        .request(
+            "textDocument/semanticTokens/full",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::semantic_tokens_to_view(&result))
 }
 
 /// 查 inlay hints（语言无关，按扩展名分派）：参数名/类型提示。params 必带 range
@@ -823,48 +799,46 @@ async fn lsp_inlay_hints(
         to_line,
     } = a;
     let state = core.lsp.clone();
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    // 握手已完成且 server 未声明 inlayHintProvider → 早退不发请求（读握手结果，
+    // 语言无关；跳转类请求有明确「确认无定义」语义需发请求，装饰类高频请求则以
+    // capability 短路省钱）。握手未完成（None）不早退——走正常请求路径由 server
+    // 回 NotInitialized，前端退避重试兜底。
     {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(vec![]);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(vec![]);
-        };
-        // 握手已完成且 server 未声明 inlayHintProvider → 早退不发请求（读握手结果，
-        // 语言无关；跳转类请求有明确「确认无定义」语义需发请求，装饰类高频请求则以
-        // capability 短路省钱）。握手未完成（None）不早退——走正常请求路径由 server
-        // 回 NotInitialized，前端退避重试兜底。
-        {
-            let caps = h.capabilities.lock().await;
-            if let Some(raw) = caps.as_ref() {
-                if !crate::lsp::protocol::LspCapabilities::from_caps(Some(raw)).inlay_hint_provider
-                {
-                    return Ok(vec![]);
-                }
+        let caps = h.capabilities.lock().await;
+        if let Some(raw) = caps.as_ref() {
+            if !crate::lsp::protocol::LspCapabilities::from_caps(Some(raw)).inlay_hint_provider
+            {
+                return Ok(vec![]);
             }
         }
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({
-            "textDocument": {"uri": uri},
-            "range": {
-                "start": {"line": (from_line as u64).saturating_sub(1), "character": 0},
-                "end": {"line": to_line as u64, "character": 0}
-            }
-        });
-        let outcome = h
-            .request(
-                "textDocument/inlayHint",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        Ok(crate::lsp::protocol::inlay_hints_to_view(&result))
     }
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument": {"uri": uri},
+        "range": {
+            "start": {"line": (from_line as u64).saturating_sub(1), "character": 0},
+            "end": {"line": to_line as u64, "character": 0}
+        }
+    });
+    let outcome = h
+        .request(
+            "textDocument/inlayHint",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(crate::lsp::protocol::inlay_hints_to_view(&result))
 }
 
 /// textDocument/didSave 通知（语言无关，按扩展名分派到对应 server）。
@@ -884,27 +858,25 @@ async fn lsp_did_save(core: Arc<Core>, a: LspDidSaveArgs) -> Result<(), String> 
         file_path,
     } = a;
     let state = core.lsp.clone();
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(());
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(());
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
     {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(());
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(());
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        {
-            let docs = h.docs.lock().await;
-            if !docs.contains(&uri) {
-                return Ok(()); // doc not open — skip
-            }
+        let docs = h.docs.lock().await;
+        if !docs.contains(&uri) {
+            return Ok(()); // doc not open — skip
         }
-        let notif = serde_json::json!({
-            "jsonrpc":"2.0","method":"textDocument/didSave",
-            "params":{"textDocument":{"uri":uri}}
-        });
-        h.transport.send(&notif).await.map_err(|e| e.to_string())
     }
+    let notif = serde_json::json!({
+        "jsonrpc":"2.0","method":"textDocument/didSave",
+        "params":{"textDocument":{"uri":uri}}
+    });
+    h.transport.send(&notif).await.map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -924,45 +896,43 @@ async fn lsp_hover(core: Arc<Core>, a: LspHoverArgs) -> Result<serde_json::Value
         column,
     } = a;
     let state = core.lsp.clone();
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(serde_json::json!({"content":null}));
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(serde_json::json!({"content":null}));
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({
+        "textDocument":{"uri":uri},
+        "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
+    });
+    let outcome = h
+        .request(
+            "textDocument/hover",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    let content = parse_hover_content(&result);
     {
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(serde_json::json!({"content":null}));
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(serde_json::json!({"content":null}));
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({
-            "textDocument":{"uri":uri},
-            "position":{"line":(line as u64).saturating_sub(1),"character":(column as u64).saturating_sub(1)}
-        });
-        let outcome = h
-            .request(
-                "textDocument/hover",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        let content = parse_hover_content(&result);
-        {
-            let raw: String = serde_json::to_string(&result)
-                .unwrap_or_default()
-                .chars()
-                .take(400)
-                .collect();
-            eprintln!(
-                "[hover] rust raw(400)={} content_some={}",
-                raw,
-                content.is_some()
-            );
-        }
-        Ok(serde_json::json!({"content":content}))
+        let raw: String = serde_json::to_string(&result)
+            .unwrap_or_default()
+            .chars()
+            .take(400)
+            .collect();
+        eprintln!(
+            "[hover] rust raw(400)={} content_some={}",
+            raw,
+            content.is_some()
+        );
     }
+    Ok(serde_json::json!({"content":content}))
 }
 
 #[derive(Deserialize)]
@@ -987,31 +957,29 @@ async fn lsp_implementation(
         word,
     } = a;
     let state = core.lsp.clone();
-    {
-        // 与 lsp_definition 同构，仅 method 换为 textDocument/implementation（父→子）。
-        // 返回 Location[] → 归一为 QueryResult[]；前端据此挂向下箭头，并反推向上箭头。
-        let lang = lang_from_ext_of(&file_path);
-        let Some(lang_id) = lang else {
-            return Ok(vec![]);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(vec![]);
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = crate::lsp::jump::position_params(&uri, line, column);
-        let outcome = crate::lsp::jump::issue(
-            &h,
-            "textDocument/implementation",
-            params,
-            crate::lsp::manager::REQUEST_TIMEOUT,
-        )
-        .await?;
-        // 历史行为：implementation **不透传 status**，非 Ok 一律当空结果（见 JumpStatus
-        // 注释「其余命令保持原空行为，向后兼容」）。故丢掉 status 只取 results——与重构前等价。
-        let (_, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
-        Ok(results)
-    }
+    // 与 lsp_definition 同构，仅 method 换为 textDocument/implementation（父→子）。
+    // 返回 Location[] → 归一为 QueryResult[]；前端据此挂向下箭头，并反推向上箭头。
+    let lang = lang_from_ext_of(&file_path);
+    let Some(lang_id) = lang else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = crate::lsp::jump::position_params(&uri, line, column);
+    let outcome = crate::lsp::jump::issue(
+        &h,
+        "textDocument/implementation",
+        params,
+        crate::lsp::manager::REQUEST_TIMEOUT,
+    )
+    .await?;
+    // 历史行为：implementation **不透传 status**，非 Ok 一律当空结果（见 JumpStatus
+    // 注释「其余命令保持原空行为，向后兼容」）。故丢掉 status 只取 results——与重构前等价。
+    let (_, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
+    Ok(results)
 }
 
 #[derive(Deserialize)]
@@ -1030,32 +998,30 @@ async fn lsp_document_symbol(
         file_path,
     } = a;
     let state = core.lsp.clone();
-    {
-        // 枚举文档声明符号（Class/Interface/Method/Function...），供前端筛可视区声明查 implementation。
-        // 客户端已声明 hierarchicalSupport → server 多返 DocumentSymbol[]（带 children）；
-        // 解析器兼容 SymbolInformation[]（扁平，有 location）兜底。
-        let Some(lang_id) = lang_from_ext_of(&file_path) else {
-            return Ok(vec![]);
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(vec![]);
-        };
-        let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
-        let params = serde_json::json!({ "textDocument":{"uri":uri} });
-        let outcome = h
-            .request(
-                "textDocument/documentSymbol",
-                params,
-                crate::lsp::manager::REQUEST_TIMEOUT,
-            )
-            .await?;
-        let result = match outcome {
-            crate::lsp::manager::RequestOutcome::Ok(v) => v,
-            _ => serde_json::Value::Null,
-        };
-        Ok(parse_document_symbols(&result))
-    }
+    // 枚举文档声明符号（Class/Interface/Method/Function...），供前端筛可视区声明查 implementation。
+    // 客户端已声明 hierarchicalSupport → server 多返 DocumentSymbol[]（带 children）；
+    // 解析器兼容 SymbolInformation[]（扁平，有 location）兜底。
+    let Some(lang_id) = lang_from_ext_of(&file_path) else {
+        return Ok(vec![]);
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(vec![]);
+    };
+    let uri = crate::lsp::protocol::resolve_file_uri(&workspace_root, &file_path);
+    let params = serde_json::json!({ "textDocument":{"uri":uri} });
+    let outcome = h
+        .request(
+            "textDocument/documentSymbol",
+            params,
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await?;
+    let result = match outcome {
+        crate::lsp::manager::RequestOutcome::Ok(v) => v,
+        _ => serde_json::Value::Null,
+    };
+    Ok(parse_document_symbols(&result))
 }
 
 #[derive(Deserialize)]
@@ -1074,21 +1040,19 @@ async fn lsp_capabilities(
         lang,
     } = a;
     let state = core.lsp.clone();
-    {
-        // 按语言查 server 的可选能力开关。server 未启动 → 默认全 false（前端据 isLspOn + caps
-        // 决定是否启用 gutter 标记；server 后续就绪时 watch 会 reconfigure）。
-        let Some(lang_id) = lang_from_id_str(&lang) else {
-            return Ok(Default::default());
-        };
-        let mgr = state.0.lock().await;
-        let Some(h) = mgr.get(&workspace_root, lang_id).await else {
-            return Ok(Default::default());
-        };
-        let caps = h.capabilities.lock().await;
-        Ok(crate::lsp::protocol::LspCapabilities::from_caps(
-            caps.as_ref(),
-        ))
-    }
+    // 按语言查 server 的可选能力开关。server 未启动 → 默认全 false（前端据 isLspOn + caps
+    // 决定是否启用 gutter 标记；server 后续就绪时 watch 会 reconfigure）。
+    let Some(lang_id) = lang_from_id_str(&lang) else {
+        return Ok(Default::default());
+    };
+    let mgr = state.0.lock().await;
+    let Some(h) = mgr.get(&workspace_root, lang_id).await else {
+        return Ok(Default::default());
+    };
+    let caps = h.capabilities.lock().await;
+    Ok(crate::lsp::protocol::LspCapabilities::from_caps(
+        caps.as_ref(),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1103,14 +1067,12 @@ async fn lsp_shutdown_workspace(
 ) -> Result<(), String> {
     let LspShutdownWorkspaceArgs { workspace_root } = a;
     let state = core.lsp.clone();
-    {
-        state.0.lock().await.kill_workspace(&workspace_root).await;
-        core.emit(
-            "lsp-diagnostics",
-            serde_json::json!({"workspaceRoot":workspace_root,"clear":true}),
-        );
-        Ok(())
-    }
+    state.0.lock().await.kill_workspace(&workspace_root).await;
+    core.emit(
+        "lsp-diagnostics",
+        serde_json::json!({"workspaceRoot":workspace_root,"clear":true}),
+    );
+    Ok(())
 }
 
 // ── helpers ──

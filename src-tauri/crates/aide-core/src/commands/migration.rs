@@ -168,11 +168,9 @@ pub struct MigrateClaudeDataArgs {
 
 async fn migrate_claude_data(_core: Arc<Core>, a: MigrateClaudeDataArgs) -> Result<MigrationSummary, String> {
     let _ = a;
-    {
     tokio::task::spawn_blocking(migrate_blocking)
         .await
         .map_err(|e| format!("migration task panicked: {e}"))?
-}
 }
 
 /// 用户选「不再提示」——只压住自动弹窗，不影响 SettingsPanel 后备按钮主动触发。

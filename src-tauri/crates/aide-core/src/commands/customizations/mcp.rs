@@ -134,7 +134,6 @@ pub struct CreateMcpServerArgs {
 
 async fn create_mcp_server(_core: Arc<Core>, a: CreateMcpServerArgs) -> Result<CustomizationItem, String> {
     let CreateMcpServerArgs { data } = a;
-    {
     let name = data["name"].as_str().unwrap_or("unnamed").to_string();
     let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
@@ -156,7 +155,6 @@ async fn create_mcp_server(_core: Arc<Core>, a: CreateMcpServerArgs) -> Result<C
         metadata: Some(cfg),
     })
 }
-}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,7 +165,6 @@ pub struct UpdateMcpServerArgs {
 
 async fn update_mcp_server(_core: Arc<Core>, a: UpdateMcpServerArgs) -> Result<(), String> {
     let UpdateMcpServerArgs { id, data } = a;
-    {
     let cfg = build_mcp_config(&data);
     let mut settings = load_settings();
     if let Some(servers) = settings
@@ -185,7 +182,6 @@ async fn update_mcp_server(_core: Arc<Core>, a: UpdateMcpServerArgs) -> Result<(
         servers.insert(id, new_cfg);
     }
     save_settings(&settings)
-}
 }
 
 #[derive(Deserialize)]

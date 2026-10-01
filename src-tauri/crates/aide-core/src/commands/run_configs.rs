@@ -132,11 +132,9 @@ pub struct DetectRunTargetsArgs {
 
 async fn detect_run_targets(_core: Arc<Core>, a: DetectRunTargetsArgs) -> Result<Vec<RunTarget>, String> {
     let DetectRunTargetsArgs { cwd } = a;
-    {
     tokio::task::spawn_blocking(move || Ok(detect_targets(Path::new(&cwd))))
         .await
         .map_err(|e| format!("detect_run_targets task panicked: {}", e))?
-}
 }
 
 // ── Project run-command detection ──────────────────────────────────────────
@@ -149,13 +147,11 @@ pub struct DetectRunCommandArgs {
 
 async fn detect_run_command(_core: Arc<Core>, a: DetectRunCommandArgs) -> Result<Option<String>, String> {
     let DetectRunCommandArgs { cwd } = a;
-    {
     tokio::task::spawn_blocking(move || {
         Ok(aide_workspace::detect::markers::detect_command_for_path(std::path::Path::new(&cwd)))
     })
     .await
     .map_err(|e| format!("detect_run_command task panicked: {}", e))?
-}
 }
 
 #[cfg(test)]

@@ -76,11 +76,9 @@ pub struct LoadSessionChangesArgs {
 
 async fn load_session_changes(_core: Arc<Core>, a: LoadSessionChangesArgs) -> Result<Vec<ChangeRoundData>, String> {
     let LoadSessionChangesArgs { session_id } = a;
-    {
     tokio::task::spawn_blocking(move || load_session_changes_blocking(session_id))
         .await
         .map_err(|e| format!("load_session_changes task panicked: {}", e))?
-}
 }
 
 /// changes 文件格式（2026-08-26 起）：
@@ -124,11 +122,9 @@ pub struct SaveSessionChangesArgs {
 
 async fn save_session_changes(_core: Arc<Core>, a: SaveSessionChangesArgs) -> Result<(), String> {
     let SaveSessionChangesArgs { session_id, rounds } = a;
-    {
     tokio::task::spawn_blocking(move || save_session_changes_blocking(session_id, rounds))
         .await
         .map_err(|e| format!("save_session_changes task panicked: {}", e))?
-}
 }
 
 /// 全量覆盖落盘（revertRound / revertSingleFile 等轮次变少/修改场景）：JSONL 每行一轮。
@@ -160,11 +156,9 @@ pub struct AppendSessionChangeArgs {
 
 async fn append_session_change(_core: Arc<Core>, a: AppendSessionChangeArgs) -> Result<(), String> {
     let AppendSessionChangeArgs { session_id, round } = a;
-    {
     tokio::task::spawn_blocking(move || append_session_change_blocking(session_id, round))
         .await
         .map_err(|e| format!("append_session_change task panicked: {}", e))?
-}
 }
 
 fn append_session_change_blocking(

@@ -1,5 +1,5 @@
 //! .jsonl 直读的命令外壳：定位会话转录（Host 的配置根）；读写实现在
-//! aide_workspace::transcripts::jsonl。远程工作区的会话由桌面前门的远程路由接管。
+//! aide_workspace::transcripts::jsonl。Host 窗口里会话住在那台 Host 的 aide-core 里，同一份实现。
 
 #[allow(unused_imports)]
 use crate::registry::Command as HostCommand;
@@ -41,7 +41,6 @@ pub struct SessionLastEventArgs {
 
 async fn session_last_event(_core: Arc<Core>, a: SessionLastEventArgs) -> Result<LastEventInfo, String> {
     let SessionLastEventArgs { session_id } = a;
-    {
     blocking("session_last_event", move || {
         match find_session_jsonl_globally(&session_id).into_iter().next() {
             Some(p) => jsonl::last_event_at(&p),
@@ -49,7 +48,6 @@ async fn session_last_event(_core: Arc<Core>, a: SessionLastEventArgs) -> Result
         }
     })
     .await
-}
 }
 
 /// 每轮对话结束都会调用一次（takeSnapshot 记录撤回锚点），必须 async——同步版本
@@ -65,7 +63,6 @@ pub struct SessionJsonlSizeArgs {
 
 async fn session_jsonl_size(_core: Arc<Core>, a: SessionJsonlSizeArgs) -> Result<u64, String> {
     let SessionJsonlSizeArgs { session_id } = a;
-    {
     blocking("session_jsonl_size", move || {
         match find_session_jsonl_globally(&session_id).into_iter().next() {
             Some(p) => jsonl::size_at(&p),
@@ -73,7 +70,6 @@ async fn session_jsonl_size(_core: Arc<Core>, a: SessionJsonlSizeArgs) -> Result
         }
     })
     .await
-}
 }
 
 #[derive(Deserialize)]
@@ -85,7 +81,6 @@ pub struct SessionTruncateJsonlArgs {
 
 async fn session_truncate_jsonl(_core: Arc<Core>, a: SessionTruncateJsonlArgs) -> Result<(), String> {
     let SessionTruncateJsonlArgs { session_id, byte_pos } = a;
-    {
     blocking("session_truncate_jsonl", move || {
         match find_session_jsonl_globally(&session_id).into_iter().next() {
             Some(p) => jsonl::truncate_at(&p, byte_pos),
@@ -93,5 +88,4 @@ async fn session_truncate_jsonl(_core: Arc<Core>, a: SessionTruncateJsonlArgs) -
         }
     })
     .await
-}
 }

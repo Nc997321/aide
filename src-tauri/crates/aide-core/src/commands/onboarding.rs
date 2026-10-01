@@ -44,12 +44,10 @@ pub struct ClaudeStartLoginArgs {
 
 async fn claude_start_login(_core: Arc<Core>, a: ClaudeStartLoginArgs) -> Result<LoginStartResult, String> {
     let _ = a;
-    {
     Ok(LoginStartResult {
         authorize_url: None,
         degraded: true,
     })
-}
 }
 
 #[derive(serde::Serialize)]

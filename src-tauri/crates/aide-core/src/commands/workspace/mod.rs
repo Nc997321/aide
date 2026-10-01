@@ -347,10 +347,8 @@ pub struct WorkspaceGetJdkArgs {
 
 async fn workspace_get_jdk(_core: Arc<Core>, a: WorkspaceGetJdkArgs) -> Result<String, String> {
     let WorkspaceGetJdkArgs { workspace_root } = a;
-    {
     let key = path_to_key(&workspace_root);
     Ok(workspace_jdk(&key).unwrap_or_default())
-}
 }
 
 /// 设某工作区 JDK（空 = 系统默认）。前端选择器改动即调，run 进程启动时
@@ -364,10 +362,8 @@ pub struct WorkspaceSetJdkArgs {
 
 async fn workspace_set_jdk(_core: Arc<Core>, a: WorkspaceSetJdkArgs) -> Result<(), String> {
     let WorkspaceSetJdkArgs { workspace_root, jdk_home } = a;
-    {
     let key = path_to_key(&workspace_root);
     set_workspace_jdk(&key, &jdk_home)
-}
 }
 
 /// 工作区列表 = 显式注册表（state.json `registeredWorkspaces`，见子模块
@@ -382,7 +378,6 @@ pub struct ListWorkspacesArgs {
 
 async fn list_workspaces(_core: Arc<Core>, a: ListWorkspacesArgs) -> Result<Vec<WorkspaceInfo>, String> {
     let _ = a;
-    {
     tokio::task::spawn_blocking(|| {
         let config = crate::app_settings::load_state();
         let daily = daily::daily_path_in(&crate::paths::our_config_dir());
@@ -397,7 +392,6 @@ async fn list_workspaces(_core: Arc<Core>, a: ListWorkspacesArgs) -> Result<Vec<
     })
     .await
     .map_err(|e| format!("list_workspaces panicked: {}", e))?
-}
 }
 
 /// 日常模式的归属（key + path）。给前端做「这个会话是不是日常」的判定与落点绑定用。
@@ -530,7 +524,6 @@ pub struct RemoveWorkspaceArgs {
 async fn remove_workspace(core: Arc<Core>, a: RemoveWorkspaceArgs) -> Result<(), String> {
     let RemoveWorkspaceArgs { key, mode } = a;
     let workspace_state = core.workspace.clone();
-    {
     match mode.as_str() {
         "hide" => {
             crate::app_settings::with_state_mut(|config| {
@@ -578,7 +571,6 @@ async fn remove_workspace(core: Arc<Core>, a: RemoveWorkspaceArgs) -> Result<(),
         })?;
     }
     Ok(())
-}
 }
 
 /// 重新显示（重登记）一个工作区：按 key 解码回真实 path 后登记；顺带清
@@ -629,11 +621,9 @@ pub struct IsWorkspaceTrustedArgs {
 
 async fn is_workspace_trusted(_core: Arc<Core>, a: IsWorkspaceTrustedArgs) -> Result<bool, String> {
     let IsWorkspaceTrustedArgs { path } = a;
-    {
     tokio::task::spawn_blocking(move || is_path_trusted(&path))
         .await
         .map_err(|e| format!("is_workspace_trusted panicked: {}", e))
-}
 }
 
 // ── 工作区 LSP 开关 Tauri 命令 ──
@@ -647,14 +637,12 @@ pub struct WorkspaceSetLspEnabledArgs {
 
 async fn workspace_set_lsp_enabled(_core: Arc<Core>, a: WorkspaceSetLspEnabledArgs) -> Result<(), String> {
     let WorkspaceSetLspEnabledArgs { workspace_root, enabled } = a;
-    {
     // 信任门：未信任工作区拒开 LSP（LSP 跑外部二进制 + 索引工作区，本就该走信任门）
     if enabled && !is_path_trusted(&workspace_root) {
         return Err("untrusted workspace".into());
     }
     let key = path_to_key(&workspace_root);
     set_lsp_enabled(&key, enabled)
-}
 }
 
 #[derive(Deserialize)]
@@ -666,14 +654,12 @@ pub struct WorkspaceSetLspExcludesArgs {
 
 async fn workspace_set_lsp_excludes(_core: Arc<Core>, a: WorkspaceSetLspExcludesArgs) -> Result<(), String> {
     let WorkspaceSetLspExcludesArgs { workspace_root, dirs } = a;
-    {
     let key = path_to_key(&workspace_root);
     set_lsp_excludes(&key, dirs)?;
     // 改排除集 → 触发该工作区 server 重拉（init exclude 不支持热改）
     // 由前端调 lsp_shutdown_workspace 后下次 did_open 自然重拉；
     // 或在此 emit 信号。v1：返回 OK，前端 disable→enable LSP 完成重拉。
     Ok(())
-}
 }
 
 /// 读某工作区 LSP 排除目录列表（spec T15 读路径补齐：UI 不再 write-only）。
@@ -687,10 +673,8 @@ pub struct WorkspaceGetLspExcludesArgs {
 
 async fn workspace_get_lsp_excludes(_core: Arc<Core>, a: WorkspaceGetLspExcludesArgs) -> Result<Vec<String>, String> {
     let WorkspaceGetLspExcludesArgs { workspace_root } = a;
-    {
     let key = path_to_key(&workspace_root);
     Ok(lsp_workspace_config(&key).exclude_dirs)
-}
 }
 
 // ── 工作区代码索引开关 Tauri 命令 ──
@@ -704,13 +688,11 @@ pub struct WorkspaceGetCodegraphEnabledArgs {
 
 async fn workspace_get_codegraph_enabled(_core: Arc<Core>, a: WorkspaceGetCodegraphEnabledArgs) -> Result<bool, String> {
     let WorkspaceGetCodegraphEnabledArgs { workspace_root } = a;
-    {
     // state.json 读轻量，但与 is_workspace_trusted 同款走 spawn_blocking，
     // 命令体不碰文件 IO。
     tokio::task::spawn_blocking(move || is_codegraph_enabled_for_path(&workspace_root))
         .await
         .map_err(|e| format!("workspace_get_codegraph_enabled panicked: {e}"))
-}
 }
 
 /// 设某工作区索引开关。**不设信任门**：开关只是「意向」记录，信任把关在
@@ -725,13 +707,11 @@ pub struct WorkspaceSetCodegraphEnabledArgs {
 
 async fn workspace_set_codegraph_enabled(_core: Arc<Core>, a: WorkspaceSetCodegraphEnabledArgs) -> Result<(), String> {
     let WorkspaceSetCodegraphEnabledArgs { workspace_root, enabled } = a;
-    {
     tokio::task::spawn_blocking(move || {
         set_codegraph_enabled(&trust_key_from_path(&workspace_root), enabled)
     })
     .await
     .map_err(|e| format!("workspace_set_codegraph_enabled panicked: {e}"))?
-}
 }
 
 /// 编码 key → 真实路径（`path_to_key` 的逆，旧数据回退用）。编码把分隔符与 `:` 都变成 `-`，

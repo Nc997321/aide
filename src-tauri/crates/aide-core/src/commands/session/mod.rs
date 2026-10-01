@@ -61,8 +61,6 @@ pub struct ListSessionsArgs {
 async fn list_sessions(core: Arc<Core>, a: ListSessionsArgs) -> Result<Vec<Session>, String> {
     let _ = a;
     let workspace_state = core.workspace.clone();
-    {
-    // 远程工作区的会话列表由前门的远程路由接管（remote_workspace::sessions），到不了这里。
     let encoded = match workspace_state.key.lock() {
         Ok(guard) => match guard.as_ref() {
             Some(key) => key.clone(),
@@ -74,7 +72,6 @@ async fn list_sessions(core: Arc<Core>, a: ListSessionsArgs) -> Result<Vec<Sessi
     tokio::task::spawn_blocking(move || list_sessions_blocking(encoded, root))
         .await
         .map_err(|e| format!("list_sessions task panicked: {}", e))?
-}
 }
 
 /// 扫描单个项目目录下的 .jsonl 会话并追加到 sessions（按 session id 去重——
@@ -225,11 +222,9 @@ pub struct CreateSessionArgs {
 
 async fn create_session(_core: Arc<Core>, a: CreateSessionArgs) -> Result<Session, String> {
     let CreateSessionArgs { id, name } = a;
-    {
     tokio::task::spawn_blocking(move || create_session_blocking(id, name))
         .await
         .map_err(|e| format!("create_session task panicked: {e}"))?
-}
 }
 
 /// 磁盘 IO 离开主线程：`create_dir_all` + `fs::write` 是真落盘，且固定在
@@ -290,11 +285,9 @@ pub struct DeleteSessionArgs {
 
 async fn delete_session(_core: Arc<Core>, a: DeleteSessionArgs) -> Result<(), String> {
     let DeleteSessionArgs { id } = a;
-    {
     tokio::task::spawn_blocking(move || delete_session_blocking(id))
         .await
         .map_err(|e| format!("delete_session task panicked: {e}"))?
-}
 }
 
 /// 磁盘 IO 离开主线程：删元数据 + 全局搜 jsonl 逐个删 + 扫 claude sessions 目录，
@@ -462,11 +455,9 @@ pub struct RenameSessionArgs {
 
 async fn rename_session(_core: Arc<Core>, a: RenameSessionArgs) -> Result<(), String> {
     let RenameSessionArgs { id, name } = a;
-    {
     tokio::task::spawn_blocking(move || rename_session_blocking(id, name))
         .await
         .map_err(|e| format!("rename_session task panicked: {e}"))?
-}
 }
 
 /// 磁盘 IO 离开主线程（读-改-写会话元数据 json）。
@@ -499,11 +490,9 @@ pub struct AutoRenameSessionArgs {
 
 async fn auto_rename_session(_core: Arc<Core>, a: AutoRenameSessionArgs) -> Result<bool, String> {
     let AutoRenameSessionArgs { id, name } = a;
-    {
     tokio::task::spawn_blocking(move || auto_rename_session_blocking(&id, &name))
         .await
         .map_err(|e| format!("auto_rename_session task panicked: {}", e))?
-}
 }
 
 fn auto_rename_session_blocking(id: &str, name: &str) -> Result<bool, String> {
@@ -561,7 +550,6 @@ pub struct SetSessionMetaArgs {
 
 async fn set_session_meta(_core: Arc<Core>, a: SetSessionMetaArgs) -> Result<(), String> {
     let SetSessionMetaArgs { id, provider, model, effort } = a;
-    {
     tokio::task::spawn_blocking(move || {
         write_session_meta_blocking(
             &id,
@@ -575,7 +563,6 @@ async fn set_session_meta(_core: Arc<Core>, a: SetSessionMetaArgs) -> Result<(),
     })
     .await
     .map_err(|e| format!("set_session_meta task panicked: {}", e))?
-}
 }
 
 /// 写会话自持的工作区归属（wsPath + wsKey 成对）。
@@ -601,7 +588,6 @@ pub struct SetSessionWorkspaceArgs {
 
 async fn set_session_workspace(_core: Arc<Core>, a: SetSessionWorkspaceArgs) -> Result<(), String> {
     let SetSessionWorkspaceArgs { id, ws_path, ws_key } = a;
-    {
     tokio::task::spawn_blocking(move || {
         write_session_meta_blocking(
             &id,
@@ -614,7 +600,6 @@ async fn set_session_workspace(_core: Arc<Core>, a: SetSessionWorkspaceArgs) -> 
     })
     .await
     .map_err(|e| format!("set_session_workspace task panicked: {}", e))?
-}
 }
 
 /// 读回会话自持的工作区归属（根路径 + 编码 key）；没记过 / 没档案 → None。
@@ -630,7 +615,6 @@ pub struct SessionWorkspaceArgs {
 
 async fn session_workspace(_core: Arc<Core>, a: SessionWorkspaceArgs) -> Result<Option<crate::session_store::SessionWorkspaceRef>, String> {
     let SessionWorkspaceArgs { id } = a;
-    {
     tokio::task::spawn_blocking(move || {
         let ws = crate::session_store::our_session_workspace(&id);
         // wsPath 是承重字段（发送 cwd 用它）；只有 key 没有 path 视为没记过。
@@ -642,7 +626,6 @@ async fn session_workspace(_core: Arc<Core>, a: SessionWorkspaceArgs) -> Result<
     .await
     .map_err(|e| format!("session_workspace task panicked: {}", e))?
 }
-}
 
 /// 读回会话记住的模型选择；没有元数据文件或没记过 → None。
 #[derive(Deserialize)]
@@ -653,7 +636,6 @@ pub struct SessionModelArgs {
 
 async fn session_model(_core: Arc<Core>, a: SessionModelArgs) -> Result<Option<String>, String> {
     let SessionModelArgs { id } = a;
-    {
     tokio::task::spawn_blocking(move || {
         let path = our_sessions_dir().join(format!("{}.json", id));
         if !path.exists() {
@@ -670,7 +652,6 @@ async fn session_model(_core: Arc<Core>, a: SessionModelArgs) -> Result<Option<S
     .await
     .map_err(|e| format!("session_model task panicked: {}", e))?
 }
-}
 
 /// 读回会话记住的 effort 选择；没有元数据文件或没记过 → None。
 #[derive(Deserialize)]
@@ -681,7 +662,6 @@ pub struct SessionEffortArgs {
 
 async fn session_effort(_core: Arc<Core>, a: SessionEffortArgs) -> Result<Option<String>, String> {
     let SessionEffortArgs { id } = a;
-    {
     tokio::task::spawn_blocking(move || {
         let path = our_sessions_dir().join(format!("{}.json", id));
         if !path.exists() {
@@ -698,7 +678,6 @@ async fn session_effort(_core: Arc<Core>, a: SessionEffortArgs) -> Result<Option
     .await
     .map_err(|e| format!("session_effort task panicked: {}", e))?
 }
-}
 
 /// 读回会话绑定的供应商 id；没有元数据文件或没记过 → None（前端回落全局激活供应商）。
 /// 字段读取与 send_message 的元数据兜底共用 `our_session_provider_field` 同一口径；
@@ -711,11 +690,9 @@ pub struct SessionProviderArgs {
 
 async fn session_provider(_core: Arc<Core>, a: SessionProviderArgs) -> Result<Option<String>, String> {
     let SessionProviderArgs { id } = a;
-    {
     tokio::task::spawn_blocking(move || Ok(crate::session_store::our_session_provider_field(&id)))
         .await
         .map_err(|e| format!("session_provider task panicked: {}", e))?
-}
 }
 
 /// 发送前的身份漂移判定（桌面端与鸿蒙端共用）：本次将生效的 provider / model 与
@@ -770,7 +747,6 @@ pub struct SessionIdentityDriftArgs {
 
 async fn session_identity_drift(core: Arc<Core>, a: SessionIdentityDriftArgs) -> Result<IdentityDrift, String> {
     let SessionIdentityDriftArgs { id, provider_id, model } = a;
-    {
     let last_provider = session_provider(core.clone(), SessionProviderArgs { id: id.clone() })
         .await
         .unwrap_or(None);
@@ -788,7 +764,6 @@ async fn session_identity_drift(core: Arc<Core>, a: SessionIdentityDriftArgs) ->
         last_model,
     })
 }
-}
 
 /// List sessions for a specific workspace by its encoded key, without relying
 /// on the current WorkspaceState. Used by the frontend to load sessions for
@@ -805,12 +780,9 @@ pub struct ListSessionsForWorkspaceArgs {
 
 async fn list_sessions_for_workspace(_core: Arc<Core>, a: ListSessionsForWorkspaceArgs) -> Result<Vec<Session>, String> {
     let ListSessionsForWorkspaceArgs { ws_key } = a;
-    {
-    // 远程工作区（WSL / SSH）由前门的远程路由接管（remote_workspace::sessions）。
     tokio::task::spawn_blocking(move || list_sessions_for_workspace_blocking(ws_key))
         .await
         .map_err(|e| format!("list_sessions_for_workspace task panicked: {}", e))?
-}
 }
 
 fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, String> {
@@ -905,14 +877,12 @@ pub struct FindSessionsSinceArgs {
 async fn find_sessions_since(core: Arc<Core>, a: FindSessionsSinceArgs) -> Result<Vec<String>, String> {
     let FindSessionsSinceArgs { since_ms } = a;
     let workspace_state = core.workspace.clone();
-    {
     // 工作区根路径在主线程上取好（锁内一次 exists() stat，够轻），
     // 真正的重活（扫目录 + 逐个读 json 解析）整体搬进阻塞线程。
     let root = workspace_state.root_for(None);
     tokio::task::spawn_blocking(move || find_sessions_since_blocking(root, since_ms))
         .await
         .map_err(|e| format!("find_sessions_since task panicked: {e}"))?
-}
 }
 
 fn find_sessions_since_blocking(root: PathBuf, since_ms: u64) -> Result<Vec<String>, String> {

@@ -223,14 +223,12 @@ pub struct RecordRecentSessionArgs {
 async fn record_recent_session(core: Arc<Core>, a: RecordRecentSessionArgs) -> Result<(), String> {
     let RecordRecentSessionArgs { ws_key, ws_name, session_id, name } = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(move || {
         record_recent_session_blocking(&service, ws_key, ws_name, session_id, name)
     })
     .await
     .map_err(|e| format!("record_recent_session task panicked: {e}"))?
-}
 }
 
 fn record_recent_session_blocking(
@@ -263,12 +261,10 @@ pub struct RecordRecentFileArgs {
 async fn record_recent_file(core: Arc<Core>, a: RecordRecentFileArgs) -> Result<(), String> {
     let RecordRecentFileArgs { ws_key, path, name } = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(move || record_recent_file_blocking(&service, ws_key, path, name))
         .await
         .map_err(|e| format!("record_recent_file task panicked: {e}"))?
-}
 }
 
 fn record_recent_file_blocking(
@@ -296,12 +292,10 @@ pub struct ListRecentArgs {
 async fn list_recent(core: Arc<Core>, a: ListRecentArgs) -> Result<RecentView, String> {
     let ListRecentArgs { ws_key } = a;
     let service = core.settings.clone();
-    {
     let service = service.clone();
     tokio::task::spawn_blocking(move || list_recent_blocking(ws_key, &service))
         .await
         .map_err(|e| format!("list_recent task panicked: {e}"))?
-}
 }
 
 fn list_recent_blocking(ws_key: String, service: &SettingsService) -> Result<RecentView, String> {
@@ -338,11 +332,9 @@ pub struct RemoveRecentSessionArgs {
 
 async fn remove_recent_session(_core: Arc<Core>, a: RemoveRecentSessionArgs) -> Result<(), String> {
     let RemoveRecentSessionArgs { session_id } = a;
-    {
     tokio::task::spawn_blocking(move || remove_recent_session_blocking(&session_id))
         .await
         .map_err(|e| format!("remove_recent_session task panicked: {e}"))?
-}
 }
 
 /// 阻塞实现。`delete_session` 自己就在阻塞线程上（它也要删 jsonl），直接调这个
@@ -366,11 +358,9 @@ pub struct ClearRecentArgs {
 
 async fn clear_recent(_core: Arc<Core>, a: ClearRecentArgs) -> Result<(), String> {
     let ClearRecentArgs { category } = a;
-    {
     tokio::task::spawn_blocking(move || clear_recent_blocking(category.as_deref()))
         .await
         .map_err(|e| format!("clear_recent task panicked: {e}"))?
-}
 }
 
 fn clear_recent_blocking(category: Option<&str>) -> Result<(), String> {
