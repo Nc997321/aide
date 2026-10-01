@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import LinkPairingSection from "./LinkPairingSection.vue";
 import { ref, watch, onMounted, computed } from "vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
 import { useSettings } from "../composables/useSettings";
@@ -853,6 +854,9 @@ function onOverlayClick(e: MouseEvent) {
 
             <!-- ── 远程控制 Tab ── -->
             <div v-else-if="activeTab === 'remote'" class="tab-remote">
+              <!-- 新协议：手机扫码直连这台 Host（端到端加密）。下面是旧协议（现有手机 APP 仍用它）。 -->
+              <LinkPairingSection />
+
               <div class="settings-field">
                 <label class="field-label">启用远程控制</label>
                 <div class="toggle-row">

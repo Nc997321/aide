@@ -78,7 +78,7 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 
 **relay 层帧契约**（register/connect/update_code/keepalive/connect_error + 码 TTL/双向活体常量、supersede 与 opt-in 静默语义）；**新增/改帧 = 三端同步**（relay ↔ aide-sdk remote.ts ↔ ohos 镜像）。
 
-**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：旧 v2（`src-tauri/src/remote/`，桌面网关）的继任者，手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳。**帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `catalog.rs` / `auth.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续；**配对靠扫二维码**（含 Host 公钥 + 一次性 psk），帧经 Noise 端到端加密、**中继不被信任**（没有配对码、没有 token，手机的静态密钥即凭据）——这是安全设计，别退回短码 / 明文。迁移期间旧 v2 继续服务现有手机端，**不要在 v2 上再加能力**。
+**手机 ↔ Host 的应用层协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)，`crates/aide-link`）：旧 v2（`src-tauri/src/remote/`，桌面网关）的继任者，手机直连 Host、握手 / 版本协商 / 目录化暴露 / 按会话订阅 + 续传 / 心跳。**Host 端的网关实现在 `aide-core` 的 `link/`（`LinkService` 随 `host::start` 启动，本机 Host 与 aide-host 共用；`link_*` 命令是 Host 设置面板用的、不对手机开放）；协议本体、帧、暴露目录、配对规则只改 `crates/aide-link`**（`frame.rs` / `catalog.rs` / `auth.rs`），同步 `docs/aide-link-protocol.md` 与 `docs/aide-link/frames.d.ts`（有对账测试），并补一致性向量（`tests/fixtures/`）；**手机端代码由手机端自己演进，桌面侧不替它改**——只交付协议。单设备模型在 Link 里原样延续；**配对靠扫二维码**（含 Host 公钥 + 一次性 psk），帧经 Noise 端到端加密、**中继不被信任**（没有配对码、没有 token，手机的静态密钥即凭据）——这是安全设计，别退回短码 / 明文。迁移期间旧 v2 继续服务现有手机端，**不要在 v2 上再加能力**。
 
 ## 架构红线：Host 模型——一张命令表，多个前门
 
@@ -87,6 +87,7 @@ relay（`relay-server/`）是**哑管道**：只做配对与 WS 桥接，不解�
 - **命令唯一实现 = `crates/aide-core` 的命令表**（Tauri 无关）：本机窗口由 `src/host_door.rs` 进程内直调（本机零退化，不绕传输层）；Host 窗口由 `host_door::forward` 原样转发给那台 Host 的 `aide-host serve`，serve 查同一张表。已迁入的命令**不写 `#[tauri::command]`、不进 `generate_handler!`**；新命令按 docs/host-model.md §4。**禁止再开平行分派**。
 - **Host 自持状态住 `aide_core::Core`**；Core 需要的宿主能力一律经端口注入：事件 `EventSink`、随包资源 `HostResources`、GUI 侧能力 `runtime::ports::AgentHooks`（内嵌浏览器 / 冻结诊断）。**aide-core 禁止依赖 Tauri**，且与 aide-host 同守「无系统 C 库、单静态二进制」约束。Host 不弹系统通知：`Core::notify` 发 `system-notification` 事件，由 GUI 前门弹。
 - **只有一套远程**：旧的「远程工作区 = 逐命令转发 + UNC 路径翻译」已于 2026-09-30 删除（P1d），**不许复活**。Host 窗口里前后端之间一律是 **Host 原生路径**，不翻译；功能代码不认识「现在在哪台机器」。
+- **事件总线是 Host 自己的**（`aide_core::bus` / `Core::bus`）：全部事件在这里编号、留底（16MiB / 5 万条）、按会话订阅投递、断线回放；`Core::new` 把前门给的 `EventSink` 包一层（Tee）——本机桌面的 `TauriSink` 照旧直接 `emit_to` 窗口，aide-host 的桥与 Aide Link 网关都是总线的消费者。**新的多客户端出口一律实现 `bus::Consumer`，不要再造平行的广播。**
 - **事件隔离两头做**：后端本机 Core 事件只 `emit_to` 本机窗口、serve 通知只 `emit_to` 该 Host 的窗口（`src/host_window.rs`）；前端监听一律窗口作用域（`@aide/sdk` 的 `TauriTransport.listen`）。**不要在共享代码里用 Tauri 默认的全局 `listen`**——它会收到发给任何窗口的事件（WSL 窗口看到本机会话的 chat-event）。
 - **GUI 与 Host 之间的跨界必须显式、用户看得见**（`src/host_window.rs`）：本机文件进对话 = 上传到 Host 暂存（`upload_local_files` → core `stage_dropped_file`）；「用本机程序打开 / 在资源管理器中显示」对 WSL 路径译成 `\\wsl.localhost\…`、SSH 如实拒绝（`host_window::gui_path`）；「从本机复制供应商」是一次显式动作，不做自动同步。GUI 侧工具（内嵌浏览器）的应答经 core `agent_tool_result`（白名单结果命令）回到 Host 的 runtime。
 - **供应商按 Host 自持**（2026-09-30 定）：每个 Host 一份供应商与密钥；远程 Host 的密钥落 `~/.aide/secrets.json`（0600，`FileSecretStore`）。**不同步 OAuth 凭据**（refresh token 轮换会互相顶掉）；官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`。

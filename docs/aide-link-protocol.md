@@ -1,7 +1,8 @@
 # Aide Link 协议（v1）
 
-> 状态：**v1 草案**（2026-09-30）——协议核心（帧 / 安全通道 / 目录 / 配对 / 状态机 / 一致性向量）已在
-> `src-tauri/crates/aide-link` 落地并通过测试；Host 侧接入（守护进程里的中继适配器）是下一步（P3b-2）。
+> 状态：**v1**（2026-10-01）——协议核心（帧 / 安全通道 / 目录 / 配对 / 状态机 / 一致性向量）在
+> `src-tauri/crates/aide-link`；Host 侧已接入（`aide-core` 的 Link 服务：本机 Host 与 aide-host 守护进程共用，
+> Host 设置面板里扫码配对，真 Host + 真中继端到端通过）。另有**本地测试 Host**（§12.1），手机端开发直连它即可。
 > 手机端按本文实现；在手机端迁移完成之前，旧协议 v2（`src-tauri/src/remote/`）原样继续服务现有的 PWA / 鸿蒙端，
 > 两者互不影响。
 >
@@ -59,7 +60,9 @@ Aide Link 是**手机 ↔ Host** 之间的一条协议化通道：
 
 > **与旧协议 v2 的差别**：v2 用 6 位配对码路由（`connect{code}`），码既是路由键又是密钥——短、会撞、可被在线爆破，
 > 也让中继知道了配对码。v1 **只按 `device_id` 路由**，配对密钥在二维码里、永不上线；中继不再需要（也不该再有）码路由。
-> Host 向中继注册时不再带配对码（中继的 `register` 将把 `pairing_code` 改为可选，属 P3b-2 的基础设施改动）。
+> Host 向中继注册时不再带配对码：`register{device_id}`（中继的 `pairing_code` 现为可选；旧桌面带码照常工作）。
+> 手机离开后，中继会把 Host 那条连接**重新挂起**给下一次手机连接，而不通知 Host——所以 Host 把下一个 `sc_init` 当作新会话的开始
+> （手机每次新连接都从 `sc_init` 起，不要在一条已握手的连接上重新握手）。
 > 建议中继对 `connect` 的失败按来源 IP 限速，作为多一层防护（`device_id` 不可猜，所以这只是纵深防御）。
 
 > v1 的传输适配器只有中继。协议本身与传输无关（安全通道只吃「一条文本消息」），将来加直连（局域网 / Tailscale 的
@@ -89,10 +92,13 @@ aide-link://pair?v=1&relay=wss%3A%2F%2Frelay.example.com%2F&id=00112233445566778
                &pk=<Host 公钥 base64url>&psk=<一次性密钥 base64url>&n=<Host 名>&exp=<过期 unix 秒>
 ```
 
+（URI 里 `%2E` 之类的百分号编码是正常的：值按 URL 规则编码，解析时按 URL 规则解码即可。）
+
 | 键 | 含义 |
 |---|---|
 | `v` | 配对 URI 版本，目前恒为 `1`（不认识的版本：提示用户升级 App） |
-| `relay` | 要连的中继地址（URL 编码） |
+| `relay` | 经中继：要连的中继地址（URL 编码）。手机连 `<relay>/ws`，**先发中继层 `connect{device_id}`**（§2.2），再说安全通道 |
+| `direct` | 直连：Host 自己的 WebSocket 地址（局域网 / Tailscale / 测试 Host）。**不发中继帧**，连上直接说安全通道。与 `relay` **恰有一个** |
 | `id` | Host 的 `device_id`（32 位十六进制） |
 | `pk` | Host 的 X25519 静态公钥（32 字节，base64url 无填充，43 字符）——**手机据此认 Host，没有中间人** |
 | `psk` | 一次性密钥（32 字节，base64url，43 字符）——**只在这个二维码里，永不经过网络** |
@@ -370,6 +376,23 @@ Host 的事件缓冲：最近 16 MiB / 5 万条（先到先止）；Host 进程�
 向量约定的固定身份（Host 的密钥、手机 A / B 的密钥、一次性密钥）见 README；参考实现（Rust，手机一侧的握手 + 加密传输）在
 `crates/aide-link/src/client.rs`，移植时可对照。真实 Host 的一致性套件会用同一个执行器
 （`aide_link::conformance::Harness`）验证自己。
+
+### 12.1 本地测试 Host
+
+不想先搭中继、也不想用真 Host 开发手机端？直接连测试 Host：
+
+```text
+cargo run -p aide-link --features transport --example test_host -- \
+    --listen 0.0.0.0:8787 --public ws://<你电脑的局域网 IP>:8787/ --demo
+```
+
+- 启动时在终端打印配对 URI 和**二维码**（手机 APP 扫它即可；`direct` 形态，不需要中继）；
+- **身份与密钥固定**（`testkit.rs` 里的常量）：二维码每次启动都一样，可以硬编码进手机端调试；一次性密钥被用掉后立刻重新开放，
+  所以能反复配对 / 顶替；
+- 后端是**脚本化的假 Host**，不执行任何真实命令：`list_sessions` → `["s1","s2"]`，`send_message` / `get_settings` 回显参数，
+  `set_model` 失败，`load_messages` 慢 150 ms……（与一致性向量约定一致）；`--demo` 每 2 秒往会话 `demo` 发一个 `chat-event`，
+  用来试订阅 / 续传；
+- `--relay <中继地址>`：改为出站注册到真中继，二维码写 `relay` 形态，用来联调经中继的路径。
 
 ## 13. 与旧协议 v2 的对照（给手机端迁移用）
 
