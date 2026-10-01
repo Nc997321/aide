@@ -144,9 +144,11 @@ impl BrowserFacade {
         };
         if let Err(e) = self.engine.create(&window, id.clone(), cfg) {
             // 建视图失败 → 回收注册表占位，不留幽灵条目。
+            tracing::warn!(view = id.as_str(), window = %self.window, "browser: create failed: {e}");
             let _ = self.lock()?.remove(&id);
             return Err(e.into());
         }
+        tracing::info!(view = id.as_str(), window = %self.window, "browser: view created");
 
         let (snapshot, event) = {
             let mut reg = self.lock()?;
@@ -351,9 +353,19 @@ impl BrowserFacade {
     fn parse_id(&self, raw: &str) -> Result<BrowserViewId, FacadeError> {
         let id = BrowserViewId::try_new(raw)
             .map_err(|e| FacadeError::ViewIdRejected(e.to_string()))?;
-        if self.lock()?.get_in(&id, &self.window).is_none() {
+        let reg = self.lock()?;
+        if reg.get_in(&id, &self.window).is_none() {
+            // 留痕：「不存在」与「不属于调用窗口」从界面上看一模一样（原生视图悬着、面板却摸不到它），
+            // 日志里必须分得清。
+            tracing::warn!(
+                view = raw,
+                caller = %self.window,
+                owner = ?reg.owner_of(&id),
+                "browser: view is not visible to the calling window"
+            );
             return Err(FacadeError::ViewNotFound(raw.to_string()));
         }
+        drop(reg);
         Ok(id)
     }
 

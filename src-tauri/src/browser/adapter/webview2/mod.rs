@@ -140,8 +140,12 @@ impl BrowserEngine for Webview2Engine {
         // 注册失败 / 导航失败都**如实失败**（返回 Err 让门面回收注册表占位），不静默降级成
         // 「视图开好了但没录上」——那正是这套工具最恨的假成功。
         if let Some(script) = arm {
-            native::add_init_script(&webview, &script)?;
-            navigate_via_eval(&webview, &target)?;
+            // 子 webview 已经挂在窗口上：这里再失败，必须把它**关掉**再报错——否则调用方回收了注册表
+            // 占位，原生视图却还浮在窗口里（没人认得它、没人能关它的幽灵视图）。
+            if let Err(e) = native::add_init_script(&webview, &script).and_then(|_| navigate_via_eval(&webview, &target)) {
+                let _ = webview.close();
+                return Err(e);
+            }
         }
 
         self.lock()?.insert(id, webview);

@@ -46,9 +46,28 @@ impl RelayStatus {
     }
 }
 
-/// 中继的 WebSocket 地址（与手机一致：`<relay>/ws`）。
+/// 中继的 WebSocket 地址（与手机一致：`<relay>/ws`）。设置里填的若已带 `/ws` 就不再重复追加
+/// （2026-10-01 真机：填了 `ws://127.0.0.1:8787/ws`，被拼成 `…/ws/ws`）。
 pub fn ws_url(relay: &str) -> String {
-    format!("{}/ws", relay.trim_end_matches('/'))
+    let base = relay.trim_end_matches('/');
+    if base.ends_with("/ws") {
+        base.to_string()
+    } else {
+        format!("{base}/ws")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ws_url;
+
+    #[test]
+    fn the_ws_path_is_appended_once() {
+        assert_eq!(ws_url("ws://relay.example"), "ws://relay.example/ws");
+        assert_eq!(ws_url("ws://relay.example/"), "ws://relay.example/ws");
+        assert_eq!(ws_url("ws://relay.example/ws"), "ws://relay.example/ws");
+        assert_eq!(ws_url("wss://relay.example/ws/"), "wss://relay.example/ws");
+    }
 }
 
 /// 中继层注册帧（Link 的 Host 不带配对码）。

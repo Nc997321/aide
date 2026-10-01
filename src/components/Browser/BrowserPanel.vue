@@ -17,6 +17,7 @@
 // `setDisplayed(false)` + 新视图 `setDisplayed(true)` + 同步坐标；视图常驻注册表，切回页面状态还在。
 // 空标签（还没导航过）不建视图——首次导航才 create，免得每个新标签都空跑一次加载。
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { api } from "@aide/sdk";
 import {
   useEmbeddedBrowser,
   onBrowserNav,
@@ -93,6 +94,21 @@ let ro: ResizeObserver | null = null;
 let rafId = 0;
 let unlistenNav: (() => void) | null = null;
 
+/**
+ * 面板对**已存在视图**的后台调用（同步坐标 / 显示 / 隐藏 / 对账）失败时不打扰用户，但**必须留痕**：
+ * 这些调用一旦被后端拒绝（视图不属于本窗口 / 已不存在），原生视图就会脱离面板——悬在错的位置、盖住
+ * 别的内容、标签页对不上——而静默吞掉错误就让这类故障无从诊断。落到 Rust 日志（`FRONTEND_ERROR`），
+ * 同一条 5 秒内只记一次（resize 期间每帧一次的同步不能淹没日志）。
+ */
+const faultLoggedAt = new Map<string, number>();
+function fault(op: string, e: unknown) {
+  const line = `[browser] ${op} failed: ${typeof e === "string" ? e : String(e)}`;
+  const now = Date.now();
+  if (now - (faultLoggedAt.get(line) ?? 0) < 5000) return;
+  faultLoggedAt.set(line, now);
+  void api.logFrontendError(line).catch(() => {});
+}
+
 function errText(e: unknown): string {
   return typeof e === "string" ? e : String(e);
 }
@@ -127,7 +143,7 @@ function syncBounds() {
   if (!viewId) return;
   const b = rectOf();
   if (!b) return;
-  void browser.setBounds(viewId, b).catch(() => {});
+  void browser.setBounds(viewId, b).catch((e) => fault(`set_bounds ${viewId}`, e));
 }
 
 /** rAF 节流：resize 期间每帧至多一次 IPC，不淹没命令通道。 */
@@ -144,7 +160,7 @@ async function showActive() {
   await nextTick(); // 等 v-show 摘掉 display:none、完成布局
   const viewId = active.value?.viewId;
   if (!viewId) return;
-  await browser.setDisplayed(viewId, true).catch(() => {});
+  await browser.setDisplayed(viewId, true).catch((e) => fault(`set_displayed(true) ${viewId}`, e));
   await nextTick();
   syncBounds();
 }
@@ -152,7 +168,8 @@ async function showActive() {
 /** 隐藏某个标签的原生视图（保活：只隐不销毁，页面状态留在注册表里）。 */
 function hideTab(t: Tab | undefined) {
   if (!t?.viewId) return;
-  void browser.setDisplayed(t.viewId, false).catch(() => {});
+  const viewId = t.viewId;
+  void browser.setDisplayed(viewId, false).catch((e) => fault(`set_displayed(false) ${viewId}`, e));
 }
 
 // ── 可见性总闸：原生视图给 HTML 浮层让位 ──
@@ -607,8 +624,10 @@ onMounted(() => {
       dropGone(views);
       applyPendingFocus();
     })
-    .catch(() => {
-      /* 对账失败不该挡住面板本身：增量通道仍然有效 */
+    .catch((e) => {
+      // 对账失败不该挡住面板本身（增量通道仍然有效），但要留痕：失败意味着面板挂载前就存在的视图
+      // （窗口重载后残留的原生视图）认不回来，会悬在面板之外。
+      fault("views_list", e);
     });
 
   // 常驻层缓冲的增量（挂载前收到的都在它那儿）。
