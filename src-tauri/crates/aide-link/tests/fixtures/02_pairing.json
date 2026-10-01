@@ -1,0 +1,73 @@
+[
+  {
+    "name": "pairing with the right code issues a token and authenticates the connection",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "pair", "code": "123456", "device": { "name": "Pixel" } } },
+      { "expect": { "type": "paired", "device_id": "dev-1", "token": "<string>",
+                    "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"] } },
+      { "send": { "type": "call", "id": 1, "method": "list_sessions", "params": {} } },
+      { "expect": { "type": "result", "id": 1, "value": ["s1", "s2"] } }
+    ]
+  },
+  {
+    "name": "a wrong code is refused with a typed error, and the connection may retry",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "pair", "code": "000000" } },
+      { "expect": { "type": "auth_error", "code": "bad_code", "message": "<string>" } },
+      { "send": { "type": "pair", "code": "123456" } },
+      { "expect": { "type": "paired" } }
+    ]
+  },
+  {
+    "name": "the stored token authenticates",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed", "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"] } }
+    ]
+  },
+  {
+    "name": "a bad token is refused",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "wrong" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } }
+    ]
+  },
+  {
+    "name": "five failed attempts on one connection end it",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "x" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } },
+      { "send": { "type": "auth", "token": "x" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } },
+      { "send": { "type": "auth", "token": "x" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } },
+      { "send": { "type": "auth", "token": "x" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } },
+      { "send": { "type": "auth", "token": "x" } },
+      { "expect": { "type": "auth_error", "code": "bad_token" } },
+      { "expect": { "type": "bye", "code": "too_many_attempts" } },
+      { "expect_closed": true }
+    ]
+  },
+  {
+    "name": "nothing but handshake frames works before authentication",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "call", "id": 5, "method": "list_sessions", "params": {} } },
+      { "expect": { "type": "error", "id": 5, "code": "unauthenticated" } },
+      { "send": { "type": "subscribe", "sessions": null } },
+      { "expect": { "type": "error", "code": "unauthenticated" } }
+    ]
+  }
+]

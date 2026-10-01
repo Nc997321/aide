@@ -1,0 +1,18 @@
+[package]
+name = "aide-link"
+version = "0.8.0"
+edition = "2021"
+description = "Aide Link: the protocol between a Host and its remote clients (phone). Frames, exposure catalog, pairing/auth and the per-connection session state machine — transport-agnostic, no Tauri, no aide-core dependency."
+
+# 与 aide-host 同一约束：不依赖任何系统 C 库（aide-host 以 musl 静态链接嵌入本 crate）。
+# 本 crate **不依赖 aide-core**：它只定义「手机能对 Host 说什么」，Host 经 `Backend` / `EventBus`
+# 两个端口接进来——协议与 Host 实现可以各自演进。
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["sync", "time", "rt", "macros"] }
+rand = "0.8"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "test-util"] }

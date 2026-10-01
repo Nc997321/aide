@@ -1,0 +1,93 @@
+[
+  {
+    "name": "nothing is pushed until the client subscribes; then events arrive numbered",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "emit": { "name": "chat-event", "payload": { "type": "text_delta", "session_id": "s1", "n": 0 } } },
+      { "expect_none": true },
+      { "send": { "type": "subscribe", "sessions": null } },
+      { "expect": { "type": "subscribed", "epoch": "<string>", "seq": 1, "resumed": false, "gap": false, "replayed": 0 } },
+      { "emit": { "name": "chat-event", "payload": { "type": "text_delta", "session_id": "s1", "n": 1 } } },
+      { "expect": { "type": "event", "seq": 2, "name": "chat-event", "payload": { "type": "text_delta", "session_id": "s1", "n": 1 } } }
+    ]
+  },
+  {
+    "name": "a session filter narrows chat-event only; session-less events still arrive",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "send": { "type": "subscribe", "sessions": ["s2"] } },
+      { "expect": { "type": "subscribed" } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1" } } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s2" } } },
+      { "emit": { "name": "system-notification", "payload": { "title": "t", "body": "b" } } },
+      { "expect": { "type": "event", "name": "chat-event", "payload": { "session_id": "s2" } } },
+      { "expect": { "type": "event", "name": "system-notification" } },
+      { "expect_none": true }
+    ]
+  },
+  {
+    "name": "events outside the catalog are never delivered",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "send": { "type": "subscribe", "sessions": null } },
+      { "expect": { "type": "subscribed" } },
+      { "emit": { "name": "file-tree-changed", "payload": [] } },
+      { "emit": { "name": "lsp-diagnostics", "payload": {} } },
+      { "expect_none": true }
+    ]
+  },
+  {
+    "name": "resuming with since replays exactly what was missed, after subscribed and before live events",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1", "n": 1 } } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1", "n": 2 } } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1", "n": 3 } } },
+      { "send": { "type": "subscribe", "sessions": null, "since": { "epoch": "epoch-1", "seq": 1 } } },
+      { "expect": { "type": "subscribed", "seq": 3, "resumed": true, "gap": false, "replayed": 2 } },
+      { "expect": { "type": "event", "seq": 2, "payload": { "n": 2 } } },
+      { "expect": { "type": "event", "seq": 3, "payload": { "n": 3 } } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1", "n": 4 } } },
+      { "expect": { "type": "event", "seq": 4, "payload": { "n": 4 } } }
+    ]
+  },
+  {
+    "name": "a different epoch means the Host restarted: not resumed, nothing replayed",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "emit": { "name": "chat-event", "payload": { "type": "x", "session_id": "s1" } } },
+      { "send": { "type": "subscribe", "sessions": null, "since": { "epoch": "some-old-epoch", "seq": 0 } } },
+      { "expect": { "type": "subscribed", "seq": 1, "resumed": false, "replayed": 0 } },
+      { "expect_none": true }
+    ]
+  },
+  {
+    "name": "unsubscribe stops the flow",
+    "steps": [
+      { "send": { "type": "hello", "versions": [1] } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "auth", "token": "test-token" } },
+      { "expect": { "type": "authed" } },
+      { "send": { "type": "subscribe", "sessions": null } },
+      { "expect": { "type": "subscribed" } },
+      { "send": { "type": "unsubscribe" } },
+      { "emit": { "name": "system-notification", "payload": {} } },
+      { "expect_none": true }
+    ]
+  }
+]

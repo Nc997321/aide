@@ -7,7 +7,7 @@ edition = "2021"
 # `cargo build`（tauri dev/build 走的路径）默认只构建主包——runner 需显式
 # 构建：`cargo build -p codegraph-runner`（pnpm build:codegraph 封装）。
 [workspace]
-members = ["crates/codegraph-core", "crates/codegraph-runner", "crates/aide-workspace", "crates/aide-core", "crates/aide-host"]
+members = ["crates/codegraph-core", "crates/codegraph-runner", "crates/aide-workspace", "crates/aide-core", "crates/aide-host", "crates/aide-link"]
 default-members = ["."]
 
 [dependencies]
