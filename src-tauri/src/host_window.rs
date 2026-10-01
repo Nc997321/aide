@@ -90,24 +90,20 @@ pub fn emit_to_host(app: &AppHandle, host: &HostId, event: &str, payload: &Value
     }
 }
 
-/// Host 窗口里 agent 的内嵌浏览器查询。内嵌浏览器目前挂在主窗口上（`browser::facade` 的
-/// MAIN_WINDOW），按窗口分属是 P1e——在那之前**如实回错**，不让 agent 干等 15s 超时。
+/// Host 窗口里 agent 的内嵌浏览器查询：在**连着这台 Host 的窗口**的浏览器里执行（视图属于
+/// 创建它的窗口，本机窗口的 tab 它看不见、也碰不到），结果经 `agent_tool_result` 回到那台 Host
+/// 的 runtime。窗口已关 = 门面如实回「window not found」，agent 不会干等超时。
 pub fn answer_browser_query(
     app: &AppHandle,
     host: &HostId,
     req: crate::browser::agent_bridge::BrowserQueryRequest,
 ) {
-    use crate::browser::agent_bridge::{build_result_command, err_payload};
-    let payload = build_result_command(
-        &req.request_id,
-        err_payload(format!(
-            "内嵌浏览器暂只在本机窗口可用（此会话跑在 {}）",
-            host.label()
-        )),
-    );
-    let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
+    let app = app.clone();
     let host = host.clone();
     tauri::async_runtime::spawn(async move {
+        let window = label_for(&host);
+        let payload = crate::runtime::browser_agent::answer(&app, &window, req).await;
+        let svc = app.state::<Arc<RemoteWorkspaces>>().inner().clone();
         let sent = async {
             svc.connection(&host)
                 .await?
@@ -135,6 +131,8 @@ pub fn gui_path(window: &WebviewWindow, path: &str) -> Result<String, String> {
 /// 窗口关闭：解绑；该 Host 的最后一扇窗关了就断开连接（serve 退出，Host 上的 agent runtime /
 /// 语言服务器随之收掉）。
 pub fn on_window_destroyed(app: &AppHandle, label: &str) {
+    // 内嵌浏览器的视图属于窗口：窗口没了，名下的视图一并回收（任何窗口，不止 Host 窗口）。
+    crate::browser::facade::release_window(app, label);
     let Some((host, last)) = app.state::<HostWindows>().unbind(label) else {
         return;
     };

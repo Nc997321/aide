@@ -18,7 +18,7 @@ impl AgentHooks for DesktopAgentHooks {
         let app = self.0.clone();
         let stdin = Arc::clone(stdin);
         tokio::spawn(async move {
-            super::browser_agent::handle(app, stdin, req).await;
+            super::browser_agent::handle(app, super::browser_agent::LOCAL_WINDOW, stdin, req).await;
         });
         true
     }

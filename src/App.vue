@@ -43,7 +43,7 @@ import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/t
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
 import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
-import { HOST_OPEN_FOLDER_EVENT, hostApi } from "@aide/sdk";
+import { HOST_OPEN_FOLDER_EVENT } from "@aide/sdk";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed, provide } from "vue";
@@ -255,14 +255,6 @@ const onboarding = useOnboarding();
 let unlistenOpenFile: (() => void) | null = null;
 let unlistenOpenSessionFromNotification: (() => void) | null = null;
 let unlistenHostOpenFolder: (() => void) | null = null;
-/** 本窗口连着的远程 Host 的显示名；本机窗口为空（一个窗口 = 一个 Host）。 */
-const hostWindowLabel = ref("");
-void hostApi
-  .current()
-  .then((h) => {
-    if (h.key !== "local") hostWindowLabel.value = h.label;
-  })
-  .catch(() => {});
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -1146,16 +1138,12 @@ onUnmounted(() => {
               v-show="rightTab === 'permissions'"
               :workspace-path="workspacePath"
             />
-            <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位。首次激活才挂（异步 chunk 不在启动时拉），
+            <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位（视图属于本窗口，Host 窗口各有各的）。首次激活才挂（异步 chunk 不在启动时拉），
                  挂上后常驻——关面板/切 tab 只 setDisplayed(false)，页面、滚动位置与前进后退历史都留着。 -->
             <BrowserPanel
-              v-if="rightPanel.browserEverActive.value && !hostWindowLabel"
+              v-if="rightPanel.browserEverActive.value"
               v-show="rightTab === 'browser'"
             />
-            <!-- 内嵌浏览器目前挂在主窗口上，按窗口分属前（P1e）Host 窗口里如实说明，不在别的窗口里开页面 -->
-            <div v-if="hostWindowLabel" v-show="rightTab === 'browser'" class="host-browser-note">
-              内嵌浏览器暂只在本机窗口可用。此窗口连着 {{ hostWindowLabel }}。
-            </div>
           </div>
         </div>
         <ARailBar :tabs="rightTabs" :model-value="rightTab" :collapsed="rightCollapsed" @select="onRailSelect" />
@@ -1355,10 +1343,5 @@ onUnmounted(() => {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-}
-.host-browser-note {
-  padding: 16px;
-  font-size: 12px;
-  color: var(--aide-text-muted);
 }
 </style>

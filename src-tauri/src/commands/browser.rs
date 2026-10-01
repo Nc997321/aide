@@ -9,7 +9,7 @@
 
 use std::collections::HashMap;
 
-use tauri::AppHandle;
+use tauri::{Manager, WebviewWindow};
 
 use crate::browser::bookmarks::{parse, BookmarkStore};
 use crate::browser::dto::{
@@ -20,10 +20,16 @@ use crate::browser::favicons::FaviconStore;
 
 type CmdResult<T> = Result<T, String>;
 
+/// 门面按**调用窗口**作用域：视图属于创建它的窗口（一个窗口 = 一个 Host），Tauri 注入
+/// 调用方窗口，命令层不认识任何窗口标签。
+fn facade(window: &WebviewWindow) -> BrowserFacade {
+    BrowserFacade::new(window.app_handle(), window.label())
+}
+
 /// 创建浏览器视图（id 由注册表发，调用方从返回快照里取）。
 #[tauri::command]
-pub async fn browser_create(app: AppHandle, dto: CreateBrowserDto) -> CmdResult<BrowserViewDto> {
-    BrowserFacade::new(&app)
+pub async fn browser_create(window: WebviewWindow, dto: CreateBrowserDto) -> CmdResult<BrowserViewDto> {
+    facade(&window)
         .create(&dto)
         .map_err(|e| e.to_string())
 }
@@ -31,8 +37,8 @@ pub async fn browser_create(app: AppHandle, dto: CreateBrowserDto) -> CmdResult<
 /// 列出全部视图（面板挂载时对账用）。**与 agent 的 `list_views` 同一个门面方法**——
 /// 两条消费路径不能各查一份状态（那正是"面板看不见 agent 开的 tab"的来源）。
 #[tauri::command]
-pub async fn browser_views_list(app: AppHandle) -> CmdResult<Vec<BrowserViewDto>> {
-    BrowserFacade::new(&app)
+pub async fn browser_views_list(window: WebviewWindow) -> CmdResult<Vec<BrowserViewDto>> {
+    facade(&window)
         .list_views()
         .map_err(|e| e.to_string())
 }
@@ -40,51 +46,51 @@ pub async fn browser_views_list(app: AppHandle) -> CmdResult<Vec<BrowserViewDto>
 /// 导航到新 URL（与当前相同则按重载处理）。
 #[tauri::command]
 pub async fn browser_navigate(
-    app: AppHandle,
+    window: WebviewWindow,
     id: String,
     url: String,
 ) -> CmdResult<BrowserViewDto> {
-    BrowserFacade::new(&app)
+    facade(&window)
         .navigate(&id, &url)
         .map_err(|e| e.to_string())
 }
 
 /// 布局同步：占位 div 的矩形拍到原生视图。
 #[tauri::command]
-pub async fn browser_set_bounds(app: AppHandle, id: String, bounds: BoundsDto) -> CmdResult<()> {
-    BrowserFacade::new(&app)
+pub async fn browser_set_bounds(window: WebviewWindow, id: String, bounds: BoundsDto) -> CmdResult<()> {
+    facade(&window)
         .set_bounds(&id, bounds)
         .map_err(|e| e.to_string())
 }
 
 /// 显隐：切走面板时隐藏原生视图（否则它浮在全部内容之上）。
 #[tauri::command]
-pub async fn browser_set_displayed(app: AppHandle, id: String, displayed: bool) -> CmdResult<()> {
-    BrowserFacade::new(&app)
+pub async fn browser_set_displayed(window: WebviewWindow, id: String, displayed: bool) -> CmdResult<()> {
+    facade(&window)
         .set_displayed(&id, displayed)
         .map_err(|e| e.to_string())
 }
 
 /// 后退。
 #[tauri::command]
-pub async fn browser_go_back(app: AppHandle, id: String) -> CmdResult<BrowserViewDto> {
-    BrowserFacade::new(&app)
+pub async fn browser_go_back(window: WebviewWindow, id: String) -> CmdResult<BrowserViewDto> {
+    facade(&window)
         .go_back(&id)
         .map_err(|e| e.to_string())
 }
 
 /// 前进。
 #[tauri::command]
-pub async fn browser_go_forward(app: AppHandle, id: String) -> CmdResult<BrowserViewDto> {
-    BrowserFacade::new(&app)
+pub async fn browser_go_forward(window: WebviewWindow, id: String) -> CmdResult<BrowserViewDto> {
+    facade(&window)
         .go_forward(&id)
         .map_err(|e| e.to_string())
 }
 
 /// 关闭视图：引擎销毁子 webview + 领域移除。
 #[tauri::command]
-pub async fn browser_close(app: AppHandle, id: String) -> CmdResult<()> {
-    BrowserFacade::new(&app)
+pub async fn browser_close(window: WebviewWindow, id: String) -> CmdResult<()> {
+    facade(&window)
         .close(&id)
         .map_err(|e| e.to_string())
 }
