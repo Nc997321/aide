@@ -87,14 +87,19 @@ impl HostWindows {
 
 
 /// 「当前窗口」：最近获得焦点且还活着的窗口，否则任意一扇（标签最小的，保证确定）。没有窗口 = `None`。
-pub fn current_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
+///
+/// **一律走 `Window`（`app.windows()` / `get_window`），不走 `WebviewWindow`（`get_webview_window` /
+/// `webview_windows()`）**：窗口一旦挂了内嵌浏览器的子 webview，Tauri 就不再把它当「webview window」，
+/// 后一类查询会把它整个漏掉——托盘「显示 Aide」找不到窗口、本机事件投不到它（2026-10-01 实测：
+/// 开着内嵌浏览器时托盘叫不出窗口）。
+pub fn current_window(app: &AppHandle) -> Option<tauri::Window> {
     let windows = app.state::<HostWindows>();
-    if let Some(w) = windows.last_focused().and_then(|l| app.get_webview_window(&l)) {
+    if let Some(w) = windows.last_focused().and_then(|l| app.get_window(&l)) {
         return Some(w);
     }
-    let all = app.webview_windows();
+    let mut all = app.windows();
     let label = all.keys().min()?.clone();
-    all.into_iter().find(|(l, _)| *l == label).map(|(_, w)| w)
+    all.remove(&label)
 }
 
 /// 把「当前窗口」叫出来（托盘 / 二次启动 / 通知点击共用）：显示 + 取消最小化 + 聚焦。
@@ -110,10 +115,10 @@ pub fn show_current_window(app: &AppHandle) {
 pub fn local_window(app: &AppHandle) -> Option<String> {
     let windows = app.state::<HostWindows>();
     let unbound = |l: &String| windows.host_of(l).is_none();
-    if let Some(l) = windows.last_focused().filter(|l| app.get_webview_window(l).is_some() && unbound(l)) {
+    if let Some(l) = windows.last_focused().filter(|l| app.get_window(l).is_some() && unbound(l)) {
         return Some(l);
     }
-    app.webview_windows().into_keys().filter(unbound).min()
+    app.windows().into_keys().filter(unbound).min()
 }
 
 /// 连着某台远程 Host 的窗口：优先它的标准标签窗口，否则任何一扇绑着它的窗口（窗口可以换绑，标签不再等于身份）。
@@ -127,7 +132,7 @@ fn host_window_of(app: &AppHandle, host: &HostId) -> Option<String> {
 }
 
 fn focus(app: &AppHandle, label: &str) {
-    if let Some(w) = app.get_webview_window(label) {
+    if let Some(w) = app.get_window(label) {
         let _ = w.unminimize();
         let _ = w.show();
         let _ = w.set_focus();
@@ -147,7 +152,7 @@ fn label_for(host: &HostId) -> String {
 /// 本机 Host（进程内 core）的事件：只投给没绑远程 Host 的窗口。
 pub fn emit_local(app: &AppHandle, event: &str, payload: &Value) {
     let windows = app.state::<HostWindows>();
-    for (label, _) in app.webview_windows() {
+    for label in app.windows().into_keys() {
         if windows.host_of(&label).is_none() {
             if let Err(e) = app.emit_to(EventTarget::webview_window(&label), event, payload) {
                 tracing::warn!(event, window = %label, "core event emit failed: {e}");
@@ -219,7 +224,7 @@ pub fn on_window_destroyed(app: &AppHandle, label: &str) {
 
 /// 新窗口的标签：基础标签没被占用就用它，否则加毫秒后缀（窗口可以换绑，标准标签的窗口可能已连着别的 Host）。
 fn fresh_label(app: &AppHandle, base: &str) -> String {
-    if app.get_webview_window(base).is_none() {
+    if app.get_window(base).is_none() {
         return base.to_string();
     }
     let ms = std::time::SystemTime::now()
@@ -342,7 +347,8 @@ pub async fn switch_window_host(window: Window, host: String, folder: Option<Str
     };
     let _ = window.set_title(&title);
     let search = serde_json::to_string(&window_query(folder.as_deref())).map_err(|e| e.to_string())?;
-    let w = app.get_webview_window(&label).ok_or("窗口不存在")?;
+    // 窗口自己的 webview（与窗口同标签）；内嵌浏览器的子 webview 不是它
+    let w = window.webviews().into_iter().find(|w| w.label() == label).ok_or("窗口不存在")?;
     w.eval(format!("location.replace(location.pathname + {search})")).map_err(|e| e.to_string())
 }
 

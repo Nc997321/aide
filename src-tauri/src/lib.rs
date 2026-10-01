@@ -140,7 +140,7 @@ pub fn run() {
             // 本机 Host 的会话 / 手机网关不断）；还有别的窗口 → 真关（Host 窗口关掉会断开那台 Host）。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
-                if app.webview_windows().keys().all(|l| l == window.label()) {
+                if app.windows().keys().all(|l| l == window.label()) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
@@ -358,15 +358,24 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             }
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
+            } => {
+                if !tray_click_settled() {
+                    return;
+                }
                 toggle_current_window(tray.app_handle());
             }
+            // 双击 = 打开：Windows 的双击是「Up → DoubleClick → 再一个 Up」三个事件，只认 Click 的话
+            // 第二个 Up 会把第一个 Up 刚显示的窗口又藏回去（表现为「双击托盘打不开」）。
+            TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                tray_click_settled();
+                host_window::show_current_window(tray.app_handle());
+            }
+            _ => {}
         });
 
     // 图标复用主窗口图标（generate_context! 已内嵌成 Image）。来源按平台分派：
@@ -377,6 +386,25 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
 
     builder.build(app)?;
     Ok(())
+}
+
+/// 略长于 Windows 默认双击间隔（500ms）。
+const TRAY_GESTURE: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// 纯核：距上一次已处理的托盘点击不足一个手势间隔的，视为同一次手势的尾巴（双击里的第二个 Up）。
+fn gesture_settled(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= TRAY_GESTURE)
+}
+
+/// 托盘左键的去抖：返回 `true` = 该处理这次点击；同时把「现在」记为最近一次托盘手势。
+fn tray_click_settled() -> bool {
+    use std::sync::{Mutex, OnceLock, PoisonError};
+    static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    let mut last = LAST.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(PoisonError::into_inner);
+    let now = std::time::Instant::now();
+    let settled = gesture_settled(*last, now);
+    *last = Some(now);
+    settled
 }
 
 /// 左键切换：当前窗口已显示且聚焦 → 隐藏；否则显示并聚焦。
@@ -445,5 +473,28 @@ fn apply_window_theme(window: &tauri::WebviewWindow) {
             &CATPPUCCIN_BASE as *const u32 as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
+    }
+}
+
+#[cfg(test)]
+mod tray_gesture_tests {
+    use super::{gesture_settled, TRAY_GESTURE};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_double_click_is_one_gesture() {
+        let t0 = Instant::now();
+        // 第一个 Up：之前没有手势 → 处理
+        assert!(gesture_settled(None, t0));
+        // 双击里的 DoubleClick / 第二个 Up 紧随其后 → 吞掉（否则第二个 Up 把刚显示的窗口又藏回去）
+        assert!(!gesture_settled(Some(t0), t0 + Duration::from_millis(120)));
+        assert!(!gesture_settled(Some(t0), t0 + Duration::from_millis(450)));
+    }
+
+    #[test]
+    fn a_later_click_is_a_new_gesture() {
+        let t0 = Instant::now();
+        assert!(gesture_settled(Some(t0), t0 + TRAY_GESTURE));
+        assert!(gesture_settled(Some(t0), t0 + Duration::from_secs(5)));
     }
 }
