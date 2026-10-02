@@ -252,7 +252,7 @@ async fn warm_all(
             return (lang_id, status);
         }
         let handle = {
-            let mgr = state.0.lock().await;
+            let mgr = state.0.read().await;
             mgr.get(workspace_root, lang_id).await
         };
         let Some(h) = handle else {
@@ -414,7 +414,7 @@ async fn ask_language(
 ) -> Result<Consulted, AgentLspStatus> {
     // 锁只圈住「取句柄」这一步：后面的请求 + 探针可能花掉几十秒，不许占着管理器。
     let handle = {
-        let mgr = state.0.lock().await;
+        let mgr = state.0.read().await;
         mgr.get(workspace_root, lang_id).await
     };
     let Some(h) = handle else {
@@ -822,7 +822,7 @@ async fn server_for(
     file_path: &str,
 ) -> Option<(crate::lsp::detector::LanguageId, Arc<ServerHandle>)> {
     let lang_id = crate::lsp::lang_from_ext_of(file_path)?;
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let h = mgr.get(workspace_root, lang_id).await?;
     Some((lang_id, h))
 }

@@ -49,7 +49,6 @@ mod mock_server;
 
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::Mutex as TokioMutex;
 
 use crate::registry::Command as HostCommand;
 use crate::{command, Core};
@@ -90,15 +89,23 @@ pub struct LspJumpResult {
     pub results: Vec<crate::lsp::types::QueryResult>,
 }
 
-pub struct LspState(pub Arc<TokioMutex<LspManager>>);
+/// 管理器读写锁：**查询（definition/hover/implementation/callHierarchy…）持读锁，可并发**；
+/// 改变「有哪台 server / 哪些文档已开」的操作（ensure_server / didOpen / didChange /
+/// didClose / kill）持写锁。
+///
+/// 为什么不是互斥锁（2026-10 真机）：旧实现每个查询在整个请求往返（最长 8s）里独占全局锁，
+/// 打开文件时 gutter 对每个符号并发发 implementation，全部串行排队，用户点「跳转」排在
+/// 最后面——「点函数过几秒才出现」。写锁保留「查询等 didOpen/ensure 完成」的次序语义
+/// （冷启动时查询不会抢在 didOpen 前面拿到空结果）。
+pub struct LspState(pub Arc<tokio::sync::RwLock<LspManager>>);
 impl LspState {
     pub fn new() -> Self {
-        Self(Arc::new(TokioMutex::new(LspManager::new())))
+        Self(Arc::new(tokio::sync::RwLock::new(LspManager::new())))
     }
 
     /// 退出清理：全量杀掉所有 LSP server（托盘「退出 Aide」的唯一调用点）。
     pub async fn kill_all(&self) {
-        self.0.lock().await.kill_all().await;
+        self.0.write().await.kill_all().await;
     }
 }
 
@@ -163,7 +170,7 @@ async fn lsp_ensure_server(
     };
     let settings =
         crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
-    let mgr = state.0.lock().await;
+    let mgr = state.0.write().await;
     match mgr
         .ensure_server(&workspace_root, lang_id, &app, &settings)
         .await
@@ -223,7 +230,7 @@ pub(crate) async fn ensure_lang(
         });
     }
     let settings = crate::app_settings::public_settings(&core.settings)?;
-    let mgr = core.lsp.0.lock().await;
+    let mgr = core.lsp.0.write().await;
     Ok(
         match mgr
             .ensure_server(workspace_root, lang_id, core, &settings)
@@ -264,7 +271,7 @@ async fn lsp_did_open(core: Arc<Core>, a: LspDidOpenArgs) -> Result<(), String> 
     };
     let settings =
         crate::app_settings::public_settings(&settings_service).map_err(|e| e.to_string())?;
-    let mgr = state.0.lock().await;
+    let mgr = state.0.write().await;
     let h = match mgr
         .ensure_server(&workspace_root, lang_id, &app, &settings)
         .await
@@ -310,7 +317,7 @@ async fn lsp_did_change(core: Arc<Core>, a: LspDidChangeArgs) -> Result<(), Stri
     let Some(lang_id) = lang_from_id_str(&lang) else {
         return Ok(());
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.write().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(());
     };
@@ -347,7 +354,7 @@ async fn lsp_did_close(core: Arc<Core>, a: LspDidCloseArgs) -> Result<(), String
     let Some(lang_id) = lang_from_id_str(&lang) else {
         return Ok(());
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.write().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(());
     };
@@ -387,7 +394,7 @@ async fn lsp_definition(core: Arc<Core>, a: LspDefinitionArgs) -> Result<LspJump
             results: vec![],
         });
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback grep）。
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(LspJumpResult {
@@ -439,7 +446,7 @@ async fn lsp_references(core: Arc<Core>, a: LspReferencesArgs) -> Result<LspJump
             results: vec![],
         });
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(LspJumpResult {
             status: JumpStatus::NotReady,
@@ -508,7 +515,7 @@ async fn lsp_call_hierarchy(
             nodes: vec![],
         });
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(CallHierarchyResult {
             status: JumpStatus::NotReady,
@@ -614,7 +621,7 @@ async fn lsp_completion(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(vec![]);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(vec![]);
     };
@@ -665,7 +672,7 @@ async fn lsp_completion_resolve(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(empty);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(empty);
     };
@@ -711,7 +718,7 @@ async fn lsp_signature_help(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(serde_json::Value::Null);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(serde_json::Value::Null);
     };
@@ -757,7 +764,7 @@ async fn lsp_semantic_tokens(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(vec![]);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(vec![]);
     };
@@ -804,7 +811,7 @@ async fn lsp_inlay_hints(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(vec![]);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(vec![]);
     };
@@ -863,7 +870,7 @@ async fn lsp_did_save(core: Arc<Core>, a: LspDidSaveArgs) -> Result<(), String> 
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(());
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(());
     };
@@ -901,7 +908,7 @@ async fn lsp_hover(core: Arc<Core>, a: LspHoverArgs) -> Result<serde_json::Value
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(serde_json::json!({"content":null}));
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(serde_json::json!({"content":null}));
     };
@@ -965,7 +972,7 @@ async fn lsp_implementation(
     let Some(lang_id) = lang else {
         return Ok(vec![]);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(vec![]);
     };
@@ -1006,7 +1013,7 @@ async fn lsp_document_symbol(
     let Some(lang_id) = lang_from_ext_of(&file_path) else {
         return Ok(vec![]);
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(vec![]);
     };
@@ -1047,7 +1054,7 @@ async fn lsp_capabilities(
     let Some(lang_id) = lang_from_id_str(&lang) else {
         return Ok(Default::default());
     };
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(Default::default());
     };
@@ -1069,7 +1076,7 @@ async fn lsp_shutdown_workspace(
 ) -> Result<(), String> {
     let LspShutdownWorkspaceArgs { workspace_root } = a;
     let state = core.lsp.clone();
-    state.0.lock().await.kill_workspace(&workspace_root).await;
+    state.0.write().await.kill_workspace(&workspace_root).await;
     core.emit(
         "lsp-diagnostics",
         serde_json::json!({"workspaceRoot":workspace_root,"clear":true}),

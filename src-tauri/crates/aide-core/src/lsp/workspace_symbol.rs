@@ -85,7 +85,7 @@ async fn lsp_workspace_symbol(
     } = a;
     let state = core.lsp.clone();
     let lang_ids = resolve_query_languages(&lang, &workspace_root).await;
-    let mgr = state.0.lock().await;
+    let mgr = state.0.read().await;
     let mut candidates = Vec::new();
     // 一个语言都没答上（server 都没起来）时保持 NotReady——**空候选 + NotReady**
     // 与「server 答了但确实没有」是可区分的两件事，这条区分就是本设计的全部意义。

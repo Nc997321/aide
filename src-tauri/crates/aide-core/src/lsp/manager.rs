@@ -832,6 +832,17 @@ fn lookup_section(settings: &serde_json::Value, section: &str) -> serde_json::Va
     cur.clone()
 }
 
+/// documentSymbol 的客户端能力声明。
+///
+/// **键名必须是规范里的 `hierarchicalDocumentSymbolSupport`**。此前写成 `hierarchicalSupport`
+/// （规范里没有这个字段），server 当作没声明，一直回扁平 `SymbolInformation[]`——它的位置
+/// 是**整个声明的起点**（TS 里就是 `export` 关键字），而不是名字。于是 gutter 的 ⇄ 拿着
+/// `export` 的位置去 `prepareCallHierarchy`，server 返回 null，面板显示「该符号不支持调用层级」
+/// （2026-10-02 用真实 typescript-language-server 复现：名字位置返回 1 个 item，`export` 位置返回 null）。
+fn document_symbol_client_capability() -> serde_json::Value {
+    serde_json::json!({"hierarchicalDocumentSymbolSupport": true})
+}
+
 async fn init_handshake(
     handle: &ServerHandle,
     workspace: &str,
@@ -864,7 +875,7 @@ async fn init_handshake(
                 "synchronization": {"didSave": true},
                 // 声明树用 DocumentSymbol[]（带 range/children）而非扁平 SymbolInformation[]，
                 // 「跳转到实现」gutter 标记据此枚举可视区声明行。解析器仍兼容 SymbolInformation 兜底。
-                "documentSymbol": {"hierarchicalSupport": true},
+                "documentSymbol": document_symbol_client_capability(),
                 // hover 走 markdown：jdtls 的 javadoc/签名渲染信息量大增（审阅场景核心）。
                 "hover": {"contentFormat": ["markdown", "plaintext"]},
                 // signatureHelp：方法调用参数提示（cmSignatureHelp 扩展消费）。
@@ -955,6 +966,14 @@ async fn init_handshake(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// 键名写错 server 不会报错，只会悄悄回扁平列表——只有测试能拦。
+    #[test]
+    fn document_symbol_capability_uses_the_spec_key() {
+        let c = document_symbol_client_capability();
+        assert_eq!(c["hierarchicalDocumentSymbolSupport"], serde_json::json!(true));
+        assert!(c.get("hierarchicalSupport").is_none());
+    }
 
     /// 「agent 打开的文档不往编辑器 UI 漏诊断」是这次隔离的**全部意义**——三种来源都钉住。
     #[test]
