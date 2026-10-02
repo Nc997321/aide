@@ -67,6 +67,10 @@ jobs:
           workspaces: src-tauri
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      # macOS 的 tauri.macos.conf.json 把 agent-sidecar/node_modules/.pnpm 里的 darwin-arm64
+      # claude 二进制当 bundle 资源——必须用 pnpm 装（npm 装出来没有 .pnpm 目录结构）
+      - name: install sidecar deps (pnpm layout)
+        run: pnpm --dir agent-sidecar install --frozen-lockfile
       - name: placeholder bundle resources
         run: |
           mkdir -p agent-sidecar/dist src-tauri/remote-kit
