@@ -429,7 +429,11 @@ function badgeText(o: Overlay): string {
 </script>
 
 <template>
-  <div class="ksl" aria-hidden="false">
+  <div class="ksl" style="max-width: none; margin: 0">
+    <!-- 根上的行内样式不是多余：宿主文档页有 `.kb-doc > * { max-width: 720px; margin: 0 auto }`（把直接子元素
+         排成居中的竖轴），本层恰好是它的直接子元素——绝对定位 + left/right:0 + auto 外边距会被**居中**，
+         整层向右偏 (文章宽 − 720) / 2。行内样式压过任何样式表，不依赖选择器优先级。
+         注释必须放在根元素里面：放在外面会让模板变成多根节点，样式隔离与属性透传都会失效。 -->
     <!-- 高亮：每条记录的每一行一个圆角色块 -->
     <template v-for="o in overlays" :key="o.rec.ref.selectionId">
       <div
@@ -557,7 +561,6 @@ function badgeText(o: Overlay): string {
   position: absolute;
   border-radius: 5px;
   background: color-mix(in srgb, var(--aide-accent) 16%, transparent);
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-accent) 70%, transparent);
   animation: ksl-in 180ms var(--aide-ease, ease-out);
   transition: background 220ms var(--aide-ease, ease), box-shadow 220ms var(--aide-ease, ease);
 }
@@ -571,7 +574,13 @@ function badgeText(o: Overlay): string {
 }
 .ksl-hl--draft {
   background: color-mix(in srgb, var(--aide-accent) 22%, transparent);
-  box-shadow: inset 0 -2px 0 var(--aide-accent), 0 0 0 3px color-mix(in srgb, var(--aide-accent) 14%, transparent);
+}
+/* 底边的那一道线只画在**最后一行**：多行选区是一整块底色，不是一排下划线 */
+.ksl-hl--last {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-accent) 70%, transparent);
+}
+.ksl-hl--draft.ksl-hl--last {
+  box-shadow: inset 0 -2px 0 var(--aide-accent);
 }
 /* 已发出 / 处理中：换成 AI 的色，并有一道流光扫过——「它正在动这一段」 */
 .ksl-hl--sent,
@@ -579,21 +588,30 @@ function badgeText(o: Overlay): string {
   background:
     linear-gradient(100deg, transparent 20%, color-mix(in srgb, var(--aide-agent-accent) 42%, transparent) 50%, transparent 80%) 0 0 / 220% 100% no-repeat,
     color-mix(in srgb, var(--aide-agent-accent) 13%, transparent);
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-agent-accent) 75%, transparent);
   animation: ksl-sweep 1.5s linear infinite;
+}
+.ksl-hl--sent.ksl-hl--last,
+.ksl-hl--working.ksl-hl--last {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-agent-accent) 75%, transparent);
 }
 /* 改好了：新文字先亮一下（成功色），再静成淡淡的一层 */
 .ksl-hl--done {
   background: color-mix(in srgb, var(--aide-success) 14%, transparent);
-  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-success) 65%, transparent);
   animation: ksl-flash 1.4s var(--aide-ease, ease-out);
+}
+.ksl-hl--done.ksl-hl--last {
+  box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-success) 65%, transparent);
 }
 .ksl-hl--refused {
   background: color-mix(in srgb, var(--aide-danger) 10%, transparent);
+}
+.ksl-hl--refused.ksl-hl--last {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-danger) 60%, transparent);
 }
 .ksl-hl--noop {
   background: color-mix(in srgb, var(--aide-text-muted) 10%, transparent);
+}
+.ksl-hl--noop.ksl-hl--last {
   box-shadow: inset 0 -2px 0 color-mix(in srgb, var(--aide-text-muted) 45%, transparent);
 }
 

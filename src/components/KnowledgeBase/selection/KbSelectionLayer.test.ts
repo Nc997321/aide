@@ -116,6 +116,16 @@ describe("选中 → 小入口 → 浮窗", () => {
   });
 });
 
+describe("根元素不受宿主的居中规则影响（回归：高亮整体向右偏 (文章宽 − 720)/2）", () => {
+  it("根元素带行内 max-width:none 与 margin:0——压过宿主 `.kb-doc > * { max-width:720px; margin:0 auto }`", () => {
+    const w = mountLayer();
+    // 读属性原文而不是 CSSStyleDeclaration：jsdom 的 cssstyle 不认 `max-width: none`，读回来是空串
+    const style = (w.element as HTMLElement).getAttribute("style") ?? "";
+    expect(style).toMatch(/max-width:\s*none/);
+    expect(style).toMatch(/margin:\s*0(px)?\b/);
+  });
+});
+
 describe("选区方向与松手位置（回归：从后往前选不出入口）", () => {
   /** 用 setBaseAndExtent 造一个**反向**选区：锚点在后、焦点在前（与从右往左拖选同形）。 */
   function selectBackward(needle: string): void {

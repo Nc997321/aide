@@ -43,6 +43,18 @@ export function mergeLineRects(rects: readonly LayoutRect[], slack = 3): LayoutR
   return out;
 }
 
+/** 相邻两行之间有行距造成的缝（文字盒高 22px、行距 25px，缝 3px）：多行选区画出来就是一条条
+ *  分开的色带。把上一行的底边接到下一行的顶边，缝就合上了；缝大到不是行距（> maxGap，比如两个
+ *  不相连的段落）就不接。要求输入已按从上到下排序（mergeLineRects 的输出满足）。 */
+export function joinLines(rects: readonly LayoutRect[], maxGap = 14): LayoutRect[] {
+  return rects.map((r, i) => {
+    const next = rects[i + 1];
+    if (!next) return { ...r };
+    const gap = next.y - (r.y + r.h);
+    return gap > 0 && gap <= maxGap ? { ...r, h: r.h + gap } : { ...r };
+  });
+}
+
 /** range 的客户端矩形 → 相对 scrollEl 内容原点。宽或高为 0 的（折叠/不可见节点）丢掉。 */
 export function rectsInScroller(range: Range, scrollEl: HTMLElement): LayoutRect[] {
   const box = scrollEl.getBoundingClientRect();
@@ -56,5 +68,5 @@ export function rectsInScroller(range: Range, scrollEl: HTMLElement): LayoutRect
       h: r.height,
     });
   }
-  return mergeLineRects(raw);
+  return joinLines(mergeLineRects(raw));
 }
