@@ -128,6 +128,11 @@ export function newRangeAfterEdit(baseContent: string, ref: Pick<KbRef, "start" 
 
 const sendRequest = ref<{ nonce: number; text: string } | null>(null);
 let sendNonce = 0;
+/** 「请把聊天亮出来」：文档侧发起的发送被聊天里的**发送前确认**（模型 / 供应商变了）拦下时，确认框画在
+ *  聊天面板里——而知识库打开时聊天面板是隐藏的，用户永远看不到它，发送就一直挂着（圈选停在「待发送」）。
+ *  知识库面板据此收起自己，让确认框露出来。 */
+const chatRequest = ref<{ nonce: number } | null>(null);
+let chatNonce = 0;
 
 export function useKbSelections() {
   wire();
@@ -206,6 +211,10 @@ export function useKbSelections() {
     sendRequest.value = { nonce: ++sendNonce, text };
   }
 
+  function revealChat(): void {
+    chatRequest.value = { nonce: ++chatNonce };
+  }
+
   const all = computed(() => Object.values(records).sort((a, b) => a.seq - b.seq));
   const pendingRefs = computed<KbRef[]>(() => all.value.filter((r) => r.status === "pending").map((r) => ({ ...r.ref })));
   const forDoc = (documentId: string) => all.value.filter((r) => r.ref.documentId === documentId);
@@ -216,6 +225,8 @@ export function useKbSelections() {
     pendingRefs,
     forDoc,
     sendRequest,
+    chatRequest,
+    revealChat,
     begin,
     setComment,
     confirm,
@@ -233,4 +244,6 @@ export function __resetKbSelectionsForTest(): void {
   counter = 0;
   sendNonce = 0;
   sendRequest.value = null;
+  chatNonce = 0;
+  chatRequest.value = null;
 }

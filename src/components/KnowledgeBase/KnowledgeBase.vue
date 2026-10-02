@@ -10,6 +10,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useKnowledgeBase } from "@/composables/useKnowledgeBase";
 import { useModal } from "@/composables/useModal";
+import { useKbSelections } from "@/composables/useKbSelections";
 import KbLogin from "./KbLogin.vue";
 import KbDocumentView from "./KbDocumentView.vue";
 import { getBaseUrl, kb } from "./kbClient";
@@ -22,6 +23,14 @@ import KbTree from "./KbTree.vue";
 import { ancestorIds, subtreeSize } from "./docTree";
 
 const emit = defineEmits<{ close: [] }>();
+
+// 聊天里有需要用户看见的东西（文档侧发出的圈选被「发送前确认」拦下，确认框在聊天面板里）：
+// 知识库收起自己，让聊天露出来。圈选与文档状态都在模块级 store 里，回来时原样还在。
+const kbSelections = useKbSelections();
+watch(
+  () => kbSelections.chatRequest.value?.nonce,
+  () => emit("close"),
+);
 
 const k = useKnowledgeBase();
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：那个在 WebView 里

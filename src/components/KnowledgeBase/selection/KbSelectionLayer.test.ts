@@ -126,6 +126,55 @@ describe("根元素不受宿主的居中规则影响（回归：高亮整体向�
   });
 });
 
+describe("发出去却迟迟没发出（兜底：不让人对着不动的「待发送」发呆）", () => {
+  function pendingViaStore() {
+    const k = useKbSelections();
+    const rec = k.begin({
+      documentId: "doc-1", title: "发布流程", baseVersion: 5, baseContent: SRC,
+      scope: { start: SRC.indexOf("切流量到旧版本"), end: SRC.indexOf("切流量到旧版本") + 7, text: "切流量到旧版本", lineStart: 3, lineEnd: 3, precise: true },
+    });
+    k.confirm(rec.ref.selectionId, "x");
+    return { k, id: rec.ref.selectionId };
+  }
+
+  it("点托盘发送后 2.5 秒仍是待发送：角标改口「还没发出」，点它把聊天亮出来", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = mountLayer();
+      const { k } = pendingViaStore();
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(10);
+      await w.find(".ksl-tray .ksl-btn--primary").trigger("click");
+      expect(w.find(".ksl-badge").text()).toContain("待发送"); // 刚点完，还不到兜底时间
+      await vi.advanceTimersByTimeAsync(2600);
+      await nextTick();
+      expect(w.find(".ksl-badge-act--stuck").text()).toContain("还没发出");
+      const before = k.chatRequest.value?.nonce ?? 0;
+      await w.find(".ksl-badge-act--stuck").trigger("click");
+      expect(k.chatRequest.value!.nonce).toBe(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("发出去了（不再是待发送）就不会误报「还没发出」", async () => {
+    vi.useFakeTimers();
+    try {
+      const w = mountLayer();
+      const { k, id } = pendingViaStore();
+      await nextTick();
+      await vi.advanceTimersByTimeAsync(10);
+      await w.find(".ksl-tray .ksl-btn--primary").trigger("click");
+      k.markSent([id], "uuid-a");
+      await vi.advanceTimersByTimeAsync(2600);
+      await nextTick();
+      expect(w.find(".ksl-badge-act--stuck").exists()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("选区方向与松手位置（回归：从后往前选不出入口）", () => {
   /** 用 setBaseAndExtent 造一个**反向**选区：锚点在后、焦点在前（与从右往左拖选同形）。 */
   function selectBackward(needle: string): void {

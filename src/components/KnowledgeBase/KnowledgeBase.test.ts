@@ -120,6 +120,18 @@ describe("索引态", () => {
   });
 });
 
+describe("聊天需要被看见", () => {
+  it("文档侧发出的圈选被聊天里的确认框拦下（revealChat）→ 面板收起自己，让聊天露出来", async () => {
+    const { useKbSelections } = await import("@/composables/useKbSelections");
+    const w = mountPanel();
+    await settle();
+    expect(w.emitted("close")).toBeUndefined();
+    useKbSelections().revealChat();
+    await flushPromises();
+    expect(w.emitted("close")).toHaveLength(1);
+  });
+});
+
 describe("上传", () => {
   /** 造一个「用户选了文件」的现场（jsdom 里 files 只读） */
   async function pickFile(w: ReturnType<typeof mountPanel>, file: File): Promise<void> {

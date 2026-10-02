@@ -278,6 +278,26 @@ function pickIntent(label: string): void {
 const pendingCount = computed(() => overlays.value.filter((o) => o.rec.status === "pending").length);
 const sendLabel = computed(() => (pendingCount.value > 0 ? `一起交给 AI（共 ${pendingCount.value + 1} 处）` : "交给 AI"));
 
+// 兜底：点了发送却迟迟没发出去（聊天里有等你确认的提示 / 没有可用的聊天面板 / 别的我们没想到的原因）。
+// 不能让用户对着一个不动的「待发送」发呆：几秒后角标改口，并给一个能把聊天亮出来的入口。
+const stuck = ref(false);
+let stuckTimer: ReturnType<typeof setTimeout> | undefined;
+const STUCK_AFTER_MS = 2500;
+function armStuckWatch(): void {
+  stuck.value = false;
+  clearTimeout(stuckTimer);
+  stuckTimer = setTimeout(() => {
+    if (pendingCount.value > 0) stuck.value = true;
+  }, STUCK_AFTER_MS);
+}
+watch(pendingCount, (n) => {
+  if (n === 0) {
+    stuck.value = false;
+    clearTimeout(stuckTimer);
+  }
+});
+onBeforeUnmount(() => clearTimeout(stuckTimer));
+
 function submit(sendNow: boolean): void {
   const id = composeId.value;
   if (!id) return;
@@ -286,7 +306,10 @@ function submit(sendNow: boolean): void {
   stage.value = "idle";
   pendingScope.value = null;
   note.value = "";
-  if (sendNow) kbSel.requestSend("");
+  if (sendNow) {
+    kbSel.requestSend("");
+    armStuckWatch();
+  }
 }
 
 function onNoteKey(e: KeyboardEvent): void {
@@ -399,6 +422,7 @@ const trayMode = computed<"pending" | "busy" | "hidden">(() => {
 function sendAll(): void {
   kbSel.requestSend(trayNote.value);
   trayNote.value = "";
+  armStuckWatch();
 }
 function onTrayKey(e: KeyboardEvent): void {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -456,7 +480,14 @@ function badgeText(o: Overlay): string {
         <span v-else-if="o.rec.status === 'working' || o.rec.status === 'sent'" class="ksl-dots" aria-hidden="true"><i /><i /><i /></span>
         <span v-else-if="o.rec.status === 'done'" class="ksl-spark">✦</span>
         <span v-else-if="o.rec.status === 'refused'" class="ksl-mark">!</span>
-        <span class="ksl-badge-text">{{ o.stale ? "原文已变，请重新圈选" : badgeText(o) }}</span>
+        <button
+          v-if="o.rec.status === 'pending' && stuck && !o.stale"
+          type="button"
+          class="ksl-badge-act ksl-badge-act--stuck"
+          title="聊天里可能有需要你确认的提示，点这里切回聊天"
+          @click="kbSel.revealChat()"
+        >还没发出 · 去聊天看看</button>
+        <span v-else class="ksl-badge-text">{{ o.stale ? "原文已变，请重新圈选" : badgeText(o) }}</span>
         <button
           v-if="o.rec.status === 'done'"
           type="button"
@@ -701,6 +732,9 @@ function badgeText(o: Overlay): string {
   padding: 0 7px;
   color: var(--aide-accent);
   font-weight: 600;
+}
+.ksl-badge-act--stuck {
+  color: var(--aide-warning);
 }
 .ksl-badge-act:hover:not(:disabled) {
   background: var(--aide-accent-subtle);
