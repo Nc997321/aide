@@ -18,6 +18,7 @@ import { useKbDocLock } from "@/composables/useKbDocLock";
 import { useModal } from "@/composables/useModal";
 import { useRightPanel } from "@/composables/useRightPanel";
 import KbHistory from "./KbHistory.vue";
+import KbMarkdownEditor from "./KbMarkdownEditor.vue";
 
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：原生样式与主题无关。 */
 const modal = useModal();
@@ -117,8 +118,6 @@ const dirty = computed(
 const canSave = computed(
   () => lock.held.value && !saving.value && draftTitle.value.trim() !== "",
 );
-
-const previewHtml = computed(() => renderKbMarkdown(draftContent.value));
 
 const updated = computed(() => {
   const d = new Date(props.doc.updatedAt);
@@ -282,22 +281,17 @@ function onReverted(): void {
         <span v-if="saveMsg" class="kb-savemsg">{{ saveMsg }}</span>
         <span v-if="saveErr" class="kb-err-inline">{{ saveErr }}</span>
         <span class="kb-spacer" />
-        <button class="kb-btn" :disabled="!canSave" @click="save()">
+        <button class="kb-link" :disabled="!canSave" @click="save()">
           {{ saving ? "保存中…" : "保存" }}
         </button>
+        <button class="kb-link" @click="cancel()">取消</button>
         <button class="kb-btn primary" @click="finish()">完成</button>
-        <button class="kb-btn" @click="cancel()">取消</button>
       </div>
 
+      <!-- 单栏：与阅读页同一条竖轴、同一套排版，不再并排放源码与预览（对照是两份内容在抢注意力）。
+           滚动在这一层，上面的标题与动作条不动。 -->
       <div class="kb-edit-body">
-        <textarea
-          v-model="draftContent"
-          class="kb-editor"
-          spellcheck="false"
-          placeholder="正文（Markdown）"
-        />
-        <!-- v-html 的内容来自 renderKbMarkdown，已做默认拒绝处理，见 ./markdown.ts -->
-        <div class="kb-preview msg-text" v-html="previewHtml" />
+        <KbMarkdownEditor v-model="draftContent" class="kb-edit-page" @save="save()" />
       </div>
     </template>
 
@@ -352,7 +346,7 @@ function onReverted(): void {
   margin-left: auto;
   margin-right: auto;
 }
-/* 编辑态：容器不滚（textarea / 预览各自滚），双栏占满剩余高度 */
+/* 编辑态：标题与动作条钉在上面，正文区（.kb-edit-body）自己滚 */
 .kb-doc.editing {
   display: flex;
   flex-direction: column;
@@ -471,21 +465,23 @@ function onReverted(): void {
 }
 
 /* ── 编辑态 ── */
+/* 标题输入就是阅读页的 h1 本身：同字号同字重，没有底块和边框 */
 .kb-title-input {
+  display: block;
   width: 100%;
   margin: 0 0 10px;
-  padding: 6px 10px;
+  padding: 0;
   font: inherit;
-  font-size: 22px;
+  font-size: 26px;
   font-weight: 600;
+  line-height: 1.25;
   letter-spacing: -0.01em;
   color: var(--aide-text-primary);
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
+  background: none;
+  border: none;
   outline: none;
 }
-.kb-title-input:focus { box-shadow: var(--aide-accent-ring); }
+.kb-title-input::placeholder { color: var(--aide-text-muted); }
 
 .kb-lock-lost {
   display: inline-flex;
@@ -502,16 +498,17 @@ function onReverted(): void {
 }
 .kb-note-input {
   width: 260px;
-  padding: 6px 10px;
+  padding: 4px 0;
   font: inherit;
   font-size: 12px;
   color: var(--aide-text-primary);
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--aide-border-subtle);
   outline: none;
+  transition: border-color var(--aide-ease-t);
 }
-.kb-note-input:focus { box-shadow: var(--aide-accent-ring); }
+.kb-note-input:focus { border-bottom-color: var(--aide-accent); }
 .kb-note-input::placeholder { color: var(--aide-text-muted); }
 .kb-savemsg { font-size: 11.5px; color: var(--aide-success); }
 .kb-err-inline { font-size: 11.5px; color: var(--aide-danger); }
@@ -545,36 +542,17 @@ function onReverted(): void {
   color: var(--aide-text-on-accent);
 }
 .kb-edit-body {
-  display: flex;
-  gap: 12px;
   flex: 1;
   min-height: 0;
-}
-.kb-editor {
-  flex: 1;
-  min-width: 0;
-  padding: 12px 14px;
-  font-family: var(--aide-font-mono);
-  font-size: 13px;
-  line-height: 1.75;
-  color: var(--aide-text-primary);
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
-  outline: none;
-  resize: none;
-}
-.kb-editor:focus { box-shadow: var(--aide-accent-ring); }
-.kb-preview {
-  flex: 1;
-  min-width: 0;
   overflow: auto;
-  padding: 12px 16px;
-  font-size: 14px;
-  line-height: 1.8;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-sm);
+  /* 滚动条贴在面板边，正文仍在那条 720 的竖轴上（见 .kb-edit-page） */
+  max-width: none;
+  margin: 0 -24px;
+  padding: 0 24px;
+}
+.kb-edit-page {
+  max-width: 720px;
+  margin: 0 auto;
 }
 
 /* ── .msg-text 未覆盖的 Markdown 元素 ──
@@ -582,11 +560,7 @@ function onReverted(): void {
 .kb-body :deep(h1),
 .kb-body :deep(h2),
 .kb-body :deep(h3),
-.kb-body :deep(h4),
-.kb-preview :deep(h1),
-.kb-preview :deep(h2),
-.kb-preview :deep(h3),
-.kb-preview :deep(h4) {
+.kb-body :deep(h4) {
   margin: 32px 0 12px;
   font-weight: 600;
   line-height: 1.35;
@@ -594,53 +568,38 @@ function onReverted(): void {
   color: var(--aide-text-primary);
 }
 .kb-body :deep(h3),
-.kb-body :deep(h4),
-.kb-preview :deep(h3),
-.kb-preview :deep(h4) { margin: 24px 0 8px; }
+.kb-body :deep(h4) { margin: 24px 0 8px; }
 
-.kb-body :deep(h1),
-.kb-preview :deep(h1) { font-size: 22px; }
-.kb-body :deep(h2),
-.kb-preview :deep(h2) { font-size: 17px; }
-.kb-body :deep(h3),
-.kb-preview :deep(h3) { font-size: 15px; }
-.kb-body :deep(h4),
-.kb-preview :deep(h4) { font-size: 14px; }
-.kb-body :deep(> *:first-child),
-.kb-preview :deep(> *:first-child) { margin-top: 0; }
+.kb-body :deep(h1) { font-size: 22px; }
+.kb-body :deep(h2) { font-size: 17px; }
+.kb-body :deep(h3) { font-size: 15px; }
+.kb-body :deep(h4) { font-size: 14px; }
+.kb-body :deep(> *:first-child) { margin-top: 0; }
 
 /* 段落节奏由这里定：.msg-text p 的 8px 是聊天里的密度，阅读面要更松 */
-.kb-body :deep(p),
-.kb-preview :deep(p) { margin: 0 0 16px; }
+.kb-body :deep(p) { margin: 0 0 16px; }
 
 .kb-body :deep(ul),
-.kb-body :deep(ol),
-.kb-preview :deep(ul),
-.kb-preview :deep(ol) {
+.kb-body :deep(ol) {
   margin: 12px 0 16px;
   padding-left: 22px;
 }
-.kb-body :deep(li),
-.kb-preview :deep(li) { margin: 5px 0; }
+.kb-body :deep(li) { margin: 5px 0; }
 
-.kb-body :deep(blockquote),
-.kb-preview :deep(blockquote) {
+.kb-body :deep(blockquote) {
   margin: 8px 0;
   padding: 2px 12px;
   border-left: 3px solid var(--aide-accent);
   color: var(--aide-text-muted);
 }
 
-.kb-body :deep(table),
-.kb-preview :deep(table) {
+.kb-body :deep(table) {
   margin: 10px 0;
   border-collapse: collapse;
   font-size: 12px;
 }
 .kb-body :deep(th),
-.kb-body :deep(td),
-.kb-preview :deep(th),
-.kb-preview :deep(td) {
+.kb-body :deep(td) {
   padding: 5px 10px;
   border: 1px solid var(--aide-border);
   /* 列宽下限：不设则 auto 布局把富余宽度全给长文本列，窄列被压到一个汉字宽，
@@ -649,27 +608,22 @@ function onReverted(): void {
      桌面聊天同一问题见 src/styles/global.css。 */
   min-width: 5em;
 }
-.kb-body :deep(th),
-.kb-preview :deep(th) {
+.kb-body :deep(th) {
   background: var(--aide-bg-deep);
   font-weight: 600;
 }
 
-.kb-body :deep(a),
-.kb-preview :deep(a) {
+.kb-body :deep(a) {
   color: var(--aide-accent);
   text-decoration: none;
 }
-.kb-body :deep(a:hover),
-.kb-preview :deep(a:hover) { text-decoration: underline; }
+.kb-body :deep(a:hover) { text-decoration: underline; }
 
-.kb-body :deep(img),
-.kb-preview :deep(img) {
+.kb-body :deep(img) {
   max-width: 100%;
   border-radius: 6px;
 }
-.kb-body :deep(hr),
-.kb-preview :deep(hr) {
+.kb-body :deep(hr) {
   margin: 14px 0;
   border: none;
   border-top: 1px solid var(--aide-border);
