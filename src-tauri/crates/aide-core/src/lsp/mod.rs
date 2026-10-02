@@ -8,6 +8,7 @@ pub mod agent_readiness;
 pub mod agent_status;
 pub mod detector;
 pub mod docs;
+pub mod ignore_dirs;
 pub mod jump;
 pub mod manager;
 pub mod profiles;
@@ -15,6 +16,7 @@ pub mod protocol;
 pub mod registry;
 pub mod rpc;
 pub mod transport;
+pub mod types;
 pub mod vue_plugin;
 pub mod workspace_access;
 pub mod workspace_langs;
@@ -71,7 +73,7 @@ pub struct EnsureOutcome {
 
 /// 跳转类 LSP 请求（definition）的结果包装：把 ServerHandle::request() 的 RequestOutcome
 /// 透传给前端，让前端区分「server 确认无结果」(Ok+空) 与「server 慢/未就绪/挂了」(其余)，
-/// 据此决定 fallback codegraph 还是等/重试。其余 LSP 命令（completion/hover/...）暂不透传
+/// 据此决定 fallback grep 还是等/重试。其余 LSP 命令（completion/hover/...）暂不透传
 /// status，保持原空行为（向后兼容），待后续渐进升级。
 #[derive(Debug, Serialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -85,7 +87,7 @@ pub enum JumpStatus {
 #[derive(Debug, Serialize)]
 pub struct LspJumpResult {
     pub status: JumpStatus,
-    pub results: Vec<crate::codegraph::types::QueryResult>,
+    pub results: Vec<crate::lsp::types::QueryResult>,
 }
 
 pub struct LspState(pub Arc<TokioMutex<LspManager>>);
@@ -377,7 +379,7 @@ async fn lsp_definition(core: Arc<Core>, a: LspDefinitionArgs) -> Result<LspJump
         word,
     } = a;
     let state = core.lsp.clone();
-    // lang 识别不出 → Ok+空（前端 fallback codegraph，与今天同）。
+    // lang 识别不出 → Ok+空（前端 fallback grep，与今天同）。
     let lang = lang_from_ext_of(&file_path);
     let Some(lang_id) = lang else {
         return Ok(LspJumpResult {
@@ -386,7 +388,7 @@ async fn lsp_definition(core: Arc<Core>, a: LspDefinitionArgs) -> Result<LspJump
         });
     };
     let mgr = state.0.lock().await;
-    // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback codegraph）。
+    // server 未起/失败 → NotReady（前端显示「未就绪」并 auto-fallback grep）。
     let Some(h) = mgr.get(&workspace_root, lang_id).await else {
         return Ok(LspJumpResult {
             status: JumpStatus::NotReady,
@@ -402,7 +404,7 @@ async fn lsp_definition(core: Arc<Core>, a: LspDefinitionArgs) -> Result<LspJump
         crate::lsp::manager::DEFINITION_TIMEOUT,
     )
     .await?;
-    // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 codegraph fallback；
+    // Ok+空数组 = server 确认无结果（status=Ok, results 空）→ 前端据 status=ok 走 grep fallback；
     // 非 Ok → results 恒空，前端据 status 决定（timeout 等/重试，not_ready/gone fallback）。
     let (status, results) = crate::lsp::jump::map_outcome(outcome, &word, &workspace_root);
     Ok(LspJumpResult { status, results })
@@ -948,7 +950,7 @@ pub struct LspImplementationArgs {
 async fn lsp_implementation(
     core: Arc<Core>,
     a: LspImplementationArgs,
-) -> Result<Vec<crate::codegraph::types::QueryResult>, String> {
+) -> Result<Vec<crate::lsp::types::QueryResult>, String> {
     let LspImplementationArgs {
         workspace_root,
         file_path,

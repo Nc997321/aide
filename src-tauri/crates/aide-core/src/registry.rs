@@ -63,7 +63,6 @@ static TABLES: &[&[Command]] = &[
     crate::commands::chat::COMMANDS,
     crate::commands::workspace_trust::COMMANDS,
     crate::commands::permissions::COMMANDS,
-    crate::commands::codegraph::COMMANDS,
     crate::lsp::COMMANDS,
     crate::lsp::workspace_symbol::COMMANDS,
     crate::commands::workspace::COMMANDS,

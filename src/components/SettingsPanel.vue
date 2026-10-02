@@ -91,7 +91,7 @@ const recentLimitLocal = ref(settings.recentLimit);
 
 // ── 编辑器 ──
 // 整块写入：任一字段变动都把完整 editor 回写后端（后端 set_settings 按 top-level
-// key 整体覆盖），与 codegraphEmbedder / jdkRegistry 同模式。缩进字符固定 Tab。
+// key 整体覆盖），与 jdkRegistry 同模式。缩进字符固定 Tab。
 const indentSizeLocal = ref(settings.editor.indentSize);
 const vimModeLocal = ref(settings.editor.vimMode);
 
@@ -1409,20 +1409,7 @@ function onOverlayClick(e: MouseEvent) {
   margin: -20px;
 }
 
-/* ── CodeGraph tab ── */
-
-.tab-codegraph {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.cg-secret-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
+/* ── 设置面板内的小按钮（代理提示「应用 / 忽略」） ── */
 
 .cg-secret-btn {
   border: 1px solid var(--aide-border);

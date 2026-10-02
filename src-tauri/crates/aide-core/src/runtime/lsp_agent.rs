@@ -3,10 +3,9 @@
 //! **为什么单独一个文件**：`runtime/mod.rs` 有 1000 行拆分线，内联这段会撞线。
 //!
 //! **失败纪律**：不 panic、不静默。任何失败都折成 `{ok:false, status, error}` 回给
-//! sidecar，由工具层转成模型可读文本（照 codegraph 的「失败返回文本不抛错」）。
+//! sidecar，由工具层转成模型可读文本（「失败返回文本不抛错」）。
 //!
-//! **与 codegraph 的区别**：查询本体**不跳 runner**——`LspManager` 就在主进程，
-//! 直接就地执行。
+//! 查询本体就地执行——`LspManager` 就在主进程。
 
 use std::sync::Arc;
 

@@ -3,7 +3,6 @@
 pub mod agent_status;
 pub mod automation;
 pub mod chat;
-pub mod codegraph;
 pub mod fs;
 pub mod customizations;
 pub mod git;

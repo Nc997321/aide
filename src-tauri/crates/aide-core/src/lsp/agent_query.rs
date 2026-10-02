@@ -55,7 +55,7 @@ enum Consulted {
 }
 
 /// 查询结果的返回形状 = **上线的那份 JSON**：`{ok, status, error?, count?, results?, ...}`。
-/// 与 codegraph 的 `agent_query -> Value` 同形。
+/// `agent_query -> Value`：失败也返回文本，不抛错。
 ///
 /// 曾经外面还包着一个 `AgentQueryOutcome { ok, status, payload }`，但那两个字段在 payload
 /// 里各有一份副本，**而真正上线的是 payload**（`build_result_command` 只是往它上面盖
@@ -591,8 +591,8 @@ async fn refine_candidates(
 }
 
 /// 命中（名字位置）→ 与跳转结果同形的一条结果（绝对路径，与 `map_outcome_absolute` 一致）。
-fn candidate_result(c: &SymbolCandidate) -> crate::codegraph::types::QueryResult {
-    use crate::codegraph::types::{Confidence, QueryResult, SymbolDef, SymbolKind};
+fn candidate_result(c: &SymbolCandidate) -> crate::lsp::types::QueryResult {
+    use crate::lsp::types::{Confidence, QueryResult, SymbolDef, SymbolKind};
     QueryResult {
         symbol: SymbolDef {
             name: c.name.clone(),
@@ -765,7 +765,7 @@ async fn run_jump(
 
 fn ok_with(
     status: AgentLspStatus,
-    results: Vec<crate::codegraph::types::QueryResult>,
+    results: Vec<crate::lsp::types::QueryResult>,
 ) -> AgentQueryOutcome {
     // `ok` 的判据只算一次：ready（可信的否定）或结果非空（铁证）——两者都不是就是
     // 「没能回答」，`ok:false` 让 sidecar 走非 ready 的文案分支。

@@ -46,7 +46,7 @@ import {
 
 // 必须是 type 别名而不是 interface：SDK 的 CallToolResult 带 `[x: string]: unknown` 索引
 // 签名，只有匿名对象类型（type 别名）才有隐式索引签名，interface 没有 → handler 返回
-// ToolResult 会报 TS2322（codegraphTools.ts 因不声明具名类型而天然避开）。
+// ToolResult 会报 TS2322。
 type ToolResult = {
   content: { type: "text"; text: string }[];
 };

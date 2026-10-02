@@ -24,7 +24,7 @@ export interface LspGate {
  * - `trusted=false`：不信任的工作区不跑语言服务器（主进程侧同一道门）。
  * - `lspLanguages` 为空：该工作区没有配得上 LSP 的语言。挂了只会白付每轮重发的
  *   工具 schema，并诱导模型去调注定返回 no_server 的工具。
- * - `AIDE_LSP_TOOLS=off`：逃生舱（与 AIDE_CODEGRAPH_TOOLS / AIDE_DOCX_TOOLS 同款）。
+ * - `AIDE_LSP_TOOLS=off`：逃生舱（与 AIDE_DOCX_TOOLS 同款）。
  *
  * 语义是「**替代品在场**」，不是「功能已开启」——退役内置通道的那一侧靠的正是这个
  * 区别：不信任的工作区、detector 没认出来的工作区（如 Rust 在子目录的 monorepo），

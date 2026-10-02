@@ -3,14 +3,12 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 
-// ignore_dirs 已随 codegraph 迁至 codegraph-core（lsp 与 runner 共用同一份
-// 黑名单——数据唯一主人）。
 use crate::lsp::detector::LanguageId;
 use crate::lsp::docs::{DocOrigin, OpenDocs};
 use crate::lsp::registry::{self, ServerSource};
 use crate::lsp::rpc::{dispatch, Action, Router};
 use crate::lsp::transport::LspTransport;
-use codegraph_core::ignore_dirs::ALWAYS_IGNORE_DIRS;
+use crate::lsp::ignore_dirs::ALWAYS_IGNORE_DIRS;
 
 // ── EnsureError ──
 
@@ -60,7 +58,7 @@ pub fn declares_workspace_symbol(caps: &serde_json::Value) -> bool {
 
 // ── 请求结果：区分「server 慢/未就绪/挂了」与「server 确认无结果」──
 // 旧实现把 NotReady/Timeout/ServerGone 三种和 Ok(空) 都返 Null，前端只看 length>0
-// 一律 fallback codegraph → jdtls 渐进解析时同符号在「直跳」与「多结果弹框」间漂移。
+// 一律 fallback grep → jdtls 渐进解析时同符号在「直跳」与「多结果弹框」间漂移。
 #[derive(Debug, PartialEq)]
 pub enum RequestOutcome {
     /// ready=false（如 jdtls 索引期）：请求根本没发。
@@ -87,7 +85,7 @@ pub struct ServerHandle {
     pub initialized: AtomicBool,
     /// 功能就绪（区别于 initialized=握手成功）。Java（jdtls）握手后还要导入项目 + 索引，
     /// 收到 language/status 的 ServiceReady 才置 true；其余语言握手成功即 true。
-    /// LSP 请求命令据此 gate：未就绪直接返空（前端 fallback CodeGraph），不挂起等索引。
+    /// LSP 请求命令据此 gate：未就绪直接返空（前端 fallback grep），不挂起等索引。
     pub ready: AtomicBool,
     pub dead: Arc<AtomicBool>,
     /// 主动关停意图：只由「我们决定终结这个 server」的路径（shutdown_handle /

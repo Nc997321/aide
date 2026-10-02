@@ -11,7 +11,6 @@ import { sessionMenuItems, sessionSectionMenuItems, workspaceMenuItems } from ".
 import { useWorkspaces } from "../composables/useWorkspaces";
 import { useSettings } from "../composables/useSettings";
 import { useWorkspaceTrust } from "../composables/useWorkspaceTrust";
-import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { api, openExternal } from "../api";
 import { hostApi, parseRemotePath } from "@aide/sdk";
 import AToast from "../ui/AToast.vue";
@@ -44,7 +43,6 @@ const emit = defineEmits<{
 
 const { workspaces, activeKey: wsActiveKey, refresh: refreshWorkspaces, openFolder, removeWorkspace: removeWs } = useWorkspaces();
 const { untrustedPaths, isTrusted, refreshFor: refreshTrust, trust, shouldPrompt, markPrompted } = useWorkspaceTrust();
-const { onWorkspaceTrusted } = useCodeGraphProgress();
 const { settings } = useSettings();
 const sessionsByWorkspace = ref<Record<string, Session[]>>({});
 const activeWorkspace = ref("");
@@ -92,14 +90,13 @@ function closeTrustPrompt(): void {
   trustPrompt.value = null;
 }
 
-/** 信任此工作区：持久化 + 自动写入安全命令白名单 + 触发索引构建 + 刷新徽标。 */
+/** 信任此工作区：持久化 + 自动写入安全命令白名单 + 刷新徽标。 */
 async function confirmTrust(): Promise<void> {
   const p = trustPrompt.value;
   if (!p) return;
   trustPrompt.value = null;
   const { ok, added } = await trust(p.path);
   if (ok) {
-    onWorkspaceTrusted(p.path);
     void refreshTrust(workspaces.value.map((w) => w.name).filter(Boolean));
     if (added > 0) {
       showToast(`已信任工作区，已添加 ${added} 条安全命令白名单`, "success");
@@ -729,7 +726,6 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           <p class="trust-path">{{ trustPrompt.path }}</p>
           <p class="trust-desc">不受信任的工作区将以下功能受限：</p>
           <ul class="trust-list">
-            <li><span class="dot"></span>代码索引（CodeGraph 向量检索）</li>
             <li><span class="dot"></span>项目 <code>CLAUDE.md</code> 指令</li>
             <li><span class="dot"></span>项目 <code>.aide/claude/</code>（技能与子代理）与 <code>.mcp.json</code></li>
           </ul>

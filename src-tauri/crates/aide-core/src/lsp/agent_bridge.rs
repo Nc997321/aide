@@ -1,6 +1,6 @@
 //! agent-sidecar ↔ LSP 的协议桥（主进程侧）。
 //!
-//! 与 `codegraph/agent_bridge.rs` 同构：`lsp_query` 事件进、`lsp_result` 命令出。
+//! `lsp_query` 事件进、`lsp_result` 命令出。
 //! 唯一区别：查询本体**不跳 runner**——`LspManager` 就在主进程，拦截点直接派发。
 
 use serde_json::Value;
@@ -56,12 +56,11 @@ mod tests {
         assert_eq!(v["status"], "ready");
     }
 
-    /// 回包 cmd 标不得串成 codegraph_result / browser_result——串了 sidecar
-    /// 按 id 配对会失败，且**无任何提示**（codegraph/agent_bridge.rs 同类测试在案）。
+    /// 回包 cmd 标不得串成 browser_result 之类别的桥——串了 sidecar
+    /// 按 id 配对会失败，且**无任何提示**。
     #[test]
     fn build_result_command_never_tags_as_another_bridge() {
         let v = build_result_command("r1", json!({"ok": true}));
-        assert_ne!(v["cmd"], "codegraph_result");
         assert_ne!(v["cmd"], "browser_result");
     }
 
@@ -76,7 +75,7 @@ mod tests {
     #[test]
     fn parse_ignores_other_event_types() {
         assert!(parse_lsp_query(&json!({"type":"text_delta"})).is_none());
-        assert!(parse_lsp_query(&json!({"type":"codegraph_query","request_id":"r"})).is_none());
+        assert!(parse_lsp_query(&json!({"type":"browser_query","request_id":"r"})).is_none());
     }
 
     #[test]

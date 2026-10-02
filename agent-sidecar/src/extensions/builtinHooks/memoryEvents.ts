@@ -83,7 +83,7 @@ export function makeMemoryEventsHook(env: NodeJS.ProcessEnv, cwd: string | undef
       };
       const log = toForwardSlashes(eventsLogPath(configDir));
       // mkdir 独立 try：bun 的 recursive mkdir 对已存在目录抛 EEXIST（见
-      // codegraphSkill.ts 同款防御），不能让它吃掉后面的 append。
+      // 同类防御），不能让它吃掉后面的 append。
       try {
         mkdirSync(safeDirname(log), { recursive: true });
       } catch {

@@ -7,7 +7,7 @@ import type {
   AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
-  SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult, LspJumpResult,
+  SkillMeta, QueryResult, LspJumpResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
@@ -664,7 +664,7 @@ export const api = {
   detectAvailableProxy(): Promise<string | null> {
     return getTransport().invoke("detect_available_proxy");
   },
-  setSettings(settings: Partial<AppSettings> | { codegraphEmbedder: Record<string, unknown> }): Promise<void> {
+  setSettings(settings: Partial<AppSettings>): Promise<void> {
     return getTransport().invoke("set_settings", { settings });
   },
 
@@ -773,39 +773,6 @@ export const api = {
     return getTransport().invoke("clear_recent", { category: category ?? null });
   },
 
-  // CodeGraph — enhanced code navigation
-  /** opts.force=true 全量重建（跳过增量快速路径）；默认增量。裸 bool 具名化。 */
-  // TODO: useCodeGraphProgress.ts:280 的 (root, true) 调用点待 B 路同步为 { force: true }
-  codegraphBuildIndex(projectRoot: string, opts: { force?: boolean } = {}): Promise<BuildIndexResult> {
-    return getTransport().invoke("codegraph_build_index", { projectRoot, force: opts.force ?? false });
-  },
-  codegraphGotoDefinition(
-    word: string,
-    file: string,
-    line: number,
-    column: number,
-    projectRoot: string,
-  ): Promise<QueryResult[]> {
-    return getTransport().invoke("codegraph_goto_definition", { word, file, line, column, projectRoot });
-  },
-  codegraphClose(projectRoot: string): Promise<void> {
-    return getTransport().invoke("codegraph_close", { projectRoot });
-  },
-  codegraphReindexFile(
-    projectRoot: string,
-    file: string,
-  ): Promise<{ reindexed: boolean; skipped?: string } | undefined> {
-    return getTransport().invoke("codegraph_reindex_file", { projectRoot, file });
-  },
-  /** 增量重扫：只 reindex mtime > indexed_at 的文件（手动「更新索引」）。 */
-  codegraphRescan(projectRoot: string): Promise<RescanResult> {
-    return getTransport().invoke("codegraph_rescan", { projectRoot });
-  },
-  /** 粗粒度构建进度（纯原子读，同步 inline 命令）。前端定时 poll。 */
-  codegraphBuildProgress(): Promise<BuildProgress> {
-    return getTransport().invoke("codegraph_build_progress");
-  },
-
   // ── LSP ──
 
   lspDetectLanguages(workspaceRoot: string): Promise<string[]> {
@@ -899,17 +866,6 @@ export const api = {
   /** 取消信任：返回移除的自动安全规则条数。 */
   untrustWorkspace(path: string): Promise<number> {
     return getTransport().invoke("untrust_workspace", { path });
-  },
-  /** 读某工作区的代码索引开关（每工作区默认关，后端权威）。 */
-  isWorkspaceCodegraphEnabled(path: string): Promise<boolean> {
-    return getTransport().invoke("workspace_get_codegraph_enabled", { workspaceRoot: path });
-  },
-  /** 设某工作区的代码索引开关（每工作区默认关；信任把关在建索引门，不在写开关处）。 */
-  setWorkspaceCodegraphEnabled(path: string, enabled: boolean): Promise<void> {
-    return getTransport().invoke("workspace_set_codegraph_enabled", {
-      workspaceRoot: path,
-      enabled,
-    });
   },
 
   /**

@@ -410,13 +410,8 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
     // 项目 .aide/claude/skills/ / 项目 .mcp.json（见 session-worker.ts startLoop）。
     cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd_str));
-    // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP 工具
-    // （挂载条件与 trusted 并列，见 codegraphTools.ts codegraphMcpRegistration）。
-    cmd["codegraph_enabled"] = json!(crate::commands::workspace::is_codegraph_enabled_for_path(
-        &cwd_str
-    ));
     // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
-    // （挂载条件与 trusted/codegraph_enabled 并列，见 lspTools.ts 的四档闸门）。
+    // （挂载条件与 trusted 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
     // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
     cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);

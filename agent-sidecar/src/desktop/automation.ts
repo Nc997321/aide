@@ -20,7 +20,7 @@ export interface AutomationConfig {
   preset: "auto" | "full";
   /** 内建工具可见性白名单；两档预设都是 ["*"]（全量可见）——收口在行为层。 */
   tools: string[];
-  /** 预授权 MCP server key（连接器），如 "aide-codegraph"。 */
+  /** 预授权 MCP server key（连接器），如 "aide-lsp"。 */
   mcpAllowlist: string[];
   /** 任务目录（~/.aide/automations/<id>/）的绝对路径：写工具落进此目录即放行
    *  （playbook.md / scripts/ 的蒸馏写入与运行中的手册自愈合写回都在 cwd 之外，

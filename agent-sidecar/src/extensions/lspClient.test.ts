@@ -47,7 +47,7 @@ describe("lspClient", () => {
   });
 
   /// 冷启动实测 46–73s（见 docs/superpowers/spikes/2026-09-19-lsp-agent-tools/），
-  /// 超时预算必须显著高于它——10s（codegraph 的值）会让每次冷启动查询都超时，
+  /// 超时预算必须显著高于它——10s会让每次冷启动查询都超时，
   /// 正好复现本设计要消灭的失败模式。
   it("超时预算显著高于冷启动上界 73s", () => {
     expect(LSP_QUERY_TIMEOUT_MS).toBeGreaterThan(73_000);

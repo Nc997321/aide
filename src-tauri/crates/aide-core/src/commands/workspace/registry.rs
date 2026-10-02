@@ -17,7 +17,7 @@ use super::WorkspaceInfo;
 /// 注册表条目——state.json `registeredWorkspaces` 数组元素（落盘 DTO）。
 ///
 /// path 是身份主人（用户给的）；key 在注册时由 `path_to_key(path)` 算出后
-/// **冻结**——它是 sessions/recent/lsp/codegraph/jdk 各段共用的身份，与磁盘
+/// **冻结**——它是 sessions/recent/lsp/jdk 各段共用的身份，与磁盘
 /// 转录目录对应，不随后续编码规则漂移。同一目录的斜杠变体（`C:/a` vs `C:\a`）
 /// 经 path_to_key 塌缩成同一 key，天然去重。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

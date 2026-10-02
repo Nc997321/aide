@@ -494,7 +494,6 @@ pub async fn host_env(host: &HostId, installed: &Installed) -> HostEnv {
 /// （2026-09-30 真机：设了 `AIDE_LSP_TOOLS=off` 的对照轮里 aide-lsp 仍在）。
 const TOOL_SWITCHES: &[&str] = &[
     "AIDE_LSP_TOOLS",
-    "AIDE_CODEGRAPH_TOOLS",
     "AIDE_DOCX_TOOLS",
     "AIDE_KB_TOOLS",
     "AIDE_BROWSER_TOOLS",

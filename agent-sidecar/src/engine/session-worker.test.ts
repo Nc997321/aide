@@ -463,58 +463,6 @@ describe("SessionWorker — 一次性会话回合结束自毁（automation）", 
 });
 
 /**
- * codegraph MCP 工具注册：SessionWorker 组装的 query options 应带
- * mcpServers["aide-codegraph"] 和 allowedTools 放行前缀；
- * AIDE_CODEGRAPH_TOOLS=off 时整体不注册。
- */
-
-describe("SessionWorker — codegraph MCP registration", () => {
-  it("registers aide-codegraph MCP server and allow rule in query options", async () => {
-    let captured: any;
-    const fakeQuery = ((args: any) => {
-      captured = args?.options ?? args;
-      return (async function* () {})();
-    }) as any;
-    const worker = new SessionWorker("s-cg", () => {}, {
-      queryFn: fakeQuery,
-      cwd: "/proj",
-    });
-    worker.handleCommand({
-      // 生产协议恒发 codegraph_enabled（主进程四处构造点下发）——fixture 同形
-      cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false, codegraph_enabled: true,
-    } as any);
-    await vi.waitFor(() => expect(captured).toBeDefined());
-    worker.stop();
-    expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
-    expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
-  });
-
-
-  it("AIDE_CODEGRAPH_TOOLS=off skips MCP registration", async () => {
-    process.env.AIDE_CODEGRAPH_TOOLS = "off";
-    try {
-      let captured: any;
-      const fakeQuery = ((args: any) => {
-        captured = args?.options ?? args;
-        return (async function* () {})();
-      }) as any;
-      const worker = new SessionWorker("s-cg-off", () => {}, {
-        queryFn: fakeQuery,
-        cwd: "/proj",
-      });
-      worker.handleCommand({
-        cmd: "send", session_id: "s-cg-off", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
-      } as any);
-      await vi.waitFor(() => expect(captured).toBeDefined());
-      worker.stop();
-      expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
-    } finally {
-      delete process.env.AIDE_CODEGRAPH_TOOLS;
-    }
-  });
-});
-
-/**
  * knowledge MCP 放行规则：**工具级**（mcp__aide-knowledge__xxx）而非 server 级
  * （mcp__aide-knowledge）。server 级规则会把 P2 的写工具一起放行，破坏「写必弹窗」
  * （设计 spec §7）——P1 只有读工具，这条断言就是 P2 的防回归网。
@@ -529,7 +477,7 @@ describe("SessionWorker — knowledge MCP 放行规则（工具级）", () => {
     }) as any;
     const worker = new SessionWorker("kb-write-rule", () => {}, { queryFn: fakeQuery, cwd: "/proj" });
     worker.handleCommand({
-      cmd: "send", session_id: "kb-write-rule", prompt: "你好", cwd: "/proj", env: {}, codegraph_enabled: true,
+      cmd: "send", session_id: "kb-write-rule", prompt: "你好", cwd: "/proj", env: {},
     } as any);
     await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();

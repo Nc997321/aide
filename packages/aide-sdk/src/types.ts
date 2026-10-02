@@ -161,8 +161,6 @@ export interface AppSettings {
   recentLimit: number;
   /** 聊天区分屏布局快照，按工作区路径键控（结构见 paneLayout/tree.ts 的 LayoutSnapshot） */
   paneLayouts: Record<string, unknown>;
-  /** CodeGraph embedding 后端配置（fastembed 本地 / http 远程）。默认 fastembed。 */
-  codegraphEmbedder: CodeGraphEmbedderConfig;
   /** JDK 注册表：本机已登记的 JDK（扫描 + 手动添加），供运行配置按项目选 JDK。
    *  机器级资源，非按工作区。 */
   jdkRegistry?: JdkEntry[];
@@ -218,23 +216,6 @@ export interface EditorSettings {
 export interface LspServerOverride {
   program: string;
   args: string[];
-}
-
-/** CodeGraph embedding 后端配置。`backend` 选 fastembed（本地 ONNX）或 http
- *  （Ollama 本地/远程、OpenAI 兼容云端）。http 分支按 `format` 组请求/解响应。
- *  切后端或模型会触发全量重建索引（向量维度/模型空间不兼容）。 */
-export interface CodeGraphEmbedderConfig {
-  backend: "fastembed" | "http";
-  /** backend === "http" 时以下字段生效： */
-  baseUrl: string;
-  /** Whether a CodeGraph credential exists in the private keychain. */
-  apiKeyConfigured: boolean;
-  model: string;
-  format: "ollama" | "openai";
-  /** 模型向量维度，0 = 自动从首次响应探测 */
-  dim: number;
-  /** 语义搜索分数阈值；undefined = 后端按模型自动（fastembed≈0.35，http≈0.55）。范围 0~1，改后立即生效、无需重建。 */
-  scoreThreshold?: number;
 }
 
 export interface ChangeFile {
@@ -573,7 +554,7 @@ export interface RecentView {
 // ── Skill types ──
 export type { SkillMeta } from "./types/skill";
 
-// ── CodeGraph types ──
+// ── LSP 查询结果 types ──
 
 export type SymbolKind =
   | "Function" | "Method" | "Class" | "Field"
@@ -594,16 +575,16 @@ export interface QueryResult {
   symbol: SymbolDef;
   confidence: Confidence;
   score: number | null;
-  /** 结果来源（前端 orchestration 层打标，Rust 不发）：lsp=语言服务、ast=codegraph 结构层、
-   *  semantic=codegraph 语义层、grep=文本回退。缺省=旧路径未打标，浮层按 confidence 兜底显示。 */
-  source?: "lsp" | "ast" | "semantic" | "grep";
+  /** 结果来源（前端 orchestration 层打标，Rust 不发）：lsp=语言服务、grep=文本回退。
+   *  缺省=未打标，浮层按 confidence 兜底显示。 */
+  source?: "lsp" | "grep";
 }
 
 /** lsp_definition 请求结局：区分「server 慢/未就绪/挂了」与「server 确认无结果」。
  *  - ok：server 正常响应（results 可空=确认无定义，由前端决定是否 fallback）
  *  - timeout：预算内无响应（前端可重试一次，仍 timeout 则降级提示，不自动 fallback）
- *  - not_ready：语言服务未就绪（前端 auto-fallback codegraph→grep + 标签 + hint）
- *  - gone：语言服务已退出（前端 auto-fallback codegraph→grep，useLsp 已 toast） */
+ *  - not_ready：语言服务未就绪（前端 auto-fallback grep + 标签 + hint）
+ *  - gone：语言服务已退出（前端 auto-fallback grep，useLsp 已 toast） */
 export type JumpStatus = "ok" | "timeout" | "not_ready" | "gone";
 
 export interface LspJumpResult {
@@ -673,79 +654,6 @@ export interface InlayHintItem {
   label: string;
   paddingLeft: boolean;
   paddingRight: boolean;
-}
-
-export interface BuildIndexResult {
-  /** true = reused a fresh on-disk index; false = full rebuild. */
-  loaded: boolean;
-  total_symbols: number;
-  /** Rust 命令级门控早退原因（"untrusted" / "disabled"）。前端静默处理，
-   *  不推通知。 */
-  skipped?: string;
-  /** true = resumed an interrupted embed from the per-file checkpoint instead
-   *  of full-rebuilding (previous build died mid-embed). */
-  resumed?: boolean;
-  /** Resume only: files already embedded (skipped via checkpoint). */
-  skipped_embedded_files?: number;
-  /** Present only on a full rebuild (loaded === false). */
-  scanned_files?: number;
-  files_with_symbols?: number;
-  has_embeddings?: boolean;
-  /** Exact reason embed didn't complete (full rebuild only): "ok" | "no_embedder: ..."
-   *  | "probe_failed: ..." | "probe_empty" | "dim_unresolved (dim=0)" | "cancelled at N/M"
-   *  | "batch_errors: N ..." | "incomplete: ...". Surfaced so the frontend can show
-   *  why semantic search is unavailable without relying on tracing logs. */
-  embed_status?: string;
-  /** NaN-skipped symbol count this build (permanent skips — bge-m3 overflow
-   *  snippets the `code:` prefix + bisection couldn't save). Counts as "processed". */
-  skipped_count?: number;
-  /** Failed embed batches this build (transient — Ollama down / timeout). >0 ⇒ the
-   *  build is `incomplete`, not `degraded`. */
-  failed_count?: number;
-  /** Actual vector count in the shard on completion. A complete shard should have
-   *  ~total_symbols minus NaN-skips; far below ⇒ broken (loaders reject it). */
-  shard_point_count?: number;
-  /** Same as has_embeddings for a fresh/resume build; `true` for incremental
-   *  (reused a load_compatible_index shard that already passed point_count check). */
-  embed_complete?: boolean;
-  /** Incremental reindex only: true when only a small set of changed files was
-   *  re-parsed + re-embedded instead of a full rebuild. */
-  incremental?: boolean;
-  /** Incremental only: number of changed files reindexed. */
-  rescanned_files?: number;
-  /** Coarse health for the UI: "complete" | "degraded" (NaN skips) | "incomplete"
-   *  (cancelled/failed/stopped early) | "structure_only" (no embedder). */
-  health?: "complete" | "incomplete" | "degraded" | "structure_only";
-}
-
-/** 粗粒度构建进度，前端 poll 拉取（不走 app.emit，避历史跨线程 emit 卡死）。 */
-export interface BuildProgress {
-  /** 是否正在构建。false = 空闲/已完成，前端据此停 poll。 */
-  active: boolean;
-  /** 已 embed 的符号数。 */
-  done: number;
-  /** 总符号数。 */
-  total: number;
-  /** 当前阶段/文件的可读描述（"扫描文件树..." / "解析 src/foo.ts (123/456)"
-   *  / "嵌入符号 1340/2000" / "写盘..."），用于构建可观测性。 */
-  current: string;
-  /** 结构层（精确跳转）是否已就绪。Phase1 swap 后 true，即使语义层 embed 还在
-   *  后台跑——用户此时已能用精确跳转，不必干等。前端据此显示"已就绪"标记。 */
-  index_ready: boolean;
-}
-
-/** 增量重扫结果（`codegraph_rescan`）。只 reindex mtime > indexed_at 的文件。 */
-export interface RescanResult {
-  /** true = 当前有匹配 root 的活跃索引。false = 无索引/根不匹配，本次 no-op。 */
-  active_index: boolean;
-  /** 语义层是否就绪（embed_ready）。false 时 rescan 跳过（后台 embed 没跑完）。 */
-  embed_ready?: boolean;
-  /** walk 找到的改动文件数（mtime > indexed_at）。 */
-  changed_files: number;
-  /** 实际成功 reindex 的文件数。 */
-  rescanned_files: number;
-  /** reindex 失败的文件数（逐文件 warn）。 */
-  errors: number;
 }
 
 // ── 通知中心 ──

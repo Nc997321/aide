@@ -73,7 +73,6 @@ export interface BuiltinMcpServer {
   purpose: string;
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
-  { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），该工作区开启代码索引（右侧栏「代码索引」面板）+ 受信任时挂载" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
   { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / create_folder / move_document / append_document / update_document / ingest_file / delete_document 每次要你确认 —— 其中 move_document 会改变目录结构、delete_document 连带子文件夹与子文档且界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
   { id: "aide-lsp", transport: "in-process", purpose: "内置代码导航（语言服务器）：lsp_definition 定义 + 整个函数体 / lsp_references 每处真实引用 + 所在函数 / lsp_symbols 一次定位多个名字 / lsp_outline 文件结构 + 行区间 / lsp_implementations 接口实现，全部自动放行；语言服务器没答上时同一发里给文本兜底（标明未验证）。受信任且有可用语言服务器的工作区挂载；要关掉用 AIDE_LSP_TOOLS=off" },

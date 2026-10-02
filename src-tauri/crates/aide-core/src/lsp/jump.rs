@@ -8,7 +8,7 @@
 //! 一个吃下 (method, root, file, line, col, word, timeout, includeDeclaration)
 //! 的函数有 8 个输入，位置与布尔相邻同型，调用点写反即静默错位。
 
-use crate::codegraph::types::QueryResult;
+use crate::lsp::types::QueryResult;
 use crate::lsp::manager::{RequestOutcome, ServerHandle};
 use crate::lsp::JumpStatus;
 use std::time::Duration;

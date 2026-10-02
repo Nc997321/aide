@@ -59,9 +59,9 @@ export function loadUserHooks(ctx: UserHooksContext): CompiledHooksByEvent {
   return out;
 }
 
-/** 合并 codegraph（in-process）与用户 mcpServers（stdio/sse/http），name 不冲突即可。 */
-export function assembleMcpServers(codegraph: Record<string, any> | null, user: Record<string, any>): Record<string, any> {
-  return { ...(codegraph ?? {}), ...user };
+/** 合并内建（in-process）与用户 mcpServers（stdio/sse/http），name 不冲突即可。 */
+export function assembleMcpServers(builtin: Record<string, any> | null, user: Record<string, any>): Record<string, any> {
+  return { ...(builtin ?? {}), ...user };
 }
 
 /** 合并内建 hook（前）与用户 hook（后），按事件分组。内建不可被越过。

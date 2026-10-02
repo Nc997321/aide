@@ -26,8 +26,6 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("workspace_set_lsp_enabled", workspace_set_lsp_enabled),
     command!("workspace_set_lsp_excludes", workspace_set_lsp_excludes),
     command!("workspace_get_lsp_excludes", workspace_get_lsp_excludes),
-    command!("workspace_get_codegraph_enabled", workspace_get_codegraph_enabled),
-    command!("workspace_set_codegraph_enabled", workspace_set_codegraph_enabled),
 ];
 
 
@@ -164,14 +162,14 @@ pub fn trust_key_from_path(path: &str) -> String {
 
 /// 已编码 key → 归一信任键：把点号替换成横杠。
 ///
-/// codegraph_workspaces 的读写都先过这里：同一工作区的「带点号 key（path_to_key
+/// 信任白名单的读写都先过这里：同一工作区的「带点号 key（path_to_key
 /// 形态）/ 横杠 key / 路径版 trust_key_from_path」塌缩成同一键。幂等——横杠形态
 /// 再归一不变。`trust_key_path_and_key_collapse_same_workspace` 据此验证。
 pub fn trust_key_from_key(key: &str) -> String {
     key.replace('.', "-")
 }
 
-/// 路径是否在信任白名单内（按归一键比对）。供 CodeGraph / send_message
+/// 路径是否在信任白名单内（按归一键比对）。供 send_message
 /// 等 Rust 侧门控点调用；读 state.json 是轻量 IO，调用方已在 spawn_blocking
 /// 或命令体里。
 pub fn is_path_trusted(path: &str) -> bool {
@@ -249,50 +247,6 @@ pub fn set_lsp_excludes(key: &str, dirs: Vec<String>) -> Result<(), String> {
             key.to_string(),
             serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
         );
-        Ok(())
-    })
-}
-
-// ── 工作区代码索引开关（codegraph_workspaces）──
-//
-// 按工作区键控的代码索引开关（取代旧的全局 settings.codegraphEnabled——每
-// 工作区默认关，用户显式开启某工作区才建索引）。注意 key 用 trust_key_from_path
-// 而非 lsp 在用的 path_to_key：信任白名单已实证同一工作区存在「带点号(4.0) /
-// 横杠(4-0)」双编码形态，须归一塌缩（见 trust_key_from_path 上方注释）；
-// lsp 用 path_to_key 是历史遗留，独立 section 互不串，不做顺手统一。
-
-/// 读某工作区索引开关（缺省 false = 每工作区默认关；解析失败同样按关，安全侧）。
-/// 入参必须是**已编码 key**（path_to_key / trust_key 任一形态均可，点号在此归一
-/// 塌缩）；裸路径请走 `is_codegraph_enabled_for_path`，勿直接喂路径——
-/// 路径分隔符不在归一范围，会算出不存在的键而静默按关。
-pub fn codegraph_workspace_enabled(key: &str) -> bool {
-    crate::app_settings::load_state()
-        .get("codegraph_workspaces")
-        .and_then(|w| w.get(trust_key_from_key(key)))
-        .and_then(|v| v.get("enabled"))
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
-}
-
-/// gate / chat.rs 下发 sidecar 共用的路径入口。
-pub fn is_codegraph_enabled_for_path(path: &str) -> bool {
-    codegraph_workspace_enabled(&trust_key_from_path(path))
-}
-
-/// 设某工作区索引开关。写 state JSON 的 codegraph_workspaces[key].enabled，
-/// key 同样先过归一（幂等：横杠形态再归一不变）。
-pub fn set_codegraph_enabled(key: &str, enabled: bool) -> Result<(), String> {
-    let key = trust_key_from_key(key);
-    crate::app_settings::with_state_mut(|config| {
-        let entry = config
-            .as_object_mut()
-            .ok_or("state not object")?
-            .entry("codegraph_workspaces")
-            .or_insert(serde_json::json!({}));
-        entry
-            .as_object_mut()
-            .ok_or("codegraph_workspaces not object")?
-            .insert(key, serde_json::json!({ "enabled": enabled }));
         Ok(())
     })
 }
@@ -607,7 +561,7 @@ async fn unhide_workspace(_core: Arc<Core>, a: UnhideWorkspaceArgs) -> Result<()
 
 // ── 工作区信任（Trusted Workspace）Tauri 命令 ──
 //
-// 路径入参：前端始终拿得到路径（侧栏 ws.name、CodeGraph root），用路径作
+// 路径入参：前端始终拿得到路径（侧栏 ws.name），用路径作
 // 身份可彻底回避前端侧的 key 编码问题；Rust 内部 trust_key_from_path 归一。
 // 命令体只做轻量 state.json 读写，走 spawn_blocking 避免在 Tauri 主线程上
 // 做文件 IO（与 list_workspaces / remove_workspace 的 async + spawn_blocking
@@ -676,43 +630,6 @@ async fn workspace_get_lsp_excludes(_core: Arc<Core>, a: WorkspaceGetLspExcludes
     let WorkspaceGetLspExcludesArgs { workspace_root } = a;
     let key = path_to_key(&workspace_root);
     Ok(lsp_workspace_config(&key).exclude_dirs)
-}
-
-// ── 工作区代码索引开关 Tauri 命令 ──
-
-/// 读某工作区索引开关（桌面右栏「代码索引」面板渲染用）。
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceGetCodegraphEnabledArgs {
-    workspace_root: String,
-}
-
-async fn workspace_get_codegraph_enabled(_core: Arc<Core>, a: WorkspaceGetCodegraphEnabledArgs) -> Result<bool, String> {
-    let WorkspaceGetCodegraphEnabledArgs { workspace_root } = a;
-    // state.json 读轻量，但与 is_workspace_trusted 同款走 spawn_blocking，
-    // 命令体不碰文件 IO。
-    tokio::task::spawn_blocking(move || is_codegraph_enabled_for_path(&workspace_root))
-        .await
-        .map_err(|e| format!("workspace_get_codegraph_enabled panicked: {e}"))
-}
-
-/// 设某工作区索引开关。**不设信任门**：开关只是「意向」记录，信任把关在
-/// 建索引的门（gate::skip_reason + 前端 ensureIndex）——未信任工作区开了
-/// 开关也能安全落盘，等信任后索引自然建起来（沿用既有 untrusted 通知流）。
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WorkspaceSetCodegraphEnabledArgs {
-    workspace_root: String,
-    enabled: bool,
-}
-
-async fn workspace_set_codegraph_enabled(_core: Arc<Core>, a: WorkspaceSetCodegraphEnabledArgs) -> Result<(), String> {
-    let WorkspaceSetCodegraphEnabledArgs { workspace_root, enabled } = a;
-    tokio::task::spawn_blocking(move || {
-        set_codegraph_enabled(&trust_key_from_path(&workspace_root), enabled)
-    })
-    .await
-    .map_err(|e| format!("workspace_set_codegraph_enabled panicked: {e}"))?
 }
 
 /// 编码 key → 真实路径（`path_to_key` 的逆，旧数据回退用）。编码把分隔符与 `:` 都变成 `-`，
@@ -939,37 +856,6 @@ mod tests {
         );
         // 清理
         set_lsp_excludes(key, vec![]).unwrap();
-    }
-
-    // ── 工作区代码索引开关 ──
-
-    #[test]
-    fn codegraph_workspace_enabled_defaults_false() {
-        // 新语义核心：未设置的工作区默认关（每工作区显式开启才建索引）
-        assert!(!codegraph_workspace_enabled("aide_test_cg_nonexistent_xyz"));
-        assert!(!is_codegraph_enabled_for_path(
-            r"C:\aide_test_cg_nonexistent_xyz"
-        ));
-    }
-
-    #[test]
-    fn set_codegraph_enabled_round_trips() {
-        let key = "aide_test_cg_set_enabled_xyz";
-        set_codegraph_enabled(key, true).unwrap();
-        assert!(codegraph_workspace_enabled(key));
-        // 关（显式 false，非缺席缺省）
-        set_codegraph_enabled(key, false).unwrap();
-        assert!(!codegraph_workspace_enabled(key));
-    }
-
-    #[test]
-    fn set_codegraph_enabled_collapses_dotted_and_dashed_keys() {
-        // 同一工作区双编码形态塌缩到同一信任键（用路径开、用带点号 key 查对得上）
-        let root = r"C:\aide_test_cg_collapse\chennong4.0";
-        let dotted = "C--aide_test_cg_collapse-chennong4.0";
-        set_codegraph_enabled(&trust_key_from_path(root), true).unwrap();
-        assert!(codegraph_workspace_enabled(dotted));
-        set_codegraph_enabled(dotted, false).unwrap();
     }
 
     // ── 工作区 JDK ──

@@ -1,7 +1,7 @@
 // 知识库工具返回文本的唯一产地（纯函数，单测直接覆盖）。
 //
 // 红线：失败也返回**文本**，永不 throw、永不 isError——工具报错会让 agent 纠结，
-// 文本提示让它自然换路（codegraphTools.ts:50 先例）。每条失败文案都要写清「下一步」。
+// 文本提示让它自然换路。每条失败文案都要写清「下一步」。
 import type {
   KbDocument,
   KbDocumentSummary,

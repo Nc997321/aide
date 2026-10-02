@@ -7,7 +7,7 @@
 //! 优先级原则：用户显式配置 > 可信环境（env / git config）> 端口猜测兜底。
 //! 聊天主路径（`runtime::env::build_runtime_env_vars`）只认 settings 显式值、
 //! 不做自动探测（核心流量出口必须可预期）；本函数服务 Rust 侧非关键路径
-//! （marketplace git clone / 模型刷新 / 连接测试 / codegraph embed）。
+//! （marketplace git clone / 模型刷新 / 连接测试）。
 //!
 //! 跨平台：git config 调用在 Windows 上必须加 `CREATE_NO_WINDOW`（CLAUDE.md 红线），
 //! 否则会弹控制台窗口。

@@ -30,7 +30,7 @@ impl WorkspaceState {
     }
 
     /// 活动工作区根（目录须存在）。无 = 没打开项目——展示/索引类消费者必须能区分这一点，
-    /// 绝不回退家目录（2026-08-01：FileTree 渲染整个家目录、CodeGraph 索引 405 万符号）。
+    /// 绝不回退家目录（2026-08-01：FileTree 渲染整个家目录）。
     pub fn active_root(&self) -> Option<PathBuf> {
         self.path
             .lock()

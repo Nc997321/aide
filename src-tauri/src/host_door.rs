@@ -53,48 +53,6 @@ fn exe(name: &str) -> String {
 }
 
 impl aide_core::resources::HostResources for DesktopResources {
-    /// dev = cargo target/debug（需先 `pnpm build:codegraph`），release = 打包资源目录
-    /// `codegraph/` 子目录（与 agent-runtime 同模式）。
-    fn codegraph_runner(&self) -> Result<std::path::PathBuf, String> {
-        #[cfg(debug_assertions)]
-        {
-            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("target")
-                .join("debug")
-                .join(exe("aide-codegraph"));
-            if path.exists() {
-                return Ok(dunce::simplified(&path).to_path_buf());
-            }
-            Err(format!(
-                "codegraph runner 未构建（{:?}）——先运行 pnpm build:codegraph",
-                path
-            ))
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            let resource_dir = self.0.path().resource_dir().map_err(|e| e.to_string())?;
-            let path = resource_dir.join("codegraph").join(exe("aide-codegraph"));
-            if path.exists() {
-                return Ok(dunce::simplified(&path).to_path_buf());
-            }
-            Err(format!("codegraph runner exe missing: {path:?}"))
-        }
-    }
-
-    /// release：打包资源目录（runner 内本地 ONNX 模型解析）；dev 不设——runner 走
-    /// CARGO_MANIFEST_DIR 源码树回退。
-    fn codegraph_model_dir(&self) -> Option<std::path::PathBuf> {
-        #[cfg(debug_assertions)]
-        {
-            None
-        }
-        #[cfg(not(debug_assertions))]
-        {
-            let res_dir = self.0.path().resource_dir().ok()?;
-            Some(dunce::simplified(&res_dir).to_path_buf())
-        }
-    }
-
     /// dev：node 跑 esbuild bundle（`agent-sidecar/dist/runtime.js`，`AIDE_NODE_PATH` 可换 node）；
     /// release：打包资源目录 `agent-runtime/` 下的独立可执行文件（旧路径 `agent-sidecar/` 兜底）。
     fn agent_runtime(&self) -> Result<(String, std::path::PathBuf), String> {

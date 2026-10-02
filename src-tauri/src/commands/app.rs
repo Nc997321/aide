@@ -30,6 +30,4 @@ pub(crate) async fn shutdown_children(app: &AppHandle) {
         core.runtime.kill_runtime().await;
         core.lsp.kill_all().await;
     }
-    // 3) codegraph runner 不在此列：proxy 内有 idle_reaper 空闲自动回收兜底，
-    //    且 CodeGraphService 尚未暴露 kill_runner 接口。
 }

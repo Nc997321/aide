@@ -29,13 +29,13 @@ describe("lspMcpRegistration 的四档挂载闸门", () => {
     expect(lspMcpRegistration({ ...OK, lspLanguages: [] })).toBeNull();
   });
 
-  it("env AIDE_LSP_TOOLS=off → 不挂载（逃生舱，同 codegraph/docx 惯例）", () => {
+  it("env AIDE_LSP_TOOLS=off → 不挂载（逃生舱，同 docx 惯例）", () => {
     expect(
       lspMcpRegistration({ ...OK, env: { AIDE_LSP_TOOLS: "off" } as NodeJS.ProcessEnv })
     ).toBeNull();
   });
 
-  it("放行前缀是 server 级（与 codegraph 同款）", () => {
+  it("放行前缀是 server 级（与 docs 同款）", () => {
     expect(LSP_ALLOW_RULE).toBe("mcp__aide-lsp");
   });
 
@@ -46,7 +46,7 @@ describe("lspMcpRegistration 的四档挂载闸门", () => {
     for (const t of LSP_TOOL_NAMES) expect(t.startsWith("lsp_")).toBe(true);
   });
 
-  /// instructions 是 server 级的引导（codegraph 的实证：光注册工具模型会无视，
+  /// instructions 是 server 级的引导（实证：光注册工具模型会无视，
   /// instructions 才翻转行为）。2026-09-29 起它按**模型真实的 grep 形状**写：每种 grep
   /// 换成哪个调用。它还必须讲清三件事：纯文本仍归 Grep、调用不会空等（文本兜底）、
   /// 只有「confirmed negative」才证明没有（红线在 server 级的那一半）。

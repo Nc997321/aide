@@ -112,6 +112,8 @@ fn best_effort_cleanup_legacy(store: &SettingsStore, legacy: Value) {
 
 fn collect_secrets(value: &mut Value) -> Vec<(String, String)> {
     let mut writes = Vec::new();
+    // 旧版 codegraphEmbedder.apiKey（codegraph 已移除，2026-10-01）：仍要摘出来，
+    // 否则明文密钥会留在新 settings 文档里；落到钥匙串里的条目已无人读取。
     if let Some(api_key) = take_nested_string(value, &["settings", "codegraphEmbedder", "apiKey"]) {
         writes.push(("codegraph/default/apiKey".to_string(), api_key));
     }

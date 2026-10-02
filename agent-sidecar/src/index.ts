@@ -1,8 +1,8 @@
 import * as readline from "readline";
 import { SessionManager } from "./engine/session-manager.js";
 import { ensureWindowsBashEnv } from "./engine/winBashEnv.js";
-import { ensureCodegraphSkill } from "./extensions/codegraphSkill.js";
 import { ensureBrowserSkill } from "./extensions/browserSkill.js";
+import { removeLegacyCodegraphSkill } from "./extensions/legacySkills.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
 import { installExitReaper, sweepStaleRegistryEntries } from "./engine/subprocessReaper.js";
 
@@ -22,12 +22,11 @@ await mainDesktop();
 
 // ---- 桌面宿主（stdin/stdout 协议，由 Rust 拉起） ----
 async function mainDesktop(): Promise<void> {
-  // codegraph-explore skill 落地：任务级触发「探索代码先用索引工具」，
-  // 与 MCP instructions 互补。内建于 runtime，免用户配置。
-  ensureCodegraphSkill(process.env);
+  // 已退役的 codegraph-explore skill：老机器上我们当年落的那份要清掉，免得把模型引向不存在的工具。
+  removeLegacyCodegraphSkill(process.env);
 
   // browser-inspect skill 落地：任务级触发「用户丢原型/规格页链接 → 读页面骨架 → 逐页抽规格」，
-  // 并约定站点适配住 references/（数据），不进代码。与 codegraphSkill 同款内建落地。
+  // 并约定站点适配住 references/（数据），不进代码。内建于 runtime，免用户配置。
   ensureBrowserSkill(process.env);
 
   // 过滤 SDK 的 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告。

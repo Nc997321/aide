@@ -29,7 +29,7 @@ describe("browserClient", () => {
     expect(q.view_id).toBe("browser-1");
     expect(q.script).toBe("1+1");
     expect(typeof q.request_id).toBe("string");
-    // 桥协议里不该出现 codegraph 的字段（两座桥共用 reader 拦截链，串了就是静默错投）。
+    // 桥协议里不该出现别的桥的字段（几座桥共用 reader 拦截链，串了就是静默错投）。
     expect(q.project_root).toBeUndefined();
 
     resolveBrowserResult({ request_id: q.request_id, ok: true, data: { value: 2 } });

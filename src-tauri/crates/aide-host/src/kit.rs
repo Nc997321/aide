@@ -1,5 +1,5 @@
 //! 目标机上 Host 的随包资源：套件安装目录里的 sidecar（runtime.js，node 跑）+ 套件带的
-//! claude CLI。codegraph runner / 捆绑 LSP 还不随远程套件分发——如实报错 / 走登录 PATH。
+//! claude CLI。捆绑 LSP 不随远程套件分发——走目标机登录 PATH 上的 server。
 //!
 //! 进程级设定（[`ServeInit`]）由客户端经 attach 给；守护进程常驻、客户端换了一茬又一茬，
 //! 所以**以最近一次 attach 的为准**（只影响之后拉起的 runtime——比如桌面探测到的代理地址
@@ -32,14 +32,6 @@ impl HostKit {
 }
 
 impl HostResources for HostKit {
-    fn codegraph_runner(&self) -> Result<PathBuf, String> {
-        Err("代码索引暂不随远程 Host 分发".into())
-    }
-
-    fn codegraph_model_dir(&self) -> Option<PathBuf> {
-        None
-    }
-
     fn lsp_dir(&self) -> Option<PathBuf> {
         None
     }

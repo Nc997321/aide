@@ -7,7 +7,7 @@
       { "send": { "type": "hello", "client": { "name": "pwa", "version": "1", "platform": "web" } } },
       { "expect": { "type": "hello_ok", "version": 1,
                     "host": { "id": "00112233445566778899aabbccddeeff", "name": "fake-host", "os": "linux", "arch": "<string>", "version": "<string>" },
-                    "granted": ["chat", "sessions", "workspace", "settings", "codegraph", "automation"],
+                    "granted": ["chat", "sessions", "workspace", "settings", "automation"],
                     "limits": { "max_frame_bytes": "<number>", "max_in_flight": "<number>" } } }
     ]
   },

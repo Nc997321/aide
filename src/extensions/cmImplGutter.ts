@@ -20,7 +20,7 @@
  *  → FileWindow → useCallHierarchy().openHierarchy（右侧栏面板换根）。
  *
  * 仅向下箭头（父→子，LSP textDocument/implementation）。向上箭头（子→父）暂未做：无标准
- * LSP go-to-super 请求，跨文件实现类拿不到父接口；要真正可用需 CodeGraph 继承索引，见
+ * LSP go-to-super 请求，跨文件实现类拿不到父接口；要真正可用需继承索引，见
  * docs/plans/java-lsp-idea-resilient-anchor.md。
  */
 import { StateField, StateEffect, RangeSet, type Extension } from "@codemirror/state";

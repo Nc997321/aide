@@ -98,17 +98,6 @@ pub static GROUPS: &[Group] = &[
         ],
     },
     Group {
-        id: "codegraph",
-        title: "代码索引",
-        methods: &[
-            "codegraph_build_index",
-            "codegraph_build_progress",
-            "codegraph_close",
-            "codegraph_reindex_file",
-            "codegraph_rescan",
-        ],
-    },
-    Group {
         id: "automation",
         title: "自动化任务",
         methods: &[

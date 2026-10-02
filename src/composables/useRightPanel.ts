@@ -15,7 +15,6 @@ export type RightTabId =
   | "changes"
   | "git"
   | "search"
-  | "codegraph"
   | "callhierarchy"
   | "permissions"
   | "browser";

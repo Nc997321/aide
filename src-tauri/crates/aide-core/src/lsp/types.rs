@@ -1,6 +1,10 @@
+//! LSP 查询结果的线上 DTO（前端 / sidecar 共用的形状）。
+//!
+//! 历史上住在 codegraph-core 里（codegraph 已于 2026-10-01 移除，tag `codegraph-final`）。
+
 use serde::{Deserialize, Serialize};
 
-/// What kind of symbol this is. Determines tree-sitter node type mapping.
+/// What kind of symbol this is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SymbolKind {
     Function,
@@ -12,7 +16,7 @@ pub enum SymbolKind {
     Variable,
 }
 
-/// Source confidence tier — structure layer is ground truth, semantic is guess.
+/// Source confidence tier. Wire format of `QueryResult.confidence`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Confidence {
     /// Extracted by tree-sitter AST parsing — high confidence.
@@ -41,24 +45,6 @@ pub struct SymbolDef {
     /// behavior. Extractor fills this from `Node::end_position().row + 1`.
     #[serde(default)]
     pub end_line: usize,
-}
-
-/// A directed call edge between two named symbols.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CallEdge {
-    pub caller: String,
-    pub callee: String,
-    pub file: String,
-    pub line: usize,
-}
-
-/// A point stored in the Qdrant Edge shard — symbol + the text used to embed it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IndexedPoint {
-    pub symbol: SymbolDef,
-    pub source: Confidence,
-    /// The exact text chunk that was embedded (method signature + body start, etc.)
-    pub code_snippet: String,
 }
 
 /// Result returned to the frontend for a goto-definition query.

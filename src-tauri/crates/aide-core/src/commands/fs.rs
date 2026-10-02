@@ -49,7 +49,7 @@ pub struct CwdArg {
     cwd: Option<String>,
 }
 
-/// 项目信息（FileTree 根、CodeGraph 索引根）。显式 `cwd` 优先；否则活动工作区。
+/// 项目信息（FileTree 根）。显式 `cwd` 优先；否则活动工作区。
 /// 都没有 = 显式空（root/name/branch 全 ""），**绝不回退家目录**（见 `active_root`）。
 async fn get_project_info(core: Arc<Core>, a: CwdArg) -> Result<ProjectInfo, String> {
     let root = match a.cwd.filter(|c| !c.trim().is_empty()) {

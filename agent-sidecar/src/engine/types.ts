@@ -304,16 +304,8 @@ export type ChatEvent =
       error?: string;
       synthetic?: boolean;
     }
-  // Rust reader 拦截的 agent 代码索引查询（不转发 Vue；响应走 codegraph_result 命令）。
-  | {
-      type: "codegraph_query";
-      request_id: string;
-      tool: string;
-      args: Record<string, unknown>;
-      project_root: string;
-    }
   // Rust reader 拦截的 agent LSP 查询（不转发 Vue；响应走 lsp_result 命令）。
-  // 与 codegraph 的区别：查询本体不跳 runner——LspManager 就在主进程就地执行
+  // 查询本体在主进程就地执行（LspManager 就在那里）
   // （见 src-tauri/src/runtime/lsp_agent.rs）。
   | {
       type: "lsp_query";
@@ -496,11 +488,6 @@ export type SidecarCommand =
       // 加载项目 CLAUDE.md / .aide/claude/ / .mcp.json；false = 受限模式，
       // startLoop 据此跳过项目级自动配置。省略时 sidecar 按信任处理。
       trusted?: boolean;
-      // 工作区级代码索引开关：Rust 按 cwd 查 state.json 的 codegraph_workspaces
-      // 注入（每工作区默认关）。true（或省略，向后兼容/测试）= 开，挂载 aide-codegraph
-      // MCP；false = 该工作区未开索引，不注册 codegraph MCP 工具（chat.rs /
-      // automation scheduler 四处构造点下发）。
-      codegraph_enabled?: boolean;
       /** 该工作区配得上 LSP 的语言（主进程 lsp_languages_for_path 算好下发）。
        *  空数组 = 不挂 aide-lsp 工具（见 extensions/lspTools.ts 的四档闸门）。 */
       lsp_languages?: string[];
@@ -549,17 +536,6 @@ export type SidecarCommand =
       question: string;
       history?: BtwHistoryRound[];
     }
-  // codegraph agent 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
-  | {
-      cmd: "codegraph_result";
-      request_id: string;
-      ok: boolean;
-      status?: string;
-      results?: unknown[];
-      candidates?: number;
-      truncated?: boolean;
-      error?: string;
-    }
   // LSP 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // `status` 是八态状态词（见 lspFormat 的 LSP_STATUS_WORDS，与 Rust 侧
   // agent_status.rs 的 as_str() 逐字一致）——**模型据此判断空结果可不可信**。
@@ -579,7 +555,7 @@ export type SidecarCommand =
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // data 刻意用 unknown 而非扁平字段：载荷随 op 而变（视图列表 / 脚本返回值 / CDP 返回值），
-  // 不像 codegraph 那样形状固定。
+
   | {
       cmd: "browser_result";
       request_id: string;

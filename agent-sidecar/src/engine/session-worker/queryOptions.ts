@@ -4,7 +4,6 @@
 // 对象化沿 mapper.ts MapperDeps 先例（宽装配函数的注入形状）。
 import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { LSP_ALLOW_RULE } from "../../extensions/lspTools.js";
-import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
@@ -101,10 +100,9 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     allowedTools: [
       "Agent",
       "Task",
-      CODEGRAPH_ALLOW_RULE,
       DOCS_ALLOW_RULE,
       // LSP 工具同属只读、不弹窗。即便本工作区没挂载 aide-lsp（四档闸门没过），
-      // 这条规则也只是永不匹配——与 codegraph 的规则同样常驻。
+      // 这条规则也只是永不匹配。
       LSP_ALLOW_RULE,
       ...KNOWLEDGE_READ_RULES,
       ...BROWSER_ALLOW_RULES,

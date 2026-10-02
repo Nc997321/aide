@@ -39,12 +39,9 @@ PLANS.md
 # 本地设计预览（字形/排版试作，不入库）
 _design_preview/
 
-# CodeGraph index & embedding model cache
+# 工作区本地数据
 .aide/
 .deveco/
-src-tauri/.fastembed_cache/
-# 内嵌的 CodeGraph embedding 模型（87MB，构建时从 HF cache 复制/下载，不入库）
-src-tauri/resources/codegraph-model/
 # llvm-cov 分支覆盖实测的工作目录（profdata/lcov/报告等大文件；工具脚本在 scripts/ 下）
 src-tauri/cov-work/
 relay-server/target/
@@ -52,8 +49,6 @@ relay-server/target/
 coverage/
 agent-sidecar/coverage/
 
-# codegraph runner 打包暂存目录（scripts/build-codegraph.mjs 产物）
-src-tauri/codegraph-dist/
 # 远程工作区套件（pnpm build:remote-kit 产物）
 src-tauri/remote-kit/
 

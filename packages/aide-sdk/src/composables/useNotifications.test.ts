@@ -91,7 +91,7 @@ describe("useNotifications", () => {
 
   it("hydrate 注入落盘项为未读", async () => {
     (api.loadNotifications as any).mockResolvedValue([
-      { id: "r1", severity: "error", source: "codegraph", title: "旧错误", timestamp: 999, read: false },
+      { id: "r1", severity: "error", source: "lsp", title: "旧错误", timestamp: 999, read: false },
     ]);
     await hydrate();
     expect(notifications.value.length).toBe(1);
@@ -101,7 +101,7 @@ describe("useNotifications", () => {
 
   it("hydrate 恢复已读状态（看过的重启后保持已读、不再提醒）", async () => {
     (api.loadNotifications as any).mockResolvedValue([
-      { id: "r1", severity: "error", source: "codegraph", title: "已处理", timestamp: 999, read: true },
+      { id: "r1", severity: "error", source: "lsp", title: "已处理", timestamp: 999, read: true },
     ]);
     await hydrate();
     expect(notifications.value.length).toBe(1);

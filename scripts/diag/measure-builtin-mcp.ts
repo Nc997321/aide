@@ -1,4 +1,4 @@
-// 量 Aide 内建 MCP server（codegraph/docs/knowledge/browser）的 tools/list 载荷体积
+// 量 Aide 内建 MCP server（docs/knowledge/browser）的 tools/list 载荷体积
 // ——即这些工具定义进入 system prompt 的固定 token 成本。
 // 用法：cd agent-sidecar && npx tsx ../scripts/diag/measure-builtin-mcp.ts
 // 纯只读：只构造定义，不发起任何查询。
@@ -16,8 +16,6 @@ import { buildBrowserTools } from "../../agent-sidecar/src/extensions/browserToo
 import { buildKnowledgeTools } from "../../agent-sidecar/src/extensions/knowledgeTools.js";
 import { buildDocxTools } from "../../agent-sidecar/src/extensions/docxTools.js";
 import { buildPdfTools } from "../../agent-sidecar/src/extensions/pdfTools.js";
-import { codegraphMcpRegistration } from "../../agent-sidecar/src/extensions/codegraphTools.js";
-import { CODEGRAPH_INSTRUCTIONS } from "../../agent-sidecar/src/extensions/codegraphTools.js";
 import { DOCS_INSTRUCTIONS } from "../../agent-sidecar/src/extensions/docsMcp.js";
 import { KNOWLEDGE_INSTRUCTIONS } from "../../agent-sidecar/src/extensions/knowledgeMcp.js";
 import { BROWSER_INSTRUCTIONS } from "../../agent-sidecar/src/extensions/browserMcp.js";
@@ -33,20 +31,7 @@ const noop = () => {};
 const env = process.env;
 const cwd = process.cwd();
 
-/** codegraph 的三个工具只能从 registration 里拿（内部 createSdkMcpServer）。 */
-function codegraphTools(): any[] {
-  const reg = codegraphMcpRegistration(cwd, noop, env, true, true) as any;
-  const inst = reg?.["aide-codegraph"]?.instance;
-  const table = inst?._registeredTools ?? {};
-  return Object.entries(table).map(([name, def]: [string, any]) => ({
-    name,
-    description: def?.description ?? "",
-    inputSchema: def?.inputSchema,
-  }));
-}
-
 const groups: { label: string; instructions: string; tools: any[] }[] = [
-  { label: "aide-codegraph", instructions: CODEGRAPH_INSTRUCTIONS, tools: codegraphTools() },
   {
     label: "aide-docs",
     instructions: DOCS_INSTRUCTIONS,

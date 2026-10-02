@@ -1,6 +1,6 @@
 //! agent-sidecar ↔ 内嵌浏览器的协议桥（主进程侧**纯函数**层，无 IO）。
 //!
-//! 形制照 `codegraph/agent_bridge.rs`（同一套 request_id 配对）：sidecar 工具 emit
+//! 形制：request_id 配对——sidecar 工具 emit
 //! `browser_query` 事件 → `runtime/mod.rs` 拦截（不转发 Vue）→ 执行体
 //! `runtime/browser_agent.rs` 驱动门面 → 结果以 `browser_result` 经 stdin 回写。
 //!
@@ -69,7 +69,7 @@ pub enum BrowserQuery {
     Forward { view_id: Option<String> },
     /// op 缺失/未知或载荷不全。
     ///
-    /// **刻意不静默丢弃**（对比 codegraph 的「解析失败即忽略」）：回一条错误让 sidecar 立刻
+    /// **刻意不静默丢弃**（不是「解析失败即忽略」）：回一条错误让 sidecar 立刻
     /// 失败并把原因写进工具返回，而不是干等客户端超时。协议不匹配是 bug，越早越响越好。
     Malformed(String),
 }
@@ -108,7 +108,7 @@ pub fn parse_browser_query(event: &Value) -> Option<BrowserQueryRequest> {
     if event.get("type").and_then(|t| t.as_str()) != Some("browser_query") {
         return None;
     }
-    // 缺 request_id 就没法配对回包 —— 只能当不是本桥的事件（同 codegraph 语义）。
+    // 缺 request_id 就没法配对回包 —— 只能当不是本桥的事件。
     let request_id = event.get("request_id")?.as_str()?.to_string();
     Some(BrowserQueryRequest {
         request_id,
@@ -206,9 +206,9 @@ mod tests {
     fn non_browser_events_are_not_ours() {
         assert!(parse_browser_query(&json!({"type": "text_delta"})).is_none());
         assert!(
-            parse_browser_query(&json!({"type": "codegraph_query", "request_id": "r"})).is_none()
+            parse_browser_query(&json!({"type": "lsp_query", "request_id": "r"})).is_none()
         );
-        // 缺 request_id：无法配对回包，当不是本桥事件（同 codegraph 语义）
+        // 缺 request_id：无法配对回包，当不是本桥事件
         assert!(
             parse_browser_query(&json!({"type": "browser_query", "op": "list_views"})).is_none()
         );
@@ -467,10 +467,10 @@ mod tests {
         assert_eq!(v["error"], "boom");
     }
 
-    /// 回包必须**恰好**打上本桥的 cmd 标——错成 codegraph_result 会让 sidecar 配对失败且无提示。
+    /// 回包必须**恰好**打上本桥的 cmd 标——错成 lsp_result 会让 sidecar 配对失败且无提示。
     #[test]
-    fn result_tag_does_not_collide_with_codegraph() {
+    fn result_tag_does_not_collide_with_lsp() {
         let v = build_result_command("r", ok_payload(Value::Null));
-        assert_ne!(v["cmd"], "codegraph_result");
+        assert_ne!(v["cmd"], "lsp_result");
     }
 }

@@ -1,4 +1,4 @@
-//! sidecar stdout 泵：心跳看门狗 + 事件分发 + codegraph / LSP / 浏览器桥拦截。
+//! sidecar stdout 泵：心跳看门狗 + 事件分发 + LSP / 浏览器桥拦截。
 //!
 //! 从 `spawn_runtime` 抽出。一个 Host 一个 sidecar 进程，一条泵（WSL / SSH 工作区的会话跑在
 //! 那台 Host 自己的泵里，见 docs/host-model.md）。
@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, ChildStderr, ChildStdin, ChildStdout};
 use tokio::sync::Mutex as TokioMutex;
 
@@ -50,29 +50,8 @@ pub fn start(p: Pump) {
                     let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
                         continue;
                     };
-                    // codegraph agent 工具查询：Rust ↔ Runtime 内部 request/response，不转发 Vue。
-                    // 查询在独立任务里跑，不阻塞 reader 主循环——慢查询
-                    // （大 shard 搜索 / HTTP embed）不能卡住心跳与其他事件的读取。
-                    // 进程隔离后：查询经 CodeGraphService RPC 转给 runner 执行，
-                    // sidecar 协议解析/组装（codegraph_query → codegraph_result）留主进程。
-                    if let Some(req) =
-                        crate::codegraph::agent_bridge::parse_codegraph_query(&event)
-                    {
-                        let core = core.clone();
-                        let stdin2 = stdin_for_agent.clone();
-                        tokio::spawn(async move {
-                            let payload = crate::codegraph::agent_bridge::answer(&core, &req).await;
-                            if let Ok(mut line) = serde_json::to_string(&payload) {
-                                line.push('\n');
-                                let mut g = stdin2.lock().await;
-                                let _ = g.write_all(line.as_bytes()).await;
-                            }
-                        });
-                        continue;
-                    }
-                    // agent LSP 查询：同 codegraph，是 Rust ↔ Runtime 的内部 request/response，
-                    // **不转发 Vue**。与 codegraph 的区别：查询本体**不跳 runner**——LspManager
-                    // 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
+                    // agent LSP 查询：Rust ↔ Runtime 的内部 request/response，**不转发 Vue**。
+                    // LspManager 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
                     // 「拦截 + 派发」，业务不内联（同 browser 的理由：本文件有 1000 行拆分线）。
                     if let Some(req) = crate::lsp::agent_bridge::parse_lsp_query(&event) {
                         let core2 = core.clone();

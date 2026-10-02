@@ -5,7 +5,7 @@
 // - `AIDE_BROWSER_TOOLS=off`：operator 级开关（调试 / 不想让 agent 碰浏览器的部署）。
 // - `!trusted`：受限模式不暴露浏览器读写。
 //
-// server 实例 per-worker 构造：handler 闭包持有**该会话的 emit**（桥的出口，同 codegraph）。
+// server 实例 per-worker 构造：handler 闭包持有**该会话的 emit**（桥的出口）。
 // 注意本注册函数**带 emit**、直连 Rust——这与 knowledge（直连 HTTP）/ docs（本地同步解析）
 // 不同，是本仓库第三种形态：需要回主进程的才需要 emit + request_id 桥。
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
@@ -15,7 +15,7 @@ import { buildBrowserTools } from "./browserTools.js";
 /**
  * allowedTools 规则：**工具级**，三个工具全部放行。
  *
- * ⚠️ 不要照抄 codegraph / docs 的 server 级规则（`mcp__aide-codegraph`）——那是「整个 server
+ * ⚠️ 不要照抄 docs 的 server 级规则（`mcp__aide-docs`）——那是「整个 server
  * 都只读」才成立的写法。本 server 混着页面读取与任意脚本执行，规则必须逐个工具写
  * （`knowledgeMcp.ts` 有同款警告）。
  *
@@ -41,7 +41,7 @@ export const BROWSER_ALLOW_RULES = [
 /**
  * MCP instructions 块（initialize 时呈现给模型）。
  *
- * **这是必需品不是优化**：`codegraphTools.ts` 2026-07-26 冒烟实锤——没有它时模型对第三方 MCP
+ * **这是必需品不是优化**：2026-07-26 冒烟实锤——没有它时模型对第三方 MCP
  * 工具视而不见，连 prompt 直接点名都会被无视。删除或弱化前必须先跑 `agent-sidecar/smoke-mcp.ts`
  * 验证行为不退化。
  */

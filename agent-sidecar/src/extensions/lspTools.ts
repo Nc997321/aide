@@ -7,7 +7,7 @@ import { lspToolsMounted, type LspGate } from "./lspGate.js";
 
 /**
  * allowedTools 前缀规则：匹配该 server 全部工具，canUseTool 直接跳过（只读工具不弹窗）。
- * 与 CODEGRAPH_ALLOW_RULE / DOCS_ALLOW_RULE 同款形状。
+ * 与 DOCS_ALLOW_RULE 同款形状。
  */
 export const LSP_ALLOW_RULE = "mcp__aide-lsp";
 
@@ -22,7 +22,7 @@ export const LSP_TOOL_NAMES = [
 ] as const;
 
 /**
- * server 级说明。codegraph 的实证：光注册工具模型会无视，**instructions 才翻转行为**。
+ * server 级说明。实证：光注册工具模型会无视，**instructions 才翻转行为**。
  *
  * 2026-09-29 重写。旧版讲了一堆「状态怎么读、什么时候别信」——那是在教模型提防这组工具，
  * 实际效果是它不用。现在每发都自带代码与文本兜底（见 lspNav.ts），说明书只需讲清

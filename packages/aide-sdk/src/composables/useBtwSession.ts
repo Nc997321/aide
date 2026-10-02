@@ -1,7 +1,6 @@
 import { ref, computed } from "vue";
 import { api } from "../api";
 import type { ActionBlock } from "../types/chat";
-import { useCodeGraphProgress } from "./useCodeGraphProgress";
 
 /** btw 支线对话的轻量 store——单例:同一时间只一个 btw(v1)。
  *
@@ -86,9 +85,6 @@ function handleBtwAnswer(e: Record<string, unknown>) {
   state.value.isBusy = false;
   state.value.done = true;
   state.value.status = "done";
-
-  // btw 是只读侧问，但主会话可能同时在改文件——同主对话，防抖增量重扫保持索引新鲜。
-  useCodeGraphProgress().scheduleRescan();
 
   // 记入支线记忆：只记真实回答（synthetic 兜底答复渲染但不记，对齐官方"只把真实
   // 回答喂给 history"）；失败轮走不到这里。

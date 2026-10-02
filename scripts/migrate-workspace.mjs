@@ -17,7 +17,7 @@
 //!      / `workspace` / `hiddenWorkspaces` / `lsp_workspaces` / `workspace_jdks`；
 //!      `recent.json` 的 `ws_key` 与 `files` 的 map 键；observatory 的 `events.jsonl`
 //!      （sidecar hook 用同规则写）；run_configs 文件名与快照文件名（走 key_to_path）。
-//!   B. `trustKeyOf`（A 再点号归一）——`trustedWorkspaces` / `codegraph_workspaces`。
+//!   B. `trustKeyOf`（A 再点号归一）——`trustedWorkspaces`。
 //!   C. `sdkDirName`（realpath 后**所有非字母数字** → `-`）——磁盘上 `projects/<名>/` 的
 //!      真实目录名，由 claude.exe 决定。超过 200 字符时它会截断并掺路径哈希，**不可反推**
 //!      → 本脚本硬拒绝这种路径。
@@ -363,11 +363,10 @@ function buildPlan(pf) {
       st.trustedWorkspaces = [...new Set(st.trustedWorkspaces.map((k) => (k === plan.oldTrust ? plan.newTrust : k)))];
       changes.push("trustedWorkspaces");
     }
-    // 3e. lsp / jdk（点号形态）；codegraph（点号归一形态）
+    // 3e. lsp / jdk（点号形态）
     for (const [sec, from, to] of [
       ["lsp_workspaces", plan.oldKey, plan.newKey],
       ["workspace_jdks", plan.oldKey, plan.newKey],
-      ["codegraph_workspaces", plan.oldTrust, plan.newTrust],
     ]) {
       const obj = st[sec];
       if (!obj || typeof obj !== "object" || !Object.prototype.hasOwnProperty.call(obj, from)) continue;
@@ -995,7 +994,7 @@ function usage() {
   2. 把 ~/.aide/claude/projects/<旧编码>/ 及 automation 作用域下的同名目录
      改名合并到新编码（孪生目录收成一个）
   3. 逐段改写 state.json（key 有**两种形态**：注册表/lsp/jdk/黑名单保留点号，
-     信任/codegraph 点号归一）、settings.json（布局标签树 + jdk 提示）、
+     信任点号归一）、settings.json（布局标签树 + jdk 提示）、
      recent.json、run_configs（文件名+cwd）、observatory（快照名+事件台账）
 
 回滚：

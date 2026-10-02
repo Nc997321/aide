@@ -26,7 +26,6 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
   return {
     cwd: dir,
     trusted: false,
-    codegraphEnabled: false,
     // 默认无 LSP 语言 = aide-lsp 不挂载（与生产默认一致：主进程不给就为空）。
     lspLanguages: [],
     processEnv: {} as NodeJS.ProcessEnv,
@@ -47,15 +46,13 @@ describe("prepareQueryContext", () => {
     expect(ctx.mcpServers).toEqual({}); // 无用户配置、内建未注册
   });
 
-  it("CLAUDE_CONFIG_DIR 在场透传；!trusted → codegraph/docs 全不注册", async () => {
+  it("CLAUDE_CONFIG_DIR 在场透传；!trusted → docs 全不注册", async () => {
     const ctx = await prepareQueryContext(
       deps({
         trusted: false,
-        codegraphEnabled: true,
         processEnv: { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv,
       }),
     );
-    expect(ctx.mcpServers["aide-codegraph"]).toBeUndefined();
     expect(ctx.mcpServers["aide-docs"]).toBeUndefined();
     // 浏览器工具同样受 trusted 门控（它带着用户的登录态，受限模式不该有）
     expect(ctx.mcpServers["aide-browser"]).toBeUndefined();

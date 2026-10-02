@@ -4,7 +4,7 @@ import type { ChatEvent } from "../engine/types.js";
 /**
  * 内嵌浏览器桥的客户端（sidecar 侧）。
  *
- * 形制照 `codegraphClient.ts`（同一套 request_id 配对模式）：工具 emit 一条 `browser_query`
+ * 形制：request_id 配对模式——工具 emit 一条 `browser_query`
  * 事件 → 桌面 Rust 的 `runtime/mod.rs` 拦截（不转发 Vue）→ `runtime/browser_agent.rs` 驱动门面
  * → 结果以 `browser_result` 经 stdin 回写 → 这里按 request_id 结算。
  *

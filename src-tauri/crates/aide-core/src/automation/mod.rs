@@ -1,6 +1,6 @@
 //! 自动化任务（Automation）：定时/间隔/单次触发无人值守 SDK 会话。
 //!
-//! 竖切包结构（codegraph/lsp 范式）：
+//! 竖切包结构（lsp 范式）：
 //! - `mod.rs`（本文件）：类型定义 + ~/.aide/automations/ 的 JSON 存储（recent.rs 范式）
 //! - `schedule.rs`：next-fire / missed-run 判定的纯函数（墙钟语义，可单测）
 //! - `scheduler.rs`：`AutomationService`——常驻 tick、发 run、终态处理、蒸馏触发
@@ -112,7 +112,7 @@ pub struct AutomationTask {
     pub model: String,
     pub effort: String, // low|medium|high|xhigh|max
     pub permission_preset: PermissionPreset,
-    /// 预授权 MCP server key 白名单（如 "aide-codegraph"）
+    /// 预授权 MCP server key 白名单（如 "aide-lsp"）
     pub connectors: Vec<String>,
     pub schedule: Schedule,
     /// 生效区间（"YYYY-MM-DD"），None = 不限

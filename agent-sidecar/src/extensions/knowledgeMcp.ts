@@ -8,14 +8,14 @@
 // 的引导文本——工具列表跨会话稳定，且会话中途第一次登录能当场生效（设计 spec §5.1）。
 //
 // server 实例 per-worker 构造；**无 emit 参数**——本 server 直连知识库的 HTTP，
-// 不像 codegraph 要回主进程查索引（无 IPC 客户端）。
+// 不走主进程 IPC。
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { buildKnowledgeTools } from "./knowledgeTools.js";
 
 /**
  * allowedTools 规则：**工具级**，只放行四个读工具。
  *
- * ⚠️ 不要照抄 codegraph/docs 的 server 级规则（`mcp__aide-codegraph`）——那是「整个
+ * ⚠️ 不要照抄 docs 的 server 级规则（`mcp__aide-docs`）——那是「整个
  * server 都只读」才成立的写法。本 server 混着写工具，server 级规则会把写操作一起
  * 放行，破坏「写必弹窗」（设计 spec §7）。
  */
@@ -27,7 +27,7 @@ export const KNOWLEDGE_READ_RULES = [
 ] as const;
 
 /**
- * MCP instructions 块（initialize 时呈现给模型）。2026-07-26 codegraph 冒烟实锤：
+ * MCP instructions 块（initialize 时呈现给模型）。2026-07-26 冒烟实锤：
  * 没有它时模型对第三方 MCP 工具视而不见，连 prompt 直接点名都会被无视——这不是优化
  * 是必需品。删除或弱化前必须先跑 agent-sidecar/smoke-mcp.ts 验证行为不退化。
  */

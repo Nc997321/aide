@@ -5,7 +5,6 @@ import type {
   SidecarCommand,
 } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
-import { resolveCodegraphResult } from "../extensions/codegraphClient.js";
 import { resolveLspResult } from "../extensions/lspClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
@@ -78,13 +77,7 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
-    // codegraph MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
-    if (cmd.cmd === "codegraph_result") {
-      resolveCodegraphResult(cmd);
-      return;
-    }
-
-    // LSP MCP 工具的 Rust 回包：同 codegraph，按 request_id 结算，无会话路由。
+    // LSP MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
     if (cmd.cmd === "lsp_result") {
       resolveLspResult(cmd);
       return;

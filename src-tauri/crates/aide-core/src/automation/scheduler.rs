@@ -81,7 +81,6 @@ struct RunFinalize {
 struct PathPolicy {
     cwd: String,
     trusted: bool,
-    codegraph_enabled: bool,
 }
 
 pub struct AutomationService {
@@ -346,13 +345,12 @@ impl AutomationService {
         }
     }
 
-    /// 外壳的路径政策读：cwd → (trusted, codegraph_enabled)。state 读属外壳，
+    /// 外壳的路径政策读：cwd → trusted。state 读属外壳，
     /// 纯函数 builder 只消费结果——两个 builder 共用，保证对同一 cwd 判断一致。
     fn path_policy(cwd: &str) -> PathPolicy {
         PathPolicy {
             cwd: cwd.to_string(),
             trusted: crate::commands::workspace::is_path_trusted(cwd),
-            codegraph_enabled: crate::commands::workspace::is_codegraph_enabled_for_path(cwd),
         }
     }
 
@@ -384,9 +382,6 @@ impl AutomationService {
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
             "auto_title": false,
             "trusted": policy.trusted,
-            // 工作区级代码索引开关：未开启的工作区不挂载 aide-codegraph MCP
-            // （与 chat.rs 的下发同语义；调用方按 cwd 查 state.json 注入）。
-            "codegraph_enabled": policy.codegraph_enabled,
             // 自动化运行**刻意不发** LSP 语言：queryOptions 对 automation 的既有立场是
             // 「全关：每次都是全新会话，精简基座 = 省钱 + 行为确定」，而挂 LSP 工具既加
             // 工具 schema（每轮重发）又可能为一个无人值守的运行拉起 GB 级语言服务器。
@@ -426,7 +421,6 @@ impl AutomationService {
             "prompt": Self::distill_prompt(task),
             "cwd": policy.cwd.as_str(),
             "trusted": policy.trusted,
-            "codegraph_enabled": policy.codegraph_enabled,
             // 同上（distill 支线同属自动化）：不发 LSP 语言。
             "lsp_languages": Vec::<String>::new(),
             "permission_mode": Self::preset_permission_mode(task.permission_preset),
@@ -1349,11 +1343,10 @@ mod tests {
 
     /// 路径政策快照的测试替身：builder 是纯函数，政策读由调用方注入，
     /// 单测因此不碰 state.json。
-    fn policy(cwd: &str, trusted: bool, codegraph_enabled: bool) -> PathPolicy {
+    fn policy(cwd: &str, trusted: bool) -> PathPolicy {
         PathPolicy {
             cwd: cwd.into(),
             trusted,
-            codegraph_enabled,
         }
     }
 
@@ -1389,7 +1382,7 @@ mod tests {
             model: "claude-sonnet-5".into(),
             effort: "medium".into(),
             permission_preset: preset,
-            connectors: vec!["aide-codegraph".into()],
+            connectors: vec!["aide-lsp".into()],
             schedule: Schedule::Interval {
                 every: 2,
                 unit: IntervalUnit::Hours,
@@ -1427,15 +1420,13 @@ mod tests {
             &task(PermissionPreset::Auto),
             "run_1",
             "提示词",
-            &policy("C:/ws", true, false),
+            &policy("C:/ws", true),
         );
         // run_id 即 session_id（1:1 映射契约）
         assert_eq!(cmd["session_id"], "run_1");
         assert_eq!(cmd["permission_mode"], "auto");
         assert_eq!(cmd["auto_title"], false);
         assert_eq!(cmd["trusted"], true);
-        // 工作区级索引开关随 cmd 下发（未开 → false，sidecar 不挂 codegraph MCP）
-        assert_eq!(cmd["codegraph_enabled"], false);
         // 模型/effort 走 env 通道（worker 读作初始值）
         assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "claude-sonnet-5");
         assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "medium");
@@ -1443,23 +1434,10 @@ mod tests {
         assert_eq!(cmd["automation"]["run_id"], "run_1");
         assert_eq!(cmd["automation"]["preset"], "auto");
         assert_eq!(cmd["automation"]["tools"][0], "*");
-        assert_eq!(cmd["automation"]["mcp_allowlist"][0], "aide-codegraph");
+        assert_eq!(cmd["automation"]["mcp_allowlist"][0], "aide-lsp");
         // 护栏是隐形常量（用户面不收配置）：轮次恒 RUN_MAX_TURNS，不带成本上限
         assert_eq!(cmd["automation"]["max_turns"], 50);
         assert!(cmd["automation"].get("max_budget_usd").is_none());
-    }
-
-    /// 下发的带值路径（true 侧）：开关开 → cmd 带 codegraph_enabled == true，
-    /// sidecar 按此挂载 aide-codegraph MCP。
-    #[test]
-    fn send_command_codegraph_enabled_true_side() {
-        let cmd = AutomationService::build_send_command(
-            &task(PermissionPreset::Auto),
-            "run_3",
-            "p",
-            &policy("C:/ws", true, true),
-        );
-        assert_eq!(cmd["codegraph_enabled"], true);
     }
 
     #[test]
@@ -1468,7 +1446,7 @@ mod tests {
             &task(PermissionPreset::Full),
             "run_2",
             "p",
-            &policy("C:/ws", false, false),
+            &policy("C:/ws", false),
         );
         assert_eq!(cmd["permission_mode"], "bypassPermissions");
         assert_eq!(cmd["automation"]["preset"], "full");
@@ -1480,7 +1458,7 @@ mod tests {
         let mut t = task(PermissionPreset::Full);
         t.model = String::new();
         let cmd =
-            AutomationService::build_send_command(&t, "run_2", "p", &policy("C:/ws", false, false));
+            AutomationService::build_send_command(&t, "run_2", "p", &policy("C:/ws", false));
         assert!(cmd["env"].get("ANTHROPIC_MODEL").is_none());
         assert_eq!(cmd["automation"]["tools"][0], "*");
     }
@@ -1529,7 +1507,7 @@ mod tests {
         let mut t = task(PermissionPreset::Auto);
         t.session_dir = Some("D:/custom/cfg".into());
         let cmd =
-            AutomationService::build_send_command(&t, "run_1", "p", &policy("C:/ws", true, false));
+            AutomationService::build_send_command(&t, "run_1", "p", &policy("C:/ws", true));
         assert_eq!(cmd["automation"]["session_dir"], "D:/custom/cfg");
         assert!(
             cmd["env"].get("CLAUDE_CONFIG_DIR").is_none(),
@@ -1547,7 +1525,7 @@ mod tests {
     fn distill_command_shape_locks_protocol() {
         let t = task(PermissionPreset::Auto);
         let run = run_record("run_1", "7576831f-d39a-4dc0-baeb-961ef8401efd");
-        let pol = policy("C:/ws", true, false);
+        let pol = policy("C:/ws", true);
         let cmd = AutomationService::build_distill_command(&t, &run, &pol);
 
         // 会话 id 约定：路由键与命令 session_id 同源（<runId>-d）
@@ -1575,7 +1553,7 @@ mod tests {
         let mut t = task(PermissionPreset::Auto);
         t.session_dir = Some("D:/custom/cfg".into());
         let run = run_record("run_9", "sdk-sid-9");
-        let pol = policy("D:/ws", true, true);
+        let pol = policy("D:/ws", true);
 
         let send = AutomationService::build_send_command(&t, "run_9", "p", &pol);
         let distill = AutomationService::build_distill_command(&t, &run, &pol);
@@ -1586,8 +1564,8 @@ mod tests {
                 "运行轮与蒸馏轮的 automation.{key} 漂移了"
             );
         }
-        // 路径政策三件套同理（同一份快照注入，不是各查各的 state）
-        for key in ["cwd", "trusted", "codegraph_enabled"] {
+        // 路径政策同理（同一份快照注入，不是各查各的 state）
+        for key in ["cwd", "trusted"] {
             assert_eq!(send[key], distill[key], "{key} 漂移了");
         }
     }

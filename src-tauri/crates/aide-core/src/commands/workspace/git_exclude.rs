@@ -4,7 +4,7 @@
 //! `.git/info/exclude`。选 exclude 而非共享 `.gitignore`：exclude 是 git 官方
 //! 「本仓库私有、不共享」的忽略机制，效果等同但不修改用户可提交的文件——团队
 //! 仓库的 git status 不会冒出 `.aide/` 一行未提交改动。`.aide/` 是 Aide 本地
-//! 状态（codegraph 索引 / LSP 数据 / 项目设置），本就不该进版本库。重新 clone
+//! 状态（LSP 数据 / 项目设置），本就不该进版本库。重新 clone
 //! 后上述流程会再次走到这里，幂等补齐，用户无感。
 //!
 //! 对外的唯一入口是 [`ensure_aide_excluded`]（由 `workspace/mod.rs` re-export），
@@ -139,10 +139,10 @@ fn ensure_aide_excluded_inner(root: &Path) -> Result<&'static str, String> {
 
 /// 确保工作区所在 git 仓库的 exclude 忽略 `.aide/`（幂等）。
 ///
-/// 任何失败（非 git 仓库、git 不可用、IO 错误）只记日志不报错——信任与
-/// 索引流程绝不因此失败。**调用方须在非主线程上下文**（spawn git 子进程 +
-/// 文件 IO），现有两个调用点（trust_workspace / codegraph_build_index）
-/// 都在 spawn_blocking 里。
+/// 任何失败（非 git 仓库、git 不可用、IO 错误）只记日志不报错——信任
+/// 流程绝不因此失败。**调用方须在非主线程上下文**（spawn git 子进程 +
+/// 文件 IO），现有调用点（trust_workspace）
+/// 在 spawn_blocking 里。
 pub fn ensure_aide_excluded(workspace_root: &Path) {
     match ensure_aide_excluded_inner(workspace_root) {
         Ok("written") => {

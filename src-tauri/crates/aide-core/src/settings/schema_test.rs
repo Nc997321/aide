@@ -28,7 +28,6 @@ fn every_legacy_persisted_field_has_exactly_one_descriptor() {
         "settings.fontSize",
         "settings.fontFamily",
         "settings.proxy",
-        "settings.codegraphEmbedder",
         "providers",
         "activeProvider",
         "workspace",

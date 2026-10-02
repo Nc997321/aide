@@ -2,7 +2,7 @@
 // 只做传输，不认识业务语义（工具在 knowledgeTools.ts，文案在 format.ts）。
 //
 // 失败一律归一成 KbFailure（判别联合），**不抛**——工具层红线是「失败也返回文本」，
-// 抛异常会让 agent 卡在错误上（codegraphTools.ts:50 先例）。fetch 可注入，单测不需要
+// 抛异常会让 agent 卡在错误上。fetch 可注入，单测不需要
 // 真起 HTTP 服务。
 import type { KbRuntimeConfig } from "./config.js";
 

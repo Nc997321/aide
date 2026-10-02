@@ -1,8 +1,6 @@
 import { ref, readonly } from "vue";
 import { api } from "../api";
 import { useRecent } from "./useRecent";
-import { useCodeGraphProgress } from "./useCodeGraphProgress";
-import { useNotifications } from "./useNotifications";
 import { imageMimeFromPath } from "../utils/imageMime";
 import type { DiffPair } from "../types";
 
@@ -113,15 +111,6 @@ const revealInTreePath = ref<string | null>(null);
 // 每窗口图片 Blob URL，关窗时释放；非响应式，仅用于清理。
 const blobUrls = new Map<string, string>();
 
-// ── 保存触发的「索引已更新」轻量提示 ──
-// 保存成功增量更新索引后，在编辑器窗口附近短暂闪一条提示（约 1.5s 自消失），
-// 不进通知中心（成功是常态，进通知中心会刷屏）。只有失败 / embed 未就绪
-// 这类需要用户知晓的情况才走 useNotifications 进通知中心（见 save()）。
-// 单例：同一时刻只显示最近一次保存的提示；新保存覆盖旧的（重置计时）。
-const indexHintWinId = ref<string | null>(null);
-let indexHintTimer: ReturnType<typeof setTimeout> | null = null;
-const { push: pushNotification } = useNotifications();
-
 function fileNameOf(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
@@ -135,27 +124,10 @@ export function isWindowDirty(win: FileWindowState): boolean {
   return !win.readonly && !win.error && !win.imageUrl && win.editContent !== win.content;
 }
 
-/**
- * 闪一条「索引已更新」轻量提示，绑定到指定窗口。约 1.5s 后自消失；
- * 新一次保存会覆盖旧的（清旧计时、重置），故同时只有一个窗口显示。
- */
-function showIndexHint(winId: string) {
-  indexHintWinId.value = winId;
-  if (indexHintTimer) clearTimeout(indexHintTimer);
-  indexHintTimer = setTimeout(() => {
-    // 仅当仍是本窗口时清，避免被更新的提示误清
-    if (indexHintWinId.value === winId) indexHintWinId.value = null;
-    indexHintTimer = null;
-  }, 1500);
-}
-
 async function detectProjectRoot() {
   try {
     const info = await api.getProjectInfo();
     projectRoot.value = info.root;
-    // 构建触发统一走 ensureIndex（lastIndexedRoot 守卫防重复）。
-    // 这里是打开文件时的兜底；主触发点在 FileTree.loadRoot（项目加载锚点）。
-    if (info.root) useCodeGraphProgress().ensureIndex(info.root);
   } catch {
     // best effort; goto falls back to grep
   }
@@ -419,50 +391,9 @@ export function useFileViewer() {
       win.content = win.editContent;
       // LSP didSave（best-effort，语言无关，按扩展名分派到对应 server）：
       // 部分 server（如 jdtls）的编译级诊断依赖 save 触发完整编译刷新。
-      // 失败/旧 SDK 无此方法均静默，绝不阻断保存主流程（含后续 codegraph 逻辑）。
+      // 失败/旧 SDK 无此方法均静默，绝不阻断保存主流程。
       if (projectRoot.value) {
         void Promise.resolve(api.lspDidSave?.(projectRoot.value, win.filePath)).catch(() => {});
-      }
-      // 增量更新 codegraph 索引（best-effort，绝不阻断保存主流程）。
-      // 后端返回结构化状态：更新成功 / 被跳过（带原因）/ 失败。
-      // 反馈分流：
-      //   · reindexed:true        → 轻量提示「索引已更新」(~1.5s 自消失，不进通知中心)
-      //   · skipped:embed_not_ready → 进通知中心（语义搜索不可用，需用户知晓）
-      //   · skipped:no_active_index / not_in_project → 静默（文件不在索引范围，常态）
-      //   · reject (失败)         → 进通知中心（error）
-      if (projectRoot.value) {
-        useCodeGraphProgress()
-          .reindexFile(projectRoot.value, win.filePath)
-          .then((r) => {
-            if (!r) return;
-            if (r.reindexed) {
-              console.info(`[codegraph] 保存已增量更新索引：${win.filePath}`);
-              showIndexHint(win.id);
-            } else if (r.skipped === "embed_not_ready") {
-              console.info(`[codegraph] 保存未触发索引更新（embed_not_ready）：${win.filePath}`);
-              pushNotification({
-                severity: "warning",
-                source: "codegraph",
-                title: "语义索引未就绪",
-                body: "保存时未更新语义索引：embed 尚未完成（后台构建中 / embedder 早停）。结构层精确跳转仍可用。",
-                timestamp: Date.now(),
-                dedupKey: `codegraph:save:embed_not_ready:${projectRoot.value}`,
-              });
-            } else if (r.skipped) {
-              console.info(`[codegraph] 保存未触发索引更新（${r.skipped}）：${win.filePath}`);
-            }
-          })
-          .catch((e) => {
-            console.warn(`[codegraph] 保存增量更新失败：${win.filePath}`, e);
-            pushNotification({
-              severity: "error",
-              source: "codegraph",
-              title: "保存更新索引失败",
-              body: `${win.fileName}: ${String(e)}`,
-              timestamp: Date.now(),
-              dedupKey: `codegraph:save:err:${win.filePath}`,
-            });
-          });
       }
     } catch (e) {
       win.error = String(e);
@@ -475,12 +406,6 @@ export function useFileViewer() {
     for (const w of [...windows.value]) closeWindow(w.id);
     projectRoot.value = "";
     gotoOwnerId.value = null;
-    if (indexHintTimer) {
-      clearTimeout(indexHintTimer);
-      indexHintTimer = null;
-    }
-    indexHintWinId.value = null;
-    useCodeGraphProgress().__resetForTest();
   }
 
   return {
@@ -490,7 +415,6 @@ export function useFileViewer() {
     projectRoot: readonly(projectRoot),
     gotoOwnerId,
     /** 当前显示「索引已更新」提示的窗口 id（null = 无）；FileWindow 按 win.id 匹配渲染 */
-    indexHintWinId: readonly(indexHintWinId),
     /** 在文件树中定位文件路径信号：FileWindow 写入 → App.vue 消费 */
     revealInTreePath,
     open,

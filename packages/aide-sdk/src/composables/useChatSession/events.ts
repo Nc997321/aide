@@ -26,7 +26,6 @@ import type {
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
 import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
-import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
@@ -736,9 +735,6 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       if (store.contextCompaction?.stage !== "failed") store.contextCompaction = null;
       store.isBusy = false;
       setSessionState(sid, "waiting");
-      // 本轮 agent 的 Edit/Write 可能改了文件——防抖触发一次增量重扫，
-      // 保持 CodeGraph 索引新鲜（否则改动累积超 20% 阈值，下次构建退全量）。
-      useCodeGraphProgress().scheduleRescan();
       break;
     }
     case "jump_queued": {

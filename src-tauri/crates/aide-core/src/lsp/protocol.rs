@@ -1,4 +1,4 @@
-use crate::codegraph::types::{Confidence, QueryResult, SymbolDef, SymbolKind};
+use crate::lsp::types::{Confidence, QueryResult, SymbolDef, SymbolKind};
 use lsp_types::{CompletionItem, Location};
 
 /// 前端 CM Completion 需要的最小字段（cmLsp 再映射成 CM 的 Completion 对象）。
@@ -225,7 +225,7 @@ fn provider_on(caps: &serde_json::Value, key: &str) -> bool {
 }
 
 /// LSP Location（无符号名）+ 查询词 + workspace_root → QueryResult。
-/// file 归一为相对 workspace_root 的路径（与 codegraph 一致；不在工作区则保留绝对，
+/// file 归一为相对 workspace_root 的路径（不在工作区则保留绝对，
 /// 前端 jumpToResult 兼容）。confidence=Structure；kind 无从得知 → 占位 Function。
 pub fn location_to_query_result(
     loc: &Location,
@@ -500,7 +500,7 @@ pub fn path_to_uri(path: &str) -> String {
 /// join workspace_root。LSP URI 必须绝对，且要与 didOpen 的 URI 对齐才能命中文档——
 /// 补全/hover 传绝对路径，定义跳转 useGotoDefinition 传相对 sourceFile，统一在此兜底，
 /// 让所有 lsp_* 命令对绝对/相对路径都正确，根除「定义 URI 缺工作区根 → server 找不到
-/// 文档 → 返空 → 退回 codegraph」这一 bug。
+/// 文档 → 返空 → 退回 grep」这一 bug。
 pub fn resolve_file_uri(workspace_root: &str, file_path: &str) -> String {
     let abs = if std::path::Path::new(file_path).is_absolute() {
         file_path.to_string()
@@ -513,7 +513,7 @@ pub fn resolve_file_uri(workspace_root: &str, file_path: &str) -> String {
     path_to_uri(&abs)
 }
 
-/// file:// URI → 本地路径（用 `/`，前端与 codegraph 都用正斜杠）。
+/// file:// URI → 本地路径（用 `/`，前端统一用正斜杠）。
 ///
 /// **先解百分号编码**：tsserver 回的是 `file:///c%3A/Users/...`（冒号被编码），不解码
 /// 就会漏过盘符判定，产出 `/c%3A/Users/...`——真机上 agent 拿到的引用路径全是这个形状，
@@ -536,7 +536,7 @@ pub fn uri_to_path(uri: &str) -> String {
     }
 }
 
-/// file:// URI → 相对 workspace_root 的路径（与 codegraph 一致用相对路径）；URI 不在
+/// file:// URI → 相对 workspace_root 的路径（用相对路径）；URI 不在
 /// workspace 下则保留绝对路径（前端 jumpToResult 兼容两种形态）。统一正斜杠、大小写
 /// 不敏感（Windows 盘符 C:/c: 都能匹配），避免 jumpToResult 拼成 root+绝对（os error 123）。
 pub fn uri_to_rel_path(uri: &str, workspace_root: &str) -> String {
@@ -589,7 +589,7 @@ mod tests {
         let loc = make_location("file:///C:/proj/src/main.rs", 5, 10);
         let qr = location_to_query_result(&loc, "my_fn", "C:/proj");
         assert_eq!(qr.symbol.name, "my_fn");
-        assert_eq!(qr.symbol.file, "src/main.rs"); // 相对工作区（与 codegraph 一致）
+        assert_eq!(qr.symbol.file, "src/main.rs"); // 相对工作区
         assert_eq!(qr.symbol.line, 6); // 1-based
         assert_eq!(qr.symbol.column, 11); // 1-based
         assert_eq!(qr.confidence, Confidence::Structure);
@@ -752,7 +752,7 @@ mod tests {
 
     #[test]
     fn uri_to_rel_path_strips_workspace_and_case_insensitive() {
-        // 工作区内 → 相对（与 codegraph 一致），正斜杠 + 大小写不敏感（Windows 盘符）
+        // 工作区内 → 相对，正斜杠 + 大小写不敏感（Windows 盘符）
         assert_eq!(
             uri_to_rel_path("file:///C:/proj/src/a.rs", "C:/proj"),
             "src/a.rs"

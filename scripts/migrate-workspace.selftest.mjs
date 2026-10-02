@@ -92,7 +92,7 @@ fs.mkdirSync(OLD, { recursive: true });
 fs.mkdirSync(OTHER, { recursive: true });
 w(path.join(OLD, "README.md"), "hello\n");
 
-// state.json：两套 key 形态 + 活动工作区 + 黑名单 + lsp/jdk/codegraph
+// state.json：两套 key 形态 + 活动工作区 + 黑名单 + lsp/jdk
 w(
   path.join(AIDE, "state.json"),
   renderJson({
@@ -107,7 +107,6 @@ w(
     trustedWorkspaces: [OLD_TRUST, "untouched-key"],
     lsp_workspaces: { [OLD_KEY]: { enabled: true, exclude_dirs: ["build"] } },
     workspace_jdks: { [OLD_KEY]: "C:\\jdk21" },
-    codegraph_workspaces: { [OLD_TRUST]: { enabled: true } },
   })
 );
 
@@ -210,7 +209,6 @@ ok(st.trustedWorkspaces.includes("untouched-key"), "无关条目未被误伤");
 ok(st.lsp_workspaces[NEW_KEY] && st.lsp_workspaces[NEW_KEY].exclude_dirs[0] === "build", "lsp_workspaces 已换 key（值保留）");
 ok(!st.lsp_workspaces[OLD_KEY], "旧 lsp key 已移除");
 eq(st.workspace_jdks[NEW_KEY], "C:\\jdk21", "workspace_jdks 已换 key");
-ok(st.codegraph_workspaces[NEW_TRUST] && !st.codegraph_workspaces[OLD_TRUST], "codegraph_workspaces（点号归一形态）");
 
 const se = rd(path.join(AIDE, "settings.json"));
 eq(se.values.workspace, NEW_KEY, "values.workspace");

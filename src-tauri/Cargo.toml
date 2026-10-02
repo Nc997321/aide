@@ -3,11 +3,9 @@ name = "aide"
 version = "0.8.0"
 edition = "2021"
 
-# Cargo workspace（优化项二）：codegraph-core / codegraph-runner 作为成员。
-# `cargo build`（tauri dev/build 走的路径）默认只构建主包——runner 需显式
-# 构建：`cargo build -p codegraph-runner`（pnpm build:codegraph 封装）。
+# Cargo workspace：`cargo build`（tauri dev/build 走的路径）默认只构建主包。
 [workspace]
-members = ["crates/codegraph-core", "crates/codegraph-runner", "crates/aide-workspace", "crates/aide-core", "crates/aide-host", "crates/aide-link"]
+members = ["crates/aide-workspace", "crates/aide-core", "crates/aide-host", "crates/aide-link"]
 default-members = ["."]
 
 [dependencies]
@@ -97,14 +95,6 @@ futures-util = "0.3"
 # 配对码 / token / device_id 生成
 rand = "0.8"
 
-# CodeGraph 进程隔离（优化项二）：
-# - 重依赖（qdrant-edge / ort / tokenizers / ndarray / tree-sitter*）已整体
-#   下沉到 crates/codegraph-runner —— 主进程二进制不再携带，重建索引时的
-#   RSS 峰值也不再发生在 aide.exe 里。
-# - codegraph-core 是两侧共用的轻量层：types DTO（lsp 共用）+ embedder 配置
-#   DTO + stdio JSON-RPC 协议。只依赖 serde，红线：任何重依赖进来都会重新
-#   污染主进程二进制。
-codegraph-core = { path = "crates/codegraph-core" }
 # 工作区操作（fs / 搜索 / git）的唯一实现：桌面命令是它的薄包装，远程工作区的
 # aide-host 在目标机上跑同一份代码（见 src/remote_workspace/）。
 aide-workspace = { path = "crates/aide-workspace" }

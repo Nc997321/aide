@@ -7,9 +7,4 @@ describe("useSettings defaults", () => {
     const { settings } = useSettings();
     expect(settings.onboarded).toBe(false);
   });
-
-  it("codegraphEnabled 不在 AppSettings（开关已下沉工作区级，defaults 不得回流该字段）", () => {
-    const { settings } = useSettings();
-    expect("codegraphEnabled" in settings).toBe(false);
-  });
 });

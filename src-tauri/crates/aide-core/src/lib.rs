@@ -14,7 +14,6 @@ pub mod bus;
 pub mod automation;
 pub mod link;
 pub mod lsp;
-pub mod codegraph;
 pub mod commands;
 pub mod host;
 pub mod paths;
@@ -63,8 +62,6 @@ pub struct Core {
     pub(crate) watch: FileWatchService,
     /// 终端 / 运行配置的 PTY 会话。
     pub pty: pty::ShellManager,
-    /// 代码索引（runner 进程的代理：惰性拉起 / 空闲回收）。
-    pub codegraph: Arc<codegraph::CodeGraphService>,
     /// 语言服务器（按 工作区 × 语言 各一台）。
     pub lsp: Arc<lsp::LspState>,
     /// agent runtime（sidecar 进程、会话路由与存活表、事件泵）。
@@ -91,10 +88,6 @@ impl Core {
         let bus = Arc::new(bus::Bus::new(bus::new_epoch()));
         let events: Arc<dyn EventSink> = Arc::new(bus::Tee { bus: Arc::clone(&bus), inner: events });
         Arc::new(Self {
-            codegraph: Arc::new(codegraph::CodeGraphService::new(
-                resources.clone(),
-                settings.clone(),
-            )),
             lsp: Arc::new(lsp::LspState::new()),
             runtime: runtime::AgentRuntimeManager::new(),
             automation: Arc::new(automation::AutomationService::new()),

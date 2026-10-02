@@ -1,4 +1,4 @@
-// 与 codegraphClient 同构：emit 一个带 request_id 的事件出去，主进程处理后经命令通道
+// emit 一个带 request_id 的事件出去，主进程处理后经命令通道
 // 回 `lsp_result`，这里按 id 结算。
 //
 // **每次查询都有预算**（默认 120s 只给预热用）。真机转录（2026-09-29 统计）：一发 LSP

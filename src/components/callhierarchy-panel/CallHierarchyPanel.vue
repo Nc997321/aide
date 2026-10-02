@@ -125,7 +125,7 @@ const rootHint = computed<{ kind: "timeout" | "notready" | "gone" | "unsupported
 
 <template>
   <div class="ch-panel">
-    <!-- 面板壳：同 CodegraphPanel/PermissionsPanel 的 panel-header + 滚动区结构 -->
+    <!-- 面板壳：同 PermissionsPanel 的 panel-header + 滚动区结构 -->
     <div class="panel-header">
       <span class="panel-title">调用层级</span>
       <button
@@ -246,7 +246,7 @@ const rootHint = computed<{ kind: "timeout" | "notready" | "gone" | "unsupported
 </template>
 
 <style scoped>
-/* ===== 面板壳：同 CodegraphPanel/PermissionsPanel 结构 ===== */
+/* ===== 面板壳：同 PermissionsPanel 结构 ===== */
 .ch-panel {
   display: flex;
   flex-direction: column;

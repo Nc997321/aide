@@ -123,7 +123,7 @@ let mut cmd = Command::new("git");
 
 ## ⚠️ Windows 必读坑点：`resource_dir()` 的 `\\?\` verbatim 路径
 
-**Tauri `resource_dir()` 在 Windows 返回带 `\\?\` 前缀的 verbatim 路径。凡要把这种路径传给外部进程（尤其 `node`），必须先 `dunce::simplified()` 剥掉前缀**，否则 node 的 `realpathSync` 处理不了，会在引导阶段 `EISDIR` 崩溃。典型现象：dev 正常（走 `CARGO_MANIFEST_DIR`），**打包后一发消息就"会话进程已退出"**。Rust 自己 `fs::read` 不受影响——只有传给子进程的才要剥。涉及：`src/host_door.rs` 的 `DesktopResources`（agent runtime / claude CLI / codegraph runner / LSP 资源路径都由它回答，aide-core 经 `HostResources` 端口取用）。
+**Tauri `resource_dir()` 在 Windows 返回带 `\\?\` 前缀的 verbatim 路径。凡要把这种路径传给外部进程（尤其 `node`），必须先 `dunce::simplified()` 剥掉前缀**，否则 node 的 `realpathSync` 处理不了，会在引导阶段 `EISDIR` 崩溃。典型现象：dev 正常（走 `CARGO_MANIFEST_DIR`），**打包后一发消息就"会话进程已退出"**。Rust 自己 `fs::read` 不受影响——只有传给子进程的才要剥。涉及：`src/host_door.rs` 的 `DesktopResources`（agent runtime / claude CLI / LSP 资源路径都由它回答，aide-core 经 `HostResources` 端口取用）。
 
 ## 关键约定
 
@@ -134,18 +134,19 @@ let mut cmd = Command::new("git");
 
 ## agent-sidecar 职责边界（engine / extensions / desktop 三层）
 
-sidecar 名义是「引擎副车架」，实际长成了「所有 Node 侧逻辑的家」（50+ 文件，含 docx/pdf 解析、codegraph、automation 等完整产品）。**边界现在开始命名**，新代码按判据归位：
+sidecar 名义是「引擎副车架」，实际长成了「所有 Node 侧逻辑的家」（50+ 文件，含 docx/pdf 解析、automation 等完整产品）。**边界现在开始命名**，新代码按判据归位：
 
 **判据：换一个宿主（如跑在 WSL / SSH 目标机上的 Host）还需要的 → engine；只有桌面 UI 需要的 → 留在桌面协议层。**
 
 | 层 | 内容 | 归位 |
 |---|---|---|
 | **engine 核心** | 会话驱动（`session-worker`/`session-manager`）、权限（`permissions`/`policy`）、事件广播与流式帧（`deltaCoalescer`/`stdoutFrames`）、子代理（`subagents`）、MCP/hooks 装配机制（`userExtensions`）、运行环境（`claudeExe`/`winBashEnv`） | 引擎本体，保持纯净 |
-| **extensions**（可选，按宿主装配） | `codegraphTools`、`docsMcp` + `docx/` + `pdf/`（完整 MCP server）、`testMcp`、`skillGuard`/`dispatchPlugins` | 已成型的独立 server 应逐步外迁为独立目录/进程形态（参照 knowledge-server 的 port/adapter 范式） |
+| **extensions**（可选，按宿主装配） | `docsMcp` + `docx/` + `pdf/`（完整 MCP server）、`testMcp`、`skillGuard`/`dispatchPlugins` | 已成型的独立 server 应逐步外迁为独立目录/进程形态（参照 knowledge-server 的 port/adapter 范式） |
 | **desktop 语义** | `display` 渲染通道、`jumpQueue` 插队、会话 tab 管理、automation/btw | 只属于桌面协议层，不进 engine |
 
 **规则**：
 1. sidecar 新增逻辑先判归——不要默认"跟会话有关就进 sidecar"，先问是不是 engine 职责。
 2. 内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`），这条义务是 extensions 层的现状约束，未来外迁后随迁。
-3. 拆分走渐进：新代码守边界，已成型大块（docx/pdf、codegraph）在触碰时顺势外迁，**不做一次性大动刀**（协议双通道契约与测试体系都挂在这个进程上）。
+3. 拆分走渐进：新代码守边界，已成型大块（docx/pdf）在触碰时顺势外迁，**不做一次性大动刀**（协议双通道契约与测试体系都挂在这个进程上）。
+   （codegraph 代码索引已于 2026-10-01 整体移除——实测 agent 不用、用户不用，且单独拖着 ONNX 模型 / runner 进程 / 远程套件缺口；**不许复活**，要找回用 git tag `codegraph-final`。agent 的代码导航只走 aide-lsp + grep 顺带作答 hook。）
 4. **机制/策略边界**：引擎提供机制，宿主决定策略（门面不认识「用途」，browser facade / browser_agent 即此口径）。headless HTTP/SSE 宿主已于 2026-09-30 删除（零消费方；会话元数据 / MCP 头注入 / 图片路径形态等只为它存在的引擎机制随之删除），**不要复活**——多端接入走 Host 模型。它留下的唯一待兑现契约：事件**按会话订阅路由**——桌面现行全量转发在多窗口/手机连同一 Host 时是泄露隐患，Host 网关协议必须按订阅投递。

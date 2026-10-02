@@ -169,7 +169,7 @@ describe("docsMcpRegistration", () => {
       }
       return value;
     });
-    // instructions 缺失时模型会无视工具（codegraph 2026-07-26 冒烟实锤），此处防回归。
+    // instructions 缺失时模型会无视工具（2026-07-26 冒烟实锤），此处防回归。
     expect(json).toContain("MUST call mcp__aide-docs__read_docx");
     expect(json).toContain("MUST call mcp__aide-docs__write_docx");
     expect(json).toContain("MUST call mcp__aide-docs__read_pdf");

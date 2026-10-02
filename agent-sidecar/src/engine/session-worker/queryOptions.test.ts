@@ -16,7 +16,6 @@ vi.mock("../../extensions/dispatchPlugins.js", () => ({
 vi.mock("../claudeExe.js", () => ({ resolveClaudeExe: vi.fn(() => "") }));
 
 import { buildSpawnQueryOptions, type QuerySpawnParts } from "./queryOptions.js";
-import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 
 function parts(over: {
@@ -50,7 +49,6 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.hooks).toEqual({ PreToolUse: [] });
     expect(o.mcpServers).toEqual({ biz: { type: "http" } });
     expect(o.env).toEqual({ PATH: "/bin" });
-    expect(o.allowedTools).toContain(CODEGRAPH_ALLOW_RULE);
     expect(o.allowedTools).toContain(DOCS_ALLOW_RULE);
     expect(o.skills).toBe("all");
     expect(o.settingSources).toEqual([]);

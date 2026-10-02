@@ -7,8 +7,7 @@
 /// （用户覆盖 > 捆绑 > PATH，三级优先级由 resolve 内部处理，不在这里重造）。
 /// 两者缺一，工具挂了也只会返回 no_server——那就干脆别挂，省下每轮重发的工具 schema。
 ///
-/// 与 `is_codegraph_enabled_for_path` 并列：都是「主进程算好、下发给 sidecar」的政策值
-/// （见 automation/scheduler.rs 的 trusted/codegraph_enabled 同款处理）。
+/// 与 `trusted` 并列：都是「主进程算好、下发给 sidecar」的政策值。
 ///
 /// **签名带 `core`**：`registry::resolve` 要它的资源端口解析捆绑资源路径。没有它就查不了
 /// 捆绑 server，**不许**退化成「只查 PATH」——那会把一批用户误判成「没有 LSP」。

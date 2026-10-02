@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::paths::{config_path, state_path};
 use crate::registry::{blocking, Command};
-use crate::settings::{SecretMutation, SettingsError, SettingsScope, SettingsService};
+use crate::settings::{SettingsError, SettingsScope, SettingsService};
 use crate::{command, Core};
 
 /// 串行化所有 state「读→改→写」临界区的全局锁。单纯的原子写只能防崩溃半截
@@ -62,55 +62,6 @@ fn default_pane_close_tab() -> String {
     "Ctrl+W".to_string()
 }
 
-/// Embedding backend selector for CodeGraph. `fastembed` = local ONNX (zero
-/// config, downloads a model on first use); `http` = any HTTP embedding service
-/// (Ollama local/remote, OpenAI/Jina cloud — selected by `format`).
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct CodeGraphEmbedderConfig {
-    #[serde(default = "default_cg_backend")]
-    pub backend: String,
-    /// backend == "http" fields (ignored when backend == "fastembed"):
-    #[serde(default)]
-    pub base_url: String,
-    #[serde(default)]
-    pub api_key_configured: bool,
-    #[serde(default = "default_cg_model")]
-    pub model: String,
-    #[serde(default = "default_cg_format")]
-    pub format: String,
-    /// 0 = auto-probe from the first successful embedding response.
-    #[serde(default)]
-    pub dim: u32,
-    /// 语义搜索分数阈值；None = 按 backend 取默认（fastembed/MiniLM≈0.35，http≈0.55）。
-    /// 纯 query-time 过滤器，不碰 embedding，改了立即生效、无需重建索引。
-    #[serde(default)]
-    pub score_threshold: Option<f32>,
-}
-
-fn default_cg_backend() -> String {
-    "fastembed".to_string()
-}
-fn default_cg_model() -> String {
-    "nomic-embed-text".to_string()
-}
-fn default_cg_format() -> String {
-    "ollama".to_string()
-}
-
-impl Default for CodeGraphEmbedderConfig {
-    fn default() -> Self {
-        Self {
-            backend: default_cg_backend(),
-            base_url: String::new(),
-            api_key_configured: false,
-            model: default_cg_model(),
-            format: default_cg_format(),
-            dim: 0,
-            score_threshold: None,
-        }
-    }
-}
 
 /// 用户在全局设置里对某语言 LSP server 的显式覆盖（"用这个二进制 + 这些参数"）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
@@ -233,10 +184,6 @@ pub struct AppSettings {
     /// 聊天区分屏布局快照——前端不透明数据（按工作区键控），Rust 只负责存取。
     #[serde(default)]
     pub pane_layouts: Value,
-    /// CodeGraph embedding 后端配置（fastembed / http）。默认 fastembed
-    /// 零配置开箱即用；切 http 走 Ollama / OpenAI 兼容云端。
-    #[serde(default)]
-    pub codegraph_embedder: CodeGraphEmbedderConfig,
     /// 已启用的固定市场源 source_id 列表（默认空；前端首次进入可写默认两条）。
     #[serde(default)]
     pub enabled_marketplaces: Vec<String>,
@@ -346,7 +293,6 @@ impl Default for AppSettings {
             open_with_extensions: Vec::new(),
             recent_limit: default_recent_limit(),
             pane_layouts: Value::Null,
-            codegraph_embedder: CodeGraphEmbedderConfig::default(),
             enabled_marketplaces: Vec::new(),
             enabled_plugins: std::collections::BTreeMap::new(),
             jdk_registry: Vec::new(),
@@ -513,14 +459,7 @@ pub fn public_settings(service: &SettingsService) -> Result<AppSettings, String>
         .get("settings")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({}));
-    let mut settings: AppSettings = serde_json::from_value(value)
-        .map_err(|error| format!("Failed to deserialize settings: {error}"))?;
-    settings.codegraph_embedder.api_key_configured = service
-        .secrets()
-        .get("codegraph/default/apiKey")
-        .map_err(|error| error.to_string())?
-        .is_some();
-    Ok(settings)
+    serde_json::from_value(value).map_err(|error| format!("Failed to deserialize settings: {error}"))
 }
 
 pub static COMMANDS: &[Command] = &[
@@ -540,21 +479,7 @@ pub struct SetSettingsArgs {
 async fn set_settings(core: Arc<Core>, a: SetSettingsArgs) -> Result<(), String> {
     blocking(move || {
         let service = &core.settings;
-        let mut incoming = a.settings;
-        let api_key = incoming
-            .get_mut("codegraphEmbedder")
-            .and_then(Value::as_object_mut)
-            .and_then(|embedder| embedder.remove("apiKey"))
-            .map(serde_json::from_value::<SecretMutation>)
-            .transpose()
-            .map_err(|error| format!("Invalid API key mutation: {error}"))?
-            .unwrap_or_default();
-        if let Some(embedder) = incoming
-            .get_mut("codegraphEmbedder")
-            .and_then(Value::as_object_mut)
-        {
-            embedder.remove("apiKeyConfigured");
-        }
+        let incoming = a.settings;
         service
             .mutate_scope_blocking(SettingsScope::User, None, |document| {
                 let target = document
@@ -571,19 +496,8 @@ async fn set_settings(core: Arc<Core>, a: SetSettingsArgs) -> Result<(), String>
                 }
                 Ok(())
             })
-            .map_err(|error| error.to_string())?;
-        match api_key {
-            SecretMutation::Unchanged => Ok(()),
-            SecretMutation::Set(value) if value.is_empty() => Ok(()),
-            SecretMutation::Set(value) => service
-                .secrets()
-                .set("codegraph/default/apiKey", &value)
-                .map_err(|error| error.to_string()),
-            SecretMutation::Clear => service
-                .secrets()
-                .delete("codegraph/default/apiKey")
-                .map_err(|error| error.to_string()),
-        }
+            .map(|_| ())
+            .map_err(|error| error.to_string())
     })
     .await
 }
@@ -757,55 +671,6 @@ mod tests {
         let s2: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
         assert!(s2.enabled_marketplaces.is_empty());
         assert!(s2.enabled_plugins.is_empty());
-    }
-
-    /// CodeGraph embedder 配置随 AppSettings 落盘/读取，camelCase 一致；缺省
-    /// 块回填默认 fastembed 后端（旧 config.json 没有这一字段时）。
-    #[test]
-    fn codegraph_embedder_config_round_trip_and_default() {
-        // 缺 codegraphEmbedder 块 → 默认 fastembed
-        let s: AppSettings = serde_json::from_str(r#"{"fontSize":14}"#).unwrap();
-        assert_eq!(s.codegraph_embedder.backend, "fastembed");
-        assert_eq!(s.codegraph_embedder.format, "ollama");
-        assert_eq!(s.codegraph_embedder.score_threshold, None);
-
-        // 完整 http 配置 round-trip
-        let json = r#"{
-            "fontSize": 14,
-            "codegraphEmbedder": {
-                "backend": "http",
-                "baseUrl": "http://localhost:11434",
-                "apiKey": "sk-x",
-                "model": "nomic-embed-text",
-                "format": "ollama",
-                "dim": 768,
-                "scoreThreshold": 0.5
-            }
-        }"#;
-        let s: AppSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.codegraph_embedder.backend, "http");
-        assert_eq!(s.codegraph_embedder.base_url, "http://localhost:11434");
-        assert_eq!(s.codegraph_embedder.model, "nomic-embed-text");
-        assert_eq!(s.codegraph_embedder.format, "ollama");
-        assert_eq!(s.codegraph_embedder.dim, 768);
-        assert_eq!(s.codegraph_embedder.score_threshold, Some(0.5));
-
-        let out = serde_json::to_string(&s).unwrap();
-        assert!(out.contains("\"codegraphEmbedder\""), "{out}");
-        assert!(
-            out.contains("\"baseUrl\":\"http://localhost:11434\""),
-            "{out}"
-        );
-    }
-
-    /// 代码索引开关已下沉工作区级：AppSettings 不再有 codegraph_enabled 字段，
-    /// 旧 settings.json 残留的 codegraphEnabled 键被 serde 静默忽略（零迁移）。
-    #[test]
-    fn codegraph_enabled_legacy_key_is_ignored() {
-        let s: AppSettings =
-            serde_json::from_str(r#"{"fontSize":14,"codegraphEnabled":false}"#).unwrap();
-        let out = serde_json::to_string(&s).unwrap();
-        assert!(!out.contains("codegraphEnabled"), "{out}");
     }
 
     /// JDK 注册表随 AppSettings 落盘/读取，camelCase 一致；缺字段回填空。

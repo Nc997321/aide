@@ -2,13 +2,10 @@
 // 组织文件在上层，子实现各自独立（docxTools.ts / pdfTools.ts + docx/ / pdf/ 子目录）。
 //
 // 注册条件：仅 `trusted=false`（受限模式）时返回 null——不信任工作区不暴露文档
-// 读取工具。**刻意不跟随代码索引的工作区开关**（codegraphMcpRegistration 自
-// 那以后多一道条件）：docx/pdf 工具不扫盘不建索引，工作区关索引不应牵连文档工具。
-// AIDE_DOCX_TOOLS=off 时返回 null（A/B 实测与调试用，不进设置面板）。
+// 读取工具。// AIDE_DOCX_TOOLS=off 时返回 null（A/B 实测与调试用，不进设置面板）。
 //
 // server 实例 per-worker 构造：handler 闭包持有该会话的 cwd。**无 emit 参数**——docx/pdf
-// 一次性同步解析，不像 codegraph 要 IPC 客户端（codegraphClient.ts 的 emit+request_id+
-// 超时那套不适用）。
+// 一次性同步解析，不走主进程 IPC。
 
 import { createSdkMcpServer } from "@anthropic-ai/claude-agent-sdk";
 import { buildDocxTools, DOCX_ALLOW_RULE } from "./docxTools.js";
@@ -18,7 +15,7 @@ import { buildPdfTools, PDF_ALLOW_RULE } from "./pdfTools.js";
 export const DOCS_ALLOW_RULE = "mcp__aide-docs";
 
 /**
- * MCP instructions 块（initialize 时呈现给模型）。codegraph 冒烟实锤过 instructions 是
+ * MCP instructions 块（initialize 时呈现给模型）。冒烟实锤过 instructions 是
  * 必需品——第三方模型对没有 instructions 块的 MCP 工具视而不见，连 prompt 点名都无视。
  * 删除或弱化前必须先跑 smoke-mcp.ts 验证模型仍采纳 read_docx / read_pdf / write_docx。
  */

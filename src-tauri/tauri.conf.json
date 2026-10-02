@@ -7,7 +7,7 @@
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build",
-    "beforeDevCommand": "pnpm build:codegraph && pnpm build:sidecar:dev && pnpm build:remote-kit:dev && pnpm dev"
+    "beforeDevCommand": "pnpm build:sidecar:dev && pnpm build:remote-kit:dev && pnpm dev"
   },
   "app": {
     "windows": [],
@@ -21,12 +21,6 @@
     "resources": {
       "../agent-sidecar/dist/aide-agent*": "agent-runtime/",
       "remote-kit/*": "remote-kit/",
-      "codegraph-dist/*": "codegraph/",
-    "resources/codegraph-model/model.onnx": "codegraph-model/model.onnx",
-    "resources/codegraph-model/tokenizer.json": "codegraph-model/tokenizer.json",
-    "resources/codegraph-model/config.json": "codegraph-model/config.json",
-    "resources/codegraph-model/special_tokens_map.json": "codegraph-model/special_tokens_map.json",
-    "resources/codegraph-model/tokenizer_config.json": "codegraph-model/tokenizer_config.json",
     "resources/lsp-install-guide.html": "lsp-install-guide.html",
     "resources/lsp/lombok.jar": "lsp/lombok.jar",
     "resources/vc-redist/vc_redist.x64.exe": "vc-redist/vc_redist.x64.exe"

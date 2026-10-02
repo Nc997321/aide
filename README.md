@@ -90,7 +90,6 @@ aide/
 │   │   ├── commands/       # Tauri commands (filesystem, git, session, settings, ...)
 │   │   ├── remote/         # Remote protocol v2 (relay client + RPC whitelist)
 │   │   ├── lsp/            # LSP integration
-│   │   ├── codegraph/      # Code graph index
 │   │   └── ...             # policy, runtime, diagnostics, skills, ...
 │   ├── Cargo.toml
 │   └── tauri.conf.json

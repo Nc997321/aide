@@ -63,7 +63,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
         </div>
       </div>
 
-      <!-- MCP 内置只读区（codegraph in-process，不写 settings.json） -->
+      <!-- MCP 内置只读区（in-process，不写 settings.json） -->
       <div v-else-if="type === 'mcp_server' && builtinMcpServers.length > 0" class="builtin-section">
         <div class="section-label">内置（只读 · in-process）</div>
         <div
