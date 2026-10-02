@@ -27,8 +27,8 @@ import {
 } from "./knowledge/client.js";
 import {
   KB_NOT_CONNECTED_TEXT,
-  formatDocument,
   formatDocumentList,
+  formatDocumentView,
   formatFailure,
   formatSearchHits,
   formatSpaces,
@@ -121,10 +121,26 @@ function buildSearchTool(env: NodeJS.ProcessEnv) {
 function buildReadDocumentTool(env: NodeJS.ProcessEnv) {
   return tool(
     "read_document",
-    "Read one knowledge base document in full (markdown) together with its version number. Call this before updating or appending to a document so you edit what is actually there.",
-    { documentId: z.string().describe("Document id (uuid) from search or list_documents") },
+    "Read one knowledge base document (markdown) with its version number. By default returns the whole body. For long documents save context: call with outline: true to get the headings with line ranges, then read just one part with section (a heading's text) or startLine/endLine. Read the whole body before updating or appending so you edit what is actually there.",
+    {
+      documentId: z.string().describe("Document id (uuid) from search or list_documents"),
+      outline: z.boolean().optional().describe("true = return only the heading outline with line ranges (no body). Use it first on a long document."),
+      section: z.string().optional().describe("Read just the section under this heading (matched by its text, sub-sections included). Take the text from the outline."),
+      startLine: z.number().int().min(1).optional().describe("Read from this line (1-based). With endLine, reads that inclusive range; without it, to the end."),
+      endLine: z.number().int().min(1).optional().describe("Last line to read (inclusive). Only meaningful with startLine."),
+    },
     (args) =>
-      kbCall<KbDocument>(env, (c) => c.getJson<KbDocument>(docPath(args.documentId)), formatDocument),
+      kbCall<KbDocument>(
+        env,
+        (c) => c.getJson<KbDocument>(docPath(args.documentId)),
+        (doc) =>
+          formatDocumentView(doc, {
+            ...(args.outline ? { outline: true } : {}),
+            ...(args.section ? { section: args.section } : {}),
+            ...(args.startLine !== undefined ? { startLine: args.startLine } : {}),
+            ...(args.endLine !== undefined ? { endLine: args.endLine } : {}),
+          }),
+      ),
   );
 }
 

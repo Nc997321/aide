@@ -11,6 +11,7 @@ import type {
   KbSearchResult,
   KbSpace,
 } from "./client.js";
+import { findSection, parseOutline, sliceLines, type KbHeading } from "./outline.js";
 
 /** 未配置 / 已登出时的引导文本（工具恒挂，未登录也有话可说——设计 spec §5.1）。 */
 export const KB_NOT_CONNECTED_TEXT =
@@ -19,6 +20,9 @@ export const KB_NOT_CONNECTED_TEXT =
 
 /** `read_document` 输出上限：超出截断并显式注明。 */
 export const KB_READ_MAX_CHARS = 100_000;
+
+/** 不带选择器整篇读时，超过这个长度就在开头提示「下次可以只读一节」。 */
+export const KB_LONG_DOC_HINT_CHARS = 20_000;
 
 /** 单次调用传入的 `content` 上限（append 只算新增段落）。 */
 export const KB_CONTENT_MAX_BYTES = 256 * 1024;
@@ -79,10 +83,96 @@ export function formatDocument(doc: KbDocument): string {
   const truncated = body.length > KB_READ_MAX_CHARS;
   const shown = truncated ? body.slice(0, KB_READ_MAX_CHARS) : body;
   const head = `# ${doc.title}\ndocumentId ${doc.id}, space ${doc.spaceId}, version ${doc.versionNo}, status ${doc.status}`;
+  // 提示放在正文**前**：放在后面时它已经陪着整篇进了上下文，晚了。
+  const hint =
+    body.length > KB_LONG_DOC_HINT_CHARS
+      ? `\nNote: this document is long (${body.length} characters, ${body.split("\n").length} lines). ` +
+        "To save context, read_document with outline: true shows its headings with line ranges; then pass section or startLine/endLine to read just the part you need."
+      : "";
   const tail = truncated
-    ? `\n\n⚠ Truncated at ${KB_READ_MAX_CHARS} characters — the document is longer than what is shown above.`
+    ? `\n\n⚠ Truncated at ${KB_READ_MAX_CHARS} characters — the document is longer than what is shown above. Use outline: true, then section or startLine/endLine, to reach the rest.`
     : "";
-  return `${head}\n\n${shown}${tail}`;
+  return `${head}${hint}\n\n${shown}${tail}`;
+}
+
+/** `read_document` 的按需读取选择器。优先级 outline > section > 行区间；都没有 = 整篇。 */
+export interface DocumentSelector {
+  outline?: boolean;
+  section?: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+function docHead(doc: KbDocument, extra: string): string {
+  return `# ${doc.title}\ndocumentId ${doc.id}, space ${doc.spaceId}, version ${doc.versionNo}, ${extra}`;
+}
+
+function headingLine(h: KbHeading): string {
+  const indent = "  ".repeat(h.level - 1);
+  return `L${h.line}-L${h.endLine}  ${indent}${"#".repeat(h.level)} ${h.title}`;
+}
+
+/** 大纲：标题 + 行区间。无标题时直说，并给出按行读的出路。 */
+export function formatOutline(doc: KbDocument): string {
+  const lines = doc.content.split("\n").length;
+  const outline = parseOutline(doc.content);
+  const head = docHead(doc, `${lines} lines, ${doc.content.length} characters`);
+  if (outline.length === 0) {
+    return `${head}\n\nNo headings found in this document. Read it in ranges with startLine/endLine, or without any selector for the whole body.`;
+  }
+  return (
+    `${head}\n\nOutline (${outline.length} headings; L<start>-L<end> are line numbers, a section includes its sub-sections):\n` +
+    outline.map(headingLine).join("\n") +
+    "\n\nRead one part with read_document { documentId, section: \"<heading text>\" } or { documentId, startLine, endLine }."
+  );
+}
+
+/** 截断到 KB_READ_MAX_CHARS：切片也可能很长（一节几十万字），上限同整篇读。 */
+function clip(text: string): string {
+  return text.length > KB_READ_MAX_CHARS
+    ? `${text.slice(0, KB_READ_MAX_CHARS)}\n\n⚠ Truncated at ${KB_READ_MAX_CHARS} characters — narrow the range with startLine/endLine to see the rest.`
+    : text;
+}
+
+export function formatSection(doc: KbDocument, query: string): string {
+  const outline = parseOutline(doc.content);
+  const hit = findSection(outline, query);
+  if (hit.kind === "found") {
+    const h = hit.heading;
+    const part = sliceLines(doc.content, h.line, h.endLine);
+    return `${docHead(doc, `section "${h.title}", lines ${part.start}-${part.end} of ${part.total}`)}\n\n${clip(part.text)}`;
+  }
+  if (hit.kind === "ambiguous") {
+    return (
+      `"${query}" matches ${hit.candidates.length} headings in "${doc.title}" — pick one by its exact text, or use startLine/endLine:\n` +
+      hit.candidates.map(headingLine).join("\n")
+    );
+  }
+  const where =
+    outline.length === 0
+      ? "This document has no headings; use startLine/endLine."
+      : `Headings in this document:\n${outline.map(headingLine).join("\n")}`;
+  return `No heading matches "${query}" in "${doc.title}". ${where}`;
+}
+
+export function formatLineRange(doc: KbDocument, startLine: number, endLine: number | undefined): string {
+  const total = doc.content.split("\n").length;
+  if (startLine > total) {
+    return `${docHead(doc, `${total} lines`)}\n\nstartLine ${startLine} is beyond the end of the document (${total} lines).`;
+  }
+  const part = sliceLines(doc.content, startLine, endLine ?? total);
+  if (part.end < part.start) {
+    return `${docHead(doc, `${total} lines`)}\n\nEmpty range: endLine must be >= startLine.`;
+  }
+  return `${docHead(doc, `lines ${part.start}-${part.end} of ${part.total}`)}\n\n${clip(part.text)}`;
+}
+
+/** `read_document` 的总出口：按选择器分派，没有选择器就是整篇。 */
+export function formatDocumentView(doc: KbDocument, sel: DocumentSelector): string {
+  if (sel.outline) return formatOutline(doc);
+  if (sel.section?.trim()) return formatSection(doc, sel.section);
+  if (sel.startLine !== undefined) return formatLineRange(doc, sel.startLine, sel.endLine);
+  return formatDocument(doc);
 }
 
 export function formatSpaces(spaces: KbSpace[]): string {

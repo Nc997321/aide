@@ -33,7 +33,7 @@ export const KNOWLEDGE_READ_RULES = [
  */
 export const KNOWLEDGE_INSTRUCTIONS = `This environment has built-in tools for the user's team knowledge base (知识库), exposed as the aide-knowledge MCP server. Rules:
 1. USE ONLY ON EXPLICIT REQUEST. Call these tools only when the user explicitly mentions the knowledge base (知识库 / 存到知识库 / 查一下知识库). Never search the knowledge base proactively.
-2. To find content you MUST call mcp__aide-knowledge__search first — never guess document ids, and never try to read knowledge base content with Grep/Read (it lives in a server, not in the workspace). Then mcp__aide-knowledge__read_document with the documentId from the hits.
+2. To find content you MUST call mcp__aide-knowledge__search first — never guess document ids, and never try to read knowledge base content with Grep/Read (it lives in a server, not in the workspace). Then mcp__aide-knowledge__read_document with the documentId from the hits. For a long document do NOT read it whole: call read_document with outline: true first (headings + line ranges), then read only the part you need with section or startLine/endLine.
 3. Don't know what exists? Use mcp__aide-knowledge__list_spaces then mcp__aide-knowledge__list_documents to browse instead of guessing.
 4. Cite documents as 知识库《标题》, and summarize instead of pasting a whole document back to the user.
 5. FAILURES COME BACK AS TEXT with the next step (not connected / login expired / locked / unreachable). Follow the hint: if it says the user must sign in, tell them to sign in from the 知识库 panel and retry.
