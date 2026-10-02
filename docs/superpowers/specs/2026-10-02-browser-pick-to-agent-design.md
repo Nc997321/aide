@@ -1,7 +1,7 @@
 # 在页面上「圈选 → 批注 → 交给 Agent」— 设计
 
 - 日期：2026-10-02
-- 状态：待评审（2026-10-02 经产品审视修订：目标用户改为网页端开发者，补 §3 第 7–12 条与 §4.4 渲染信息，见 §9）
+- 状态：**搁置（2026-10-02 用户定）**——待工作机上量出 §9.4 的基线再重启；以下为搁置前的设计与审视（2026-10-02 经产品审视修订：目标用户改为网页端开发者，补 §3 第 7–12 条与 §4.4 渲染信息，见 §9）
 - 范围：`src/components/Browser/`（面板入口）、`src/components/ChatPanel/`（待发送卡片）、`packages/aide-sdk/src/types/chat.ts` + `agent-sidecar/src/engine/types.ts`（`display` 新块）、`src-tauri/src/commands/browser.rs`（一条通用求值命令）。**不动** `knowledge-server/`、不动 Aide Link 暴露目录。
 - 关联：
   - `2026-09-30-aide-library-design.md` §1.2（与 WorkBuddy 的对照）、§4.6（预览与发布共用取件地址）
