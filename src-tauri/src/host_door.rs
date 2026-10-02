@@ -29,10 +29,23 @@ impl EventSink for TauriSink {
     }
 }
 
+/// 通知的「身份」：Windows 用 AUMID，macOS 用 bundle id，其余平台没有对应概念。
+/// `Notification::app_id` 只在 Windows 编译（notify-rust 里 `#[cfg(target_os = "windows")]`），
+/// 不能无条件调用——曾因此让桌面壳在 macOS 上整个编不过。
+/// macOS 的 `set_application` 全进程只能设一次（重复调用返回 Err，无妨）；
+/// 未打包运行（dev）时找不到该 bundle 也返回 Err，通知退回系统默认来源。
+pub(crate) fn apply_notification_identity(n: &mut notify_rust::Notification) {
+    #[cfg(windows)]
+    n.app_id("com.aide.app");
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application("com.aide.app");
+    let _ = &n;
+}
+
 fn show_system_notification(payload: &Value) {
     let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("").to_string();
     let mut n = notify_rust::Notification::new();
-    n.app_id("com.aide.app");
+    apply_notification_identity(&mut n);
     n.auto_icon();
     n.summary(&text("title"));
     n.body(&text("body"));

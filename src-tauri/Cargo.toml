@@ -143,7 +143,9 @@ windows = { version = "0.61", features = [
 webview2-com = "0.38.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.2"
+# 不单独声明 objc2：由下面两个 crate 传递引入（0.2.x 这一代依赖 objc2 0.5）。
+# 曾写成 `objc2 = "0.2"`（指向更老的 0.2.7，只有 `Id` 没有 `Retained`），与它们不同代，
+# 桌面壳在 macOS 上编不过。
 objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.2", features = ["NSString", "NSURL", "NSArray"] }
 

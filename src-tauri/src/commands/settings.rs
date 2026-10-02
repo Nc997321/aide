@@ -36,7 +36,7 @@ pub fn notify_send(app: tauri::AppHandle, title: String, body: String, session_i
     {
         let _ = (app, session_id);
         let mut n = notify_rust::Notification::new();
-        n.app_id("com.aide.app");
+        crate::host_door::apply_notification_identity(&mut n);
         n.auto_icon();
         n.summary(&title);
         n.body(&body);

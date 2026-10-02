@@ -24,7 +24,9 @@
 // 非 Windows / 非 x64：watchdog 调用拿不到任何栈，返回 None 即可。
 #![cfg_attr(all(windows, target_arch = "x86_64"), allow(unused))]
 
+#[cfg(all(windows, target_arch = "x86_64"))]
 use std::ffi::c_void;
+#[cfg(all(windows, target_arch = "x86_64"))]
 use std::sync::OnceLock;
 
 #[cfg(all(windows, target_arch = "x86_64"))]
@@ -210,8 +212,16 @@ unsafe fn park_frame_inner(h: HANDLE, ctx: &mut CONTEXT, walk_full: bool) -> Opt
 /// 一场冻结开一次（watchdog 持有），冻结收尾 Drop → SymCleanup + CloseHandle。
 /// 只抓顶帧、不跑 StackWalk64 全栈：顶帧的模块名就足以把 V8 / Blink / 合成光栅 /
 /// 系统调用等待分开，而跨进程走全栈要多一套内存读回调与函数表访问——收益不抵复杂度。
+#[cfg(all(windows, target_arch = "x86_64"))]
 pub struct ForeignProc {
     h: HANDLE,
+    pid: u32,
+}
+
+/// 非 Windows / 非 x64：没有进程句柄这回事（`HANDLE` 是 Windows 类型，不能出现在这里），
+/// `open` 恒返回 None，结构体永远不会被构造。
+#[cfg(not(all(windows, target_arch = "x86_64")))]
+pub struct ForeignProc {
     pid: u32,
 }
 
