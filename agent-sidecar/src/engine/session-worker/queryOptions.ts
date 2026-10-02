@@ -107,6 +107,12 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       ...KNOWLEDGE_READ_RULES,
       ...BROWSER_ALLOW_RULES,
     ],
+    // 会话 cwd 是 Aide 自持属性（wsPath 档案 / ChangeLog 基线 / Host 目录探测都认它）。
+    // EnterWorktree 会在会话中途改 cwd——档案对不上 = 「跑错项目」，且 UI 看不见。
+    // disallowedTools 把工具从模型上下文里整个摘掉（不依赖权限模式，auto/bypass 下也拦得住）。
+    // 只拦会话级切换；Agent 工具的 isolation:"worktree" 只动子代理 cwd，不在此列。
+    // 要放开须先把 worktree 做成一等工作区概念（新会话 + wsPath 指向它），别在这里删。
+    disallowedTools: ["EnterWorktree", "ExitWorktree"],
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
     skills: p.branch.automationConfig ? [] : "all",

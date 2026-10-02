@@ -55,6 +55,22 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.allowDangerouslySkipPermissions).toBe(true);
   });
 
+  it("会话级 worktree 切换工具被摘除（会改会话 cwd → 档案/基线对不上）；主会话与自动化都带", () => {
+    const main = buildSpawnQueryOptions(parts()) as Opts;
+    expect(main.disallowedTools).toEqual(["EnterWorktree", "ExitWorktree"]);
+    const auto = buildSpawnQueryOptions(
+      parts({
+        branch: {
+          automationConfig: {
+            taskId: "t", runId: "r", preset: "auto", tools: ["Read"], mcpAllowlist: [],
+            taskDir: "", sessionDir: "",
+          },
+        },
+      }),
+    ) as Opts;
+    expect(auto.disallowedTools).toEqual(["EnterWorktree", "ExitWorktree"]);
+  });
+
   it("受限工作区（!trusted）→ strictMcpConfig:true", () => {
     const o = buildSpawnQueryOptions(parts({ workspace: { trusted: false } })) as Opts;
     expect(o.strictMcpConfig).toBe(true);
