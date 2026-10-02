@@ -133,6 +133,9 @@ let sendNonce = 0;
  *  知识库面板据此收起自己，让确认框露出来。 */
 const chatRequest = ref<{ nonce: number } | null>(null);
 let chatNonce = 0;
+/** 已被认领的最大 sendRequest nonce；认领窗口（毫秒）。 */
+let claimedNonce = 0;
+const CLAIM_WINDOW_MS = 400;
 
 export function useKbSelections() {
   wire();
@@ -206,9 +209,27 @@ export function useKbSelections() {
     if (r) rec.newRange = r;
   }
 
-  /** 文档侧要求「现在就发」：聚焦的聊天输入框收到后带上全部待发送圈选发出去。 */
+  /** 文档侧要求「现在就发」：聚焦的聊天输入框收到后带上全部待发送圈选发出去。
+   *
+   *  **必须有人认领**（claimSend）。认领方是聊天输入框——知识库打开时它在隐藏的聊天面板里，
+   *  没聚焦 / 没挂上 / 被别的东西挡住，这次发送就石沉大海，圈选永远停在「待发送」，用户对着
+   *  一个不动的标记发呆。所以发出请求后给一个很短的认领窗口：没人认领就立刻把聊天亮出来，
+   *  并在控制台留一行线索（下次有人说「卡住了」，不用再猜）。 */
   function requestSend(text = ""): void {
-    sendRequest.value = { nonce: ++sendNonce, text };
+    const nonce = ++sendNonce;
+    sendRequest.value = { nonce, text };
+    const hasPending = Object.values(records).some((r) => r.status === "pending");
+    if (!hasPending) return;
+    setTimeout(() => {
+      if (claimedNonce >= nonce) return;
+      console.warn("[kb-send] 没有聊天输入框认领这次发送（可能没有聚焦的聊天面板）——把聊天亮出来", { nonce });
+      revealChat();
+    }, CLAIM_WINDOW_MS);
+  }
+
+  /** 聊天输入框：这次发送我接了（之后它走它自己的发送流程，成败由 sent / 门控回执体现）。 */
+  function claimSend(nonce: number): void {
+    claimedNonce = Math.max(claimedNonce, nonce);
   }
 
   function revealChat(): void {
@@ -235,6 +256,7 @@ export function useKbSelections() {
     markSent,
     resolveDone,
     requestSend,
+    claimSend,
   };
 }
 
@@ -246,4 +268,5 @@ export function __resetKbSelectionsForTest(): void {
   sendRequest.value = null;
   chatNonce = 0;
   chatRequest.value = null;
+  claimedNonce = 0;
 }

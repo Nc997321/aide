@@ -342,7 +342,10 @@ async function onSendRequest(prompt: string, opts: SendOptions & { effectiveProv
       };
       // 带知识库圈选的发送多半是在文档那一侧发起的（知识库打开时这个面板是隐藏的）：确认框画在
       // 这里，不把聊天亮出来用户就永远看不到它、发送一直挂着。
-      if (sendOpts.kbrefs?.length) useKbSelections().revealChat();
+      if (sendOpts.kbrefs?.length) {
+        console.info("[kb-send] 圈选发送被「发送前确认」拦下，等用户在聊天里确认", { sid: sidForGate });
+        useKbSelections().revealChat();
+      }
       return;
     }
   }

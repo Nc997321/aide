@@ -615,6 +615,8 @@ watch(
   () => {
     const req = kbSel.sendRequest.value;
     if (!req || !props.focused || !kbChips.value.length) return;
+    // 认领：告诉文档侧「这次发送我接了」，否则它会判定没人接、把聊天亮出来（见 requestSend）。
+    kbSel.claimSend(req.nonce);
     void handleSend({ text: req.text });
   },
 );
