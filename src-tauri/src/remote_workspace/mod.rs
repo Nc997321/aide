@@ -65,6 +65,9 @@ pub struct RemoteWorkspaces {
     /// 正在自动重连的 Host（连接断了、守护进程仍可能在）。在表里时 [`connection`](Self::connection)
     /// 如实回「正在重新连接」，不另起一条会跟重连抢的连接；`connect` / `disconnect` 清它（=取消）。
     reconnecting: Mutex<std::collections::HashSet<HostId>>,
+    /// WSL 发行版的保活进程（见 [`keep_wsl_awake`](Self::keep_wsl_awake)）。随桌面进程存亡
+    /// （`kill_on_drop`），不随窗口 / 连接走：窗口全关后守护进程还要继续活着。
+    keepalive: Mutex<HashMap<HostId, tokio::process::Child>>,
 }
 
 /// 断线重连的退避（秒）：覆盖一次 ssh 网络抖动 / WSL 重启，之后放弃并如实报断开。
@@ -284,14 +287,40 @@ impl RemoteWorkspaces {
         };
         let app_for_events = app.clone();
         let app_for_close = app.clone();
-        HostConnection::start(
+        let conn = HostConnection::start(
             host.clone(),
             cmd,
             &init,
             Arc::new(move |h: &HostId, n: Notification| on_host_event(&app_for_events, h, n)),
             Arc::new(move |h: &HostId, reason: &str| on_host_closed(&app_for_close, h, reason)),
         )
-        .await
+        .await?;
+        self.keep_wsl_awake(host);
+        Ok(conn)
+    }
+
+    /// WSL 的虚拟机在没有任何 `wsl.exe` 进程时会空闲关机，守护进程（以及它手里跑着的会话）
+    /// 随之消失。窗口全关后桥进程也没了，所以另起一个常驻的 `wsl.exe`：脚本盯着
+    /// `daemon.pid`，**守护进程在它就在、守护进程退（空闲退出 / 崩溃）它就退**——
+    /// 保活的寿命恰好等于 Host 的寿命，不会无谓地拖着虚拟机。非 WSL 目标什么都不做。
+    fn keep_wsl_awake(&self, host: &HostId) {
+        if !matches!(host, HostId::Wsl(_)) {
+            return;
+        }
+        let mut alive = self.keepalive.lock().unwrap_or_else(PoisonError::into_inner);
+        if let Some(child) = alive.get_mut(host) {
+            if matches!(child.try_wait(), Ok(None)) {
+                return;
+            }
+        }
+        let script = "pid=$(cat \"$HOME/.aide/host/daemon.pid\" 2>/dev/null); \
+                      while [ -n \"$pid\" ] && kill -0 \"$pid\" 2>/dev/null; do sleep 20; done";
+        match launcher::command(host, script).and_then(|mut c| c.spawn().map_err(|e| e.to_string())) {
+            Ok(child) => {
+                alive.insert(host.clone(), child);
+            }
+            Err(e) => tracing::warn!("[host] WSL 保活进程起不来（{}）：{e}", host.label()),
+        }
     }
 
     pub async fn disconnect(&self, host: &HostId) {
