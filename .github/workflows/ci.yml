@@ -50,11 +50,10 @@ jobs:
           -p aide-workspace -p aide-core -p aide-link -p aide-host
 
   tauri-shell:
-    name: tauri shell compile probe (macOS)
+    name: tauri shell compile (macOS)
     runs-on: macos-latest
-    # 探针：桌面壳依赖前端产物与 sidecar 资源，CI 里只做占位后 cargo check。
-    # 首轮不阻塞整体结论，跑通稳定后去掉 continue-on-error。
-    continue-on-error: true
+    # 桌面壳依赖前端产物与 sidecar 资源，CI 里用占位文件后 cargo check（只验编译，不打包）。
+    # 2026-10-02 首次在 macOS 编过，转为正式检查。
     steps:
       - uses: actions/checkout@v5
       - uses: pnpm/action-setup@v4
