@@ -12,14 +12,14 @@ import { useKnowledgeBase } from "@/composables/useKnowledgeBase";
 import { useModal } from "@/composables/useModal";
 import KbLogin from "./KbLogin.vue";
 import KbDocumentView from "./KbDocumentView.vue";
-import { kb } from "./kbClient";
+import { getBaseUrl, kb } from "./kbClient";
 import { GUIDE_MD } from "./guideText";
 import { MIN_SERVER_VERSION, UPGRADE_COMMAND } from "./serverVersion";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
 import KbSpaceList from "./KbSpaceList.vue";
 import KbTree from "./KbTree.vue";
-import { subtreeSize } from "./docTree";
+import { ancestorIds, subtreeSize } from "./docTree";
 
 const emit = defineEmits<{ close: [] }>();
 
@@ -51,6 +51,116 @@ const reading = computed(
     k.searching.value ||
     !!k.activeDoc.value,
 );
+
+// ── 阅读态的左侧目录栏 ──
+// 阅读时看得见自己在库里的位置、能直接跳到相邻文档，不必每次退回整屏目录。
+// 开合是个人偏好，记在 localStorage（不可用时就每次默认展开，不影响功能）。
+const RAIL_KEY = "aide.kb.railOpen";
+function readRail(): boolean {
+  try {
+    return localStorage.getItem(RAIL_KEY) !== "0";
+  } catch {
+    return true;
+  }
+}
+const railOpen = ref(readRail());
+function toggleRail(): void {
+  railOpen.value = !railOpen.value;
+  try {
+    localStorage.setItem(RAIL_KEY, railOpen.value ? "1" : "0");
+  } catch {
+    /* 偏好存不下就算了 */
+  }
+}
+
+const railTitle = computed(
+  () =>
+    (k.spaces.value.length > 1 && k.spaces.value.find((s) => s.id === k.activeSpaceId.value)?.name) ||
+    "目录",
+);
+
+/** 当前文档的祖先链（从根到父）。给文章页的面包屑用。 */
+const crumbs = computed(() => {
+  const id = activeDocId.value;
+  if (!id) return [];
+  const byId = new Map(k.documents.value.map((d) => [d.id, d.title]));
+  return ancestorIds(k.documents.value, id)
+    .reverse()
+    .map((aid) => ({ id: aid, title: byId.get(aid) ?? "" }))
+    .filter((c) => c.title !== "");
+});
+
+/** 搜索结果的所在路径：命中很多时，靠路径区分同名文档。 */
+const hitPaths = computed(() => {
+  const res = k.searchResult.value;
+  if (!res) return {};
+  const byId = new Map(k.documents.value.map((d) => [d.id, d.title]));
+  const out: Record<string, string> = {};
+  for (const h of res.hits) {
+    out[h.documentId] = ancestorIds(k.documents.value, h.documentId)
+      .reverse()
+      .map((id) => byId.get(id) ?? "")
+      .filter(Boolean)
+      .join(" / ");
+  }
+  return out;
+});
+
+/** 点面包屑里的文件夹：文件夹没有正文，只能把它在目录里亮出来。 */
+async function onReveal(id: string): Promise<void> {
+  if (!railOpen.value) toggleRail();
+  k.revealNode(id);
+  await nextTick();
+  treeRef.value?.scrollToNode(id);
+}
+
+// ── 索引首页：最近更新 + 概况 ──
+// 首页不能只是一列目录：先回答「最近谁动了什么」，再给全量目录；页脚亮出连接状态，
+// 让人一眼知道这个库是连着的、是新的。
+
+/** 相对时间：近的说「今天 / 昨天 / N 天前」，远的给日期。 */
+function relTime(raw: string): string {
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return "";
+  const days = Math.floor((Date.now() - d.getTime()) / 86_400_000);
+  if (days <= 0) return "今天";
+  if (days === 1) return "昨天";
+  if (days < 7) return `${days} 天前`;
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return d.getFullYear() === new Date().getFullYear() ? `${mm}-${dd}` : `${d.getFullYear()}-${mm}-${dd}`;
+}
+
+const docCount = computed(() => k.documents.value.filter((d) => d.kind !== "folder").length);
+
+/** 最近更新的 4 篇文档（不含文件夹）。不足 3 篇时不出这一块——几篇的库一眼就看完了，不需要「最近」。 */
+const recent = computed(() => {
+  if (docCount.value < 3) return [];
+  const byId = new Map(k.documents.value.map((d) => [d.id, d.title]));
+  return k.documents.value
+    .filter((d) => d.kind !== "folder" && d.updatedAt)
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
+    .slice(0, 4)
+    .map((d) => ({
+      id: d.id,
+      title: d.title,
+      path: ancestorIds(k.documents.value, d.id)
+        .reverse()
+        .map((id) => byId.get(id) ?? "")
+        .filter(Boolean)
+        .join(" / "),
+      time: relTime(d.updatedAt),
+    }));
+});
+
+/** 页脚的连接主机：只给 host（端口去掉），完整地址在设置里看。 */
+const serverHost = computed(() => {
+  try {
+    return new URL(getBaseUrl()).hostname;
+  } catch {
+    return getBaseUrl();
+  }
+});
 
 /** 回索引：把"开着的东西"全部关掉。 */
 function backToIndex(): void {
@@ -120,6 +230,13 @@ async function openFromSearch(id: string): Promise<void> {
   k.revealNode(id);
   await nextTick();
   treeRef.value?.scrollToNode(id);
+}
+
+function onTreeToggle(id: string): void {
+  k.toggleCollapsed(k.activeSpaceId.value, id);
+}
+function onTreePatch(id: string, input: { title?: string; parentId?: string | null }): void {
+  void k.patchNode(id, input);
 }
 
 /** 新建节点：标题在树组件的内联输入里收集，随 emit 一起交出来。 */
@@ -236,6 +353,15 @@ onMounted(() => {
           class="kb-home-caret"
         />
         <span>资料库</span>
+      </button>
+
+      <button
+        v-if="k.user.value && reading"
+        class="kb-iconbtn"
+        v-tooltip="railOpen ? '收起目录' : '展开目录'"
+        @click="toggleRail()"
+      >
+        <Icon name="sidebar" :size="14" :stroke-width="1.4" />
       </button>
 
       <div v-if="k.user.value" class="kb-searchbox">
@@ -360,6 +486,29 @@ onMounted(() => {
             @rename="(id, name) => void k.renameSpace(id, name)"
           />
 
+          <section v-if="recent.length" class="kb-recent">
+            <div class="kb-sec-label">最近更新</div>
+            <div class="kb-recent-grid">
+              <button
+                v-for="r in recent"
+                :key="r.id"
+                type="button"
+                class="kb-card"
+                @click="openFromSearch(r.id)"
+              >
+                <span class="kb-card-title">{{ r.title }}</span>
+                <span class="kb-card-meta">
+                  <span class="kb-card-path">{{ r.path || "根目录" }}</span>
+                  <span class="kb-card-time">{{ r.time }}</span>
+                </span>
+              </button>
+            </div>
+          </section>
+
+          <div v-if="k.documents.value.length" class="kb-sec-label kb-sec-all">
+            全部文档<span class="kb-sec-count">{{ docCount }}</span>
+          </div>
+
           <KbTree
             ref="treeRef"
             :documents="k.documents.value"
@@ -368,23 +517,11 @@ onMounted(() => {
             :busy="k.loading.value"
             :accept="k.formats.value"
             @open="(id) => void openDoc(id)"
-            @toggle="(id) => k.toggleCollapsed(k.activeSpaceId.value, id)"
-            @create="
-              (parentId, kind, title) => {
-                void onCreateNode(parentId, kind, title);
-              }
-            "
-            @patch="
-              (id, input) => {
-                void k.patchNode(id, input);
-              }
-            "
-            @remove="(id) => void onDeleteDoc(id)"
-            @upload="
-              (parentId, file) => {
-                void onUpload(parentId, file);
-              }
-            "
+            @toggle="onTreeToggle"
+            @create="onCreateNode"
+            @patch="onTreePatch"
+            @remove="onDeleteDoc"
+            @upload="onUpload"
           />
 
           <!-- 空态是**邀请**：两条路都直接给出来（建一份 / 传一个），
@@ -399,6 +536,10 @@ onMounted(() => {
         </div>
 
         <footer class="kb-index-foot">
+          <!-- 连接状态：绿点 + 主机 + 服务版本。「它连着、它是新的」要写在脸上，用户才信它。 -->
+          <span class="kb-conn" :title="`已连接 ${serverHost}`">
+            <i class="kb-conn-dot" />已连接 · {{ serverHost }}<template v-if="k.serverVersion.value"> · v{{ k.serverVersion.value }}</template>
+          </span>
           <span class="kb-foot-name">{{ k.user.value.displayName }}</span>
           <button v-if="isAdmin" class="kb-link" @click="innerView = 'members'">成员</button>
           <!-- 指南不再是特殊页面：它就是库里一份普通文档，没有就让用户一键装进来。
@@ -413,7 +554,38 @@ onMounted(() => {
       </div>
 
       <!-- ══ 阅读态：整屏给这一样东西 ══════════════════════════════════ -->
-      <main v-else class="kb-main">
+      <div v-else class="kb-reading">
+        <aside v-if="railOpen" class="kb-rail" aria-label="目录">
+          <div class="kb-rail-head">
+            <span class="kb-rail-title">{{ railTitle }}</span>
+            <button
+              class="kb-iconbtn kb-rail-add"
+              v-tooltip="'新建'"
+              :disabled="!k.activeSpaceId.value"
+              @click="treeRef?.openCreateMenu($event, null)"
+            >
+              <Icon name="plus" :size="12" :stroke-width="1.5" />
+            </button>
+          </div>
+          <div class="kb-rail-scroll">
+            <KbTree
+              ref="treeRef"
+              compact
+              :documents="k.documents.value"
+              :active-id="activeDocId"
+              :collapsed="collapsed"
+              :busy="k.loading.value"
+              :accept="k.formats.value"
+              @open="(id) => void openDoc(id)"
+              @toggle="onTreeToggle"
+              @create="onCreateNode"
+              @patch="onTreePatch"
+              @remove="onDeleteDoc"
+              @upload="onUpload"
+            />
+          </div>
+        </aside>
+      <main class="kb-main">
         <p v-if="k.error.value" class="kb-err">{{ k.error.value }}</p>
         <p v-if="k.notice.value" class="kb-notice">{{ k.notice.value }}</p>
 
@@ -441,18 +613,22 @@ onMounted(() => {
           v-else-if="k.searchResult.value || k.searching.value"
           :result="k.searchResult.value"
           :busy="k.searching.value"
+          :paths="hitPaths"
           @open="(id) => void openFromSearch(id)"
         />
         <KbDocumentView
           v-else-if="k.activeDoc.value"
           :doc="k.activeDoc.value"
+          :crumbs="crumbs"
           :editable="true"
+          @reveal="(id) => void onReveal(id)"
           @saved="(id) => refreshDoc(id)"
           @reverted="(id) => refreshDoc(id)"
           @editing="onEditing"
           @delete="(id) => void onDeleteDoc(id)"
         />
       </main>
+      </div>
       </Transition>
     </template>
   </div>
@@ -622,6 +798,70 @@ onMounted(() => {
   background: var(--aide-accent);
 }
 
+/* 分组小标题：与阅读态的目录栏 / 本页内容同一档（11 / 500 / 字距） */
+.kb-sec-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 0 2px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--aide-text-muted);
+}
+.kb-sec-count { font-variant-numeric: tabular-nums; letter-spacing: 0; opacity: 0.7; }
+.kb-sec-all { padding-top: 28px; }
+
+/* 最近更新：整个首页里唯一成"卡"的东西——它们是**入口**，不是列表行 */
+.kb-recent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+}
+.kb-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 18px;
+  min-height: 92px;
+  padding: 14px 16px;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-md, var(--aide-radius-sm));
+  cursor: pointer;
+  transition: background var(--aide-ease-t), border-color var(--aide-ease-t), transform var(--aide-ease-t);
+}
+.kb-card:hover {
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-border);
+  transform: translateY(-1px);
+}
+.kb-card:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.45;
+  color: var(--aide-text-primary);
+}
+.kb-card-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
+}
+.kb-card-path { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kb-card-time { flex: none; font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .kb-card:hover { transform: none; } }
+
 /* 空空间是**邀请**，不是一句灰字 */
 .kb-index-empty {
   padding: 72px 8px;
@@ -655,7 +895,14 @@ onMounted(() => {
   color: var(--aide-text-muted);
   flex: none;
 }
-.kb-foot-name { margin-right: auto; }
+.kb-conn { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; }
+.kb-conn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--aide-success);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--aide-success) 18%, transparent);
+}
 
 .kb-link {
   border: none;
@@ -669,6 +916,51 @@ onMounted(() => {
 }
 .kb-link:hover { color: var(--aide-text-primary); }
 .kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+
+/* ── 阅读态：左目录栏 + 正文 ───────────────────────────── */
+.kb-reading {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  /* 容器查询看的是面板自己的宽度（不是窗口宽度）：左侧栏 / 右栏会吃掉一大块 */
+  container-type: inline-size;
+}
+.kb-rail {
+  flex: 0 0 264px;
+  width: 264px;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--aide-border-subtle);
+}
+@container (max-width: 760px) {
+  .kb-rail { display: none; }
+}
+.kb-rail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 40px;
+  padding: 0 8px 0 20px;
+  flex: none;
+}
+.kb-rail-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  color: var(--aide-text-muted);
+}
+.kb-rail-add { width: 24px; height: 24px; }
+.kb-rail-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 8px 16px;
+}
 
 /* ── 阅读态：整屏给它 ─────────────────────────────────── */
 /* 索引态是"环境光里的目录"，阅读态是"一块打亮的纸"——两个态之间换的是整个平面，

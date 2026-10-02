@@ -17,6 +17,7 @@
 // ⚠️ 将来若要给 aide 全局收紧渲染，改这里一处即可，不要在各 v-html 点重复写。
 import { Marked } from "marked";
 import { escapeHtml } from "@aide/sdk/utils/markdown";
+import { hljs } from "@aide/sdk/utils/highlight";
 
 /** 允许的 URL 协议。其余（javascript: / data: / vbscript:）一律拒绝。 */
 function safeUrl(raw: string): string | null {
@@ -164,10 +165,38 @@ function separateComponentTags(text: string): string {
   return out.join("\n");
 }
 
+/** 标了语言的围栏才高亮，且超过这个体积直接转义纯文本（hljs 对超大块是卡顿放大器）。
+ *  **没标语言的不跑 highlightAuto**：它会把文本拿 12 种语言各试一遍再挑最像的，
+ *  既慢，猜错时还给普通文字染上莫名其妙的颜色——文档里的无标注围栏多半就是日志 / 目录树 / 命令输出。 */
+const HIGHLIGHT_MAX_CHARS = 100_000;
+
+/**
+ * 代码块：语言标签 + 复制按钮 + 高亮。
+ * 按钮只带 `data-kb-copy`，没有任何文档内容进属性；点击由 KbDocumentView 在容器上
+ * 事件委托处理（v-html 里的节点绑不了 Vue 事件）。语言名只在 hljs 认识时才进 class，
+ * 标签文字一律转义——围栏信息串来自文档，是不可信输入。
+ */
+function renderCode({ text, lang }: { text: string; lang?: string }): string {
+  const name = (lang ?? "").trim().split(/\s+/)[0] ?? "";
+  const known = name !== "" && !!hljs.getLanguage(name);
+  const body =
+    known && text.length <= HIGHLIGHT_MAX_CHARS
+      ? hljs.highlight(text, { language: name, ignoreIllegals: true }).value
+      : escapeHtml(text);
+  const cls = known ? `hljs language-${escapeHtml(name)}` : "hljs";
+  return (
+    `<div class="kb-code"><div class="kb-code-bar"><span class="kb-code-lang">${escapeHtml(name)}</span>` +
+    `<button type="button" class="kb-copy" data-kb-copy>复制</button></div>` +
+    `<pre><code class="${cls}">${body}</code></pre></div>`
+  );
+}
+
 const kbMarked = new Marked({ gfm: true, breaks: false });
 
 kbMarked.use({
   renderer: {
+    code: renderCode,
+
     /** 原始 HTML（块与行内同走这里）：只放行白名单标签（无属性），其余转义成文本，
      *  绝不把原样 HTML 交给浏览器解析。 */
     html({ text, block }: { text: string; block?: boolean }): string {

@@ -81,6 +81,7 @@ export const GLYPHS: Record<string, string> = {
   file: '<path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/>',
   /** 收藏夹目录：文件夹（带页签的直角轮廓，与 file / link 同族） */
   folder: '<path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/>',
+  sidebar: '<rect x="2.5" y="3" width="11" height="10" rx="1.6"/><path d="M6.5 3v10"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   more: '<circle cx="4" cy="8" r="0.9" class="f"/><circle cx="8" cy="8" r="0.9" class="f"/><circle cx="12" cy="8" r="0.9" class="f"/>',
   // 折叠箭头。默认朝右（折叠态），展开时用 CSS 转 90° 指向下——

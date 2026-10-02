@@ -19,13 +19,20 @@ import { useModal } from "@/composables/useModal";
 import { useRightPanel } from "@/composables/useRightPanel";
 import KbHistory from "./KbHistory.vue";
 import KbMarkdownEditor from "./KbMarkdownEditor.vue";
+import KbOutline from "./KbOutline.vue";
 
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：原生样式与主题无关。 */
 const modal = useModal();
 
-const props = withDefaults(defineProps<{ doc: KbDocument; editable?: boolean }>(), {
-  editable: false,
-});
+const props = withDefaults(
+  defineProps<{
+    doc: KbDocument;
+    editable?: boolean;
+    /** 祖先链（从根到父，不含自己）。给了才显示面包屑 */
+    crumbs?: { id: string; title: string }[];
+  }>(),
+  { editable: false, crumbs: () => [] },
+);
 
 const emit = defineEmits<{
   /** 保存成功（父层刷新 activeDoc 与侧栏列表）。带 docId：保存期间用户可能已切走 */
@@ -34,6 +41,8 @@ const emit = defineEmits<{
   reverted: [docId: string];
   /** 编辑会话开关（父层据此在切换文档前拦截未保存修改） */
   editing: [on: boolean];
+  /** 点了面包屑里的文件夹：文件夹没有正文可开，只能在目录里定位到它 */
+  reveal: [id: string];
   /** 用户点了删除。**只报意图**：确认弹窗与接口调用都在父层——只有它手里有整份
    *  文档列表，「会连带删掉几篇子文档」才算得出来。 */
   delete: [docId: string];
@@ -86,6 +95,8 @@ async function openPreview(): Promise<void> {
 // objectURL（`<img src>` 发不出 Authorization 头，见 design spec §8.2）。
 // 所以渲染完还需要这一趟「装载」，它依赖 DOM 已挂载。
 const viewBody = ref<HTMLElement | null>(null);
+/** 文章容器：真正滚动的那一层，目录的滚动联动要挂在它上面 */
+const docEl = ref<HTMLElement | null>(null);
 let assetLoader: AssetLoader | null = null;
 
 /** 换文档或切回看态时重新装载。旧的一批先回收，否则 objectURL 会泄漏。 */
@@ -118,6 +129,28 @@ const dirty = computed(
 const canSave = computed(
   () => lock.held.value && !saving.value && draftTitle.value.trim() !== "",
 );
+
+/** 本页目录只在「看 markdown 正文」时出现；编辑 / 历史态没有渲染出来的标题可读。 */
+const outlineOn = computed(() => !editing.value && !showHistory.value && kind.value === "markdown");
+const outlineRev = computed(() => `${props.doc.id}:${props.doc.versionNo}:${props.doc.content?.length ?? 0}`);
+
+/** 阅读时长：中文按 500 字/分钟粗估。只是个量级感，所以不精确到秒、最少 1 分钟。 */
+const readMinutes = computed(() => Math.max(1, Math.round((props.doc.content?.length ?? 0) / 500)));
+
+/** 代码块的「复制」：按钮在 v-html 里，事件委托在正文容器上。 */
+async function onBodyClick(e: MouseEvent): Promise<void> {
+  const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-kb-copy]");
+  if (!btn) return;
+  const code = btn.closest(".kb-code")?.querySelector("pre")?.textContent ?? "";
+  try {
+    await navigator.clipboard.writeText(code);
+    btn.textContent = "已复制";
+  } catch {
+    // 剪贴板不可用（权限 / 非安全上下文）不假装成功：代码就在旁边，能自己选
+    btn.textContent = "复制失败";
+  }
+  window.setTimeout(() => (btn.textContent = "复制"), 1500);
+}
 
 const updated = computed(() => {
   const d = new Date(props.doc.updatedAt);
@@ -231,21 +264,29 @@ function onReverted(): void {
 </script>
 
 <template>
-  <article class="kb-doc" :class="{ editing, history: showHistory }">
+  <div class="kb-doc-shell">
+  <article ref="docEl" class="kb-doc" :class="{ editing, history: showHistory }">
     <!-- 历史 / 查看 / 编辑 互斥切换：覆盖层方案在 overflow:auto 容器里
          会有「随内容滚走」的定位坑，直接换视图最稳 -->
     <KbHistory v-if="showHistory" :doc="doc" @reverted="onReverted" />
 
     <header v-else-if="!editing" class="kb-doc-head">
+      <nav v-if="crumbs.length" class="kb-crumbs" aria-label="所在位置">
+        <template v-for="(c, i) in crumbs" :key="c.id">
+          <span v-if="i" class="kb-crumb-sep">›</span>
+          <button type="button" class="kb-crumb" @click="emit('reveal', c.id)">{{ c.title }}</button>
+        </template>
+      </nav>
       <h1>{{ doc.title }}</h1>
       <div class="kb-meta">
         <span class="kb-ver">v{{ doc.versionNo }}</span>
         <span v-if="updated">{{ updated }}</span>
+        <span v-if="kind === 'markdown' && doc.content">约 {{ readMinutes }} 分钟读完</span>
         <!-- slug 是内部标识（同父下唯一），个人库里对人没有信息量，不上台面 -->
         <span class="kb-spacer" />
         <span v-if="editable" class="kb-head-actions">
           <button class="kb-link" @click="showHistory = true">历史</button>
-          <button class="kb-link" :disabled="lock.state.value.phase === 'acquiring'" @click="startEdit()">
+          <button class="kb-link kb-edit-btn" :disabled="lock.state.value.phase === 'acquiring'" @click="startEdit()">
             {{ lock.state.value.phase === "acquiring" ? "取锁中…" : "编辑" }}
           </button>
           <!-- 只在看态出现（编辑态下没有这个按钮）：编辑中的草稿与「删掉这篇」同时可点，
@@ -303,6 +344,7 @@ function onReverted(): void {
         v-if="kind === 'markdown'"
         ref="viewBody"
         class="kb-body msg-text"
+        @click="onBodyClick"
         v-html="renderKbMarkdown(doc.content ?? '')"
       />
 
@@ -325,6 +367,9 @@ function onReverted(): void {
       这篇文档还没有正文。
     </p>
   </article>
+  <!-- 目录是文章的**邻居**而不是子元素：文章容器自己滚动，目录要钉在原地 -->
+  <KbOutline v-if="outlineOn" :body-el="viewBody" :scroll-el="docEl" :rev="outlineRev" />
+  </div>
 </template>
 
 <style scoped>
@@ -335,8 +380,22 @@ function onReverted(): void {
    圆角底块、没有 chip；标题下面也不再画横线（留白代替）。
    ───────────────────────────────────────────────────────────────── */
 
+/* 外壳：文章 + 右侧目录并排。目录在窄面板下整列收起（容器查询：看的是面板宽度，
+   不是窗口宽度——左侧栏与右栏会吃掉一大块） */
+.kb-doc-shell {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  container-type: inline-size;
+}
+@container (max-width: 980px) {
+  .kb-doc-shell :deep(.kb-outline) { display: none; }
+}
+
 .kb-doc {
-  height: 100%;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   padding: 40px 24px 88px;
   /* App.vue 的 .app-layout 全局设了 user-select: none（防拖拽分栏时误选界面文字），
@@ -376,11 +435,37 @@ function onReverted(): void {
 .kb-doc.editing .kb-doc-head,
 .kb-doc.editing .kb-edit-bar {
   flex-shrink: 0;
+  /* flex 列里 margin:auto 的子项不再拉伸、会缩成内容宽度并居中——
+     标题 / 操作条与满宽的正文编辑器就对不齐了。显式占满那条 720 竖轴。 */
+  width: 100%;
 }
 
 .kb-doc-head {
   margin-bottom: 32px;
 }
+/* 面包屑：文章标题上方一行静音的位置说明，不是导航条 */
+.kb-crumbs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 6px;
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--aide-text-muted);
+}
+.kb-crumb {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  transition: color var(--aide-ease-t);
+}
+.kb-crumb:hover { color: var(--aide-text-primary); }
+.kb-crumb:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-crumb-sep { opacity: 0.5; }
+
 .kb-doc-head h1 {
   margin: 0 0 10px;
   font-size: 26px;
@@ -421,6 +506,19 @@ function onReverted(): void {
 .kb-link:disabled { opacity: 0.4; cursor: default; }
 .kb-link:disabled:hover { color: var(--aide-text-muted); }
 .kb-link.danger:hover { color: var(--aide-danger); }
+/* 「编辑」是这页最主要的动作：给它一个轮廓，其余（历史 / 删除）保持静音文字 */
+.kb-link.kb-edit-btn {
+  padding: 3px 12px;
+  color: var(--aide-text-secondary);
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+}
+.kb-link.kb-edit-btn:hover:not(:disabled) {
+  color: var(--aide-text-primary);
+  background: var(--aide-surface-hover);
+  border-color: var(--aide-border);
+}
+
 .kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
 
 .kb-lock-note {
@@ -584,6 +682,11 @@ function onReverted(): void {
 .kb-body :deep(h3) { font-size: 15px; }
 .kb-body :deep(h4) { font-size: 14px; }
 .kb-body :deep(> *:first-child) { margin-top: 0; }
+/* 目录跳转落点：标题不要贴着容器顶边 */
+.kb-body :deep(h1),
+.kb-body :deep(h2),
+.kb-body :deep(h3),
+.kb-body :deep(h4) { scroll-margin-top: 20px; }
 
 /* 段落节奏由这里定：.msg-text p 的 8px 是聊天里的密度，阅读面要更松 */
 .kb-body :deep(p) { margin: 0 0 16px; }
@@ -620,6 +723,53 @@ function onReverted(): void {
 .kb-body :deep(th) {
   background: var(--aide-bg-deep);
   font-weight: 600;
+}
+
+/* 代码块（markdown.ts 的 renderCode 产出）：外层 .kb-code 持有底色与边框，
+   里面的 pre 退成纯滚动区——否则 .msg-text pre 自带的那层框会叠成双框。
+   顶栏只放两样：语言名（左）与复制（右），都是静音小字。 */
+.kb-body :deep(.kb-code) {
+  margin: 18px 0;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  background: var(--aide-bg-deep);
+  overflow: hidden;
+}
+.kb-body :deep(.kb-code-bar) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 30px;
+  padding: 0 8px 0 14px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  border-bottom: 1px solid var(--aide-border-subtle);
+  user-select: none;
+}
+.kb-body :deep(.kb-code-lang) { font-family: var(--aide-font-mono); letter-spacing: 0.02em; }
+.kb-body :deep(.kb-copy) {
+  border: none;
+  background: none;
+  padding: 3px 8px;
+  font: inherit;
+  color: inherit;
+  border-radius: var(--aide-radius-sm);
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity var(--aide-ease-t), background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.kb-body :deep(.kb-code:hover .kb-copy),
+.kb-body :deep(.kb-copy:focus-visible) { opacity: 1; }
+.kb-body :deep(.kb-copy:hover) { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+.kb-body :deep(.kb-copy:focus-visible) { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-body :deep(.kb-code pre) {
+  margin: 0;
+  padding: 12px 14px;
+  border: none;
+  border-radius: 0;
+  background: none;
+  font-size: 12.5px;
+  line-height: 1.65;
 }
 
 /* 提示块（<Note> / <Tip> / <Warning> 渲染而来，类名由 markdown.ts 写死）：

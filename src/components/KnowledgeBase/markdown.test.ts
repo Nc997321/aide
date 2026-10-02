@@ -187,3 +187,37 @@ describe("renderKbMarkdown 的文档站组件标签", () => {
     expect(html).not.toMatch(/style|onclick/);
   });
 });
+
+describe("renderKbMarkdown 的代码块", () => {
+  it("标了语言：高亮 + 语言标签 + 复制按钮", () => {
+    const html = renderKbMarkdown("```ts\nconst a = 1;\n```");
+
+    expect(html).toContain('class="kb-code"');
+    expect(html).toContain('<span class="kb-code-lang">ts</span>');
+    expect(html).toContain("data-kb-copy");
+    expect(html).toContain("language-ts");
+    expect(html).toContain("hljs-keyword");
+  });
+
+  it("没标语言：不跑自动识别（不染色），仍有复制按钮", () => {
+    const html = renderKbMarkdown("```\nconst a = 1;\n```");
+
+    expect(html).toContain("data-kb-copy");
+    expect(html).not.toContain("hljs-");
+    expect(html).not.toContain("language-");
+  });
+
+  it("语言名来自文档，是不可信输入：不认识的不进 class，标签文字转义", () => {
+    const html = renderKbMarkdown('```"><img src=x onerror=a()>\nx\n```');
+
+    expect(html).not.toMatch(/<img/i);
+    expect(html).not.toContain("language-");
+  });
+
+  it("代码正文里的标签仍被转义", () => {
+    const html = renderKbMarkdown("```html\n<script>alert(1)</script>\n```");
+
+    expect(html).not.toContain("<script>");
+  });
+});
+

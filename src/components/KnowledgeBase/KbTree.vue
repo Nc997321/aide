@@ -28,6 +28,8 @@ const props = defineProps<{
   /** 文件选择器上认的扩展名（**服务端返回的那份**，父层从 kb.formats 拿）。
    *  它只管对话框里的过滤；真正的拒绝在 uploadFile 里——两处不能各写一份格式表。 */
   accept?: string[];
+  /** 侧栏形态：行高 30 / 字号 13、不出时间列。整屏目录页（默认）是书的目次，侧栏是导航。 */
+  compact?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -230,7 +232,7 @@ const vFocus = {
 </script>
 
 <template>
-  <div ref="root" class="kb-tree">
+  <div ref="root" class="kb-tree" :class="{ compact }">
     <!-- 隐藏的文件选择器：整个面板只有这一个（空态那个入口也走它） -->
     <input
       ref="fileEl"
@@ -343,6 +345,9 @@ const vFocus = {
 .kb-tree {
   position: relative;
 }
+/* 侧栏形态：同一套选中 / 层级语言，只收紧尺寸、去掉时间列 */
+.kb-tree.compact .kb-treerow { height: 30px; font-size: 13px; gap: 6px; padding-right: 4px; }
+.kb-tree.compact .kb-row-time { display: none; }
 
 /* 它是**目录页**，不是文件列表：行高 44、标题 15px、右侧一列时间。
    整屏宽度下，这样读起来像一本书的目次，而不是一个管理系统的表格。 */
