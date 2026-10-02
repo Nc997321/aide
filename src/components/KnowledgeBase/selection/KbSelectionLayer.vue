@@ -136,17 +136,19 @@ watch(
   () => props.bodyEl,
   (now, prev) => {
     prev?.removeEventListener("load", scheduleLayout, true);
-    prev?.removeEventListener("mouseup", onPointerUp);
-    prev?.removeEventListener("keyup", onKeyUp);
     observe();
-    now?.addEventListener("mouseup", onPointerUp);
-    now?.addEventListener("keyup", onKeyUp);
+    void now;
     dismiss();
   },
   { immediate: true },
 );
 onMounted(() => {
   window.addEventListener("resize", scheduleLayout);
+  // 选区结算在**文档级**监听：从后往前拖选时，鼠标常常拖过行首、在正文容器之外的页边空白处松手，
+  // 只挂在正文上就收不到这次抬起（只有从前往后选才出现入口的 bug 即源于此）。
+  // 是不是选在正文里，由 readSelection 按选区本身判断，不看鼠标落在哪。
+  document.addEventListener("mouseup", onPointerUp, true);
+  document.addEventListener("keyup", onKeyUp, true);
   document.addEventListener("mousedown", onDocMouseDown, true);
   document.addEventListener("keydown", onDocKeyDown, true);
   void document.fonts?.ready.then(scheduleLayout);
@@ -156,9 +158,9 @@ onBeforeUnmount(() => {
   clearTimeout(toastTimer);
   ro?.disconnect();
   props.bodyEl?.removeEventListener("load", scheduleLayout, true);
-  props.bodyEl?.removeEventListener("mouseup", onPointerUp);
-  props.bodyEl?.removeEventListener("keyup", onKeyUp);
   window.removeEventListener("resize", scheduleLayout);
+  document.removeEventListener("mouseup", onPointerUp, true);
+  document.removeEventListener("keyup", onKeyUp, true);
   document.removeEventListener("mousedown", onDocMouseDown, true);
   document.removeEventListener("keydown", onDocKeyDown, true);
   // 离开文档时丢掉草稿；待发送的保留（用户可能去聊天里发）。
@@ -166,12 +168,17 @@ onBeforeUnmount(() => {
 });
 
 // ── 选中 → 小入口 ──────────────────────────────────────────────────────────
-function onPointerUp(): void {
+/** 本层自己的零件（小入口 / 浮窗 / 角标 / 托盘）上的鼠标事件不算「选完了文字」。 */
+function isOwnUi(t: EventTarget | null): boolean {
+  return t instanceof Element && !!t.closest(".ksl-pop, .ksl-cta, .ksl-badge, .ksl-tray");
+}
+function onPointerUp(e: MouseEvent): void {
+  if (isOwnUi(e.target)) return;
   // 等浏览器把选区结算完（双击选词、拖选收尾）
   setTimeout(readSelection, 0);
 }
 function onKeyUp(e: KeyboardEvent): void {
-  if (e.shiftKey) setTimeout(readSelection, 0);
+  if (e.shiftKey && !isOwnUi(e.target)) setTimeout(readSelection, 0);
 }
 
 function readSelection(): void {

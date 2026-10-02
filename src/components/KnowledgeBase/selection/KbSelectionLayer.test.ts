@@ -116,6 +116,68 @@ describe("选中 → 小入口 → 浮窗", () => {
   });
 });
 
+describe("选区方向与松手位置（回归：从后往前选不出入口）", () => {
+  /** 用 setBaseAndExtent 造一个**反向**选区：锚点在后、焦点在前（与从右往左拖选同形）。 */
+  function selectBackward(needle: string): void {
+    const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+    for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+      const t = n as Text;
+      const i = t.data.indexOf(needle);
+      if (i < 0) continue;
+      window.getSelection()!.setBaseAndExtent(t, i + needle.length, t, i);
+      return;
+    }
+    throw new Error("没找到");
+  }
+  const settle = async () => {
+    await new Promise((r) => setTimeout(r, 0));
+    await nextTick();
+  };
+
+  it("反向选区、在正文里松手 → 出入口，范围与正向选同一段完全一样", async () => {
+    const w = mountLayer();
+    selectBackward("切流量到旧版本");
+    body.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await settle();
+    expect(w.find(".ksl-cta").exists()).toBe(true);
+    await w.find(".ksl-cta").trigger("click");
+    await nextTick();
+    expect(useKbSelections().all.value[0]!.ref).toMatchObject({ text: "切流量到旧版本", start: SRC.indexOf("切流量到旧版本") });
+  });
+
+  it("反向选区、鼠标拖出正文在页边空白处松手（mouseup 的目标在正文之外）→ 照样出入口", async () => {
+    const w = mountLayer();
+    selectBackward("切流量到旧版本");
+    scroller.dispatchEvent(new MouseEvent("mouseup", { bubbles: true })); // 目标是滚动容器本身，不在 body 内
+    await settle();
+    expect(w.find(".ksl-cta").exists()).toBe(true);
+  });
+
+  it("选区落在正文之外（比如标题区）→ 不出入口，也不报错", async () => {
+    const w = mountLayer();
+    const outside = document.createElement("h1");
+    outside.textContent = "文档标题";
+    scroller.insertBefore(outside, body);
+    const r = document.createRange();
+    r.selectNodeContents(outside);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(r);
+    scroller.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await settle();
+    expect(w.find(".ksl-cta").exists()).toBe(false);
+  });
+
+  it("在本层自己的零件上抬起鼠标不当作「选完了文字」（点入口时不会重复读选区）", async () => {
+    const w = mountLayer();
+    selectBackward("切流量到旧版本");
+    body.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }));
+    await settle();
+    await w.find(".ksl-cta").trigger("mouseup");
+    await settle();
+    expect(w.find(".ksl-cta").exists()).toBe(true);
+  });
+});
+
 describe("提交", () => {
   async function openCompose(w: VueWrapper) {
     await selectText("切流量到旧版本");
