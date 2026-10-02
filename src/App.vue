@@ -441,13 +441,14 @@ watch(
 );
 
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化/插件市场/记忆观测台，主区切回聊天
-  // （知识库不关：它跟会话/工作区/配对都无关，见主区挂载处的注释）。
+  // 选中会话时关掉自动化/插件市场/记忆观测台/知识库，主区切回聊天
+  // （知识库虽与会话/工作区无关，但它占主区、v-if 链优先级高于聊天，不关的话点会话毫无反应）。
   // 浏览器也不关：它是右栏 tab——2026-09-20 前这里会 closePanel()，正是"切会话就把浏览器
   // 踢掉、视图随之隐藏、agent 截图永远等不到帧"那条死路的入口。
   automation.closePanel();
   marketplace.closePanel();
   observatory.closePanel();
+  knowledgeBase.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
