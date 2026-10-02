@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import { renderKbMarkdown } from "./markdown";
 
@@ -218,6 +219,38 @@ describe("renderKbMarkdown 的代码块", () => {
     const html = renderKbMarkdown("```html\n<script>alert(1)</script>\n```");
 
     expect(html).not.toContain("<script>");
+  });
+});
+
+describe("renderKbMarkdown 的属性注入（2026-10-02 实测的存储型 XSS）", () => {
+  // 任何一条产出里出现「新的事件属性」就是失守：on* 必须只出现在被转义的文本里
+  const hasLiveHandler = (html: string): boolean => {
+    const el = document.createElement("div");
+    el.innerHTML = html;
+    return Array.from(el.querySelectorAll("*")).some((n) =>
+      n.getAttributeNames().some((a) => a.toLowerCase().startsWith("on")),
+    );
+  };
+
+  const PAYLOADS: [string, string][] = [
+    ["链接 href 里的引号", '[a](https://e.com/"onmouseover="alert(1))'],
+    ["链接 <> 形态的 href", '[a](<https://e.com/" onmouseover="alert(1)>)'],
+    ["链接 title", '[a](https://e.com "t\\" onmouseover=\\"alert(1)")'],
+    ["图片 <> 形态的 src", '![a](<https://e.com/x.png" onerror="alert(1)>)'],
+    ["图片 alt", '![a" onerror="alert(1)](https://e.com/x.png)'],
+    ["围栏语言名", '```ts" onclick="alert(1)\nx\n```'],
+  ];
+
+  for (const [name, src] of PAYLOADS) {
+    it(`${name}：不产生活的事件属性`, () => {
+      expect(hasLiveHandler(renderKbMarkdown(src))).toBe(false);
+    });
+  }
+
+  it("正常的带引号 title / alt 仍然被完整保留（只是被转义）", () => {
+    const html = renderKbMarkdown('[a](https://e.com "say \'hi\'")');
+    expect(html).toContain('href="https://e.com"');
+    expect(html).toContain("&#39;hi&#39;");
   });
 });
 

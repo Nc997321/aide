@@ -19,6 +19,16 @@ import { Marked } from "marked";
 import { escapeHtml } from "@aide/sdk/utils/markdown";
 import { hljs } from "@aide/sdk/utils/highlight";
 
+/**
+ * **属性位置**的转义。SDK 的 `escapeHtml` 只转 `& < >`，写进文本节点够用，写进
+ * `href="…"` / `alt="…"` 就不够了：值里一个 `"` 就能收掉属性、后面接 `onerror=`——
+ * 文档正文团队可写，那是对所有读者客户端的存储型 XSS（2026-10-02 实测复现）。
+ * 凡是要进属性的值，一律走这个；文本位置继续用 escapeHtml。
+ */
+function escapeAttr(v: string): string {
+  return escapeHtml(v).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
 /** 允许的 URL 协议。其余（javascript: / data: / vbscript:）一律拒绝。 */
 function safeUrl(raw: string): string | null {
   const v = raw.trim();
@@ -183,7 +193,7 @@ function renderCode({ text, lang }: { text: string; lang?: string }): string {
     known && text.length <= HIGHLIGHT_MAX_CHARS
       ? hljs.highlight(text, { language: name, ignoreIllegals: true }).value
       : escapeHtml(text);
-  const cls = known ? `hljs language-${escapeHtml(name)}` : "hljs";
+  const cls = known ? `hljs language-${escapeAttr(name)}` : "hljs";
   return (
     `<div class="kb-code"><div class="kb-code-bar"><span class="kb-code-lang">${escapeHtml(name)}</span>` +
     `<button type="button" class="kb-copy" data-kb-copy>复制</button></div>` +
@@ -217,8 +227,8 @@ kbMarked.use({
       const url = safeUrl(href);
       // 协议不允许 → 退化成纯文本，而不是渲染一个危险的 <a>
       if (!url) return text;
-      const t = title ? ` title="${escapeHtml(title)}"` : "";
-      return `<a href="${escapeHtml(url)}"${t} target="_blank" rel="noopener noreferrer">${text}</a>`;
+      const t = title ? ` title="${escapeAttr(title)}"` : "";
+      return `<a href="${escapeAttr(url)}"${t} target="_blank" rel="noopener noreferrer">${text}</a>`;
     },
 
     image({
@@ -232,10 +242,10 @@ kbMarked.use({
     }): string {
       const url = safeImageUrl(href);
       if (!url) return escapeHtml(text);
-      const t = title ? ` title="${escapeHtml(title)}"` : "";
+      const t = title ? ` title="${escapeAttr(title)}"` : "";
       // loading=lazy：一篇长文档里几十张图不该在打开瞬间全部拉。
       // ⚠️ 对 asset:// 它不生效（src 稍后会被 JS 换成 objectURL），见 spec §12 已知代价
-      return `<img src="${escapeHtml(url)}" alt="${escapeHtml(text)}"${t} loading="lazy" />`;
+      return `<img src="${escapeAttr(url)}" alt="${escapeAttr(text)}"${t} loading="lazy" />`;
     },
   },
 });
