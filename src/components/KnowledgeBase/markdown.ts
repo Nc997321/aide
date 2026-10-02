@@ -48,13 +48,130 @@ function safeImageUrl(raw: string): string | null {
   return safeUrl(v);
 }
 
+/**
+ * 原始 HTML 的**标签白名单**：只放行"排版语义"标签，且一律**丢弃全部属性**。
+ *
+ * 为什么要放行：导入的文档（Mintlify 一类文档站导出的 md）里到处是
+ * `<h2 id="x"> 标题 </h2>`，全转义的话就把标签源码原样摆在正文里。
+ * 为什么安全：只出标签名、不带任何属性 → 没有事件属性、style、href、src 可注入；
+ * 白名单之外（script/iframe/img/a/style/不认识的标签……）与标签之间的文字仍然整段转义。
+ * `id` 也一并丢掉：它会和应用自身 DOM 的 id 撞车（DOM clobbering），而文档内锚点
+ * 本来就因为链接 target=_blank 用不上。
+ */
+const ALLOWED_TAGS = new Set([
+  "h1", "h2", "h3", "h4", "h5", "h6",
+  "p", "br", "hr",
+  "b", "strong", "i", "em", "u", "s", "del", "sub", "sup", "kbd", "mark",
+  "ul", "ol", "li", "blockquote",
+  "table", "thead", "tbody", "tr", "th", "td",
+]);
+const VOID_TAGS = new Set(["br", "hr"]);
+
+/**
+ * 文档站组件标签（Mintlify 等）。**只认这张具体的名单，不按"首字母大写"猜**：
+ * `Vec<T>` 里的 `<T>` 同样是大写开头，猜规则会把泛型吞掉。名单外一律照旧转义显示。
+ *  - callout：渲染成提示块（kind 只决定配色，类名全是本文件写死的，不取自文档）；
+ *  - container：标签本身对读者没有意义，丢掉、保留里面的内容；有 title 的把标题留成一行粗体
+ *    （否则「安装」「配置」这些小标题会凭空消失）。title 转义后只作纯文本。
+ */
+const CALLOUT_KINDS: Record<string, "note" | "tip" | "warn"> = {
+  note: "note", info: "note",
+  tip: "tip", check: "tip",
+  warning: "warn", caution: "warn", danger: "warn",
+};
+const CONTAINER_TAGS = new Set([
+  "steps", "step", "tabs", "tab", "card", "cardgroup", "accordion", "accordiongroup",
+  "frame", "columns", "column", "div", "span",
+]);
+const isComponentTag = (name: string) => name in CALLOUT_KINDS || CONTAINER_TAGS.has(name);
+
+// 标签 `<name ...>` / `</name>` / `<name/>`；属性段不含 `<` `>`，所以 `<a title=">">` 这类
+// 取巧写法落不进来，而是被当成普通文字转义。
+const TAG_RE = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)(\s[^<>]*)?(\/?)>/g;
+const COMMENT_RE = /<!--[\s\S]*?-->/g;
+const TITLE_RE = /\btitle\s*=\s*(?:"([^"]*)"|'([^']*)')/i;
+
+/** 当前这次 parse 里还没闭合的提示块（记元素名 div/span，闭合要对得上）。parse 同步，模块级即可。 */
+let openCallouts: string[] = [];
+
+function sanitizeHtml(raw: string, block: boolean): string {
+  // HTML 注释对读者没有意义，静默丢弃（以前会把 `<!-- ... -->` 当文字摆出来）
+  const text = raw.replace(COMMENT_RE, "");
+  let out = "";
+  let last = 0;
+  for (const m of text.matchAll(TAG_RE)) {
+    const name = m[2].toLowerCase();
+    const closing = m[1] === "/";
+    out += escapeHtml(text.slice(last, m.index));
+    last = m.index + m[0].length;
+    if (name in CALLOUT_KINDS) {
+      if (closing) {
+        // 没有对应开标签的孤立闭标签：丢掉，别输出一个会误伤外层的 </div>
+        const el = openCallouts.pop();
+        if (el) out += `</${el}>`;
+      } else if (m[4] === "/" || /\/\s*$/.test(m[3] ?? "")) {
+        continue; // 自闭合 <Note />：没有内容，不开外框
+      } else {
+        // 行内（<Note>x</Note> 写在一行里）用 span：块级元素塞进 <p> 会被浏览器截断出空段落
+        const el = block ? "div" : "span";
+        openCallouts.push(el);
+        out += `<${el} class="kb-callout kb-callout-${CALLOUT_KINDS[name]}">`;
+      }
+    } else if (CONTAINER_TAGS.has(name)) {
+      if (closing) continue;
+      const t = TITLE_RE.exec(m[3] ?? "");
+      const title = (t?.[1] ?? t?.[2] ?? "").trim();
+      if (title) out += block ? `<p><strong>${escapeHtml(title)}</strong></p>` : `<strong>${escapeHtml(title)}</strong> `;
+    } else if (!ALLOWED_TAGS.has(name)) {
+      out += escapeHtml(m[0]);
+    } else if (VOID_TAGS.has(name)) {
+      out += `<${name}>`;
+    } else {
+      out += closing ? `</${name}>` : `<${name}>`;
+    }
+  }
+  return out + escapeHtml(text.slice(last));
+}
+
+/**
+ * 解析前处理：给**独占一行**的组件标签前后补空行。
+ *
+ * CommonMark 的 HTML 块会一直吃到下一个空行——`<Note>\n  带 `代码` 的正文\n</Note>` 整段
+ * 都落进同一个 html 块，正文就成了不渲染的原文。补了空行，标签自成一块，里面的正文走正常
+ * Markdown 解析。围栏代码块里的不动（那是文档在**讲**这些标签，不是在用）。
+ */
+const COMPONENT_LINE_RE = /^\s*<\/?([a-zA-Z][a-zA-Z0-9]*)(\s[^<>]*)?\/?>\s*$/;
+function separateComponentTags(text: string): string {
+  if (!/<\/?[a-zA-Z]/.test(text)) return text;
+  const lines = text.split("\n");
+  const out: string[] = [];
+  let fence: string | null = null;
+  for (const line of lines) {
+    const f = /^\s*(`{3,}|~{3,})/.exec(line);
+    if (f) {
+      if (fence === null) fence = f[1][0];
+      else if (f[1][0] === fence) fence = null;
+    }
+    const m = fence === null && !f ? COMPONENT_LINE_RE.exec(line) : null;
+    if (m && isComponentTag(m[1].toLowerCase())) {
+      if (out.length && out[out.length - 1].trim() !== "") out.push("");
+      out.push(line.trim()); // 去缩进：缩进 ≥4 格会被当成代码块
+      out.push("");
+    } else {
+      out.push(line);
+    }
+  }
+  return out.join("\n");
+}
+
 const kbMarked = new Marked({ gfm: true, breaks: false });
 
 kbMarked.use({
   renderer: {
-    /** 原始 HTML 块：转义成文本显示，绝不交给浏览器解析。 */
-    html({ text }: { text: string }): string {
-      return escapeHtml(text);
+    /** 原始 HTML（块与行内同走这里）：只放行白名单标签（无属性），其余转义成文本，
+     *  绝不把原样 HTML 交给浏览器解析。 */
+    html({ text, block }: { text: string; block?: boolean }): string {
+      return sanitizeHtml(text, block ?? false);
     },
 
     link({
@@ -100,7 +217,10 @@ export function renderKbMarkdown(text: string): string {
   // 缓存靠下面的 Map 自己维护（与 SDK 同款 LRU 思路，规模按文档数封顶）。
   const hit = cache.get(text);
   if (hit !== undefined) return hit;
-  const html = kbMarked.parse(text) as string;
+  openCallouts = [];
+  let html = kbMarked.parse(separateComponentTags(text)) as string;
+  // 漏写闭标签的提示块：在文末补上，别让它的外框连带后面的内容一起开着
+  while (openCallouts.length) html += `</${openCallouts.pop()}>`;
   if (cache.size >= 200) cache.delete(cache.keys().next().value as string);
   cache.set(text, html);
   return html;

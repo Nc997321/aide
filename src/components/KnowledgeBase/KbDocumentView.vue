@@ -339,6 +339,15 @@ function onReverted(): void {
   height: 100%;
   overflow: auto;
   padding: 40px 24px 88px;
+  /* App.vue 的 .app-layout 全局设了 user-select: none（防拖拽分栏时误选界面文字），
+   * 该属性可继承，会一路传导到正文，整篇文档都选不中、复制不了（与 ChatMessage.vue /
+   * FileWindow.vue 同一类问题）。在文档容器局部恢复；按钮 / 链接式动作仍保持不可选。 */
+  user-select: text;
+  -webkit-user-select: text;
+}
+.kb-doc button {
+  user-select: none;
+  -webkit-user-select: none;
 }
 /* 一页纸的那条竖轴：直接子元素一律 720px 居中 */
 .kb-doc > * {
@@ -612,6 +621,27 @@ function onReverted(): void {
   background: var(--aide-bg-deep);
   font-weight: 600;
 }
+
+/* 提示块（<Note> / <Tip> / <Warning> 渲染而来，类名由 markdown.ts 写死）：
+   与引用块同一语言——左侧强调线 + 淡底，不画整圈边框 */
+.kb-body :deep(.kb-callout) {
+  display: block;
+  margin: 16px 0;
+  padding: 10px 14px;
+  border-left: 3px solid var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border-radius: 0 var(--aide-radius-sm) var(--aide-radius-sm) 0;
+}
+.kb-body :deep(.kb-callout-tip) {
+  border-left-color: var(--aide-success);
+  background: color-mix(in srgb, var(--aide-success) 12%, transparent);
+}
+.kb-body :deep(.kb-callout-warn) {
+  border-left-color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 12%, transparent);
+}
+.kb-body :deep(.kb-callout > :first-child) { margin-top: 0; }
+.kb-body :deep(.kb-callout > :last-child) { margin-bottom: 0; }
 
 .kb-body :deep(a) {
   color: var(--aide-accent);
