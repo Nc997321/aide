@@ -124,7 +124,9 @@ async fn a_real_host_pairs_a_phone_through_a_real_relay() {
     let hello_ok = phone.recv().await;
     assert_eq!(hello_ok["type"], "hello_ok", "{hello_ok}");
     assert_eq!(hello_ok["host"]["id"], offer.device_id.as_str());
-    assert_eq!(hello_ok["host"]["os"], "linux");
+    // Host 上报的是它自己所在的系统（std::env::consts::OS），不是固定 linux——
+    // 测试跑在哪个平台就该是哪个（CI 的 macOS 上曾因写死 "linux" 失败）。
+    assert_eq!(hello_ok["host"]["os"], std::env::consts::OS);
 
     // 真实的 Host 命令：来自真 Core 的命令表
     let ws = phone.call(1, "get_active_workspace", json!({})).await;
