@@ -88,9 +88,17 @@ jobs:
         working-directory: agent-sidecar
     steps:
       - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
       - uses: actions/setup-node@v5
         with:
           node-version: 24
+      # projection.dom.test.ts 的 jsdom 只声明在根 package.json，靠向上解析到根 node_modules
+      # ——本地如此，CI 也要还原这个布局，否则该文件的 worker 起不来
+      - name: install root deps (jsdom)
+        working-directory: .
+        run: pnpm install --frozen-lockfile
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
