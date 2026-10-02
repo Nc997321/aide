@@ -356,6 +356,7 @@ fn close_freeze(inner: &DiagInner, fz: ActiveFreeze, outcome: FreezeOutcome, dir
 }
 
 /// 主窗口 HWND（Windows 判「未响应」用）。在主线程解析一次，存成整数共享。
+#[cfg_attr(not(windows), allow(unused_variables))] // app 只在 cfg(windows) 块里用
 pub(super) fn resolve_hwnd(app: &AppHandle) -> Arc<AtomicIsize> {
     let hwnd = Arc::new(AtomicIsize::new(0));
     #[cfg(windows)]
@@ -376,6 +377,7 @@ pub(super) fn resolve_hwnd(app: &AppHandle) -> Arc<AtomicIsize> {
 /// 主线程 OS TID：冻结期跨线程抓栈用（OpenThread + SuspendThread）。在主线程
 /// 调 GetCurrentThreadId 记下，watchdog 据此挂起主线程走栈。非 Windows 为 0（抓栈
 /// 函数自行返回 None）。
+#[cfg_attr(not(windows), allow(unused_variables))] // app 只在 cfg(windows) 块里用
 fn resolve_main_thread_id(app: &AppHandle) -> Arc<AtomicU32> {
     let tid = Arc::new(AtomicU32::new(0));
     #[cfg(windows)]

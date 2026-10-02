@@ -147,7 +147,8 @@ webview2-com = "0.38.2"
 # 曾写成 `objc2 = "0.2"`（指向更老的 0.2.7，只有 `Id` 没有 `Retained`），与它们不同代，
 # 桌面壳在 macOS 上编不过。
 objc2-app-kit = { version = "0.2", features = ["NSPasteboard", "NSPasteboardItem"] }
-objc2-foundation = { version = "0.2", features = ["NSString", "NSURL", "NSArray"] }
+# NSEnumerator：NSArray::iter / IntoIterator 都挂在它后面（clipboard.rs 遍历剪贴板条目用）
+objc2-foundation = { version = "0.2", features = ["NSString", "NSURL", "NSArray", "NSEnumerator"] }
 
 [dev-dependencies]
 # test feature 提供 tauri::test::mock_app（MockRuntime）——单测里验证事件播报/静默
