@@ -15,7 +15,7 @@
 //   少一个依赖，且语义上更难出错：漏掉的是"少渲染一个标签"，不是"放进一个脚本"。
 //
 // ⚠️ 将来若要给 aide 全局收紧渲染，改这里一处即可，不要在各 v-html 点重复写。
-import { Marked } from "marked";
+import { Marked, type Tokens } from "marked";
 import { escapeHtml } from "@aide/sdk/utils/markdown";
 import { hljs } from "@aide/sdk/utils/highlight";
 
@@ -202,6 +202,34 @@ function renderCode({ text, lang }: { text: string; lang?: string }): string {
 }
 
 const kbMarked = new Marked({ gfm: true, breaks: false });
+
+/**
+ * 文档互链：`[[标题]]` / `[[标题|显示文字]]`。
+ *
+ * 这里只负责**渲染成一个带标记的锚点**，不解析成哪篇文档——渲染函数是纯的、按正文缓存，
+ * 而「标题对应哪篇」取决于当前库的目录，由 KbDocumentView 在点击与渲染后处理里查。
+ * 目标名来自文档（不可信），只进 data 属性且整体转义；没有 href，不可能成为导航向量。
+ */
+kbMarked.use({
+  extensions: [
+    {
+      name: "wikiLink",
+      level: "inline",
+      start: (src: string) => src.indexOf("[["),
+      tokenizer(src: string) {
+        const m = /^\[\[([^[\]\n|]{1,200})(?:\|([^[\]\n]{1,200}))?\]\]/.exec(src);
+        if (!m) return undefined;
+        const target = m[1].trim();
+        if (!target) return undefined;
+        return { type: "wikiLink", raw: m[0], target, label: (m[2] ?? m[1]).trim() };
+      },
+      renderer(token: Tokens.Generic) {
+        const target = escapeAttr(String(token.target ?? ""));
+        return `<a class="kb-wiki" data-kb-wiki="${target}" role="link" tabindex="0">${escapeHtml(String(token.label ?? ""))}</a>`;
+      },
+    },
+  ],
+});
 
 kbMarked.use({
   renderer: {

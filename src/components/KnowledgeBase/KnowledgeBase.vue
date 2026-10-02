@@ -106,6 +106,24 @@ const hitPaths = computed(() => {
   return out;
 });
 
+// ── 文档互链 [[标题]] ──
+const norm = (t: string): string => t.trim().toLowerCase();
+const knownTitles = computed<ReadonlySet<string>>(
+  () => new Set(k.documents.value.filter((d) => d.kind !== "folder").map((d) => norm(d.title))),
+);
+
+/** 点互链：按标题找文档。重名取最近更新的那篇；找不到就如实说，不静默。 */
+async function onWiki(title: string): Promise<void> {
+  const hits = k.documents.value
+    .filter((d) => d.kind !== "folder" && norm(d.title) === norm(title))
+    .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
+  if (!hits.length) {
+    k.notice.value = `库里没有叫「${title.trim()}」的文档`;
+    return;
+  }
+  await openFromSearch(hits[0].id);
+}
+
 /** 点面包屑里的文件夹：文件夹没有正文，只能把它在目录里亮出来。 */
 async function onReveal(id: string): Promise<void> {
   if (!railOpen.value) toggleRail();
@@ -235,8 +253,10 @@ async function openFromSearch(id: string): Promise<void> {
 function onTreeToggle(id: string): void {
   k.toggleCollapsed(k.activeSpaceId.value, id);
 }
-function onTreePatch(id: string, input: { title?: string; parentId?: string | null }): void {
-  void k.patchNode(id, input);
+async function onTreePatch(id: string, input: { title?: string; parentId?: string | null }): Promise<void> {
+  const ok = await k.patchNode(id, input);
+  // 移进了折叠着的文件夹：展开它，否则刚移过去的节点从屏幕上「消失」了
+  if (ok && input.parentId) k.revealNode(input.parentId);
 }
 
 /** 新建节点：标题在树组件的内联输入里收集，随 emit 一起交出来。 */
@@ -620,7 +640,9 @@ onMounted(() => {
           v-else-if="k.activeDoc.value"
           :doc="k.activeDoc.value"
           :crumbs="crumbs"
+          :known-titles="knownTitles"
           :editable="true"
+          @wiki="(t) => void onWiki(t)"
           @reveal="(id) => void onReveal(id)"
           @saved="(id) => refreshDoc(id)"
           @reverted="(id) => refreshDoc(id)"

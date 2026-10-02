@@ -222,6 +222,33 @@ describe("renderKbMarkdown 的代码块", () => {
   });
 });
 
+describe("renderKbMarkdown 的文档互链 [[标题]]", () => {
+  it("渲染成带标记的锚点，目标进 data 属性，没有 href", () => {
+    const html = renderKbMarkdown("见 [[部署手册]] 与 [[回滚|回滚流程]]");
+
+    expect(html).toContain('data-kb-wiki="部署手册"');
+    expect(html).toContain(">部署手册</a>");
+    expect(html).toContain('data-kb-wiki="回滚"');
+    expect(html).toContain(">回滚流程</a>");
+    expect(html).not.toContain("href=");
+  });
+
+  it("目标名来自文档，是不可信输入：转义，不能逃出属性", () => {
+    const html = renderKbMarkdown('[[x" onclick="a()]]');
+
+    // 引号被转义在属性值里；`onclick=` 只会作为链接文字出现，而不是一个活属性
+    // （「不产生活的事件属性」由下面基于 DOM 的那组用例统一断言）
+    expect(html).toContain('data-kb-wiki="x&quot; onclick=&quot;a()"');
+  });
+
+  it("代码里的 [[x]] 不是互链；单括号、空目标、跨行也不是", () => {
+    expect(renderKbMarkdown("`[[x]]`")).not.toContain("data-kb-wiki");
+    expect(renderKbMarkdown("[x]")).not.toContain("data-kb-wiki");
+    expect(renderKbMarkdown("[[ ]]")).not.toContain("data-kb-wiki");
+    expect(renderKbMarkdown("[[a\nb]]")).not.toContain("data-kb-wiki");
+  });
+});
+
 describe("renderKbMarkdown 的属性注入（2026-10-02 实测的存储型 XSS）", () => {
   // 任何一条产出里出现「新的事件属性」就是失守：on* 必须只出现在被转义的文本里
   const hasLiveHandler = (html: string): boolean => {
@@ -238,6 +265,7 @@ describe("renderKbMarkdown 的属性注入（2026-10-02 实测的存储型 XSS�
     ["链接 title", '[a](https://e.com "t\\" onmouseover=\\"alert(1)")'],
     ["图片 <> 形态的 src", '![a](<https://e.com/x.png" onerror="alert(1)>)'],
     ["图片 alt", '![a" onerror="alert(1)](https://e.com/x.png)'],
+    ["互链目标", '[[x" onclick="alert(1)]]'],
     ["围栏语言名", '```ts" onclick="alert(1)\nx\n```'],
   ];
 

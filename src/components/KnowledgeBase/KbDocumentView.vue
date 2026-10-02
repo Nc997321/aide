@@ -30,8 +30,10 @@ const props = withDefaults(
     editable?: boolean;
     /** 祖先链（从根到父，不含自己）。给了才显示面包屑 */
     crumbs?: { id: string; title: string }[];
+    /** 库里现有文档标题（小写）。互链 `[[标题]]` 据此判断是否断链 */
+    knownTitles?: ReadonlySet<string>;
   }>(),
-  { editable: false, crumbs: () => [] },
+  { editable: false, crumbs: () => [], knownTitles: () => new Set<string>() },
 );
 
 const emit = defineEmits<{
@@ -41,6 +43,8 @@ const emit = defineEmits<{
   reverted: [docId: string];
   /** 编辑会话开关（父层据此在切换文档前拦截未保存修改） */
   editing: [on: boolean];
+  /** 点了互链 `[[标题]]`：父层按标题找文档并打开 */
+  wiki: [title: string];
   /** 点了面包屑里的文件夹：文件夹没有正文可开，只能在目录里定位到它 */
   reveal: [id: string];
   /** 用户点了删除。**只报意图**：确认弹窗与接口调用都在父层——只有它手里有整份
@@ -106,12 +110,22 @@ async function loadAssets() {
   assetLoader = null;
 
   if (!viewBody.value) return;
+  markWikiLinks();
   assetLoader = createAssetLoader((id) => kb.getAsset(id));
   await assetLoader.load(viewBody.value);
 }
 
+/** 互链渲染后处理：目标标题在库里找不到的标成断链（灰色虚线），而不是让人点了才发现没反应。 */
+function markWikiLinks(): void {
+  viewBody.value?.querySelectorAll<HTMLElement>("[data-kb-wiki]").forEach((el) => {
+    const known = props.knownTitles.has((el.dataset.kbWiki ?? "").trim().toLowerCase());
+    el.classList.toggle("missing", !known);
+    el.title = known ? "" : "库里没有这篇文档";
+  });
+}
+
 watch(
-  () => [props.doc.id, props.doc.content, editing.value, showHistory.value],
+  () => [props.doc.id, props.doc.content, editing.value, showHistory.value, props.knownTitles],
   loadAssets,
   { immediate: true },
 );
@@ -139,6 +153,11 @@ const readMinutes = computed(() => Math.max(1, Math.round((props.doc.content?.le
 
 /** 代码块的「复制」：按钮在 v-html 里，事件委托在正文容器上。 */
 async function onBodyClick(e: MouseEvent): Promise<void> {
+  const wiki = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-kb-wiki]");
+  if (wiki) {
+    emit("wiki", wiki.dataset.kbWiki ?? "");
+    return;
+  }
   const btn = (e.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-kb-copy]");
   if (!btn) return;
   const code = btn.closest(".kb-code")?.querySelector("pre")?.textContent ?? "";
@@ -792,6 +811,19 @@ function onReverted(): void {
 }
 .kb-body :deep(.kb-callout > :first-child) { margin-top: 0; }
 .kb-body :deep(.kb-callout > :last-child) { margin-bottom: 0; }
+
+/* 互链：与普通链接同色但无下划线 hover 之外的装饰；断链灰掉并画虚线 */
+.kb-body :deep(.kb-wiki) {
+  color: var(--aide-accent);
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
+}
+.kb-body :deep(.kb-wiki:hover) { border-bottom-color: var(--aide-accent); }
+.kb-body :deep(.kb-wiki.missing) {
+  color: var(--aide-text-muted);
+  cursor: default;
+  border-bottom: 1px dashed var(--aide-text-muted);
+}
 
 .kb-body :deep(a) {
   color: var(--aide-accent);

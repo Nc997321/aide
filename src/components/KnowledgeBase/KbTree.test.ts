@@ -237,3 +237,48 @@ describe("KbTree 的新建", () => {
     expect(w.emitted("create")?.[0]).toEqual([null, "folder", "顶层文件夹"]);
   });
 });
+
+describe("拖拽移动", () => {
+  // 树：f(文件夹) ⊃ a(文档)、g(文件夹)；h 是根上的文档
+  const TREE = [...DOCS, node("h", null, "doc")];
+  const mountDrag = () =>
+    mount(KbTree, {
+      props: { documents: TREE, activeId: null, busy: false, collapsed: new Set<string>() },
+      global: { stubs: { Icon: true } },
+    });
+  const row = (w: ReturnType<typeof mountDrag>, id: string) => w.find(`[data-kb-node="${id}"]`);
+  const dt = () => ({ setData: () => {}, effectAllowed: "" });
+
+  it("拖文档到文件夹上 → patch(parentId = 该文件夹)", async () => {
+    const w = mountDrag();
+    await row(w, "h").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "f").trigger("dragover");
+    await row(w, "f").trigger("drop");
+    expect(w.emitted("patch")?.[0]).toEqual(["h", { parentId: "f" }]);
+  });
+
+  it("拖到树的空白处（根）→ patch(parentId = null)", async () => {
+    const w = mountDrag();
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await w.find(".kb-tree").trigger("drop"); // 事件目标就是容器本身 = 空白处
+    expect(w.emitted("patch")?.[0]).toEqual(["a", { parentId: null }]);
+  });
+
+  it("不能把文件夹拖进自己的子树；拖到原位也不动", async () => {
+    const w = mountDrag();
+    await row(w, "f").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "g").trigger("drop"); // g 在 f 里面
+    expect(w.emitted("patch")).toBeUndefined();
+
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "f").trigger("drop"); // a 本来就在 f 里
+    expect(w.emitted("patch")).toBeUndefined();
+  });
+
+  it("文档行不是放置目标", async () => {
+    const w = mountDrag();
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "h").trigger("drop");
+    expect(w.emitted("patch")).toBeUndefined();
+  });
+});

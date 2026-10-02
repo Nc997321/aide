@@ -214,6 +214,58 @@ function commitCreate(): void {
   creating.value = null;
 }
 
+// ── 拖拽移动 ──
+// 拖一行到文件夹上 = 移进去；拖到树的空白处 = 移到根。不做「拖到两行之间排序」：
+// 顺序由 docTree 的排序规则决定，没有手动序号可写。
+// 走 patch(parentId)，与「⋯ → 移动到…」同一条通道、同一套服务端校验；这里只先挡掉
+// 一眼就知道不行的（拖进自己的子树、拖到原位），让光标别骗人。
+const dragId = ref<string | null>(null);
+/** 当前悬停的放置目标：文件夹 id；'' = 根（树空白处） */
+const dropTarget = ref<string | null>(null);
+
+function canDropInto(parentId: string | null): boolean {
+  const id = dragId.value;
+  if (!id) return false;
+  const me = props.documents.find((d) => d.id === id);
+  if (!me || me.parentId === parentId) return false;
+  return parentId === null || !selfSubtreeOf(id).has(parentId);
+}
+
+function onDragStart(e: DragEvent, id: string): void {
+  dragId.value = id;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id); // Firefox / WebKit 没有数据就不触发 drag
+  }
+}
+function onDragEnd(): void {
+  dragId.value = null;
+  dropTarget.value = null;
+}
+/** 树容器（= 根）只认落在**空白处**的拖放：落在某个文档行上不是「移到根」，
+ *  那一行不是落点，事件冒泡上来也要无视，否则用户对着一个文档松手、项目却跑到了根目录。 */
+function onRowSurface(e: DragEvent): boolean {
+  return (e.target as HTMLElement | null)?.closest?.(".kb-treerow") != null;
+}
+
+function onDragOver(e: DragEvent, parentId: string | null): void {
+  if (parentId === null && onRowSurface(e)) return;
+  if (!canDropInto(parentId)) return; // 不 preventDefault = 浏览器显示「禁止」光标
+  e.preventDefault();
+  e.stopPropagation();
+  dropTarget.value = parentId ?? "";
+}
+function onDrop(e: DragEvent, parentId: string | null): void {
+  if (parentId === null && onRowSurface(e)) return;
+  e.stopPropagation();
+  const id = dragId.value;
+  const ok = canDropInto(parentId);
+  onDragEnd();
+  if (!id || !ok) return;
+  e.preventDefault();
+  emit("patch", id, { parentId });
+}
+
 /** 搜索跳转用：把某一行滚进视野。`CSS.escape` 防 id 里的特殊字符破坏选择器。 */
 function scrollToNode(id: string): void {
   root.value
@@ -232,7 +284,13 @@ const vFocus = {
 </script>
 
 <template>
-  <div ref="root" class="kb-tree" :class="{ compact }">
+  <div
+    ref="root"
+    class="kb-tree"
+    :class="{ compact, 'drop-root': dropTarget === '' }"
+    @dragover="onDragOver($event, null)"
+    @drop="onDrop($event, null)"
+  >
     <!-- 隐藏的文件选择器：整个面板只有这一个（空态那个入口也走它） -->
     <input
       ref="fileEl"
@@ -247,10 +305,16 @@ const vFocus = {
       v-for="row in rows"
       :key="row.doc.id"
       class="kb-treerow"
-      :class="{ on: row.doc.id === activeId, 'is-folder': row.isFolder }"
+      :class="{ on: row.doc.id === activeId, 'is-folder': row.isFolder, 'drop-on': dropTarget === row.doc.id, dragging: dragId === row.doc.id }"
       :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
       :data-kb-node="row.doc.id"
       tabindex="0"
+      :draggable="renaming !== row.doc.id"
+      @dragstart="onDragStart($event, row.doc.id)"
+      @dragend="onDragEnd"
+      @dragover="row.isFolder ? onDragOver($event, row.doc.id) : undefined"
+      @dragleave="dropTarget === row.doc.id && (dropTarget = null)"
+      @drop="row.isFolder ? onDrop($event, row.doc.id) : undefined"
       @click="onLabelClick(row)"
       @keydown.enter.prevent="row.isFolder ? emit('toggle', row.doc.id) : emit('open', row.doc.id)"
       @keydown.space.prevent="row.isFolder ? emit('toggle', row.doc.id) : emit('open', row.doc.id)"
@@ -348,6 +412,13 @@ const vFocus = {
 /* 侧栏形态：同一套选中 / 层级语言，只收紧尺寸、去掉时间列 */
 .kb-tree.compact .kb-treerow { height: 30px; font-size: 13px; gap: 6px; padding-right: 4px; }
 .kb-tree.compact .kb-row-time { display: none; }
+/* 侧栏里空白处也要能当「移到根」的落点：树撑满它的滚动区 */
+.kb-tree.compact { min-height: 100%; }
+
+/* 拖拽：被拖的那行变淡；放置目标（文件夹行 / 整棵树 = 根）用 accent 轮廓标出来 */
+.kb-treerow.dragging { opacity: 0.45; }
+.kb-treerow.drop-on { background: var(--aide-accent-subtle); box-shadow: inset 0 0 0 1px var(--aide-accent); }
+.kb-tree.drop-root { box-shadow: inset 0 0 0 1px var(--aide-accent); border-radius: var(--aide-radius-sm); }
 
 /* 它是**目录页**，不是文件列表：行高 44、标题 15px、右侧一列时间。
    整屏宽度下，这样读起来像一本书的目次，而不是一个管理系统的表格。 */
