@@ -18,6 +18,7 @@ import { minimalSetup } from "codemirror";
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language";
 import { markdown, markdownLanguage } from "@codemirror/lang-markdown";
 import { tags } from "@lezer/highlight";
+import { FORMAT_ACTIONS, type FormatAction } from "./mdCommands";
 
 const props = defineProps<{ modelValue: string }>();
 const emit = defineEmits<{
@@ -91,6 +92,9 @@ onMounted(() => {
         placeholder("开始写…（支持 Markdown）"),
         keymap.of([
           { key: "Mod-s", preventDefault: true, run: () => (emit("save"), true) },
+          { key: "Mod-b", preventDefault: true, run: (v) => (FORMAT_ACTIONS.bold(v), true) },
+          { key: "Mod-i", preventDefault: true, run: (v) => (FORMAT_ACTIONS.italic(v), true) },
+          { key: "Mod-k", preventDefault: true, run: (v) => (FORMAT_ACTIONS.link(v), true) },
         ]),
         theme,
         EditorView.updateListener.of((u) => {
@@ -121,11 +125,46 @@ watch(
   },
 );
 
+function run(action: FormatAction): void {
+  if (view) FORMAT_ACTIONS[action](view);
+}
+
+/** 工具条：不求全，只放写文档最常用的十个。其余照常手打 Markdown——存下去的永远是原文。 */
+const TOOLS: { action: FormatAction; label: string; title: string; cls?: string }[] = [
+  { action: "bold", label: "B", title: "加粗（Ctrl/Cmd+B）", cls: "b" },
+  { action: "italic", label: "I", title: "斜体（Ctrl/Cmd+I）", cls: "i" },
+  { action: "code", label: "<>", title: "行内代码", cls: "m" },
+  { action: "link", label: "链接", title: "链接（Ctrl/Cmd+K）" },
+  { action: "h2", label: "H2", title: "二级标题" },
+  { action: "h3", label: "H3", title: "三级标题" },
+  { action: "quote", label: "引用", title: "引用" },
+  { action: "ul", label: "列表", title: "无序列表" },
+  { action: "ol", label: "编号", title: "有序列表" },
+  { action: "codeBlock", label: "代码块", title: "代码块" },
+];
+
 defineExpose({ focus: () => view?.focus() });
 </script>
 
 <template>
-  <div ref="host" class="kb-md-editor" @mousedown.self="view?.focus()" />
+  <div class="kb-md-wrap">
+    <!-- mousedown.prevent：点按钮不抢走编辑器的焦点与选区，命令才作用得上 -->
+    <div class="kb-md-tools" role="toolbar" aria-label="格式">
+      <button
+        v-for="t in TOOLS"
+        :key="t.action"
+        type="button"
+        class="kb-md-tool"
+        :class="t.cls"
+        :title="t.title"
+        @mousedown.prevent
+        @click="run(t.action)"
+      >
+        {{ t.label }}
+      </button>
+    </div>
+    <div ref="host" class="kb-md-editor" @mousedown.self="view?.focus()" />
+  </div>
 </template>
 
 <style scoped>
@@ -133,4 +172,36 @@ defineExpose({ focus: () => view?.focus() });
   min-height: 50vh;
   cursor: text;
 }
+
+/* 工具条钉在滚动区顶部；不透明底（与面板同色），否则正文会从它下面透出来 */
+.kb-md-tools {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 6px 0 10px;
+  margin-bottom: 4px;
+  background: var(--aide-bg-base);
+  user-select: none;
+}
+.kb-md-tool {
+  min-width: 28px;
+  height: 26px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--aide-radius-sm);
+  background: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--aide-text-muted);
+  cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.kb-md-tool:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
+.kb-md-tool:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-md-tool.b { font-weight: 700; }
+.kb-md-tool.i { font-style: italic; }
+.kb-md-tool.m { font-family: var(--aide-font-mono); }
 </style>
