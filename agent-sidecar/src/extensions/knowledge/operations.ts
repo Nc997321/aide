@@ -17,6 +17,7 @@ import {
   type KbUpload,
 } from "./client.js";
 import { decideSpace, type SpaceDecision } from "./space.js";
+import { applySelectionEdit, type KbScopeStore } from "./scope.js";
 import {
   KB_CONTENT_MAX_BYTES,
   KB_DOC_MAX_BYTES,
@@ -260,4 +261,81 @@ export async function ingestFile(client: KbClient, cwd: string, args: IngestArgs
     upload,
   );
   return r.ok ? formatIngestResult(r.data) : formatFailure(r.failure);
+}
+
+export interface EditSelectionArgs {
+  selectionId: string;
+  newText: string;
+  changeNote?: string;
+}
+
+/** 变更说明默认值：把用户的意见带进版本历史，谁看都知道这次为什么改。 */
+function selectionChangeNote(comment: string): string {
+  const c = comment.trim().replace(/\s+/g, " ");
+  return `AI edited the user's selection${c ? `: ${c.length > 160 ? `${c.slice(0, 160)}…` : c}` : ""}`;
+}
+
+/**
+ * 只改用户圈选的那一段（edit_selection）。
+ *
+ * 范围来自 KbScopeStore（用户消息的 kbref 块登记的），**不来自 agent 的参数**——agent 只能给
+ * 「替换成什么」。写入前校验选区原文仍在原位（文档在圈选之后被改过就拒绝，让用户重新圈）；
+ * 新正文 = 原文前缀 + 新文本 + 原文后缀，所以选区之外是构造性不变；写入后再读回一次核对
+ * 前后缀，并发改动导致的漂移如实报出来（PUT 没有乐观锁，这是能做到的最强保证）。
+ */
+export async function editSelection(client: KbClient, scopes: KbScopeStore, args: EditSelectionArgs): Promise<string> {
+  const scope = scopes.get(args.selectionId);
+  if (!scope) {
+    const known = scopes.list().map((s) => s.id);
+    return known.length
+      ? `Refused: there is no selection "${args.selectionId}". Selections available this turn: ${known.join(", ")}.`
+      : "Refused: the user has not selected anything in a knowledge base document this turn, so there is no selection to edit.";
+  }
+  if (!withinLimit(args.newText, KB_CONTENT_MAX_BYTES)) {
+    return formatTooLarge("newText", KB_CONTENT_MAX_BYTES);
+  }
+
+  const cur = await client.getJson<KbDocument>(docPath(scope.documentId));
+  if (!cur.ok) return formatFailure(cur.failure);
+  const content = cur.data.content;
+  if (typeof content !== "string") {
+    return formatFailure({ kind: "bad_response", detail: "document payload has no `content` string" });
+  }
+
+  const edit = applySelectionEdit(content, scope, args.newText);
+  if (!edit.ok) {
+    return `Refused: the selected text is no longer where the user selected it in 《${scope.title}》 (version ${cur.data.versionNo}, the user selected at version ${scope.baseVersion}) — the document was edited after the selection. Nothing was changed. Ask the user to select the text again.`;
+  }
+  if (!withinLimit(edit.body, KB_DOC_MAX_BYTES)) {
+    return formatTooLarge("the document after editing", KB_DOC_MAX_BYTES);
+  }
+
+  const saved = await client.sendJson<KbSaveResult>(docPath(scope.documentId), "PUT", {
+    title: cur.data.title,
+    content: edit.body,
+    changeNote: args.changeNote?.trim() || selectionChangeNote(scope.comment),
+  });
+  if (!saved.ok) return formatFailure(saved.failure);
+
+  // 读回核对：选区之外的前后缀必须与写入前逐字相同。读回失败不推翻写入成功，只是如实说没核对。
+  const prefix = content.slice(0, scope.start);
+  const suffix = content.slice(scope.end);
+  const after = await client.getJson<KbDocument>(docPath(scope.documentId));
+  let verified = "";
+  if (after.ok && typeof after.data.content === "string") {
+    const intact = after.data.content.startsWith(prefix) && after.data.content.endsWith(suffix);
+    verified = intact
+      ? " Verified: everything outside the selection is unchanged."
+      : " WARNING: after saving, the text outside the selection no longer matches what it was before — someone may have edited the document at the same moment. Tell the user and point them to the version history.";
+  } else {
+    verified = " (Could not re-read the document to verify the surroundings.)";
+  }
+
+  scopes.moveTo(scope.id, {
+    start: edit.start,
+    end: edit.end,
+    text: args.newText,
+    baseVersion: saved.data.versionNo,
+  });
+  return formatSavedDocument(saved.data, "Edited the selection in") + verified;
 }

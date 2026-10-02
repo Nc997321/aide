@@ -85,7 +85,41 @@ export type UserMessageBlock =
   // 只引用了这一段（编辑器选区），缺省=整文件。isDir 表示引用的是目录（@目录 =
   // 授权 + 一级清单，见 2026-09-17 跨目录方案）。与 aide-sdk/src/types/chat.ts 同形
   // ——**两份必须同形，漂移会让 display 静默失效**（降级成纯文本，不报错）。
-  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean };
+  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean }
+  // 页面选区（浏览器里点选的元素 + 用户意见）：sidecar 不解释，原样随 user_message 回灌。
+  // 与 aide-sdk/src/types/chat.ts 的 `pageref` 块 / `PageRef` **必须同形**——漂移会让
+  // display 静默降级成纯文本，不报错。设计：docs/superpowers/specs/2026-10-02-browser-pick-to-agent-design.md
+  | {
+      type: "pageref";
+      url: string;
+      title?: string;
+      selector: string;
+      tag: string;
+      text: string;
+      html: string;
+      comment: string;
+      source?: string;
+      rect?: { x: number; y: number; w: number; h: number };
+      viewport?: { w: number; h: number };
+      styles?: Record<string, string>;
+    }
+  // 知识库选区：用户圈定的一段文档源文 + 意见。**语义是授权**——sidecar 把它登记成本轮唯一
+  // 允许 edit_selection 改动的范围（extensions/knowledge/scope.ts）。与 aide-sdk 的 `kbref` 块 /
+  // `KbRef` **必须同形**。设计：docs/superpowers/specs/2026-10-02-kb-selection-edit-design.md
+  | {
+      type: "kbref";
+      selectionId: string;
+      documentId: string;
+      title: string;
+      baseVersion: number;
+      start: number;
+      end: number;
+      text: string;
+      comment: string;
+      lineStart: number;
+      lineEnd: number;
+      precise: boolean;
+    };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与
  *  packages/aide-sdk/src/types/chat.ts 必须同形。 */

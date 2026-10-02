@@ -19,6 +19,7 @@ import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
+import { useKbSelections } from "@/composables/useKbSelections";
 import { useMentionSuggest, applyPick, type MentionSuggestion } from "@/composables/useMentionSuggest";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
@@ -595,6 +596,29 @@ watch(
   },
 );
 
+// ── 知识库圈选（在文档里圈出来的一处 + 意见）──────────────────────────────────
+// 圈选的草稿在 useKbSelections（模块级）：知识库打开时这个输入框不在眼前，圈选得能在文档那侧
+// 直接发（requestSend）；回到聊天时同一批圈选以芯片形式出现在这里，也能从这里发。
+// 只有聚焦（选中会话）的输入框认领它们——与文件引用芯片同一条规则。
+const kbSel = useKbSelections();
+const kbChips = computed(() => (props.focused ? kbSel.all.value.filter((r) => r.status === "pending") : []));
+/** 本次发送带走的圈选 id；发送坐实（sendConfirmedNonce）时把它们标成「已发出」。 */
+let sentKbIds: string[] = [];
+/** 文档侧「现在就发」：发送不动输入框里用户自己的草稿，所以坐实时也不清空它。 */
+let keepDraftOnConfirm = false;
+function kbChipLabel(r: { ref: { title: string; lineStart: number; lineEnd: number } }): string {
+  const lines = r.ref.lineStart === r.ref.lineEnd ? `第 ${r.ref.lineStart} 行` : `第 ${r.ref.lineStart}–${r.ref.lineEnd} 行`;
+  return `${r.ref.title || "未命名文档"} · ${lines}`;
+}
+watch(
+  () => kbSel.sendRequest.value?.nonce,
+  () => {
+    const req = kbSel.sendRequest.value;
+    if (!req || !props.focused || !kbChips.value.length) return;
+    void handleSend({ text: req.text });
+  },
+);
+
 // 输入框 `@path `→mention 芯片转换层（与来源无关：手打/粘贴/拖入都走这）。
 // paste/drop 管道把文件引用以 `@path ` 文本插进 textarea，这里统一扫描转换。
 const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
@@ -924,32 +948,34 @@ async function handleDrop(e: DragEvent) {
  *  确保所有早退路径（btw 无参 / skill 读取失败）都能正确解锁，下一次发送可
  *  正常进入。图片不再预检（探测已移除）：模型不支持时由 sidecar 回滚并提示。 */
 const sending = ref(false);
-async function handleSend() {
+async function handleSend(override?: { text: string }) {
   if (sending.value) return;
   sending.value = true;
   try {
-    await performSend();
+    await performSend(override);
   } finally {
     sending.value = false;
   }
 }
 
-async function performSend() {
-  const text = inputText.value.trim();
-  const hasImages = pendingImages.value.length > 0;
+/** override = 文档侧发起的发送：只带圈选 + 一句补充，不碰输入框里用户自己的草稿 / 图片 / 引用芯片。 */
+async function performSend(override?: { text: string }) {
+  const text = override ? override.text.trim() : inputText.value.trim();
+  const hasImages = !override && pendingImages.value.length > 0;
+  const kbrefs = kbChips.value.map((r) => ({ ...r.ref }));
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
   // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
-  const mentionPrefix = pendingMentions.value.length
+  const mentionPrefix = !override && pendingMentions.value.length
     ? pendingMentions.value.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
     : "";
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
-  if (!text && !hasImages && !mentionPrefix) return;
+  if (!text && !hasImages && !mentionPrefix && !kbrefs.length) return;
 
   // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
   // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
   // + 二次确认）；btw 无参数进输入模式、有参数直接发支线。查不到才走 skill /
   // 普通文本。已在 btw 模式里时不拦（输入本来就是支线内容，/btw 字面量无意义）。
-  if (!btwMode.value) {
+  if (!btwMode.value && !override) {
     const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
@@ -973,7 +999,7 @@ async function performSend() {
     }
   }
 
-  if (btwMode.value) {
+  if (btwMode.value && !override) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
@@ -1023,9 +1049,12 @@ async function performSend() {
   const newlyAttached = attachedDirsFrom(mentionResolution, props.workspacePath ?? null);
   const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
-  const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  const images = override ? [] : pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  sentKbIds = kbrefs.map((r) => r.selectionId);
+  keepDraftOnConfirm = !!override;
   const sendOpts: SendOptions = {
     images: images.length ? images : undefined,
+    kbrefs: kbrefs.length ? kbrefs : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
     initialModel: selectedModel.value || undefined,
@@ -1088,6 +1117,13 @@ async function handleQuickAction(action: QuickAction) {
 // 发送坐实（ChatPanel 门控通过/确认后递增 nonce）：清空输入。取消确认不递增，
 // 输入保留——与旧实现「取消时内容回退对话框」语义一致。
 watch(() => props.sendConfirmedNonce, () => {
+  // 圈选：发出去了 → 标成 sent（之后的状态只由聊天事件推进）。无论是不是文档侧发起的都要标。
+  if (sentKbIds.length) kbSel.markSent(sentKbIds, props.sessionId ?? undefined);
+  sentKbIds = [];
+  if (keepDraftOnConfirm) {
+    keepDraftOnConfirm = false;
+    return;
+  }
   inputText.value = "";
   pendingImages.value = [];
   pendingMentions.value = [];
@@ -1202,6 +1238,14 @@ const { actions: quickActions } = useQuickActions();
           <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
         </div>
       </Transition>
+      <!-- 知识库圈选芯片：在文档里圈出来、还没发送的几处。× = 不要这一处（文档里的角标同步消失） -->
+      <div v-if="kbChips.length" class="mention-strip">
+        <div v-for="(r, i) in kbChips" :key="r.ref.selectionId" class="mention-chip kb-chip" v-tooltip="r.ref.text">
+          <span class="kb-chip-pin">{{ i + 1 }}</span>
+          <span class="mention-chip-name">{{ kbChipLabel(r) }}<span v-if="r.ref.comment" class="kb-chip-note"> · {{ r.ref.comment }}</span></span>
+          <button class="mention-chip-remove" @click="kbSel.discard(r.ref.selectionId)">×</button>
+        </div>
+      </div>
       <!-- 文件引用芯片（文件树右键「添加到对话」）：发送时展开成 @path 前缀 -->
       <div v-if="pendingMentions.length" class="mention-strip">
         <div
@@ -1339,7 +1383,7 @@ const { actions: quickActions } = useQuickActions();
             @open="usagePanelOpen = true"
           />
           <ChatSendButton
-            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length) || sending"
+            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
             :busy="isBusy && !btwMode"
             :actions="quickActions"
             :btw-active="btwMode"
@@ -1881,6 +1925,26 @@ const { actions: quickActions } = useQuickActions();
 }
 
 /* 选区引用的行号后缀：弱化成次要色，不与文件名抢视线 */
+.kb-chip {
+  max-width: 320px;
+  border-color: color-mix(in srgb, var(--aide-accent) 40%, var(--aide-border));
+  background: color-mix(in srgb, var(--aide-accent) 8%, var(--aide-surface-default));
+}
+.kb-chip-pin {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--aide-accent-gradient, var(--aide-accent));
+  color: var(--aide-text-on-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.kb-chip-note {
+  color: var(--aide-text-primary);
+}
 .mention-chip-range {
   color: var(--aide-text-muted);
 }

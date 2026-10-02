@@ -42,6 +42,11 @@ export function estimateBlockBytes(block: ContentBlock): number {
     }
     case "action":
       return 0;
+    // 页面选区 / 知识库选区卡片：载荷是选区原文（+ HTML 摘要），按原文长度估。
+    case "pageref":
+      return (block.html.length + block.text.length + block.comment.length) * 2;
+    case "kbref":
+      return (block.text.length + block.comment.length) * 2;
   }
 }
 

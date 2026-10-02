@@ -5,6 +5,7 @@
 import type { ChatEvent } from "../types.js";
 import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
+import type { KbScopeStore } from "../../extensions/knowledge/scope.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
@@ -25,6 +26,9 @@ export interface QueryContextDeps {
   lspLanguages: string[];
   processEnv: NodeJS.ProcessEnv;
   emit: (e: ChatEvent) => void;
+  /** 本会话的「用户在知识库里圈选的范围」登记簿（由 worker 持有、随用户消息更新）；
+   *  知识库工具据此把写入限制在圈选范围内。 */
+  kbScopes?: KbScopeStore;
   automationConfig: AutomationConfig | undefined;
   /** builtinHooks 的会话适配器（worker 建闭包桥接 private 成员：
    *  policy/stopEffort/modelSwitchGuard）。 */
@@ -49,7 +53,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 知识库读写（P1 只有读工具）：注册条件=!trusted 跳过、AIDE_KB_TOOLS=off 跳过。
   // **未登录也挂**——凭据每次调用现读，未配置时工具返回「去知识库面板登录」的引导
   // 文本（设计 spec §5.1）。无 emit 参数：直连知识库的 HTTP，不走主进程 IPC。
-  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.cwd);
+  const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.cwd, deps.kbScopes);
   // 内嵌浏览器读写（读骨架 / 执行脚本 / CDP）：注册条件=!trusted 跳过、AIDE_BROWSER_TOOLS=off
   // 跳过。**带 emit**——它要走 request_id 桥回桌面 Rust 驱动 WebView2（本仓库第三种形态：
   // knowledge 直连 HTTP、docs 本地同步解析、lsp 与本插件回主进程）。

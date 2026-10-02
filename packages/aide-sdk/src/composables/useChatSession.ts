@@ -5,6 +5,8 @@ import { writeSessionMeta } from "./sessionIdentity";
 import type {
   ActionBlock,
   ChatMessage,
+  KbRef,
+  PageRef,
   UserMessageBlock,
 } from "../types/chat";
 import type { PermissionRuleDraft } from "../types/permissions";
@@ -18,6 +20,8 @@ import {
 import { useProviders } from "./useProviders";
 import { useBtwSession } from "./useBtwSession";
 import type { FileMentionResolution } from "../utils/fileMentions";
+import { formatPageRefsForPrompt, sanitizePageRef, MAX_PAGE_REFS } from "../utils/pageRefs";
+import { formatKbRefsForPrompt, MAX_KB_REFS } from "../utils/kbRefs";
 import { maybeEvict } from "./useChatSession/evict";
 import { handleChatEvent } from "./useChatSession/events";
 import { hydrate, hasMoreOlder, loadOlderPage, resetPaginationForRevert } from "./useChatSession/pagination";
@@ -71,6 +75,13 @@ export interface SendOptions {
    *  透传（与 initialModel 同语义：spawn 时是初始值，存活会话幂等）。 */
   initialEffort?: string;
   mentions?: FileMentionResolution;
+  /** 浏览器里点选的页面元素（+ 用户意见）。发给模型的是 `formatPageRefsForPrompt` 的展开文本，
+   *  用户气泡里是独立的 `pageref` 卡片（走 display）。 */
+  pagerefs?: PageRef[];
+  /** 用户在知识库文档里圈选的范围（+ 意见）。**语义是授权**：sidecar 把它登记成本轮唯一允许
+   *  edit_selection 改动的范围。发给模型的是 `formatKbRefsForPrompt` 的展开文本，用户气泡里是
+   *  独立的 `kbref` 卡片（走 display，同一份数据）。 */
+  kbrefs?: KbRef[];
   /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
   permissionMode?: string;
   /** 工具栏快捷操作（压缩/清空上下文）：存在时用户气泡渲染成动作胶囊（见
@@ -91,6 +102,8 @@ interface QueuedSend {
   prompt: string;
   images?: ImageAttachment[];
   mentions?: FileMentionResolution;
+  pagerefs?: PageRef[];
+  kbrefs?: KbRef[];
   permissionMode?: string;
   /** 发送时的模型（调用环境透传，invoke 时展开为 initialModel）。
    *  显式走数据流（输入区 → sendMessage opts → item → dispatchSend），不再由
@@ -137,7 +150,15 @@ function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
   // 记下本次派发的用户提问，供变更面板给轮次做标题（图片消息无文本时兜底占位）。
   // 动作胶囊用 label 做标题更可读，底层 prompt 是 /compact 这种斜杠命令。
   lastDispatchedPrompt[sid] =
-    item.action?.label || item.prompt || (item.images?.length ? "[图片]" : "");
+    item.action?.label ||
+    item.prompt ||
+    (item.images?.length
+      ? "[图片]"
+      : item.pagerefs?.length
+        ? "[页面选区]"
+        : item.kbrefs?.length
+          ? "[知识库选区]"
+          : "");
   const { setSessionState, setSessionHealth } = useSessionState();
   setSessionState(sid, "running");
   // 新一轮开始：清掉上轮可能残留的 warning（红点）。
@@ -182,6 +203,13 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
           // 目录引用要把种类带出去，否则接收端只画得出"合成 Read 卡"（见 E 段）
           ...(m.isDir ? { isDir: true } : {}),
         })),
+        // 页面选区：清洗后的版本进 display（与发给模型的展开文本同源，两边看到的是同一份）。
+        ...(item.pagerefs ?? []).slice(0, MAX_PAGE_REFS).map((r) => ({
+          type: "pageref" as const,
+          ...sanitizePageRef(r),
+        })),
+        // 知识库选区：display 里的就是授权的权威来源（sidecar 据此登记范围），所以原样带，不改写。
+        ...(item.kbrefs ?? []).slice(0, MAX_KB_REFS).map((r) => ({ type: "kbref" as const, ...r })),
       ];
 }
 
@@ -205,7 +233,9 @@ function sendQueued(
   // 混合 tab：会话可能归属别的工作区，sidecar 必须在它自己的项目目录里跑。
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
-  const sendText = item.mentions?.sendText ?? item.prompt;
+  const baseText = item.mentions?.sendText ?? item.prompt;
+  const extra = [formatPageRefsForPrompt(item.pagerefs ?? []), formatKbRefsForPrompt(item.kbrefs ?? [])].filter(Boolean);
+  const sendText = extra.length ? [baseText, ...extra].filter(Boolean).join("\n\n") : baseText;
   api.sendMessage({
     sessionId: sid,
     prompt: sendText,
@@ -337,6 +367,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
       images: opts.images,
       initialModel: opts.initialModel ?? null,
       mentions: opts.mentions,
+      pagerefs: opts.pagerefs,
+      kbrefs: opts.kbrefs,
       permissionMode: opts.permissionMode,
       effort: opts.initialEffort,
       action: opts.action,

@@ -25,6 +25,11 @@ import type {
   UserMessageBlock,
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
+import {
+  emitKbSelectionEvent,
+  isEditSelectionTool,
+  parseEditSelectionResult,
+} from "../useKbSelectionEvents";
 import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
@@ -191,6 +196,13 @@ function blocksFromDisplay(
             // 与回看路径 transcriptMapping 必须同时带，否则重开历史就变回文件卡。
             ...(b.isDir ? { isDir: true } : {}),
           };
+        // 页面选区卡片。字段原样搬运（display 由发送方清洗过一次，这里不重复校验）；
+        // 缺 selector/tag 视为畸形块，跳过——整条消息不因一个坏块消失。
+        case "pageref":
+          return b.selector && b.tag ? { ...b } : null;
+        // 知识库选区卡片：缺关键字段的畸形块跳过（整条消息不因一个坏块消失）。
+        case "kbref":
+          return b.selectionId && b.documentId ? { ...b } : null;
         default:
           return null;
       }
@@ -223,6 +235,9 @@ function handleRuntimeDead(e: Record<string, unknown>): void {
     setSessionState(sid, "stopped");
   }
 }
+
+/** 在途的 edit_selection 调用：toolId → selectionId（tool_result 只带 id，要靠它认回是哪个选区）。 */
+const editSelectionCalls = new Map<string, string>();
 
 export function handleChatEvent(e: Record<string, unknown>): void {
   if (e["type"] === "runtime_dead") {
@@ -334,11 +349,28 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       }
       msg.blocks.push(block);
       registerToolCall(sid, toolId, block);
+      if (isEditSelectionTool(block.name)) {
+        const selectionId = (block.input as { selectionId?: unknown } | null)?.selectionId;
+        if (typeof selectionId === "string" && selectionId) {
+          editSelectionCalls.set(toolId, selectionId);
+          emitKbSelectionEvent({ kind: "working", sid, selectionId });
+        }
+      }
       break;
     }
     case "tool_result": {
       const toolId = e["id"] as string;
       const block = lookupToolCall(sid, toolId);
+      const editedSelection = editSelectionCalls.get(toolId);
+      if (editedSelection) {
+        editSelectionCalls.delete(toolId);
+        emitKbSelectionEvent({
+          kind: "result",
+          sid,
+          selectionId: editedSelection,
+          ...parseEditSelectionResult(String(e["content"] ?? ""), Boolean(e["is_error"])),
+        });
+      }
       if (block) {
         block.result = e["content"] as string;
         block.isError = e["is_error"] as boolean;
@@ -735,6 +767,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       if (store.contextCompaction?.stage !== "failed") store.contextCompaction = null;
       store.isBusy = false;
       setSessionState(sid, "waiting");
+      emitKbSelectionEvent({ kind: "turn_end", sid });
       break;
     }
     case "jump_queued": {

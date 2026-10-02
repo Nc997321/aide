@@ -20,6 +20,7 @@ import { useRightPanel } from "@/composables/useRightPanel";
 import KbHistory from "./KbHistory.vue";
 import KbMarkdownEditor from "./KbMarkdownEditor.vue";
 import KbOutline from "./KbOutline.vue";
+import KbSelectionLayer from "./selection/KbSelectionLayer.vue";
 
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：原生样式与主题无关。 */
 const modal = useModal();
@@ -147,6 +148,9 @@ const canSave = computed(
 /** 本页目录只在「看 markdown 正文」时出现；编辑 / 历史态没有渲染出来的标题可读。 */
 const outlineOn = computed(() => !editing.value && !showHistory.value && kind.value === "markdown");
 const outlineRev = computed(() => `${props.doc.id}:${props.doc.versionNo}:${props.doc.content?.length ?? 0}`);
+
+/** 圈选层只在「看 markdown 正文」且有编辑权限时挂载：圈选的目的是让 AI 改，没有写权限就没有入口。 */
+const selectable = computed(() => outlineOn.value && props.editable);
 
 /** 阅读时长：中文按 500 字/分钟粗估。只是个量级感，所以不精确到秒、最少 1 分钟。 */
 const readMinutes = computed(() => Math.max(1, Math.round((props.doc.content?.length ?? 0) / 500)));
@@ -385,6 +389,15 @@ function onReverted(): void {
     <p v-if="!editing && !showHistory && !doc.content" class="kb-empty">
       这篇文档还没有正文。
     </p>
+    <!-- 圈选 → 交给 AI 改：绝对定位在本滚动容器里的一层（高亮 / 浮窗 / 角标 / 托盘） -->
+    <KbSelectionLayer
+      v-if="selectable"
+      :body-el="viewBody"
+      :scroll-el="docEl"
+      :doc="doc"
+      @refresh="(id) => emit('saved', id)"
+      @reverted="(id) => emit('reverted', id)"
+    />
   </article>
   <!-- 目录是文章的**邻居**而不是子元素：文章容器自己滚动，目录要钉在原地 -->
   <KbOutline v-if="outlineOn" :body-el="viewBody" :scroll-el="docEl" :rev="outlineRev" />
@@ -412,6 +425,8 @@ function onReverted(): void {
 }
 
 .kb-doc {
+  /* 圈选层（KbSelectionLayer）绝对定位在这个滚动容器里，坐标原点就是它 */
+  position: relative;
   flex: 1;
   min-width: 0;
   min-height: 0;

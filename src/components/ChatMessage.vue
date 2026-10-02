@@ -5,6 +5,8 @@ import { renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
 import StreamingText from "./StreamingText.vue";
 import ToolCallBlock from "./ToolCallBlock.vue";
+import KbRefCard from "./KbRefCard.vue";
+import PageRefCard from "./PageRefCard.vue";
 import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
@@ -202,6 +204,9 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'subagent'"
           :block="seg.block"
         />
+        <!-- 用户在知识库文档 / 网页里圈选的一处（+ 意见）：折叠卡片，点开看被圈的原文 -->
+        <KbRefCard v-else-if="seg.block.type === 'kbref'" :block="seg.block" />
+        <PageRefCard v-else-if="seg.block.type === 'pageref'" :block="seg.block" />
       </template>
       <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span

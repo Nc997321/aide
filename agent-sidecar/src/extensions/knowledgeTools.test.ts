@@ -67,12 +67,13 @@ function stubFetch(reply: { status: number; body: string }) {
 }
 
 describe("buildKnowledgeTools", () => {
-  it("4 读 + 7 写，顺序稳定", () => {
+  it("4 读 + 7 写 + 选区编辑，顺序稳定", () => {
     const names = (buildKnowledgeTools(credEnv, "/proj") as unknown as { name: string }[]).map((t) => t.name);
     expect(names).toEqual([
       "search", "read_document", "list_spaces", "list_documents",
       "create_document", "create_folder", "move_document",
       "append_document", "update_document", "ingest_file", "delete_document",
+      "edit_selection",
     ]);
   });
 });

@@ -1,7 +1,7 @@
 # 在页面上「圈选 → 批注 → 交给 Agent」— 设计
 
 - 日期：2026-10-02
-- 状态：**搁置（2026-10-02 用户定）**——待工作机上量出 §9.4 的基线再重启；以下为搁置前的设计与审视（2026-10-02 经产品审视修订：目标用户改为网页端开发者，补 §3 第 7–12 条与 §4.4 渲染信息，见 §9）
+- 状态：**实施中（2026-10-02 用户决定先做，覆盖此前的搁置；§9.4 的工作机基线改为上线后度量）**。经产品审视修订：目标用户为网页端开发者，补 §3 第 7–12 条与 §4.4 渲染信息，见 §9。§8 开放问题按默认值定案，见 §10
 - 范围：`src/components/Browser/`（面板入口）、`src/components/ChatPanel/`（待发送卡片）、`packages/aide-sdk/src/types/chat.ts` + `agent-sidecar/src/engine/types.ts`（`display` 新块）、`src-tauri/src/commands/browser.rs`（一条通用求值命令）。**不动** `knowledge-server/`、不动 Aide Link 暴露目录。
 - 关联：
   - `2026-09-30-aide-library-design.md` §1.2（与 WorkBuddy 的对照）、§4.6（预览与发布共用取件地址）
@@ -172,7 +172,7 @@ interface PickedElement {
 
 - `html` 截断到 **2000 字符**（加 `…[已截断，共 N 字符]`），`text` 截断到 **300**。超过的部分 agent 需要时自己 `browser_read`。
 - 脱敏：`<script>` / `<style>` 内容丢弃；`input[type=password]` 的 value 不读（与 `projection.ts` 同一条纪律）；`data:` URI 替换成 `data:…(N bytes)`；`href`/`src` 里**查询串中名叫 token/key/secret/sig/auth 的参数**抹值。
-- **库取件地址**（`/api/preview/<token>`）的 token 在 `url` 里抹掉——它是只读凭证（资料库 §4.5），不该进对话历史。
+- **库取件地址**（`/p/<token>`）的 token 在 `url` 里抹掉——它是只读凭证（资料库 §4.5），不该进对话历史。
 
 **颜色**：高亮框与意见框在**页面里**，用不了 `var(--aide-*)`。`arm` 时由宿主读当前主题的 accent（`getComputedStyle` 取 `--aide-accent`）**作为参数传给脚本**——脚本里不出现任何 hex 字面量（主题红线）。
 
@@ -208,7 +208,7 @@ interface PickedElement {
 
 **降级（红线：整条消息不能消失）**：
 
-- `comment` **同时**作为一个独立的 `text` 块写进 `display`——接收端不认识 `pageref`（手机端 / 旧版本）时，用户的话仍在气泡里，只是少一张卡片。
+- ~~`comment` 同时作为独立 `text` 块写进 display~~ **（实施时撤回，见 §10）**：桌面端会把意见显示两遍。降级只保证「用户自己打的那段话仍在气泡里、整条消息不消失」；逐元素的意见在不认识 `pageref` 的客户端上看不到——手机端本来也不发起选取，要显示由手机端自己演进。
 - 不认识的块一律**跳过该块**，不抛错、不渲染成乱码。
 - 桌面 `ChatMessage.vue` 的 `pageref` 卡片：标题 = `tag.selector 末段` + 意见；点开折叠区看 `html`；`source` 有则显示。
 
@@ -344,4 +344,18 @@ interface PickedElement {
 - 带 `pageref` 的轮次里，agent 到首次正确修改所需的**工具调用数**，对比不带的轮次（有没有真的省）。
 - `source` 命中率（开发构建下有多少选区带到了源码线索）——低于 50% 说明线索机制要补框架。
 - 选取模式的**放弃率**（开了没选出东西就退出）——高说明交互有坑（层级、瞬态 UI）。
+
+---
+
+## 10. 实施定案（2026-10-02）
+
+§8 的开放问题按默认值定案，实施中另有两处与前文不同：
+
+1. **`browser_exec` 不收紧**。用户在同一面板本来就能开 DevTools；权限等同 agent 的 `browser_eval`。
+2. **轮询 250ms**。
+3. **只入队、由用户发送**，不做「圈完自动开跑」。
+4. **`html` 截断 2000 字符先上线**，用真实页面的 `source` 命中率与截断率（§9.6）再调。
+5. **撤回「comment 同时写独立 text 块」**（见 §4.5）：桌面会重复显示。
+6. **历史回看路径**：重开历史会话时，用户消息来自 transcript（发给模型的展开文本），不是 `display`。`pageref` 的展开文本本身是人能读的（§4.5 的格式），所以回看时显示为普通文本气泡——**不为它改 `transcriptMapping`**，如实降级。若以后要在回看里也出卡片，再给展开文本加可逆解析（形如 `splitMentionSend`）。
+7. **无法在 WSL/Linux 上做真机验证**：WebView2 只在 Windows。本机验证范围 = 纯逻辑单测 + jsdom 里跑页面脚本；§6 里依赖真机的条目（IME、瞬态浮层、最大化、并发拦截）需要在 Windows 真机上走一遍。
 

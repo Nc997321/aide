@@ -33,11 +33,13 @@ import {
   formatSearchHits,
   formatSpaces,
 } from "./knowledge/format.js";
+import { KbScopeStore as KbScopeStoreImpl, type KbScopeStore } from "./knowledge/scope.js";
 import {
   appendToDocument,
   createDocument,
   createFolder,
   deleteDocument,
+  editSelection,
   ingestFile,
   moveDocument,
   resolveWriteTarget,
@@ -304,9 +306,50 @@ function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
   );
 }
 
-/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径。 */
-export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
-  return [
+function buildEditSelectionTool(env: NodeJS.ProcessEnv, scopes: KbScopeStore) {
+  return tool(
+    "edit_selection",
+    "Rewrite the part of a knowledge base document that the USER selected (circled) in the 知识库 panel — and nothing else. The user's message lists each selection with an id (s1, s2, …). You supply only the replacement text: it replaces the selected source text EXACTLY, so write just that piece (keep its own markdown form, e.g. a list item stays a list item), never repeat the text around it. The position is fixed by the user's selection; you cannot change it. If the user's request would need changes outside the selection, do not do them — say so instead. Read the document first with read_document if you need the surrounding context.",
+    {
+      selectionId: z.string().describe("The selection id from the user's message, e.g. \"s1\""),
+      newText: z.string().describe("The replacement for the selected text. Empty string deletes the selection."),
+      changeNote: z.string().optional().describe("One line for the version history saying what changed and why. Defaults to the user's own note."),
+    },
+    (args) => kbWrite(env, (client) => editSelection(client, scopes, args)),
+  );
+}
+
+/** 本轮被圈选范围约束时，其余一切写工具的回复：只指向唯一出路，不留「那我换个工具改」的口子。 */
+export const SCOPED_WRITE_REFUSAL =
+  "Refused: the user selected a specific part of a knowledge base document this turn, so the only write allowed is edit_selection on that selection — nothing else in the knowledge base may be changed. If the request needs more than that, tell the user and let them send a new message.";
+
+/** 圈选约束下被禁用的写工具（edit_selection 自己不在内）。 */
+const SCOPED_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  "create_document",
+  "create_folder",
+  "move_document",
+  "append_document",
+  "update_document",
+  "ingest_file",
+  "delete_document",
+]);
+
+/** 给被禁用的写工具套一层闸：圈选生效时直接回文本拒绝，不碰服务端。 */
+function gateWhenScoped<T extends { name: string; handler: (...a: any[]) => Promise<ToolResult> }>(
+  t: T,
+  scopes: KbScopeStore,
+): T {
+  if (!SCOPED_BLOCKED_TOOLS.has(t.name)) return t;
+  return {
+    ...t,
+    handler: async (...a: any[]) => (scopes.active ? textResult(SCOPED_WRITE_REFUSAL) : t.handler(...a)),
+  };
+}
+
+/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径；
+ *  scopes 是本会话的「用户圈选」登记簿（缺省 = 空表，行为与没有这个功能时一致）。 */
+export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string, scopes: KbScopeStore = new KbScopeStoreImpl()) {
+  const tools = [
     buildSearchTool(env),
     buildReadDocumentTool(env),
     buildListSpacesTool(env),
@@ -318,5 +361,7 @@ export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
     buildUpdateDocumentTool(env),
     buildIngestFileTool(env, cwd),
     buildDeleteDocumentTool(env),
+    buildEditSelectionTool(env, scopes),
   ];
+  return tools.map((t) => gateWhenScoped(t as never, scopes) as (typeof tools)[number]);
 }

@@ -39,6 +39,7 @@ import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv } from "./cliEnv.js";
 import { thinkingDisabledFor } from "./thinkingPolicy.js";
+import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { cancelAllLspQueries, queryLsp } from "../extensions/lspClient.js";
@@ -93,6 +94,9 @@ export interface SessionWorkerOptions {
 }
 
 export class SessionWorker {
+  /** 用户在知识库文档里圈选的范围（edit_selection 的授权来源）。引擎不解释它，只在用户消息到达时
+   *  更新、在装配 MCP 时递给知识库扩展。 */
+  private readonly kbScopes = new KbScopeStore();
   /** fork/resume 源：SDK 会话 ID。空串=全新会话不 resume。
    *  仅 btw / provider_switched / 重开会话时设置（在 handleCommand 或 session_init 里）。
    *  注意：这不是路由键——路由键是 routingKey，由 SessionManager 管理。 */
@@ -376,6 +380,8 @@ export class SessionWorker {
       message: buildUserMessage(prompt, images ?? []),
       parent_tool_use_id: null,
     };
+    // 圈选登记（知识库扩展语义，worker 只是转手）：每条用户消息整表替换，见 knowledge/scope.ts。
+    this.kbScopes.replaceFromDisplay(display);
     if (target === "nextQuery") this.nextQueryInjections.push(msg);
     else this.queue.push(msg);
     this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
@@ -810,6 +816,7 @@ export class SessionWorker {
             lspLanguages,
             processEnv: process.env,
             emit: (e) => this.emit(e),
+            kbScopes: this.kbScopes,
             automationConfig: this.automationConfig,
             session: {
               makePolicyHook: (hookCwd) => this.policy.makeHook(hookCwd),

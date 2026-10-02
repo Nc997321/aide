@@ -42,6 +42,7 @@ macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foun
 - **`permission_cancelled` = 「这条请求已终结」**（批准/拒绝/abort/连带放行都发），不是"被取消"。`permissions.ts` 的 `resolve()` 无条件发，新增任何终结挂起请求的路径都要发。
 - 事件到手机按订阅投递（`subscribe` 可按会话过滤、`since` 续传）。
 - **`display` 渲染描述通道**：`prompt` 是 @引用展开后的纯文本、sidecar 无法还原「正文/引用卡片/动作胶囊」边界，所以渲染信息随 send 下发再回灌（Rust `attach_display` 原样搬运不校验）。**⚠️ `UserMessageBlock` 在 `agent-sidecar/src/types.ts` 与 `packages/aide-sdk/src/types/chat.ts` 各一份且必须同形**，漂移会让 display **静默失效**；新增 block 形态两边一起改。display 缺失/未知 → 降级成纯文本或跳过该块，**整条消息不能消失**。
+- **知识库圈选编辑（`kbref`）= 授权，不是引用**：用户在文档里圈的范围经 `display` 的 `kbref` 块进 sidecar，登记进 `KbScopeStore`（`extensions/knowledge/scope.ts`，按最新一条用户消息整表替换）；agent 只能 `edit_selection(selectionId,newText)` 改那一段（没有范围参数），圈选生效期间其余知识库写工具一律被拒。两份 `UserMessageBlock` 同形由 `userMessageBlockParity.test.ts` 对账。设计见 docs/superpowers/specs/2026-10-02-kb-selection-edit-design.md。
 - **@引用行号区间**（`@path:12-48`）解析唯一真相源 `packages/aide-sdk/src/utils/fileMentions.ts`；省 token 靠发送前切片注入；引用读**磁盘内容**（未保存的编辑不在里面）。
 
 ## 红线：语言无关（LSP）
