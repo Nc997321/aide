@@ -27,6 +27,9 @@ jobs:
           node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # 根 vitest 的 include 含 agent-sidecar/src/**，那些测试 import 的 SDK / zod 只在
+      # sidecar 自己的 node_modules 里——不装就是「0 test」的加载失败
+      - run: pnpm --dir agent-sidecar install --frozen-lockfile
       # build 内含构建期守卫（sync-io / overlay-layers / lsp-parity）+ vue-tsc + vite build
       - run: pnpm build
       - run: pnpm test
