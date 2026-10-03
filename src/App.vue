@@ -1039,7 +1039,16 @@ onUnmounted(() => {
       @open-hosts="hostLauncherVisible = true"
       @open-workbench="wb.toggle()"
       @open-settings-providers="openSettingsProviders"
-    />
+    >
+      <template #search>
+        <ACommandPalette
+          ref="paletteRef"
+          :open="paletteOpen"
+          @open="paletteOpen = true"
+          @close="paletteOpen = false"
+        />
+      </template>
+    </TitleBar>
 
     <!-- Host 窗口：连接意外断开时如实说明并给「重新连接」；本机窗口不渲染 -->
     <HostConnectionBanner />
@@ -1196,12 +1205,6 @@ onUnmounted(() => {
       />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
-
-    <ACommandPalette
-      ref="paletteRef"
-      :open="paletteOpen"
-      @close="paletteOpen = false"
-    />
   </div>
 </template>
 

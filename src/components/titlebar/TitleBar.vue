@@ -327,12 +327,15 @@ function isRowRunning(cfg: RunConfig): boolean {
 
     </div>
 
-    <!-- Center: search trigger -->
-    <button class="titlebar-search-trigger" @click="$emit('open-palette')">
-      <Icon class="titlebar-search-icon" name="search" :size="13" />
-      <span class="titlebar-search-text">搜索...</span>
-      <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
-    </button>
+    <!-- Center: 搜索框。App 经 #search 插槽放入 ACommandPalette（输入框 + 下拉面板，VS Code 式）；
+         没有插槽内容时退回点击即触发 open-palette 的占位按钮 -->
+    <slot name="search">
+      <button class="titlebar-search-trigger" @click="$emit('open-palette')">
+        <Icon class="titlebar-search-icon" name="search" :size="13" />
+        <span class="titlebar-search-text">搜索...</span>
+        <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
+      </button>
+    </slot>
 
     <!-- Right: window controls -->
     <div class="titlebar-right">
