@@ -53,8 +53,6 @@ const records = reactive<Record<string, KbSelectionRecord>>({});
 let counter = 0;
 const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
-/** 结果态（done / refused / noop）在界面上停留多久后自动收起。 */
-const RESULT_LINGER_MS = 20_000;
 /** sent 之后多久没动静就当「这一轮没改」。 */
 const SENT_GIVE_UP_MS = 180_000;
 
@@ -78,7 +76,9 @@ function finishWith(id: string, patch: Partial<KbSelectionRecord> & { status: Kb
   const rec = records[id];
   if (!rec) return;
   Object.assign(rec, patch);
-  schedule(id, RESULT_LINGER_MS, () => remove(id));
+  // 结果态不自动收起：它不只是一条提示——卡片里的对话线程、「已改 · vN」角标和撤销都挂在这条记录上，
+  // 定时清掉就是用户读着回复 / 想撤销时卡片凭空消失。只由用户（×）或下一轮圈选（让位）收起。
+  clearTimer(id);
 }
 
 /** 工具回的英文拒绝文本 → 给用户看的话。认不出的原样截短给出，不吞。 */

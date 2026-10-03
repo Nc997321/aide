@@ -88,14 +88,16 @@ describe("生命周期", () => {
     expect(k.records[a]!.status).toBe("working");
   });
 
-  it("结果态停留一会儿后自动收起；sent 太久没动静按没改处理", () => {
+  it("结果态不会自动消失（卡片线程与撤销挂在它上面）；sent 太久没动静按没改处理", () => {
     const k = useKbSelections();
     const a = k.begin(input).ref.selectionId;
     k.confirm(a, "");
     k.markSent([a]);
     vi.advanceTimersByTime(180_001);
     expect(k.records[a]!.status).toBe("noop");
-    vi.advanceTimersByTime(20_001);
+    vi.advanceTimersByTime(24 * 3600_000);
+    expect(k.records[a]!.status).toBe("noop");
+    k.discard(a); // 用户点 × 才收起
     expect(k.records[a]).toBeUndefined();
   });
 
