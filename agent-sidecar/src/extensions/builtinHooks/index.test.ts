@@ -3,6 +3,7 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeModelSwitchGuard } from "../../engine/modelSwitchGuard";
 import { BUILTIN_HOOKS, buildBuiltinHooks } from "./index";
 import type { ChatEvent } from "../../engine/types.js";
+import { KbScopeStore } from "../knowledge/scope";
 
 // session 桩：registry 通过依赖注入的 ctx.session 调 private 方法（policy/stopEffort/
 // modelSwitchGuard）。guard 返回 null（支线场景）→ 两个 switch hook 不挂载。
@@ -22,9 +23,9 @@ describe("builtinHooks registry", () => {
     expect(first.alwaysMounted).toBe(true);
   });
 
-  it("顺序固定：policy → subagentModel → skillGuard(PreToolUse)，stopEffort(Stop)，switchGuard 一对", () => {
+  it("顺序固定：policy → subagentModel → skillGuard → kbMemoryGuard(PreToolUse)，stopEffort(Stop)，switchGuard 一对", () => {
     const pre = BUILTIN_HOOKS.filter((h) => h.event === "PreToolUse").map((h) => h.id);
-    expect(pre).toEqual(["policy", "subagentModel", "skillGuard"]);
+    expect(pre).toEqual(["policy", "subagentModel", "skillGuard", "kbMemoryGuard"]);
     const stop = BUILTIN_HOOKS.filter((h) => h.event === "Stop").map((h) => h.id);
     expect(stop).toEqual(["stopEffort"]);
   });
@@ -74,5 +75,12 @@ describe("builtinHooks registry", () => {
     expect(hooks.PostModelSwitch).toHaveLength(1);
     expect(manifest.some((m) => m.id === "modelSwitchGuard" && m.event === "PreModelSwitch")).toBe(true);
     expect(manifest.some((m) => m.id === "modelSwitchCommitted" && m.event === "PostModelSwitch")).toBe(true);
+  });
+
+  it("kbMemoryGuard 只在有圈选登记簿时挂载（条件挂）", () => {
+    const base = { cwd: "/x", env: { CLAUDE_CONFIG_DIR: "/home/u/.aide/claude" }, session: sessionStub };
+    expect(buildBuiltinHooks(base).manifest.some((m) => m.id === "kbMemoryGuard")).toBe(false);
+    const withScopes = { ...base, kbScopes: new KbScopeStore() };
+    expect(buildBuiltinHooks(withScopes).manifest.some((m) => m.id === "kbMemoryGuard")).toBe(true);
   });
 });

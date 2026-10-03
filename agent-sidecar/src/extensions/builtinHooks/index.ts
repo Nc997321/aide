@@ -2,6 +2,8 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../../engine/subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
 import { makeMemoryEventsHook } from "./memoryEvents";
+import { makeKbMemoryGuardHook } from "../knowledge/memoryGuard";
+import type { KbScopeStore } from "../knowledge/scope";
 import { makeLspGlanceHook } from "../lspGlance";
 import { isLspWarm, queryLsp } from "../lspClient";
 import type { ChatEvent } from "../../engine/types.js";
@@ -15,6 +17,8 @@ export interface HookBuildContext {
               makeModelSwitchGuard(): ModelSwitchGuard | null };
   /** aide-lsp 通道（闸门已算好，见 lspGate.ts）。缺省 = 不挂 grep 顺带作答。 */
   lsp?: { mounted: boolean; emit: (e: ChatEvent) => void };
+  /** 本会话的圈选登记簿：本轮带圈选期间，memoryGuard 拒绝写记忆。缺省 = 不挂。 */
+  kbScopes?: KbScopeStore;
 }
 
 export interface BuiltinHookEntry {
@@ -40,6 +44,9 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },
+  { id: "kbMemoryGuard", event: "PreToolUse", matcher: "^(Write|Edit|MultiEdit|NotebookEdit)$",
+    purpose: "知识库圈选改写那一轮不写记忆（拦 Write/Edit 落在 memory 目录；本轮用户消息不带圈选即恢复）", alwaysMounted: false,
+    build: (ctx) => makeKbMemoryGuardHook({ configDir: ctx.env.CLAUDE_CONFIG_DIR ?? "", scopes: ctx.kbScopes }) },
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$",
     purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）", alwaysMounted: true,
     build: (ctx) => makeMemoryEventsHook(ctx.env, ctx.cwd) },

@@ -81,3 +81,24 @@ describe("splitKbRefSections（落盘文本 → 卡片，format 的逆）", () =
     expect(splitKbRefSections(broken).refs).toEqual([]);
   });
 });
+
+describe("关联项目（linked）", () => {
+  it("没有关联项目：展开文本不多出任何一句（与此前字节一致）", () => {
+    expect(formatKbRefsForPrompt([ref()])).not.toContain("关联的项目");
+  });
+
+  it("有关联项目：结尾补一句，列出去重后的目录，并提示 read_memory 只读", () => {
+    const t = formatKbRefsForPrompt([ref({ linked: ["/repo/a", "/repo/b"] }), ref({ selectionId: "s2", linked: ["/repo/a"] })]);
+    expect(t).toContain("这些文档关联的项目：/repo/a、/repo/b。");
+    expect(t).toContain("read_memory");
+    expect(t.match(/\/repo\/a/g)).toHaveLength(1);
+  });
+
+  it("往返：关联项目那一句不会漏进还原出的用户原文，选区卡片照常还原", () => {
+    const text = formatKbRefsForPrompt([ref({ linked: ["/repo/a"] })]);
+    const { displayText, refs } = splitKbRefSections(`改具体些\n\n${text}`);
+    expect(displayText).toBe("改具体些");
+    expect(refs).toHaveLength(1);
+    expect(refs[0]!.text).toBe("切流量到旧版本");
+  });
+});

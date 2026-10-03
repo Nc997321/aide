@@ -28,6 +28,8 @@ export interface KbScope {
 /** 单条消息最多登记的选区数、单个选区的原文上限（字符）。越界的块整个丢弃，不截断——
  *  截断会让 text 与偏移对不上，等于伪造范围。 */
 export const MAX_KB_SCOPES = 8;
+/** 单条消息最多登记的关联工作区数（与 engine 附加根的 8 个上限同量级）。 */
+export const MAX_LINKED_ROOTS = 8;
 export const MAX_KB_SCOPE_TEXT = 20_000;
 
 function isInt(v: unknown): v is number {
@@ -58,17 +60,38 @@ export function parseScope(raw: unknown): KbScope | null {
   };
 }
 
+/** kbref 块里的 `linked`（关联工作区根目录）→ 干净的字符串数组；形状不对的丢弃。
+ *  display 来自客户端，不可信：这里只做形状清洗，是否真是已注册工作区由 read_memory 读不读得到记忆目录兜底。 */
+export function parseLinked(raw: unknown): string[] {
+  if (typeof raw !== "object" || raw === null) return [];
+  const linked = (raw as Record<string, unknown>).linked;
+  if (!Array.isArray(linked)) return [];
+  return linked.filter((x): x is string => typeof x === "string" && x.trim().length > 0).map((x) => x.trim());
+}
+
 export class KbScopeStore {
   private scopes = new Map<string, KbScope>();
+  private linked: string[] = [];
 
-  /** 一条用户消息到达：整表替换。没有 kbref 就是清空。 */
+  /** 一条用户消息到达：整表替换。没有 kbref 就是清空（圈选范围与关联项目都随最新一条消息走，
+   *  不残留上一轮的授权）。 */
   replaceFromDisplay(display: readonly UserMessageBlock[] | undefined): void {
     this.scopes.clear();
+    const linked = new Set<string>();
     for (const block of display ?? []) {
       if (this.scopes.size >= MAX_KB_SCOPES) break;
       const scope = parseScope(block);
-      if (scope && !this.scopes.has(scope.id)) this.scopes.set(scope.id, scope);
+      if (scope && !this.scopes.has(scope.id)) {
+        this.scopes.set(scope.id, scope);
+        for (const dir of parseLinked(block)) linked.add(dir);
+      }
     }
+    this.linked = [...linked].slice(0, MAX_LINKED_ROOTS);
+  }
+
+  /** 本轮可参考记忆的关联工作区（read_memory 的授权根之一）。 */
+  linkedRoots(): string[] {
+    return [...this.linked];
   }
 
   get(id: string): KbScope | undefined {

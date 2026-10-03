@@ -813,6 +813,9 @@ export class SessionWorker {
             // 附加根的记忆注入只在 spawn 期进 system prompt（F6：中途 @ 的走消息级
             // 目录段当轮送达）
             attachedDirs: this.additionalDirs,
+            // read_memory 的授权根，现取：@目录账本（additionalDirs 在 commit 时整体换新数组）
+            // + 本轮用户消息里圈选的文档所关联的工作区（随最新一条消息整表替换，见 KbScopeStore）。
+            memoryRoots: () => [...new Set([...this.additionalDirs, ...this.kbScopes.linkedRoots()])],
             lspLanguages,
             processEnv: process.env,
             emit: (e) => this.emit(e),

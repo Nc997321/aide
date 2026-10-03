@@ -881,6 +881,15 @@ export const api = {
       token: input.token,
     });
   },
+  /** 知识库「关联项目」全表：`{ 文档或文件夹 id: [工作区 key] }`。**本 Host 自持**（工作区与记忆都是
+   *  Host 的），不同步、不对手机开放。 */
+  kbLinks(): Promise<Record<string, string[]>> {
+    return getTransport().invoke("kb_links", {});
+  },
+  /** 设置某个文档 / 文件夹**直接**关联的工作区（全量覆盖；空数组 = 清掉）。返回写入后的全表。 */
+  setKbLinks(nodeId: string, wsKeys: string[]): Promise<Record<string, string[]>> {
+    return getTransport().invoke("set_kb_links", { nodeId, wsKeys });
+  },
 };
 
 export { permissionsApi } from "./api/permissions";

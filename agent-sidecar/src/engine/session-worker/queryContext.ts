@@ -14,6 +14,7 @@ import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } 
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
 import { loadLspHint } from "../lspHint.js";
+import { crossMemoryMcpRegistration } from "../crossMemory.js";
 
 export interface QueryContextDeps {
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
@@ -22,6 +23,10 @@ export interface QueryContextDeps {
   /** 本会话的 @目录账本（附加根）——只有 spawn 期这一条路进 system prompt，
    *  中途 @ 的靠消息级目录段当轮送达（方案 F6 / D 段）。 */
   attachedDirs?: string[];
+  /** 「可参考的其他工作区」的**现取**入口（read_memory 工具用）。与 attachedDirs 寿命不同：
+   *  attachedDirs 是 spawn 时的快照、只喂 system prompt；这里每次调用现取，所以会话中途
+   *  @ 的目录立刻可读记忆，不必重建 query。 */
+  memoryRoots?: () => string[];
   /** 该工作区配得上 LSP 的语言（空 = 不挂 aide-lsp 工具）。 */
   lspLanguages: string[];
   processEnv: NodeJS.ProcessEnv;
@@ -54,6 +59,12 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // **未登录也挂**——凭据每次调用现读，未配置时工具返回「去知识库面板登录」的引导
   // 文本（设计 spec §5.1）。无 emit 参数：直连知识库的 HTTP，不走主进程 IPC。
   const knowledgeMcp = knowledgeMcpRegistration(deps.processEnv, deps.trusted, deps.cwd, deps.kbScopes);
+  // 跨工作区记忆（只读）：参考别的工作区的 auto memory 正文。!trusted 跳过；恒挂，
+  // 让中途 @ 的目录立即可用（见 crossMemory.ts）。
+  const memoryMcp = crossMemoryMcpRegistration(
+    { configDir: deps.processEnv.CLAUDE_CONFIG_DIR ?? "", roots: deps.memoryRoots ?? (() => deps.attachedDirs ?? []) },
+    deps.trusted,
+  );
   // 内嵌浏览器读写（读骨架 / 执行脚本 / CDP）：注册条件=!trusted 跳过、AIDE_BROWSER_TOOLS=off
   // 跳过。**带 emit**——它要走 request_id 桥回桌面 Rust 驱动 WebView2（本仓库第三种形态：
   // knowledge 直连 HTTP、docs 本地同步解析、lsp 与本插件回主进程）。
@@ -92,6 +103,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     session: deps.session,
     // grep 顺带作答与 aide-lsp 工具**同一道闸**（lspGate）：工具不在，附注里指向的工具也不存在。
     lsp: { mounted: lspToolsMounted(lspGate), emit: deps.emit },
+    kbScopes: deps.kbScopes,
   });
   // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与内建项按
   // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
@@ -107,6 +119,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     {
       ...(docsMcp ?? {}),
       ...(knowledgeMcp ?? {}),
+      ...(memoryMcp ?? {}),
       ...(browserMcp ?? {}),
       ...(lspMcp ?? {}),
     },

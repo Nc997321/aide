@@ -23,7 +23,7 @@ export interface AttachDecision {
 
 /** 归一键：Windows 形态（盘符/UNC）不区分大小写，分隔符归一、剥尾分隔符。
  *  只用于**比对**，入账保留原值（下发/显示不丢用户的写法）。 */
-function dirKey(dir: string): string {
+export function dirKey(dir: string): string {
   const p = dir.trim().replace(/[\\/]+$/, "").replace(/[\\/]/g, "/");
   return /^[a-zA-Z]:\//.test(p) || p.startsWith("//") ? p.toLowerCase() : p;
 }

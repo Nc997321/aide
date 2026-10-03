@@ -6,6 +6,7 @@ import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropi
 import { LSP_ALLOW_RULE } from "../../extensions/lspTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
+import { MEMORY_READ_RULES } from "../crossMemory.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption, type SdkPluginConfig } from "../../extensions/dispatchPlugins.js";
 import { retireBuiltinLspPlugins } from "../../extensions/lspRetire.js";
@@ -105,6 +106,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       // 这条规则也只是永不匹配。
       LSP_ALLOW_RULE,
       ...KNOWLEDGE_READ_RULES,
+      // 跨工作区记忆只读，同样是工具级规则。
+      ...MEMORY_READ_RULES,
       ...BROWSER_ALLOW_RULES,
     ],
     // 会话 cwd 是 Aide 自持属性（wsPath 档案 / ChangeLog 基线 / Host 目录探测都认它）。

@@ -96,6 +96,10 @@ export interface SendOptions {
    *  语义不同：workspace 是会话归属（1 个），这是本会话的附加授权（N 个，粘性）。
    *  全量语义是有意的：sidecar 侧并集合并幂等，重连/换端重报一遍就自愈。 */
   additionalDirs?: string[];
+  /** 新会话刚分配出临时 id（无会话首发）时**同步**回调一次，早于任何派发：调用方要在
+   *  sidecar 的第一条事件（session_title / session_init）到达之前登记「这个临时号是谁的」
+   *  （例如知识库卡片把它记到文档名下、暂存会话标题）。已有会话的发送不会调用。 */
+  onTempSession?: (tempSid: string) => void;
 }
 
 interface QueuedSend {
@@ -333,6 +337,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       // 种进注册表——dispatchSend 的 workspaceRoot、finalize 后的落盘归属都读它，
       // 不再受「发出后用户切了工作区」影响。
       if (opts.workspace) useSessionWorkspaces().setWorkspace(sid, opts.workspace);
+      opts.onTempSession?.(sid);
       // 新会话：spawn 将用的 provider 当场坐实到 tempId（定名后由 finalizeSpawn
       // 迁到 realId 并落盘）。此前靠 ChatPanel 的 settleOnSend("") 推进一个全局单值
       // 基线——既会跨会话串（别的面板一切就改基线），又落不了盘。

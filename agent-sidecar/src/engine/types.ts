@@ -119,6 +119,9 @@ export type UserMessageBlock =
       lineStart: number;
       lineEnd: number;
       precise: boolean;
+      /** 这篇文档关联的工作区根目录（本 Host 上的路径）：本轮可经 read_memory 参考它们的记忆。
+       *  只读，不授予那些工作区的任何文件访问。缺省 = 没有关联项目。 */
+      linked?: string[];
     };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { KbScopeStore, applySelectionEdit, parseScope, type KbScope } from "./scope.js";
+import { KbScopeStore, applySelectionEdit, parseLinked, parseScope, type KbScope } from "./scope.js";
 import type { UserMessageBlock } from "../../engine/types.js";
 
 const block = (over: Record<string, unknown> = {}) => ({
@@ -116,5 +116,39 @@ describe("applySelectionEdit", () => {
 
   it("范围越界 → stale", () => {
     expect(applySelectionEdit("短", scope, "x")).toEqual({ ok: false, reason: "stale" });
+  });
+});
+
+describe("关联项目（read_memory 的授权根之一）", () => {
+  it("parseLinked：只留非空字符串并去空白；形状不对给空数组", () => {
+    expect(parseLinked(block({ linked: [" /a/b ", "", 3, null, "/c"] }))).toEqual(["/a/b", "/c"]);
+    expect(parseLinked(block({ linked: "/a" }))).toEqual([]);
+    expect(parseLinked(block())).toEqual([]);
+    expect(parseLinked(null)).toEqual([]);
+  });
+
+  it("随最新一条用户消息整表替换：带圈选的消息给出关联根，之后不带圈选的消息清空（不残留上一轮授权）", () => {
+    const s = new KbScopeStore();
+    s.replaceFromDisplay([block({ linked: ["/repo/a", "/repo/b"] })] as unknown as UserMessageBlock[]);
+    expect(s.linkedRoots()).toEqual(["/repo/a", "/repo/b"]);
+    s.replaceFromDisplay([{ type: "text", text: "继续" }]);
+    expect(s.linkedRoots()).toEqual([]);
+  });
+
+  it("多个选区的关联根取并集去重；畸形选区块不贡献关联根", () => {
+    const s = new KbScopeStore();
+    s.replaceFromDisplay([
+      block({ selectionId: "s1", linked: ["/repo/a"] }),
+      block({ selectionId: "s2", linked: ["/repo/a", "/repo/b"] }),
+      block({ selectionId: "s3", end: 999, linked: ["/repo/evil"] }), // 偏移与原文对不上 → 整块不登记
+    ] as unknown as UserMessageBlock[]);
+    expect(s.linkedRoots()).toEqual(["/repo/a", "/repo/b"]);
+  });
+
+  it("数量封顶", () => {
+    const s = new KbScopeStore();
+    const many = Array.from({ length: 20 }, (_, i) => `/repo/${i}`);
+    s.replaceFromDisplay([block({ linked: many })] as unknown as UserMessageBlock[]);
+    expect(s.linkedRoots()).toHaveLength(8);
   });
 });

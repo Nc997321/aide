@@ -85,6 +85,14 @@ describe("prepareQueryContext", () => {
     expect(ctx.instructions).toContain("B-RULES");
   });
 
+  it("跨工作区记忆：trusted 挂 aide-memory，受限模式不挂", async () => {
+    const env = { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv;
+    const on = await prepareQueryContext(deps({ trusted: true, processEnv: env }));
+    expect(on.mcpServers["aide-memory"]).toBeDefined();
+    const off = await prepareQueryContext(deps({ trusted: false, processEnv: env }));
+    expect(off.mcpServers["aide-memory"]).toBeUndefined();
+  });
+
   it("automation：mcpServers 按白名单收口——空白名单 = 连接器全不挂载（docs 也被滤掉）", async () => {
     const ctx = await prepareQueryContext(
       deps({

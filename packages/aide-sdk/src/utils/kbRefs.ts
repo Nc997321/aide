@@ -13,6 +13,14 @@ const ESCAPED_CLOSE = "<\\/选区内容>";
 
 const TAIL_HINT =
   "（以上选区由用户在知识库文档里圈定：只能用 edit_selection 修改它们，选区之外一个字都不要动。）";
+/** 文档关联了项目时的补充一句：让 agent 知道这些项目的记忆可以参考（只读）。 */
+const LINKED_HINT_PREFIX = "（这些文档关联的项目：";
+const LINKED_HINT_RE = /\n*（这些文档关联的项目：[^\n]*）/;
+function linkedHint(refs: readonly KbRef[]): string {
+  const dirs = [...new Set(refs.flatMap((r) => r.linked ?? []))];
+  if (dirs.length === 0) return "";
+  return `\n${LINKED_HINT_PREFIX}${dirs.join("、")}。写得贴合它们时，可用 read_memory 参考其记忆；记忆只读，也不代表可以访问那些项目的文件。）`;
+}
 
 /**
  * 发给模型的展开文本。生成与解析（splitKbRefSections）放同一个文件、同一处真相源——
@@ -38,7 +46,7 @@ export function formatKbRefsForPrompt(refs: readonly KbRef[]): string {
     ].join("\n"),
   );
   const dropped = refs.length > MAX_KB_REFS ? `\n（另有 ${refs.length - MAX_KB_REFS} 个选区因超过上限未带上）` : "";
-  return `${blocks.join("\n\n")}${dropped}\n\n${TAIL_HINT}`;
+  return `${blocks.join("\n\n")}${dropped}\n\n${TAIL_HINT}${linkedHint(kept)}`;
 }
 
 export interface KbRefSplit {
@@ -110,6 +118,7 @@ export function splitKbRefSections(text: string): KbRefSplit {
   displayText = displayText
     .replace(/\n*（另有 \d+ 个选区因超过上限未带上）/, "")
     .replace(TAIL_HINT, "")
+    .replace(LINKED_HINT_RE, "")
     .trim();
   return { displayText, refs };
 }

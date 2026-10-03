@@ -22,6 +22,9 @@
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { memoryDirs } from "./memoryDirs.js";
+import { MEMORY_READ_RULES } from "./crossMemory.js";
+
+const MEMORY_READ_TOOL = MEMORY_READ_RULES[0];
 
 const MAX_INSTRUCTION_FILE_BYTES = 256 * 1024;
 /** auto memory 索引（MEMORY.md）截断：前 200 行 / 25 KiB 先到先截——镜像 CLI 的加载
@@ -95,7 +98,8 @@ async function attachedRootChunk(dir: string, configDir: string): Promise<string
     readInstructionFile(join(dir, "CLAUDE.md")),
     readMemoryIndex(configDir, dir),
   ]);
-  const body = [rules, memory].filter((t): t is string => !!t && t.length > 0);
+  const body = [rules, memory && `（本仓记忆索引。正文用 ${MEMORY_READ_TOOL}，root=${dir}，id=索引里的文件名）\n${memory}`]
+    .filter((t): t is string => !!t && t.length > 0);
   if (body.length === 0) return null;
   return [
     `--- 附加工作区指令：${dir} ---`,

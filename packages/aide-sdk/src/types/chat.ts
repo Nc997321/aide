@@ -414,6 +414,9 @@ export interface KbRef {
   lineEnd: number;
   /** true = 范围就是用户选中的那段文字；false = 选区含格式/跨块，已扩大到整块。 */
   precise: boolean;
+  /** 这篇文档关联的工作区根目录（本 Host 上的路径）：本轮可经 read_memory 参考它们的记忆。
+   *  只读，不授予那些工作区的任何文件访问。缺省 = 没有关联项目。 */
+  linked?: string[];
 }
 
 export type UserMessageBlock =

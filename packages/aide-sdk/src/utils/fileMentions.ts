@@ -202,7 +202,7 @@ async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
     `一级条目（${entries.length} 个）：`,
     listing + more,
     ...(rules ? [`本仓指令文件 ${dir}/CLAUDE.md 原文（仅当操作该仓文件时适用）：`, rules] : []),
-    ...(memory ? [`本仓记忆索引（auto memory，仅当操作该仓文件时适用）：`, memory] : []),
+    ...(memory ? [`本仓记忆索引（auto memory，仅当操作该仓文件时适用；正文用 mcp__aide-memory__read_memory，root=${dir}，id=索引里的文件名）：`, memory] : []),
   ].join("\n");
 }
 
