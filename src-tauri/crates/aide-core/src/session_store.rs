@@ -83,22 +83,29 @@ pub fn our_session_workspace(session_id: &str) -> SessionWorkspaceRef {
     }
 }
 
-/// 会话是否是自动化运行产物（tags 含 "automation"）。
-/// 运行转录仍是普通 session JSONL（查看器直接复用），但不进正常会话列表——
-/// 一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。tags 由
-/// AutomationService 发起运行时写入 `~/.aide/sessions/<id>.json`。
-pub fn our_session_is_automation(session_id: &str) -> bool {
+/// 不进正常会话列表的会话标签（`~/.aide/sessions/<id>.json` 的 `tags`）。
+/// - `automation`：自动化运行产物。转录仍是普通 session JSONL（查看器直接复用），
+///   但一个每天跑的任务 30 天产生 30+ 条记录，会把列表冲垮。
+/// 新增一类「宿主内部会话」只需在这里加一个标签，所有列表扫描路径自动认。
+pub const HIDDEN_SESSION_TAGS: &[&str] = &["automation"];
+
+/// 档案 JSON 的 `tags` 是否含隐藏标签。纯函数，便于单测。
+pub fn tags_mark_hidden(profile: &serde_json::Value) -> bool {
+    profile
+        .get("tags")
+        .and_then(|t| t.as_array())
+        .map(|a| a.iter().any(|x| x.as_str().is_some_and(|t| HIDDEN_SESSION_TAGS.contains(&t))))
+        .unwrap_or(false)
+}
+
+/// 会话是否是宿主内部会话（见 [`HIDDEN_SESSION_TAGS`]）：列表类扫描一律跳过。
+/// 读不到档案 = 不隐藏（普通会话的常态）。
+pub fn our_session_is_hidden(session_id: &str) -> bool {
     let path = our_sessions_dir().join(format!("{}.json", session_id));
-    if let Ok(content) = fs::read_to_string(&path) {
-        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) {
-            return v
-                .get("tags")
-                .and_then(|t| t.as_array())
-                .map(|a| a.iter().any(|x| x.as_str() == Some("automation")))
-                .unwrap_or(false);
-        }
-    }
-    false
+    fs::read_to_string(&path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .is_some_and(|v| tags_mark_hidden(&v))
 }
 
 /// 多根查找核心：对每个配置根的 `projects/` 做一次 [`find_session_jsonl_in`]。
@@ -155,6 +162,16 @@ mod tests {
         assert!(hits[0].starts_with(&base.join("scopes")));
 
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn tags_mark_hidden_only_for_hidden_kinds() {
+        use serde_json::json;
+        assert!(tags_mark_hidden(&json!({"tags": ["automation", "aut_1"]})));
+        assert!(!tags_mark_hidden(&json!({"tags": ["other"]})));
+        assert!(!tags_mark_hidden(&json!({"tags": []})));
+        assert!(!tags_mark_hidden(&json!({"name": "x"})), "没有 tags 字段 = 普通会话");
+        assert!(!tags_mark_hidden(&json!({"tags": "automation"})), "tags 必须是数组");
     }
 
     /// scopes 目录不存在（没人用过隔离）→ 退化为只有全局，不报错。

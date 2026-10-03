@@ -71,7 +71,7 @@ pub use aide_core::paths::{
 // ── 会话档案 / 转录定位（住在 aide-core） ──
 
 pub use aide_core::session_store::{
-    find_session_jsonl_globally, our_session_is_automation, our_session_name,
+    find_session_jsonl_globally, our_session_is_hidden, our_session_name,
     our_session_provider_field, our_session_workspace, SessionWorkspaceRef,
 };
 

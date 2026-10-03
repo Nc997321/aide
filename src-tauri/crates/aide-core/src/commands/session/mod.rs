@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::paths::{claude_projects_dir, claude_sessions_dir, our_sessions_dir};
-use crate::session_store::{our_session_is_automation, our_session_name};
+use crate::session_store::{our_session_is_hidden, our_session_name};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Session {
@@ -103,8 +103,8 @@ fn scan_project_jsonl_sessions(
         if session_id.is_empty() || sessions.iter().any(|s| s.id == session_id) {
             continue;
         }
-        // 自动化运行产物不进正常会话列表（tags 机制见 our_session_is_automation）
-        if our_session_is_automation(&session_id) {
+        // 宿主内部会话（自动化运行 / 知识库卡片）不进正常会话列表（tags 机制见 our_session_is_hidden）
+        if our_session_is_hidden(&session_id) {
             continue;
         }
 
@@ -183,8 +183,8 @@ fn list_sessions_blocking(
                         continue;
                     }
 
-                    // 自动化运行产物不进正常会话列表
-                    if our_session_is_automation(session_id) {
+                    // 宿主内部会话不进正常会话列表
+                    if our_session_is_hidden(session_id) {
                         continue;
                     }
 
@@ -823,6 +823,12 @@ fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, 
                     }
 
                     if sessions.iter().any(|s| s.id == session_id) {
+                        continue;
+                    }
+
+                    // 与 list_sessions_blocking 的第二遍同口径：刚创建、转录还没落盘的隐藏会话
+                    // 只有元数据，不过滤会在这条路径上漏出来。
+                    if our_session_is_hidden(session_id) {
                         continue;
                     }
 

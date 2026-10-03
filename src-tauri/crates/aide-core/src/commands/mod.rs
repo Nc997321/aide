@@ -8,6 +8,7 @@ pub mod customizations;
 pub mod git;
 pub mod jdk;
 pub mod link;
+pub mod kb_links;
 pub mod knowledge;
 pub mod marketplace;
 pub mod memory_observatory;
