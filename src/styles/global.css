@@ -263,6 +263,9 @@ html, body, #app {
 }
 .msg-text ol {
   list-style-type: decimal;
+  /* 编号在 padding 区里绘制，等宽字体下 "1." 就要 ~2ch + 标记间距，20px 不够会被
+     容器 overflow 裁掉半个（只剩 "L."）；2em 够放到 "10."。无序圆点窄，仍用 20px。 */
+  padding-left: 2em;
 }
 .msg-text li {
   margin: 2px 0;
