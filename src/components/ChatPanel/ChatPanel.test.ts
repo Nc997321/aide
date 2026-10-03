@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import { nextTick, ref } from "vue";
-import { __resetKbSelectionsForTest, useKbSelections } from "@/composables/useKbSelections";
 import type { ProviderConfig, ProviderModelMappings } from "@/types";
 
 // ── Tauri（useChatSession 模块级 import 需要）──
@@ -250,65 +249,6 @@ describe("ChatPanel 跨会话串修复", () => {
       info: "供应商仍是 p_test，仅模型由 kimi 改为 deepseek。确认后模型选择会写入会话记录。",
     });
 
-    wrapper.unmount();
-  });
-});
-
-describe("ChatPanel · 知识库圈选发送遇到「发送前确认」（回归：一直停在待发送）", () => {
-  async function setupDrift() {
-    const driftMock = vi.fn(async () => ({ providerDrift: false, modelDrift: true, lastProvider: null, lastModel: "kimi" }));
-    const api = (await import("@aide/sdk/api")).api as unknown as { sessionIdentityDrift: typeof driftMock };
-    api.sessionIdentityDrift = driftMock;
-    sessionProviderMock.mockImplementation(async () => "p_test");
-    sessionModelMock.mockImplementation(async () => "kimi");
-    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentModel: "haiku", isBusy: false }) });
-    await flush();
-    // 用户在聊天里换过模型 → 下一次发送会触发「模型变更」确认
-    const modelStub = wrapper.findAllComponents({ name: "ThemedSelect" }).find((s) => s.props("title") === "模型");
-    modelStub?.vm.$emit("update:modelValue", "deepseek");
-    await nextTick();
-    return wrapper;
-  }
-  function pendingKbRecord() {
-    const k = useKbSelections();
-    const rec = k.begin({
-      documentId: "doc-1", title: "发布流程", baseVersion: 3, baseContent: "出现故障时先切流量到旧版本再排查。",
-      scope: { start: 6, end: 13, text: "切流量到旧版本", lineStart: 1, lineEnd: 1, precise: true },
-    });
-    k.confirm(rec.ref.selectionId, "写具体些");
-    return { k, id: rec.ref.selectionId };
-  }
-
-  it("文档侧发送被确认门拦下：确认框画在聊天里，此时圈选仍是待发送；并且请求「把聊天亮出来」", async () => {
-    __resetKbSelectionsForTest();
-    const wrapper = await setupDrift();
-    const { k, id } = pendingKbRecord();
-    const before = k.chatRequest.value?.nonce ?? 0;
-    k.requestSend("");
-    await flush();
-    expect(wrapper.emitted("send")).toBeFalsy();
-    expect(wrapper.findComponent({ name: "PermissionDialog" }).props("permission")).toMatchObject({ name: "__sendConfirm__" });
-    expect(k.records[id]!.status).toBe("pending");
-    // 知识库打开时聊天面板是隐藏的——不亮出来，用户永远看不到这个确认框
-    expect(k.chatRequest.value?.nonce).toBe(before + 1);
-    wrapper.unmount();
-  });
-
-  it("没有门控时（模型没变）直接发出，不打扰：不请求亮出聊天", async () => {
-    __resetKbSelectionsForTest();
-    // 显式声明「没有漂移」：同文件里别的用例会把这个桩改成有漂移，不能依赖默认
-    const api = (await import("@aide/sdk/api")).api as unknown as { sessionIdentityDrift: unknown };
-    api.sessionIdentityDrift = vi.fn(async () => ({ providerDrift: false, modelDrift: false, lastProvider: null, lastModel: null }));
-    sessionProviderMock.mockImplementation(async () => "p_test");
-    sessionModelMock.mockImplementation(async () => "kimi");
-    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentModel: "haiku", isBusy: false }) });
-    await flush();
-    const { k } = pendingKbRecord();
-    const before = k.chatRequest.value?.nonce ?? 0;
-    k.requestSend("");
-    await flush();
-    expect(wrapper.emitted("send")).toBeTruthy();
-    expect(k.chatRequest.value?.nonce ?? 0).toBe(before);
     wrapper.unmount();
   });
 });

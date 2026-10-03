@@ -72,7 +72,7 @@ function blockOf(node: Node, body: HTMLElement): HTMLElement | null {
   return hit && body.contains(hit) ? hit : null;
 }
 
-function lineOf(source: string, offset: number): number {
+export function lineOf(source: string, offset: number): number {
   let line = 1;
   for (let i = source.indexOf("\n"); i !== -1 && i < offset; i = source.indexOf("\n", i + 1)) line += 1;
   return line;

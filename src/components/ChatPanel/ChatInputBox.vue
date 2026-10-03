@@ -597,30 +597,17 @@ watch(
 );
 
 // ── 知识库圈选（在文档里圈出来的一处 + 意见）──────────────────────────────────
-// 圈选的草稿在 useKbSelections（模块级）：知识库打开时这个输入框不在眼前，圈选得能在文档那侧
-// 直接发（requestSend）；回到聊天时同一批圈选以芯片形式出现在这里，也能从这里发。
+// 圈选的草稿在 useKbSelections（模块级）。文档里的卡片自己发（一篇文档一个会话，见
+// useKbCardSession）；没发出的「待发送」在这里以芯片出现，也能从这里发。
 // 只有聚焦（选中会话）的输入框认领它们——与文件引用芯片同一条规则。
 const kbSel = useKbSelections();
 const kbChips = computed(() => (props.focused ? kbSel.all.value.filter((r) => r.status === "pending") : []));
 /** 本次发送带走的圈选 id；发送坐实（sendConfirmedNonce）时把它们标成「已发出」。 */
 let sentKbIds: string[] = [];
-/** 文档侧「现在就发」：发送不动输入框里用户自己的草稿，所以坐实时也不清空它。 */
-let keepDraftOnConfirm = false;
 function kbChipLabel(r: { ref: { title: string; lineStart: number; lineEnd: number } }): string {
   const lines = r.ref.lineStart === r.ref.lineEnd ? `第 ${r.ref.lineStart} 行` : `第 ${r.ref.lineStart}–${r.ref.lineEnd} 行`;
   return `${r.ref.title || "未命名文档"} · ${lines}`;
 }
-watch(
-  () => kbSel.sendRequest.value?.nonce,
-  () => {
-    const req = kbSel.sendRequest.value;
-    if (!req || !props.focused || !kbChips.value.length) return;
-    // 认领：告诉文档侧「这次发送我接了」，否则它会判定没人接、把聊天亮出来（见 requestSend）。
-    kbSel.claimSend(req.nonce);
-    void handleSend({ text: req.text });
-  },
-);
-
 // 输入框 `@path `→mention 芯片转换层（与来源无关：手打/粘贴/拖入都走这）。
 // paste/drop 管道把文件引用以 `@path ` 文本插进 textarea，这里统一扫描转换。
 const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
@@ -950,24 +937,23 @@ async function handleDrop(e: DragEvent) {
  *  确保所有早退路径（btw 无参 / skill 读取失败）都能正确解锁，下一次发送可
  *  正常进入。图片不再预检（探测已移除）：模型不支持时由 sidecar 回滚并提示。 */
 const sending = ref(false);
-async function handleSend(override?: { text: string }) {
+async function handleSend() {
   if (sending.value) return;
   sending.value = true;
   try {
-    await performSend(override);
+    await performSend();
   } finally {
     sending.value = false;
   }
 }
 
-/** override = 文档侧发起的发送：只带圈选 + 一句补充，不碰输入框里用户自己的草稿 / 图片 / 引用芯片。 */
-async function performSend(override?: { text: string }) {
-  const text = override ? override.text.trim() : inputText.value.trim();
-  const hasImages = !override && pendingImages.value.length > 0;
+async function performSend() {
+  const text = inputText.value.trim();
+  const hasImages = pendingImages.value.length > 0;
   const kbrefs = kbChips.value.map((r) => ({ ...r.ref }));
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
   // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
-  const mentionPrefix = !override && pendingMentions.value.length
+  const mentionPrefix = pendingMentions.value.length
     ? pendingMentions.value.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
     : "";
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
@@ -977,7 +963,7 @@ async function performSend(override?: { text: string }) {
   // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
   // + 二次确认）；btw 无参数进输入模式、有参数直接发支线。查不到才走 skill /
   // 普通文本。已在 btw 模式里时不拦（输入本来就是支线内容，/btw 字面量无意义）。
-  if (!btwMode.value && !override) {
+  if (!btwMode.value) {
     const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
@@ -1001,7 +987,7 @@ async function performSend(override?: { text: string }) {
     }
   }
 
-  if (btwMode.value && !override) {
+  if (btwMode.value) {
     // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
     // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
@@ -1051,9 +1037,8 @@ async function performSend(override?: { text: string }) {
   const newlyAttached = attachedDirsFrom(mentionResolution, props.workspacePath ?? null);
   const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
-  const images = override ? [] : pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   sentKbIds = kbrefs.map((r) => r.selectionId);
-  keepDraftOnConfirm = !!override;
   const sendOpts: SendOptions = {
     images: images.length ? images : undefined,
     kbrefs: kbrefs.length ? kbrefs : undefined,
@@ -1122,10 +1107,6 @@ watch(() => props.sendConfirmedNonce, () => {
   // 圈选：发出去了 → 标成 sent（之后的状态只由聊天事件推进）。无论是不是文档侧发起的都要标。
   if (sentKbIds.length) kbSel.markSent(sentKbIds, props.sessionId ?? undefined);
   sentKbIds = [];
-  if (keepDraftOnConfirm) {
-    keepDraftOnConfirm = false;
-    return;
-  }
   inputText.value = "";
   pendingImages.value = [];
   pendingMentions.value = [];

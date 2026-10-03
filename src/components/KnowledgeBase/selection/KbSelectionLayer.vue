@@ -16,7 +16,10 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { kb, KbError } from "../kbClient";
 import { useKbSelections, type KbSelectionRecord } from "@/composables/useKbSelections";
-import { scopeFromRange, type ResolvedScope } from "./scopeFromRange";
+import { useKbCardSession } from "@/composables/useKbCardSession";
+import { scopeFromRange, lineOf, type ResolvedScope } from "./scopeFromRange";
+import { inlineDiff } from "./inlineDiff";
+import { pathBasename } from "@/utils/fileIcons";
 import { rangeForSource } from "./rangeForSource";
 import { rectsInScroller, type LayoutRect } from "./layoutRects";
 
@@ -26,6 +29,8 @@ const props = defineProps<{
   /** 文章的滚动容器：本层的绝对定位参照与坐标原点。 */
   scrollEl: HTMLElement | null;
   doc: { id: string; title: string; versionNo: number; content?: string | null };
+  /** 这篇文档生效的关联项目的工作区根目录：随圈选带给 AI，让它能只读地参考那些项目的记忆。 */
+  linkedRoots?: string[];
 }>();
 
 const emit = defineEmits<{
@@ -36,6 +41,8 @@ const emit = defineEmits<{
 }>();
 
 const kbSel = useKbSelections();
+/** 这篇文档的卡片对话（一篇文档一个会话）：发送、回复、权限确认都在卡片里，不再回聊天。 */
+const card = useKbCardSession(() => props.doc);
 const source = computed(() => props.doc.content ?? "");
 
 // ── 阶段：idle → cta（选中后的小入口）→ compose（写意见的浮窗）─────────────────
@@ -164,7 +171,7 @@ onBeforeUnmount(() => {
   document.removeEventListener("mousedown", onDocMouseDown, true);
   document.removeEventListener("keydown", onDocKeyDown, true);
   // 离开文档时丢掉草稿；待发送的保留（用户可能去聊天里发）。
-  if (composeId.value) kbSel.discard(composeId.value);
+  discardDraft();
 });
 
 // ── 选中 → 小入口 ──────────────────────────────────────────────────────────
@@ -209,9 +216,15 @@ function dismiss(): void {
   stage.value = "idle";
   pendingScope.value = null;
   ctaAnchor.value = null;
-  if (composeId.value) kbSel.discard(composeId.value);
+  discardDraft();
   composeId.value = null;
   note.value = "";
+}
+
+/** 关卡片只丢**草稿**。已发出 / 已改好的记录还有角标和撤销要留着，对话也在会话里，不随卡片消失。 */
+function discardDraft(): void {
+  const id = composeId.value;
+  if (id && kbSel.records[id]?.status === "draft") kbSel.discard(id);
 }
 
 /** 点小入口：把暂存的范围变成草稿记录，打开浮窗。 */
@@ -224,6 +237,7 @@ function openCompose(): void {
     baseVersion: props.doc.versionNo,
     baseContent: source.value,
     scope,
+    linked: props.linkedRoots,
   });
   composeId.value = rec.ref.selectionId;
   note.value = "";
@@ -268,6 +282,12 @@ const scopeHint = computed(() =>
     : "选区含格式或跨段，已扩大到整块——AI 只会改这一块，其余内容不会动",
 );
 
+/** 这次 AI 会参考哪些记忆：日常记忆恒在；文档关联了项目就再加上它们。让人看得见 AI 带了什么上下文。 */
+const memoryLine = computed(() => {
+  const names = (props.linkedRoots ?? []).map((p) => pathBasename(p) || p);
+  return names.length ? `参考：日常记忆 + ${names.join("、")}` : "参考：日常记忆";
+});
+
 /** 常用意图：点一下就填进意见，省掉最常见的那几句话。 */
 const INTENTS = ["更简洁", "更具体", "改得更正式", "修正错别字", "翻译成英文", "补充例子"];
 function pickIntent(label: string): void {
@@ -278,45 +298,122 @@ function pickIntent(label: string): void {
 const pendingCount = computed(() => overlays.value.filter((o) => o.rec.status === "pending").length);
 const sendLabel = computed(() => (pendingCount.value > 0 ? `一起交给 AI（共 ${pendingCount.value + 1} 处）` : "交给 AI"));
 
-// 兜底：点了发送却迟迟没发出去（聊天里有等你确认的提示 / 没有可用的聊天面板 / 别的我们没想到的原因）。
-// 不能让用户对着一个不动的「待发送」发呆：几秒后角标改口，并给一个能把聊天亮出来的入口。
-const stuck = ref(false);
-let stuckTimer: ReturnType<typeof setTimeout> | undefined;
-const STUCK_AFTER_MS = 2500;
-function armStuckWatch(): void {
-  stuck.value = false;
-  clearTimeout(stuckTimer);
-  stuckTimer = setTimeout(() => {
-    if (pendingCount.value > 0) stuck.value = true;
-  }, STUCK_AFTER_MS);
-}
-watch(pendingCount, (n) => {
-  if (n === 0) {
-    stuck.value = false;
-    clearTimeout(stuckTimer);
-  }
+// ── 卡片里的对话 ───────────────────────────────────────────────────────────
+/** 卡片已经过了「写第一句」的阶段：草稿之后是在跟 AI 对话（线程、追问、撤销）。 */
+const inThread = computed(() => !!composeRec.value && composeRec.value.status !== "draft");
+/** 这一处正在处理：输入框锁住，等它回来再追问（并发改同一段只会互相覆盖）。 */
+const locked = computed(() => composeRec.value?.status === "sent" || composeRec.value?.status === "working");
+const threadEl = ref<HTMLElement | null>(null);
+const THREAD_SHOW = 10;
+const turns = computed(() => card.thread.value.slice(-THREAD_SHOW));
+watch(
+  () => [turns.value.length, turns.value[turns.value.length - 1]?.text, card.permission.value?.id] as const,
+  () => void nextTick(() => threadEl.value && (threadEl.value.scrollTop = threadEl.value.scrollHeight)),
+);
+
+/** AI 想改这一处，等你点头：画成「原文 ↔ 新文本」对照（权限弹窗里只有入参，看不出动了哪几个字）。 */
+const ask = computed(() => {
+  const req = card.editRequest.value;
+  if (!req) return null;
+  const rec = kbSel.records[req.selectionId];
+  if (!rec || rec.ref.documentId !== props.doc.id) return null;
+  return { rec, diff: inlineDiff(rec.ref.text, req.newText) };
 });
-onBeforeUnmount(() => clearTimeout(stuckTimer));
+/** 别的权限请求（不是改圈选的那一段）：卡片里不替用户批，说清楚去哪里处理。 */
+const otherAsk = computed(() => (card.permission.value && !ask.value ? card.permission.value.name : null));
+
+async function answerAsk(approved: boolean): Promise<void> {
+  try {
+    await card.respond(approved, approved ? undefined : "用户在知识库卡片里拒绝了这次修改");
+  } catch (e) {
+    showToast(`没能回复 AI：${String(e)}`);
+  }
+}
+
+/** 把本篇文档里所有「待发送」的圈选发给这篇文档的会话。 */
+async function sendPending(text: string): Promise<void> {
+  const recs = kbSel.forDoc(props.doc.id).filter((r) => r.status === "pending");
+  if (recs.length === 0) return;
+  try {
+    const sid = await card.send(recs.map((r) => ({ ...r.ref })), text);
+    if (sid) kbSel.markSent(recs.map((r) => r.ref.selectionId), sid);
+    else showToast(card.sendError.value ?? "没有发出去，请稍后再试");
+  } catch (e) {
+    showToast(`没有发出去：${String(e)}`);
+  }
+}
+
+/** 追问：在上一轮的结果之上再改。每条用户消息都要带自己的圈选（授权按最新一条消息整表替换），
+ *  所以这里按「现在这一段长什么样」重新圈出同一处：改好了就用新范围，没改成就用原范围。 */
+async function followUp(): Promise<void> {
+  const base = composeRec.value;
+  const content = props.doc.content;
+  const said = note.value.trim();
+  if (!base || !said || locked.value) return;
+  const range = base.status === "done" ? base.newRange : { start: base.ref.start, end: base.ref.end };
+  if (!range || content == null) {
+    showToast("文档还在刷新到新版本，稍等一下再说");
+    return;
+  }
+  const text = content.slice(range.start, range.end);
+  if (base.status !== "done" && text !== base.ref.text) {
+    showToast("这一段的原文已经变了，请重新圈选");
+    return;
+  }
+  const next = kbSel.begin({
+    documentId: props.doc.id,
+    title: props.doc.title,
+    baseVersion: props.doc.versionNo,
+    baseContent: content,
+    scope: {
+      start: range.start,
+      end: range.end,
+      text,
+      lineStart: lineOf(content, range.start),
+      lineEnd: lineOf(content, Math.max(range.start, range.end - 1)),
+      precise: base.ref.precise,
+    },
+    linked: props.linkedRoots,
+  });
+  // 上一轮的记录让位：它的角标和撤销到这里为止，新的一轮从「现在的版本」算起。
+  kbSel.discard(base.ref.selectionId);
+  kbSel.confirm(next.ref.selectionId, said);
+  composeId.value = next.ref.selectionId;
+  note.value = "";
+  await sendPending("");
+}
 
 function submit(sendNow: boolean): void {
   const id = composeId.value;
   if (!id) return;
   kbSel.confirm(id, note.value);
+  note.value = "";
+  if (sendNow) {
+    // 卡片留着：对话就在这里继续，不关浮窗、不回聊天。
+    void sendPending("");
+    return;
+  }
   composeId.value = null;
   stage.value = "idle";
   pendingScope.value = null;
-  note.value = "";
-  if (sendNow) {
-    kbSel.requestSend("");
-    armStuckWatch();
-  }
 }
 
 function onNoteKey(e: KeyboardEvent): void {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
     e.preventDefault();
-    submit(true);
+    if (inThread.value) void followUp();
+    else submit(true);
   }
+}
+
+/** 点角标：重新打开这一处的对话卡片。 */
+function reopen(rec: KbSelectionRecord): void {
+  if (rec.status === "draft" || rec.status === "pending") return;
+  discardDraft();
+  composeId.value = rec.ref.selectionId;
+  note.value = "";
+  stage.value = "compose";
+  void nextTick(() => noteEl.value?.focus());
 }
 
 // 浮窗的位置：贴在圈选末行下方，放不下就翻到首行上方；横向夹在文章可视宽度内。
@@ -420,9 +517,8 @@ const trayMode = computed<"pending" | "busy" | "hidden">(() => {
   return "hidden";
 });
 function sendAll(): void {
-  kbSel.requestSend(trayNote.value);
+  void sendPending(trayNote.value);
   trayNote.value = "";
-  armStuckWatch();
 }
 function onTrayKey(e: KeyboardEvent): void {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -481,12 +577,12 @@ function badgeText(o: Overlay): string {
         <span v-else-if="o.rec.status === 'done'" class="ksl-spark">✦</span>
         <span v-else-if="o.rec.status === 'refused'" class="ksl-mark">!</span>
         <button
-          v-if="o.rec.status === 'pending' && stuck && !o.stale"
+          v-if="!o.stale && o.rec.status !== 'pending'"
           type="button"
-          class="ksl-badge-act ksl-badge-act--stuck"
-          title="聊天里可能有需要你确认的提示，点这里切回聊天"
-          @click="kbSel.revealChat()"
-        >还没发出 · 去聊天看看</button>
+          class="ksl-badge-text ksl-badge-text--link"
+          title="打开这一处的对话"
+          @click="reopen(o.rec)"
+        >{{ badgeText(o) }}</button>
         <span v-else class="ksl-badge-text">{{ o.stale ? "原文已变，请重新圈选" : badgeText(o) }}</span>
         <button
           v-if="o.rec.status === 'done'"
@@ -511,32 +607,67 @@ function badgeText(o: Overlay): string {
       <span class="ksl-spark">✦</span>让 AI 改这段
     </button>
 
-    <!-- 浮窗：范围说明 + 一句话 + 常用意图 + 发送 -->
+    <!-- 对话卡：范围说明 + 这一处的对话线程 + 一句话 + 常用意图。发送、回复、确认都在这张卡里 -->
     <div v-if="stage === 'compose' && composeRec" class="ksl-pop" :class="{ 'ksl-pop--up': popFlipped }" :style="popStyle" role="dialog" aria-label="让 AI 修改圈选的内容">
       <span class="ksl-notch" aria-hidden="true" />
       <header class="ksl-pop-head">
         <span class="ksl-spark ksl-spark--lg">✦</span>
         <span class="ksl-pop-title">让 AI 改这一段</span>
+        <span v-if="composeRec.status === 'done'" class="ksl-ver">已改 · v{{ composeRec.versionNo }}</span>
         <span class="ksl-scope" :class="{ 'ksl-scope--wide': !composeRec.ref.precise }" :title="scopeHint">{{ scopeLabel }}</span>
+        <button v-if="inThread" type="button" class="ksl-x" aria-label="收起" @click="dismiss">×</button>
       </header>
+
+      <div class="ksl-memory" :title="(linkedRoots ?? []).join('\n') || '没有关联项目，只带日常记忆'">{{ memoryLine }}</div>
+
+      <div v-if="inThread" ref="threadEl" class="ksl-thread" aria-live="polite">
+        <div v-for="t in turns" :key="t.id" class="ksl-turn" :class="`ksl-turn--${t.role}`">
+          <span v-if="t.role === 'ai'" class="ksl-av" aria-hidden="true">✦</span>
+          <div class="ksl-bubble">{{ t.text }}</div>
+        </div>
+        <div v-if="locked" class="ksl-turn ksl-turn--ai">
+          <span class="ksl-av" aria-hidden="true">✦</span>
+          <div class="ksl-bubble ksl-bubble--busy"><span class="ksl-dots" aria-hidden="true"><i /><i /><i /></span>{{ composeRec.status === "sent" ? "已交给 AI" : "正在改这一段" }}</div>
+        </div>
+        <div v-if="ask" class="ksl-ask" role="group" aria-label="AI 想这样改这一段">
+          <div class="ksl-ask-title">AI 想这样改</div>
+          <div class="ksl-diff">{{ ask.diff.same1 }}<del v-if="ask.diff.del">{{ ask.diff.del }}</del><ins v-if="ask.diff.ins">{{ ask.diff.ins }}</ins>{{ ask.diff.same2 }}</div>
+          <div class="ksl-ask-acts">
+            <button type="button" class="ksl-btn" @click="answerAsk(false)">不要</button>
+            <button type="button" class="ksl-btn ksl-btn--primary" @click="answerAsk(true)">应用这处修改</button>
+          </div>
+        </div>
+        <div v-else-if="otherAsk" class="ksl-ask ksl-ask--other" role="status">
+          <div class="ksl-ask-title">AI 想执行「{{ otherAsk }}」，需要你确认</div>
+          <div class="ksl-ask-acts"><button type="button" class="ksl-btn" @click="kbSel.revealChat()">去聊天里确认</button></div>
+        </div>
+        <div v-if="composeRec.status === 'refused'" class="ksl-note ksl-note--bad">{{ composeRec.message }}</div>
+      </div>
+
       <textarea
         ref="noteEl"
         v-model="note"
         class="ksl-input"
         rows="2"
-        placeholder="想怎么改？（可以留空，只让 AI 看这一段）"
+        :disabled="locked"
+        :placeholder="inThread ? '继续说，比如：再短一点' : '想怎么改？（可以留空，只让 AI 看这一段）'"
         spellcheck="false"
         @keydown="onNoteKey"
       />
       <div class="ksl-intents" role="group" aria-label="常用意图">
-        <button v-for="t in INTENTS" :key="t" type="button" class="ksl-intent" @click="pickIntent(t)">{{ t }}</button>
+        <button v-for="t in INTENTS" :key="t" type="button" class="ksl-intent" :disabled="locked" @click="pickIntent(t)">{{ t }}</button>
       </div>
       <footer class="ksl-pop-foot">
         <span class="ksl-hint">{{ scopeHint }}</span>
         <span class="ksl-spacer" />
-        <button type="button" class="ksl-btn" @click="submit(false)" title="先记下这一处，继续圈别处，最后一起发">再圈一处</button>
-        <button type="button" class="ksl-btn ksl-btn--primary" @click="submit(true)">
-          {{ sendLabel }}<kbd>↵</kbd>
+        <template v-if="!inThread">
+          <button type="button" class="ksl-btn" @click="submit(false)" title="先记下这一处，继续圈别处，最后一起发">再圈一处</button>
+          <button type="button" class="ksl-btn ksl-btn--primary" @click="submit(true)">
+            {{ sendLabel }}<kbd>↵</kbd>
+          </button>
+        </template>
+        <button v-else type="button" class="ksl-btn ksl-btn--primary" :disabled="locked || !note.trim()" @click="followUp">
+          发送<kbd>↵</kbd>
         </button>
       </footer>
     </div>
@@ -732,9 +863,6 @@ function badgeText(o: Overlay): string {
   padding: 0 7px;
   color: var(--aide-accent);
   font-weight: 600;
-}
-.ksl-badge-act--stuck {
-  color: var(--aide-warning);
 }
 .ksl-badge-act:hover:not(:disabled) {
   background: var(--aide-accent-subtle);
@@ -1071,6 +1199,153 @@ function badgeText(o: Overlay): string {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
 }
+/* ── 卡片里的对话线程 ── */
+.ksl-memory {
+  margin-top: -4px;
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ksl-x {
+  appearance: none;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: var(--aide-radius-sm);
+  background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+.ksl-x:hover {
+  background: var(--aide-surface-default);
+  color: var(--aide-text-primary);
+}
+.ksl-ver {
+  font-size: 11px;
+  color: var(--aide-success);
+  border: 1px solid color-mix(in srgb, var(--aide-success) 40%, transparent);
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-variant-numeric: tabular-nums;
+}
+.ksl-thread {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 230px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.ksl-turn {
+  display: flex;
+  gap: 7px;
+  min-width: 0;
+}
+.ksl-turn--user {
+  justify-content: flex-end;
+}
+.ksl-av {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-top: 1px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 11px;
+  color: var(--aide-agent-accent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 16%, transparent);
+}
+.ksl-bubble {
+  max-width: 88%;
+  padding: 5px 10px;
+  border-radius: 11px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--aide-text-primary);
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.ksl-turn--user .ksl-bubble {
+  border-bottom-right-radius: 3px;
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 28%, transparent);
+}
+.ksl-turn--ai .ksl-bubble {
+  padding-left: 0;
+  max-width: calc(100% - 28px);
+}
+.ksl-bubble--busy {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--aide-text-secondary);
+}
+.ksl-ask {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 10px;
+  border-radius: var(--aide-radius-md);
+  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 40%, transparent);
+  background: color-mix(in srgb, var(--aide-agent-accent) 8%, transparent);
+}
+.ksl-ask-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--aide-agent-accent);
+}
+.ksl-diff {
+  font-size: 12.5px;
+  line-height: 1.75;
+  color: var(--aide-text-secondary);
+  overflow-wrap: anywhere;
+}
+.ksl-diff del {
+  color: var(--aide-danger);
+  background: color-mix(in srgb, var(--aide-danger) 13%, transparent);
+  text-decoration: line-through;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.ksl-diff ins {
+  color: var(--aide-success);
+  background: color-mix(in srgb, var(--aide-success) 14%, transparent);
+  text-decoration: none;
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.ksl-ask-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.ksl-note--bad {
+  font-size: 12px;
+  color: var(--aide-danger);
+}
+.ksl-badge-text--link {
+  appearance: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+.ksl-intent:disabled,
+.ksl-input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 @keyframes ksl-pop-in {
   from { opacity: 0; transform: scale(0.96) translateY(-4px); }
   to { opacity: 1; transform: scale(1) translateY(0); }

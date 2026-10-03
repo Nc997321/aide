@@ -20,7 +20,9 @@ import { useRightPanel } from "@/composables/useRightPanel";
 import KbHistory from "./KbHistory.vue";
 import KbMarkdownEditor from "./KbMarkdownEditor.vue";
 import KbOutline from "./KbOutline.vue";
+import KbLinkedProjects from "./KbLinkedProjects.vue";
 import KbSelectionLayer from "./selection/KbSelectionLayer.vue";
+import { effectiveLinks, useKbLinks } from "@/composables/useKbLinks";
 
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：原生样式与主题无关。 */
 const modal = useModal();
@@ -35,6 +37,14 @@ const props = withDefaults(
     knownTitles?: ReadonlySet<string>;
   }>(),
   { editable: false, crumbs: () => [], knownTitles: () => new Set<string>() },
+);
+
+// 这篇文档生效的关联项目（自己直接打的 + 祖先文件夹继承的）→ 存在的工作区路径。
+// 圈选发给 AI 时随 kbref 带上，AI 才能只读地参考它们的记忆。
+const kbLinks = useKbLinks();
+void kbLinks.load();
+const linkedRoots = computed(() =>
+  kbLinks.rootsOf(effectiveLinks(kbLinks.table.value, props.doc.id, [...props.crumbs].reverse().map((c) => c.id))),
 );
 
 const emit = defineEmits<{
@@ -317,6 +327,7 @@ function onReverted(): void {
           <button class="kb-link danger" @click="emit('delete', doc.id)">删除</button>
         </span>
       </div>
+      <KbLinkedProjects :node-id="doc.id" :crumbs="crumbs" />
       <p v-if="conflictName" class="kb-lock-note">
         正被 {{ conflictName }} 编辑中，稍后再试
       </p>
@@ -395,6 +406,7 @@ function onReverted(): void {
       :body-el="viewBody"
       :scroll-el="docEl"
       :doc="doc"
+      :linked-roots="linkedRoots"
       @refresh="(id) => emit('saved', id)"
       @reverted="(id) => emit('reverted', id)"
     />

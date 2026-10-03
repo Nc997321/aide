@@ -13,11 +13,14 @@
 import { computed, ref } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useContextMenu } from "@/composables/useContextMenu";
-import { kbCreateItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
-import { buildTree, flatten, type KbTreeNode } from "./docTree";
+import { kbCreateItems, kbLinkMenuItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
+import { useKbLinks } from "@/composables/useKbLinks";
+import { ancestorIds, buildTree, flatten, type KbTreeNode } from "./docTree";
 import type { KbDocumentSummary } from "./kbClient";
 
 const { show: showMenu } = useContextMenu();
+const kbLinks = useKbLinks();
+void kbLinks.load();
 
 const props = defineProps<{
   documents: KbDocumentSummary[];
@@ -118,6 +121,7 @@ function openRowMenu(e: MouseEvent, row: { doc: KbDocumentSummary; isFolder: boo
       {
         onRename: (id, title) => startRename(id, title),
         onMove: (id) => openMover(id, x, y),
+        onLink: (id) => openLinker(id, x, y),
         onDelete: (id) => emit("remove", id),
       },
     ),
@@ -172,6 +176,14 @@ function openMover(id: string, x: number, y: number): void {
       emit("patch", id, { parentId }),
     ),
   );
+}
+
+/** 「关联项目…」同样是第二个菜单。文件夹的关联由其下文档继承，所以这里也看得到从上层继承来的。
+ *  每点一次切换一个，菜单随即关闭——重新打开能看到最新的勾选状态。 */
+function openLinker(id: string, x: number, y: number): void {
+  const titleOf = (nodeId: string) => props.documents.find((d) => d.id === nodeId)?.title ?? "上层文件夹";
+  const projects = kbLinks.menuProjects(id, ancestorIds(props.documents, id), titleOf);
+  showMenu(x, y, kbLinkMenuItems(projects, (key) => void kbLinks.toggle(id, key)));
 }
 
 /** 新建行的缩进：跟它要落进去的那一层对齐（目标父的深度 + 1）。 */

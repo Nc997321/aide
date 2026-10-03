@@ -105,52 +105,9 @@ function pendingRecord(comment = "写具体些") {
   return { k, id: rec.ref.selectionId };
 }
 
-type SendRequest = [string, { kbrefs?: { selectionId: string; comment: string }[] }];
-
 beforeEach(() => __resetKbSelectionsForTest());
 
-describe("ChatInputBox · 文档里圈选 → 交给 AI（文档侧发起的发送）", () => {
-  it("文档侧 requestSend → 聚焦的输入框带着圈选发出 send-request（空 prompt 也发）", async () => {
-    const w = mountBox();
-    const { k, id } = pendingRecord();
-    k.requestSend("");
-    await flushPromises();
-    const ev = w.emitted("send-request") as SendRequest[] | undefined;
-    expect(ev).toHaveLength(1);
-    expect(ev![0]![0]).toBe("");
-    expect(ev![0]![1].kbrefs).toEqual([expect.objectContaining({ selectionId: id, comment: "写具体些" })]);
-  });
-
-  it("父层确认发送（sendConfirmedNonce 变化）后，圈选才被标成已发出——此前一直是待发送", async () => {
-    const w = mountBox();
-    const { k, id } = pendingRecord();
-    k.requestSend("");
-    await flushPromises();
-    expect(k.records[id]!.status).toBe("pending");
-    await w.setProps({ sendConfirmedNonce: 1 });
-    expect(k.records[id]!.status).toBe("sent");
-  });
-
-  it("托盘里的补充说明作为消息正文一起发出", async () => {
-    const w = mountBox();
-    const { k } = pendingRecord();
-    k.requestSend("语气正式一点");
-    await flushPromises();
-    expect((w.emitted("send-request") as SendRequest[])[0]![0]).toBe("语气正式一点");
-  });
-
-  it("不碰输入框里用户自己的草稿：发送坐实后草稿还在", async () => {
-    const w = mountBox();
-    const el = w.find("textarea.chat-input").element as HTMLTextAreaElement;
-    el.value = "我自己还没写完的话";
-    await w.find("textarea.chat-input").trigger("input");
-    const { k } = pendingRecord();
-    k.requestSend("");
-    await flushPromises();
-    await w.setProps({ sendConfirmedNonce: 1 });
-    expect((w.find("textarea.chat-input").element as HTMLTextAreaElement).value).toBe("我自己还没写完的话");
-  });
-
+describe("ChatInputBox · 没发出的圈选以芯片出现在输入框上方", () => {
   it("输入框上方出现圈选芯片，× 摘掉后文档侧的记录同步消失", async () => {
     const w = mountBox();
     const { k, id } = pendingRecord();
@@ -159,12 +116,5 @@ describe("ChatInputBox · 文档里圈选 → 交给 AI（文档侧发起的发�
     expect(w.find(".kb-chip").text()).toContain("发布流程");
     await w.find(".kb-chip .mention-chip-remove").trigger("click");
     expect(k.records[id]).toBeUndefined();
-  });
-
-  it("没有圈选时 requestSend 不会发出任何东西", async () => {
-    const w = mountBox();
-    useKbSelections().requestSend("");
-    await flushPromises();
-    expect(w.emitted("send-request")).toBeUndefined();
   });
 });

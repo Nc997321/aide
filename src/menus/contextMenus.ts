@@ -314,12 +314,14 @@ export function kbNodeMenuItems(
   h: {
     onRename: (id: string, title: string) => void;
     onMove: (id: string) => void;
+    onLink: (id: string) => void;
     onDelete: (id: string) => void;
   },
 ): MenuItem[] {
   return [
     { label: "重命名", action: () => h.onRename(node.id, node.title) },
     { label: "移动到…", action: () => h.onMove(node.id) },
+    { label: "关联项目…", action: () => h.onLink(node.id) },
     sep(),
     { label: "删除", danger: true, action: () => h.onDelete(node.id) },
   ];
@@ -365,6 +367,25 @@ export function kbMoveMenuItems(
       action: () => onPick(f.id),
     })),
   ];
+}
+
+/**
+ * 「关联项目…」的选择：列出本 Host 上的工作区，已关联的打勾，点一下切换。
+ * 关联项目让 AI 改这篇文档（或这个文件夹下的文档）时能只读地参考那个项目的记忆。
+ * `inherited` 是从祖先文件夹继承来的——显示但不可在这里取消（要取消得去那个文件夹上改），
+ * 置灰并注明来源，别让人以为点了没反应是坏了。
+ */
+export function kbLinkMenuItems(
+  projects: { key: string; label: string; linked: boolean; inheritedFrom?: string }[],
+  onToggle: (key: string) => void,
+): MenuItem[] {
+  if (projects.length === 0) return [{ label: "还没有打开过的工作区", disabled: true }];
+  return projects.map((p) => ({
+    label: p.inheritedFrom ? `${p.label}（继承自「${p.inheritedFrom}」）` : p.label,
+    icon: p.linked || p.inheritedFrom ? "✓" : "○",
+    disabled: !!p.inheritedFrom && !p.linked,
+    action: () => onToggle(p.key),
+  }));
 }
 
 /** 知识库空间的 ⋯ 菜单。目前只有重命名——删除空间与改可见性改动面太大，没做。 */

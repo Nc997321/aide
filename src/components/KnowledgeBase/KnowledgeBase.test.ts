@@ -45,6 +45,16 @@ vi.mock("./kbClient", () => ({
   KbError: class KbError extends Error {},
 }));
 
+// 圈选层的卡片对话会话在这里不是被测对象，且会接全局聊天事件监听（jsdom 里没有 Tauri）。
+vi.mock("@/composables/useKbCardSession", async () => {
+  const { ref } = await import("vue");
+  return {
+    useKbCardSession: () => ({
+      sid: ref(null), thread: ref([]), permission: ref(null), editRequest: ref(null), busy: ref(false),
+      sendError: ref(null), send: async () => undefined, respond: async () => {}, forget: () => {},
+    }),
+  };
+});
 vi.mock("./kbRuntime", () => ({ pushKnowledgeRuntime: vi.fn(async () => {}) }));
 
 vi.mock("../../composables/useModal", () => ({

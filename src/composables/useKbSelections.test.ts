@@ -105,67 +105,6 @@ describe("生命周期", () => {
   });
 });
 
-describe("requestSend", () => {
-  it("每次请求 nonce 递增，聊天输入框据此触发发送", () => {
-    const k = useKbSelections();
-    k.requestSend("补一句");
-    const first = k.sendRequest.value!.nonce;
-    k.requestSend();
-    expect(k.sendRequest.value!.nonce).toBe(first + 1);
-    expect(k.sendRequest.value!.text).toBe("");
-  });
-});
-
-describe("发送请求必须有人认领（否则亮出聊天）", () => {
-  function pending() {
-    const k = useKbSelections();
-    const id = k.begin(input).ref.selectionId;
-    k.confirm(id, "x");
-    return k;
-  }
-
-  it("有人认领 → 不打扰", () => {
-    const k = pending();
-    const before = k.chatRequest.value?.nonce ?? 0;
-    k.requestSend("");
-    k.claimSend(k.sendRequest.value!.nonce);
-    vi.advanceTimersByTime(1000);
-    expect(k.chatRequest.value?.nonce ?? 0).toBe(before);
-  });
-
-  it("没人认领（没有聚焦的聊天输入框）→ 认领窗口过后立刻亮出聊天，并留一行控制台线索", () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const k = pending();
-    const before = k.chatRequest.value?.nonce ?? 0;
-    k.requestSend("");
-    vi.advanceTimersByTime(399);
-    expect(k.chatRequest.value?.nonce ?? 0).toBe(before);
-    vi.advanceTimersByTime(2);
-    expect(k.chatRequest.value!.nonce).toBe(before + 1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("[kb-send]"), expect.anything());
-    warn.mockRestore();
-  });
-
-  it("没有待发送的圈选时不报警（没东西可发，不是「没人接」）", () => {
-    const k = useKbSelections();
-    const before = k.chatRequest.value?.nonce ?? 0;
-    k.requestSend("");
-    vi.advanceTimersByTime(1000);
-    expect(k.chatRequest.value?.nonce ?? 0).toBe(before);
-  });
-
-  it("认领的是更早的请求不算：每次请求各自要认领", () => {
-    const k = pending();
-    k.requestSend("");
-    const first = k.sendRequest.value!.nonce;
-    k.claimSend(first);
-    k.requestSend("");
-    const before = k.chatRequest.value?.nonce ?? 0;
-    vi.advanceTimersByTime(500);
-    expect(k.chatRequest.value!.nonce).toBe(before + 1);
-  });
-});
-
 describe("newRangeAfterEdit", () => {
   const base = "前缀。切流量到旧版本。后缀。";
   const ref = { start: 3, end: 10 };

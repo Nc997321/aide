@@ -17,8 +17,8 @@ import { onKbSelectionEvent, type KbSelectionEvent } from "@aide/sdk/composables
  * 状态只由两类来源推进：用户操作，以及聊天事件流里的 edit_selection 事件（多端一致的真相）。
  * 本地绝不「乐观地」宣布 done——不是 AI 真改成了，就不能说改成了。
  *
- * 草稿归属是**当前选中的会话**（发送时才决定发给谁），不是某个输入框：知识库打开时聊天输入框
- * 不在眼前，所以圈选也得能在文档这一侧直接发出去（requestSend）。
+ * 发送走**这篇文档自己的卡片会话**（useKbCardSession：一篇文档一个会话，对话在卡片里完成）。
+ * 没发出的「待发送」仍会在聊天输入框上方以芯片出现，用户也可以从聊天里发。
  */
 export type KbSelectionStatus = "draft" | "pending" | "sent" | "working" | "done" | "refused" | "noop";
 
@@ -45,6 +45,8 @@ export interface BeginInput {
   baseVersion: number;
   baseContent: string;
   scope: { start: number; end: number; text: string; lineStart: number; lineEnd: number; precise: boolean };
+  /** 这篇文档关联的工作区根目录（见 KbRef.linked）；没有就不带这个字段。 */
+  linked?: string[];
 }
 
 const records = reactive<Record<string, KbSelectionRecord>>({});
@@ -126,16 +128,10 @@ export function newRangeAfterEdit(baseContent: string, ref: Pick<KbRef, "start" 
   return { start: ref.start, end: newContent.length - suffix.length };
 }
 
-const sendRequest = ref<{ nonce: number; text: string } | null>(null);
-let sendNonce = 0;
-/** 「请把聊天亮出来」：文档侧发起的发送被聊天里的**发送前确认**（模型 / 供应商变了）拦下时，确认框画在
- *  聊天面板里——而知识库打开时聊天面板是隐藏的，用户永远看不到它，发送就一直挂着（圈选停在「待发送」）。
- *  知识库面板据此收起自己，让确认框露出来。 */
+/** 「请把聊天亮出来」：卡片里遇到只能在聊天里处理的事（比如别的工具的权限确认）时用。
+ *  知识库打开时聊天面板是隐藏的，知识库面板据此收起自己。 */
 const chatRequest = ref<{ nonce: number } | null>(null);
 let chatNonce = 0;
-/** 已被认领的最大 sendRequest nonce；认领窗口（毫秒）。 */
-let claimedNonce = 0;
-const CLAIM_WINDOW_MS = 400;
 
 export function useKbSelections() {
   wire();
@@ -157,6 +153,7 @@ export function useKbSelections() {
         lineStart: input.scope.lineStart,
         lineEnd: input.scope.lineEnd,
         precise: input.scope.precise,
+        ...(input.linked?.length ? { linked: [...input.linked] } : {}),
       },
       status: "draft",
       baseContent: input.baseContent,
@@ -209,29 +206,6 @@ export function useKbSelections() {
     if (r) rec.newRange = r;
   }
 
-  /** 文档侧要求「现在就发」：聚焦的聊天输入框收到后带上全部待发送圈选发出去。
-   *
-   *  **必须有人认领**（claimSend）。认领方是聊天输入框——知识库打开时它在隐藏的聊天面板里，
-   *  没聚焦 / 没挂上 / 被别的东西挡住，这次发送就石沉大海，圈选永远停在「待发送」，用户对着
-   *  一个不动的标记发呆。所以发出请求后给一个很短的认领窗口：没人认领就立刻把聊天亮出来，
-   *  并在控制台留一行线索（下次有人说「卡住了」，不用再猜）。 */
-  function requestSend(text = ""): void {
-    const nonce = ++sendNonce;
-    sendRequest.value = { nonce, text };
-    const hasPending = Object.values(records).some((r) => r.status === "pending");
-    if (!hasPending) return;
-    setTimeout(() => {
-      if (claimedNonce >= nonce) return;
-      console.warn("[kb-send] 没有聊天输入框认领这次发送（可能没有聚焦的聊天面板）——把聊天亮出来", { nonce });
-      revealChat();
-    }, CLAIM_WINDOW_MS);
-  }
-
-  /** 聊天输入框：这次发送我接了（之后它走它自己的发送流程，成败由 sent / 门控回执体现）。 */
-  function claimSend(nonce: number): void {
-    claimedNonce = Math.max(claimedNonce, nonce);
-  }
-
   function revealChat(): void {
     chatRequest.value = { nonce: ++chatNonce };
   }
@@ -245,7 +219,6 @@ export function useKbSelections() {
     all,
     pendingRefs,
     forDoc,
-    sendRequest,
     chatRequest,
     revealChat,
     begin,
@@ -255,8 +228,6 @@ export function useKbSelections() {
     discardPending,
     markSent,
     resolveDone,
-    requestSend,
-    claimSend,
   };
 }
 
@@ -264,9 +235,6 @@ export function useKbSelections() {
 export function __resetKbSelectionsForTest(): void {
   for (const id of Object.keys(records)) remove(id);
   counter = 0;
-  sendNonce = 0;
-  sendRequest.value = null;
   chatNonce = 0;
   chatRequest.value = null;
-  claimedNonce = 0;
 }

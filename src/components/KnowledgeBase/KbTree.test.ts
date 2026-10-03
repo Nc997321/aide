@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
+// 关联项目走 Host 命令；这里只关心菜单怎么用它。
+const linkApi = vi.hoisted(() => ({
+  kbLinks: vi.fn(async () => ({}) as Record<string, string[]>),
+  setKbLinks: vi.fn(async (_id: string, _keys: string[]) => ({}) as Record<string, string[]>),
+}));
+vi.mock("@aide/sdk/api", () => ({
+  api: new Proxy(linkApi, { get: (t, k: string) => (k in t ? (t as Record<string, unknown>)[k] : vi.fn(async () => undefined)) }),
+}));
 import KbTree from "./KbTree.vue";
+import { useWorkspaces } from "../../composables/useWorkspaces";
+import { __resetKbLinksForTest } from "../../composables/useKbLinks";
 // 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
 // 那里不套 tsconfig 的 paths——用 `@/` 会满屏 "Cannot find module"（假的）。
 // 同目录的 PermissionDialog.test.ts 也是这个写法。
@@ -117,10 +127,40 @@ describe("KbTree 的 ⋯ 菜单", () => {
   it("文件夹与文档的 ⋯ 菜单一致：都是「对这个节点」的操作（新建有自己的入口）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "关联项目…", "删除"]);
 
     await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
-    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "关联项目…", "删除"]);
+  });
+
+  it("「关联项目…」列出本 Host 的工作区：已关联的打勾，继承自上层文件夹的置灰并注明来源；点一下切换", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [
+      { key: "ws-a", name: "/home/u/proj-a", missing: false },
+      { key: "ws-b", name: "/home/u/proj-b", missing: false },
+      { key: "ws-c", name: "/home/u/proj-c", missing: false },
+    ];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], a: ["ws-a"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    await useMenuItem(w, "a", "关联项目…");
+    const items = menuItems.value;
+    expect(items.map((i) => [i.label, i.icon, !!i.disabled])).toEqual([
+      ["proj-a", "✓", false], // 自己直接关联
+      ["proj-b（继承自「f」）", "✓", true], // 来自上层文件夹，这里不能取消
+      ["proj-c", "○", false],
+    ]);
+    linkApi.setKbLinks.mockResolvedValueOnce({});
+    items[2]!.action?.();
+    expect(linkApi.setKbLinks).toHaveBeenCalledWith("a", ["ws-a", "ws-c"]);
+  });
+
+  it("没有任何已注册工作区：菜单说清楚，不是一个空菜单", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [];
+    const w = mountTree();
+    await useMenuItem(w, "a", "关联项目…");
+    expect(menuLabels()).toEqual(["还没有打开过的工作区"]);
   });
 
   it("删除是危险项（红色）", async () => {
