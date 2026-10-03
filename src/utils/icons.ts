@@ -88,6 +88,7 @@ export const GLYPHS: Record<string, string> = {
   // 一个字形两种状态，省掉两个几乎一样的路径
   caret: '<path d="M6.5 4L10.5 8L6.5 12"/>',
   /** 链接：跳转到定义（精确结构匹配） */
+  tag: '<path d="M2.5 8.2V3.5h4.7l6.3 6.3-4.7 4.7z"/><circle cx="5.3" cy="6.3" r="0.9" class="f"/>',
   link: '<rect x="2.5" y="5" width="7" height="4.5" rx="2.25"/><rect x="6.5" y="6.5" width="7" height="4.5" rx="2.25"/>',
   /** 搜索：放大镜（语义匹配） */
   search: '<circle cx="6.5" cy="6.5" r="3.8"/><path d="M9.2 9.2L13 13"/>',

@@ -186,6 +186,22 @@ function openLinker(id: string, x: number, y: number): void {
   showMenu(x, y, kbLinkMenuItems(projects, (key) => void kbLinks.toggle(id, key)));
 }
 
+/** 行上直接显示的关联项目标签：只列**这个节点自己**打的（继承来的在文档头部看，行上全列会满屏重复）。
+ *  最多露两个，其余折成「+N」——整行是导航，不是标签管理页；点标签就是打开关联菜单。 */
+const MAX_ROW_TAGS = 2;
+function rowTags(id: string): { shown: { key: string; label: string; missing: boolean }[]; more: number; all: string } {
+  const all = kbLinks.directKeys(id).map((k) => kbLinks.resolve(k));
+  return {
+    shown: all.slice(0, MAX_ROW_TAGS),
+    more: Math.max(0, all.length - MAX_ROW_TAGS),
+    all: all.map((p) => p.label + (p.missing ? "（已不在）" : "")).join("、"),
+  };
+}
+function onTagClick(e: MouseEvent, id: string): void {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openLinker(id, r.left, r.bottom + 2);
+}
+
 /** 新建行的缩进：跟它要落进去的那一层对齐（目标父的深度 + 1）。 */
 const creatingDepth = computed(() => {
   const at = creating.value;
@@ -362,6 +378,26 @@ const vFocus = {
         {{ row.doc.title }}
       </span>
 
+      <!-- 关联项目标签：打过才出现，常驻可见（不靠悬停）；点它 = 打开关联菜单 -->
+      <span v-if="rowTags(row.doc.id).shown.length" data-kb-tags class="kb-row-tags" :title="`关联项目：${rowTags(row.doc.id).all}`">
+        <button
+          v-for="t in rowTags(row.doc.id).shown"
+          :key="t.key"
+          type="button"
+          data-kb-tag
+          class="kb-row-tag"
+          :class="{ 'kb-row-tag--missing': t.missing }"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >{{ t.label }}</button>
+        <button
+          v-if="rowTags(row.doc.id).more"
+          type="button"
+          data-kb-tag-more
+          class="kb-row-tag kb-row-tag--more"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >+{{ rowTags(row.doc.id).more }}</button>
+      </span>
+
       <!-- 空文件夹标「空」：先回答「为什么这个展不开」，而不是给一个按不动的箭头 -->
       <span v-if="row.isFolder && !row.hasChildren" data-kb-empty class="kb-empty-mark">空</span>
 
@@ -380,6 +416,14 @@ const vFocus = {
           @click.stop="openCreateMenu($event, row.doc.id)"
         >
           <Icon name="plus" :size="11" />
+        </button>
+        <button
+          data-kb-link
+          class="kb-rowbtn"
+          title="关联项目"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >
+          <Icon name="tag" :size="11" />
         </button>
         <button
           data-kb-more
@@ -495,6 +539,40 @@ const vFocus = {
 .kb-treerow.is-folder > .kb-label { font-weight: 500; }
 .kb-treerow.on > .kb-label { color: var(--aide-text-primary); }
 .kb-treerow:hover > .kb-label { color: var(--aide-text-primary); }
+
+/* 关联项目标签：行内的小胶囊，不抢标题——标题先收缩、标签保形（单个标签过长才省略） */
+.kb-row-tags {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-row-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 96px;
+  appearance: none;
+  padding: 0 7px;
+  line-height: 16px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 28%, transparent);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-row-tag--more { color: var(--aide-text-secondary); background: transparent; border-color: var(--aide-border); }
+.kb-row-tag--missing {
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border-color: color-mix(in srgb, var(--aide-warning) 40%, transparent);
+}
+.kb-row-tag:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 
 .kb-empty-mark {
   flex: 0 0 auto;

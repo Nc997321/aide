@@ -155,6 +155,48 @@ describe("KbTree 的 ⋯ 菜单", () => {
     expect(linkApi.setKbLinks).toHaveBeenCalledWith("a", ["ws-a", "ws-c"]);
   });
 
+  it("打过的关联项目直接标在行上（不用打开菜单就看得到），文件夹与文档都一样", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [
+      { key: "ws-a", name: "/home/u/proj-a", missing: false },
+      { key: "ws-b", name: "/home/u/proj-b", missing: false },
+      { key: "ws-c", name: "/home/u/proj-c", missing: false },
+    ];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], a: ["ws-a", "ws-b", "ws-c"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    // 文件夹：一个标签
+    expect(w.findAll("[data-kb-node='f'] [data-kb-tag]").map((t) => t.text())).toEqual(["proj-b"]);
+    // 文档：只露两个，其余折成 +N；没打过的行没有标签区
+    expect(w.findAll("[data-kb-node='a'] [data-kb-tag]").map((t) => t.text())).toEqual(["proj-a", "proj-b"]);
+    expect(w.find("[data-kb-node='a'] [data-kb-tag-more]").text()).toBe("+1");
+    expect(w.find("[data-kb-node='g'] [data-kb-tags]").exists()).toBe(false);
+  });
+
+  it("继承来的不重复标在子行上；已不在的工作区标成警示而不是丢掉", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [{ key: "ws-b", name: "/home/u/proj-b", missing: false }];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], g: ["gone"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.find("[data-kb-node='a'] [data-kb-tags]").exists()).toBe(false); // a 在 f 下，只继承
+    expect(w.find("[data-kb-node='g'] [data-kb-tag]").classes()).toContain("kb-row-tag--missing");
+  });
+
+  it("点标签、点行上的标签按钮，都直接打开关联菜单", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [{ key: "ws-a", name: "/home/u/proj-a", missing: false }];
+    linkApi.kbLinks.mockResolvedValueOnce({ a: ["ws-a"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    await w.find("[data-kb-node='a'] [data-kb-tag]").trigger("click");
+    expect(menuItems.value.map((i) => i.label)).toEqual(["proj-a"]);
+    hideMenu();
+    await w.find("[data-kb-node='g'] [data-kb-link]").trigger("click");
+    expect(menuItems.value.map((i) => i.label)).toEqual(["proj-a"]);
+    expect(w.emitted("open")).toBeFalsy(); // 点标签不该顺带打开文档
+  });
+
   it("没有任何已注册工作区：菜单说清楚，不是一个空菜单", async () => {
     __resetKbLinksForTest();
     useWorkspaces().workspaces.value = [];
