@@ -533,7 +533,7 @@ describe("SessionWorker — 会话自动命名", () => {
     // 标题在 send 时同步产出——不调模型、不等助手回复，无需等待
     const evt = events.find((e) => e.type === "session_title");
     expect(evt).toBeDefined();
-    expect(evt.title).toBe("帮我修登录页 bug");
+    expect(evt.title).toBe("修登录页 bug");
     worker.stop();
   });
 

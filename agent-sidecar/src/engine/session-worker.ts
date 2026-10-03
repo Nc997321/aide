@@ -161,7 +161,7 @@ export class SessionWorker {
   /** 本会话是否已触发过语言服务器预热（只触发一次，见 startLoop）。 */
   private lspWarmed = false;
 
-  // ---- 会话自动命名（截取首条用户消息内容作标题，见 titleGenerator.ts） ----
+  // ---- 会话自动命名（规则清洗首条用户消息作标题，见 titleGenerator.ts） ----
   /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
    *  自动化运行（scheduler、smoke）不给会话起标题。 */
   private autoTitle = true;
@@ -700,15 +700,15 @@ export class SessionWorker {
       // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
       if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
       // 自动命名：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
-      // 才生成标题——老会话已有名字，fork 会话语义上属于源会话。标题即首条
-      // 用户消息的内容截取，发消息时同步产出，不等回复、不调模型。
+      // 才生成标题——老会话已有名字，fork 会话语义上属于源会话。标题由首条
+      // 用户消息规则提炼，发消息时同步产出，不等回复、不调模型。
       if (
         this.autoTitle &&
         !this.titleAttempted &&
         !cmd.resume_session_id &&
         !cmd.provider_switched
       ) {
-        this.emitSessionTitle(cmd.prompt);
+        this.emitSessionTitle(cmd.prompt, cmd.display);
       }
       this.startLoop(
         cmd.cwd ?? this.cwd,
@@ -1077,13 +1077,13 @@ export class SessionWorker {
 
   // ---- 会话自动命名 ----
 
-  /** 用首条用户消息的内容截取会话标题（见 titleGenerator.ts）。本地纯截取——
+  /** 从首条用户消息提炼会话标题（规则清洗 + 按句取，见 titleGenerator.ts）。纯本地——
    *  不调模型、零延迟，send 时同步发出 session_title。内容为空白时
    *  titleFromContent 返回 null，这里就不发事件，会话保留默认名。 */
-  private emitSessionTitle(userText: string): void {
+  private emitSessionTitle(userText: string, display?: UserMessageBlock[]): void {
     if (this.titleAttempted) return;
     this.titleAttempted = true;
-    const title = titleFromContent(userText);
+    const title = titleFromContent(userText, display);
     if (title && !this.stopped) this.emit({ type: "session_title", title });
   }
 
