@@ -34,7 +34,8 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   "session-changed": [id: string];
-  "new-session": [name: string];
+  /** ws 缺省 = 用活动工作区；给了 = 在该工作区新建（不改活动工作区） */
+  "new-session": [name: string, ws?: { wsKey: string; wsPath: string }];
   "workspace-changed": [path: string];
   "remove-workspace": [ws: WorkspaceInfo];
   "open-settings": [];
@@ -224,6 +225,21 @@ async function loadWsSessions(wsKey: string) {
  *  重命名 / 删除 / 乐观移除全都自动生效，不用维护第二套列表。 */
 const dailyKey = ref("");
 const dailyCollapsed = ref(false);
+/** 自动化分区的折叠态（v-model 进 AutomationSidebarSection）：提到这里是为了「全部折叠/展开」一键统管三个根分区 */
+const autoCollapsed = ref(false);
+
+/** 三个根分区（日常 / 项目 / 自动化）是否全部折叠。只动分区这一层——各工作区自己的展开态原样保留，
+ *  所以「全部展开」回来时看到的还是折叠前的样子。 */
+const allSectionsCollapsed = computed(
+  () => dailyCollapsed.value && sessionsSectionCollapsed.value && autoCollapsed.value,
+);
+
+function toggleAllSections() {
+  const next = !allSectionsCollapsed.value;
+  dailyCollapsed.value = next;
+  sessionsSectionCollapsed.value = next;
+  autoCollapsed.value = next;
+}
 
 const dailySessions = computed(() =>
   dailyKey.value ? (sessionsByWorkspace.value[dailyKey.value] ?? []) : [],
@@ -458,6 +474,8 @@ function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
       () => emit("remove-workspace", ws),
       // 不受信任工作区：行内不再放「不受信任」文字徽标，信任入口收进此菜单
       !ws.missing && untrustedPaths.value.has(ws.name) ? () => openTrustPrompt(ws) : undefined,
+      // 远程登记的工作区属于另一台 Host 的窗口，本机窗口里不在它下面开会话
+      remoteOf(ws) ? undefined : () => newSessionIn(ws),
     ),
   );
 }
@@ -465,6 +483,13 @@ function onWorkspaceContextMenu(e: MouseEvent, ws: WorkspaceInfo) {
 function newSession() {
   const name = `新会话 ${new Date().toLocaleTimeString()}`;
   emit("new-session", name);
+}
+
+/** 工作区 ⋯ 菜单「新增会话」：归属显式绑到被点的工作区，而不是落到发送时的活动工作区
+ *  （「跑错项目」的来源）。 */
+function newSessionIn(ws: WorkspaceInfo) {
+  const name = `新会话 ${new Date().toLocaleTimeString()}`;
+  emit("new-session", name, { wsKey: ws.key, wsPath: ws.name });
 }
 
 onMounted(async () => {
@@ -529,6 +554,35 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
         <div class="brand-name">Aide</div>
         <div class="brand-ver">{{ appVersion ? `v${appVersion}` : "" }}</div>
       </div>
+      <!-- 侧栏级操作：作用于整个侧栏而非某一分区，所以放品牌行右侧 -->
+      <div class="brand-actions">
+        <button
+          class="status-bar-btn collapse-all"
+          v-tooltip="allSectionsCollapsed ? '全部展开' : '全部折叠'"
+          @click="toggleAllSections"
+        >
+          <!-- 全部折叠态显示「展开」字形（上下箭头外指），否则显示「折叠」字形（箭头内聚） -->
+          <svg v-if="allSectionsCollapsed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m7 15 5 5 5-5"/>
+            <path d="m7 9 5-5 5 5"/>
+          </svg>
+          <svg v-else width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m7 20 5-5 5 5"/>
+            <path d="m7 4 5 5 5-5"/>
+          </svg>
+        </button>
+        <button
+          class="status-bar-btn pin"
+          :class="{ pinned: props.pinned }"
+          v-tooltip="props.pinned ? '取消固定（恢复自动隐藏）' : '固定侧栏'"
+          @click="emit('toggle-pin')"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 17v5"/>
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
+          </svg>
+        </button>
+      </div>
     </div>
 
     <!-- 顶部导航组（品牌区之下、分区树之上，WorkBuddy 式）：「新增会话」+ 三个
@@ -549,6 +603,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
         :sessions="dailySessions"
         :active-session-id="props.activeSessionId"
         :collapsed="dailyCollapsed"
+        :limit="settings.recentLimit"
         @toggle="dailyCollapsed = !dailyCollapsed"
         @menu="onSessionSectionMenu"
         @select="(sid: string) => emit('session-changed', sid)"
@@ -677,7 +732,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
       <!-- 自动化分区：分区树的第三个根分区（日常、工作区树之下，同区滚动），
            选中任务由 App.vue 把主区切成 AutomationMain（PaneLayout v-show 保活） -->
-      <AutomationSidebarSection />
+      <AutomationSidebarSection v-model:collapsed="autoCollapsed" />
 
     </div>
 
@@ -690,21 +745,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <button class="update-dismiss" v-tooltip="'忽略'" @click.stop="dismissUpdate">✕</button>
     </div>
 
-    <!-- Status bar: actions（供应商切换已搬到标题栏 ProviderSwitcher；pin 随分区树改造从 header 挪到此处） -->
+    <!-- Status bar: actions（供应商切换已搬到标题栏 ProviderSwitcher；pin 已挪到品牌行右侧） -->
     <div class="status-bar">
       <div class="status-bar-actions">
-        <button
-          class="status-bar-btn pin"
-          :class="{ pinned: props.pinned }"
-          v-tooltip="props.pinned ? '取消固定（恢复自动隐藏）' : '固定侧栏'"
-          @click="emit('toggle-pin')"
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 17v5"/>
-            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V6h1a2 2 0 0 0 0-4H8a2 2 0 0 0 0 4h1z"/>
-          </svg>
-        </button>
-        <LinkConnectPopover @open-settings="emit('open-settings')" />
+<LinkConnectPopover @open-settings="emit('open-settings')" />
         <button class="status-bar-btn" v-tooltip="'设置'" @click="emit('open-settings')">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <circle cx="12" cy="12" r="3"/>
@@ -1053,6 +1097,13 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .brand :deep(.app-logo) {
   border-radius: 10px;
 }
+.brand-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex-shrink: 0;
+}
 .brand-name {
   font-size: 15px;
   font-weight: 700;
@@ -1332,7 +1383,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   background: var(--aide-surface-default);
 }
 
-/* 钉子按钮（分区树改造后挪到状态栏）：未固定斜 45°（"没钉上"），
+/* 钉子按钮（现居品牌行右侧，复用 .status-bar-btn 的按钮皮肤）：未固定斜 45°（"没钉上"），
    固定竖直 + accent 高亮（QQ 侧栏语义，沿用旧 header 的视觉约定） */
 .status-bar-btn.pin svg {
   width: 13px;

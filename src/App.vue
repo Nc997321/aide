@@ -453,15 +453,23 @@ function onSessionChanged(id: string) {
   paneLayout.openSession(id);
 }
 
-function onNewSession(name: string) {
-  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余
-  if (!paneLayout.hasAnyTab.value) return;
+function onNewSession(name: string, ws?: { wsKey: string; wsPath: string }) {
+  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余。
+  // 但侧栏显式指定了工作区时要把它种进欢迎页（工程模式 + defaultWs），否则点了没反应。
+  if (!paneLayout.hasAnyTab.value) {
+    if (ws) {
+      paneLayout.setChatMode("project");
+      paneLayout.setDefaultWs(ws);
+    }
+    return;
+  }
   // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
   // 工作区归属在创建时绑定（布局全局一份，切工作区不动 tab，不快照就会落到
   // 发送时的「当前」工作区）。
-  const wsKey = activeWorkspaceKey.value;
-  const wsPath = workspacePath.value;
+  // 侧栏工作区 ⋯ 菜单显式指定了工作区就用它（不动活动工作区），否则取活动工作区。
+  const wsKey = ws?.wsKey ?? activeWorkspaceKey.value;
+  const wsPath = ws?.wsPath ?? workspacePath.value;
   paneLayout.openBlankTab(name, wsKey && wsPath ? { wsKey, wsPath } : undefined);
 }
 

@@ -10,12 +10,14 @@ const mountSection = (props: {
   sessions?: Session[];
   activeSessionId?: string;
   collapsed?: boolean;
+  limit?: number;
 }) =>
   mount(SidebarDailySection, {
     props: {
       sessions: props.sessions ?? [],
       activeSessionId: props.activeSessionId ?? "",
       collapsed: props.collapsed ?? false,
+      limit: props.limit,
     },
   });
 
@@ -70,5 +72,32 @@ describe("SidebarDailySection（侧栏「日常」根分区）", () => {
     const w = mountSection({ sessions: [s("a", "甲")] });
     await w.find(".sec-head").trigger("click");
     expect(w.emitted("toggle")).toHaveLength(1);
+  });
+
+  describe("按「最近访问保留条数」折叠", () => {
+    const five = ["a", "b", "c", "d", "e"].map((id) => s(id, id));
+
+    it("超出 limit：只露前 N 条，余下收进「另外 N 个」，计数仍是总数", () => {
+      const w = mountSection({ sessions: five, limit: 3 });
+      expect(w.findAll(".session-row")).toHaveLength(3);
+      expect(w.find(".session-more").text()).toBe("另外 2 个");
+      expect(w.find(".sec-count").text()).toBe("5");
+    });
+
+    it("点「另外 N 个」展开全部，再点「收起」回到前 N 条", async () => {
+      const w = mountSection({ sessions: five, limit: 3 });
+      await w.find(".session-more").trigger("click");
+      expect(w.findAll(".session-row")).toHaveLength(5);
+      expect(w.find(".session-more").text()).toBe("收起");
+      await w.find(".session-more").trigger("click");
+      expect(w.findAll(".session-row")).toHaveLength(3);
+    });
+
+    it("未超 limit / 未传 limit：不折叠、无展开行", () => {
+      expect(mountSection({ sessions: five, limit: 5 }).find(".session-more").exists()).toBe(false);
+      const w = mountSection({ sessions: five });
+      expect(w.findAll(".session-row")).toHaveLength(5);
+      expect(w.find(".session-more").exists()).toBe(false);
+    });
   });
 });

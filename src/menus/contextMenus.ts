@@ -283,8 +283,11 @@ export function workspaceMenuItems(
   onRemove?: () => void,
   /** 仅不受信任工作区传入：菜单提供信任入口（行内已不放「不受信任」文字徽标） */
   onTrust?: () => void,
+  /** 在该工作区新建会话（不改活动工作区）；缺省 = 不提供（目录丢失 / 远程登记的工作区） */
+  onNewSession?: () => void,
 ): MenuItem[] {
   return [
+    ...(onNewSession && !ws.missing ? [{ label: "新增会话", action: onNewSession }] : []),
     ...(ws.missing ? [] : [{ label: "切换到此工作区", action: () => onActivate?.() }]),
     ...(onTrust ? [{ label: "信任此工作区", warning: true, action: onTrust }] : []),
     { label: "在文件资源管理器中打开", action: () => api.showInExplorer(ws.name) },
