@@ -580,6 +580,22 @@ export function useKnowledgeBase() {
   }
 
   /**
+   * 原位重新读取当前文档：**不先清空 activeDoc**（openDocument 会清，正文视图随之卸载重建）。
+   * AI 改写落地后用它——视图不能被卸载：圈选卡片、对话线程、滚动位置都在这个视图里，
+   * 卸掉就是用户读着回复时整张卡片消失。读失败不覆盖现有正文，只报错。
+   */
+  async function reloadDocument(id: string): Promise<void> {
+    const seq = ++docSeq;
+    try {
+      const doc = await kb.getDocument(id);
+      if (seq !== docSeq || activeDoc.value?.id !== id) return;
+      activeDoc.value = doc;
+    } catch (e) {
+      if (seq === docSeq) fail(e, "刷新文档失败");
+    }
+  }
+
+  /**
    * 软删一篇文档（服务端连同子文档一起删）。成功 → 刷新侧栏。
    *
    * 删掉的正是当前打开的那篇 → 连正文一起清空：留着它，用户会对着一个已经不存在
@@ -674,6 +690,7 @@ export function useKnowledgeBase() {
     toggleCollapsed,
     revealNode,
     openDocument,
+    reloadDocument,
     deleteDocument,
     search,
     clearSearch,

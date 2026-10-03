@@ -2,7 +2,7 @@
 // 文档正文：查看 / 编辑 / 版本历史 三态。
 //
 // 编辑的锁走 useKbDocLock（30s 心跳续租，失锁禁存）；保存成功后不退出编辑——
-// 服务端有 5 分钟合并窗口（revision_merge_window_seconds），连续小保存会合并进
+// 服务端有合并窗口（revision_merge_window_seconds，默认 15 分钟），连续小保存会合并进
 // 同一版本，「完成」才是编辑会话的终点，那时才释放锁。
 //
 // draft 的脏检查基线（baseTitle/baseContent）是本地变量而不是 props.doc：
@@ -23,6 +23,7 @@ import KbOutline from "./KbOutline.vue";
 import KbLinkedProjects from "./KbLinkedProjects.vue";
 import KbSelectionLayer from "./selection/KbSelectionLayer.vue";
 import { effectiveLinks, useKbLinks } from "@/composables/useKbLinks";
+import { useKbSelections } from "@/composables/useKbSelections";
 
 /** 应用统一的对话框（ModalDialog）。**不用 window.confirm**：原生样式与主题无关。 */
 const modal = useModal();
@@ -52,6 +53,8 @@ const emit = defineEmits<{
   saved: [docId: string];
   /** 回滚完成（父层刷新 activeDoc；历史面板由本组件关闭） */
   reverted: [docId: string];
+  /** AI 改写落地，请父层**原位**重读正文（不要卸载本视图：圈选卡片还开着）。 */
+  refresh: [docId: string];
   /** 编辑会话开关（父层据此在切换文档前拦截未保存修改） */
   editing: [on: boolean];
   /** 点了互链 `[[标题]]`：父层按标题找文档并打开 */
@@ -196,8 +199,15 @@ const conflictName = computed(() =>
   lock.state.value.phase === "conflict" ? lock.state.value.holderName : null,
 );
 
+/** AI 正在改这篇文档（圈选已发出、还没收尾）。此时进编辑态，草稿基线是改之前的正文，保存是整篇覆盖、
+ *  没有乐观锁——AI 刚写进去的修改会被静默盖掉。所以等它收尾再编辑。 */
+const kbSel = useKbSelections();
+const aiBusy = computed(() =>
+  kbSel.forDoc(props.doc.id).some((r) => r.status === "sent" || r.status === "working"),
+);
+
 async function startEdit(): Promise<void> {
-  if (editing.value || !props.editable) return;
+  if (editing.value || !props.editable || aiBusy.value) return;
   lockErr.value = null;
   try {
     const ok = await lock.enter(props.doc.id);
@@ -229,7 +239,7 @@ async function save(): Promise<boolean> {
     baseTitle = draftTitle.value.trim();
     baseContent = draftContent.value;
     saveMsg.value = r.merged
-      ? `已合并进 v${r.versionNo}（5 分钟内的连续保存不另开版本）`
+      ? `已合并进 v${r.versionNo}（合并窗口内的连续保存不另开版本）`
       : `已保存为 v${r.versionNo}`;
     // 修改说明只随一次保存生效，保存完清空，避免下次误用
     changeNote.value = "";
@@ -319,8 +329,13 @@ function onReverted(): void {
         <span class="kb-spacer" />
         <span v-if="editable" class="kb-head-actions">
           <button class="kb-link" @click="showHistory = true">历史</button>
-          <button class="kb-link kb-edit-btn" :disabled="lock.state.value.phase === 'acquiring'" @click="startEdit()">
-            {{ lock.state.value.phase === "acquiring" ? "取锁中…" : "编辑" }}
+          <button
+            class="kb-link kb-edit-btn"
+            :disabled="lock.state.value.phase === 'acquiring' || aiBusy"
+            :title="aiBusy ? 'AI 正在修改这篇文档，等它改完再编辑，否则你的保存会盖掉它的修改' : undefined"
+            @click="startEdit()"
+          >
+            {{ lock.state.value.phase === "acquiring" ? "取锁中…" : aiBusy ? "AI 修改中…" : "编辑" }}
           </button>
           <!-- 只在看态出现（编辑态下没有这个按钮）：编辑中的草稿与「删掉这篇」同时可点，
                是两条状态机的交叉，没有必要 -->
@@ -407,7 +422,7 @@ function onReverted(): void {
       :scroll-el="docEl"
       :doc="doc"
       :linked-roots="linkedRoots"
-      @refresh="(id) => emit('saved', id)"
+      @refresh="(id) => emit('refresh', id)"
       @reverted="(id) => emit('reverted', id)"
     />
   </article>

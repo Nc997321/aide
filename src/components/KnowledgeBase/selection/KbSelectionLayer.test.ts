@@ -9,7 +9,7 @@ vi.mock("./layoutRects", async (importOriginal) => {
   return { ...real, rectsInScroller: () => [{ x: 40, y: 120, w: 160, h: 22 }] };
 });
 vi.mock("../kbClient", () => ({
-  kb: { revert: vi.fn().mockResolvedValue({ documentId: "doc-1", revisionId: "r", versionNo: 6, merged: false }) },
+  kb: { updateDocument: vi.fn().mockResolvedValue({ documentId: "doc-1", revisionId: "r", versionNo: 7, merged: false }) },
   KbError: class KbError extends Error {},
 }));
 
@@ -91,7 +91,7 @@ beforeEach(() => {
   fakeCard.permission.value = null;
   fakeCard.editRequest.value = null;
   fakeCard.sendError.value = null;
-  vi.mocked(kb.revert).mockClear();
+  vi.mocked(kb.updateDocument).mockClear();
   vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0));
   vi.stubGlobal("cancelAnimationFrame", (id: number) => clearTimeout(id));
   vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} unobserve() {} });
@@ -118,7 +118,7 @@ describe("选中 → 小入口 → 浮窗", () => {
     await nextTick();
     expect(w.find(".ksl-pop").exists()).toBe(true);
     expect(w.find(".ksl-scope").text()).toBe("第 3 行 · 这几个字");
-    expect(w.find(".ksl-hint").text()).toContain("一个字都不会动");
+    expect(w.find(".ksl-scope").attributes("title")).toContain("一个字都不会动");
     const [rec] = useKbSelections().all.value;
     expect(rec).toMatchObject({ status: "draft" });
     expect(rec!.ref.text).toBe("切流量到旧版本");
@@ -138,7 +138,7 @@ describe("选中 → 小入口 → 浮窗", () => {
     await nextTick();
     expect(w.find(".ksl-scope").classes()).toContain("ksl-scope--wide");
     expect(w.find(".ksl-scope").text()).toContain("整块");
-    expect(w.find(".ksl-hint").text()).toContain("已扩大到整块");
+    expect(w.find(".ksl-scope").attributes("title")).toContain("已扩大到整块");
   });
 
   it("没有可圈选的内容（折叠选区）不出入口", async () => {
@@ -328,7 +328,7 @@ describe("发出之后：状态由聊天事件推进", () => {
     expect(w.find(".ksl-tray--busy").exists()).toBe(true);
   });
 
-  it("改好了：请父层刷新文档；文档到新版本后新范围亮起，可撤销（撤销 = 回到圈选时的版本）", async () => {
+  it("改好了：请父层刷新文档；文档到新版本后新范围亮起，可撤销（撤销 = 把这一段写回圈选时的原文）", async () => {
     const w = mountLayer();
     const { k, id } = await pendingRecord(w);
     emitKbSelectionEvent({ kind: "working", sid: "uuid-a", selectionId: id });
@@ -345,8 +345,26 @@ describe("发出之后：状态由聊天事件推进", () => {
 
     await w.find(".ksl-badge-act").trigger("click");
     await flushPromises();
-    expect(kb.revert).toHaveBeenCalledWith("doc-1", 5);
+    expect(kb.updateDocument).toHaveBeenCalledWith("doc-1", expect.objectContaining({ title: "发布流程", content: SRC }));
     expect(w.emitted("reverted")).toEqual([["doc-1"]]);
+  });
+
+  it("合并窗口内合并保存、版本号没变：照样刷新并算出新范围，撤销仍把这一段改回原文", async () => {
+    const w = mountLayer();
+    const { k, id } = await pendingRecord(w);
+    emitKbSelectionEvent({ kind: "working", sid: "uuid-a", selectionId: id });
+    emitKbSelectionEvent({ kind: "result", sid: "uuid-a", selectionId: id, ok: true, versionNo: 5 }); // 合并进当前版本：号没变
+    await nextTick();
+    expect(w.emitted("refresh")).toEqual([["doc-1"]]);
+    expect(k.records[id]!.newRange).toBeUndefined(); // 还没刷新：正文是旧的，不能拿它算高亮
+
+    const next = SRC.replace("切流量到旧版本", "把入口流量全部切回上一个稳定版本");
+    await w.setProps({ doc: { id: "doc-1", title: "发布流程", versionNo: 5, content: next } });
+    await nextTick();
+    expect(next.slice(k.records[id]!.newRange!.start, k.records[id]!.newRange!.end)).toBe("把入口流量全部切回上一个稳定版本");
+    await w.find(".ksl-badge-act").trigger("click");
+    await flushPromises();
+    expect(kb.updateDocument).toHaveBeenCalledWith("doc-1", expect.objectContaining({ content: SRC }));
   });
 
   it("之后又有别的改动：撤销按钮禁用（不能把别人的改动一起回掉）", async () => {

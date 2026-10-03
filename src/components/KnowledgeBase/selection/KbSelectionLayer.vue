@@ -268,7 +268,7 @@ function onDocKeyDown(e: KeyboardEvent): void {
 const composeRec = computed(() => (composeId.value ? kbSel.records[composeId.value] : undefined));
 const composeOverlay = computed(() => overlays.value.find((o) => o.rec.ref.selectionId === composeId.value));
 
-/** 范围说明：用户在发送前就要知道 AI 只会动哪里。 */
+/** 范围说明：用户在发送前就要知道 AI 只会动哪里。标签直接写在头部的范围胶囊上，解释放它的 title（脚注那行说明会把按钮挤窄、折行崩版，已去掉）。 */
 const scopeLabel = computed(() => {
   const r = composeRec.value?.ref;
   if (!r) return "";
@@ -462,7 +462,9 @@ function badgeStyle(o: Overlay): Record<string, string> {
 }
 
 // ── 状态推进里需要本层配合的两件事 ──────────────────────────────────────────
-// 1) done：文档要刷新到新版本（一次）；刷新到了就算出新范围、亮一下。
+// 1) done：文档要刷新（每条一次）；刷新到了就算出新范围、亮一下。
+// 「刷新到了」认**内容变了**，不认版本号变了：服务端合并窗口内的连续保存会合并进当前版本，
+// 版本号纹丝不动，但正文已经是改后的——靠版本号判断会既不刷新、又拿旧正文算出一段错位的高亮。
 const asked = new Set<string>();
 const told = new Set<string>();
 watch(
@@ -471,12 +473,11 @@ watch(
     for (const rec of kbSel.forDoc(props.doc.id)) {
       if (rec.status !== "done") continue;
       const id = rec.ref.selectionId;
-      if ((rec.versionNo ?? 0) > props.doc.versionNo) {
-        if (!asked.has(id)) {
-          asked.add(id);
-          emit("refresh", props.doc.id);
-        }
-      } else if (!rec.newRange && props.doc.content != null) {
+      if (!asked.has(id)) {
+        asked.add(id);
+        emit("refresh", props.doc.id);
+      }
+      if (!rec.newRange && props.doc.content != null && props.doc.content !== rec.baseContent) {
         kbSel.resolveDone(id, props.doc.content);
         // 刷新到了、位置却算不出（同时有别人改了别处）：不画错位的高亮，但要交代结果。
         if (!kbSel.records[id]?.newRange && !told.has(id)) {
@@ -489,16 +490,29 @@ watch(
   { immediate: true },
 );
 
-// 2) 撤销：回滚到圈选那一刻的版本。只有「之后没有别的改动」才允许——否则会把别人的改动一起回掉。
+// 2) 撤销：把**这一段**写回圈选时的原文，不回滚版本。
+// 不能「回到圈选时的版本」：服务端合并窗口内同一作者的连续保存会改写当前版本而不是新建，圈选时的那个
+// 版本号可能已经被 AI 的改动改写，回滚过去等于没撤。所以按内容来——只有圈选段前后的文字都还和圈选时
+// 逐字相同才允许（之后别处有改动就禁用，避免把别人的改动一起抹掉）。
+function undoContent(rec: KbSelectionRecord): string | null {
+  const cur = props.doc.content;
+  const nr = rec.newRange;
+  if (rec.status !== "done" || !nr || cur == null) return null;
+  const prefix = rec.baseContent.slice(0, rec.ref.start);
+  const suffix = rec.baseContent.slice(rec.ref.end);
+  if (!cur.startsWith(prefix) || cur.slice(nr.end) !== suffix || nr.start !== rec.ref.start) return null;
+  return prefix + rec.ref.text + suffix;
+}
 const undoing = ref<string | null>(null);
 function canUndo(rec: KbSelectionRecord): boolean {
-  return rec.status === "done" && rec.versionNo === props.doc.versionNo;
+  return undoContent(rec) !== null;
 }
 async function undo(rec: KbSelectionRecord): Promise<void> {
-  if (!canUndo(rec) || undoing.value) return;
+  const content = undoContent(rec);
+  if (content === null || undoing.value) return;
   undoing.value = rec.ref.selectionId;
   try {
-    await kb.revert(props.doc.id, rec.ref.baseVersion);
+    await kb.updateDocument(props.doc.id, { title: props.doc.title, content, changeNote: "撤销 AI 对圈选段的修改" });
     kbSel.discard(rec.ref.selectionId);
     emit("reverted", props.doc.id);
   } catch (e) {
@@ -589,7 +603,7 @@ function badgeText(o: Overlay): string {
           type="button"
           class="ksl-badge-act"
           :disabled="!canUndo(o.rec) || undoing === o.rec.ref.selectionId"
-          :title="canUndo(o.rec) ? '回到圈选之前的版本' : '之后又有别的改动，请到「历史」里回退'"
+          :title="canUndo(o.rec) ? '把这一段改回圈选时的原文' : '这一处之后文档又有别的改动，请到「历史」里回退'"
           @click="undo(o.rec)"
         >{{ undoing === o.rec.ref.selectionId ? "撤销中…" : "撤销" }}</button>
         <button
@@ -658,7 +672,6 @@ function badgeText(o: Overlay): string {
         <button v-for="t in INTENTS" :key="t" type="button" class="ksl-intent" :disabled="locked" @click="pickIntent(t)">{{ t }}</button>
       </div>
       <footer class="ksl-pop-foot">
-        <span class="ksl-hint">{{ scopeHint }}</span>
         <span class="ksl-spacer" />
         <template v-if="!inThread">
           <button type="button" class="ksl-btn" @click="submit(false)" title="先记下这一处，继续圈别处，最后一起发">再圈一处</button>
@@ -977,14 +990,23 @@ function badgeText(o: Overlay): string {
   display: flex;
   align-items: center;
   gap: 7px;
+  /* 头部永远一行：标题与状态胶囊不折行，放不下时只让范围胶囊省略（它是最不要紧的一块） */
+  flex-wrap: nowrap;
+  min-width: 0;
 }
+.ksl-pop-head > * { flex: 0 0 auto; }
 .ksl-pop-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--aide-text-primary);
+  white-space: nowrap;
 }
 .ksl-scope {
   margin-left: auto;
+  flex: 0 1 auto !important;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 2px 8px;
   border-radius: 10px;
   font-size: 11px;
@@ -1048,12 +1070,6 @@ function badgeText(o: Overlay): string {
   display: flex;
   align-items: center;
   gap: 8px;
-}
-.ksl-hint {
-  font-size: 11px;
-  line-height: 1.4;
-  color: var(--aide-text-muted);
-  max-width: 150px;
 }
 .ksl-spacer {
   flex: 1;
@@ -1232,6 +1248,7 @@ function badgeText(o: Overlay): string {
   border-radius: 10px;
   padding: 1px 7px;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .ksl-thread {
   display: flex;

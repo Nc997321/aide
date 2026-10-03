@@ -316,6 +316,13 @@ async function refreshDoc(id: string): Promise<void> {
   if (spaceId) await k.loadDocuments(spaceId);
 }
 
+/** AI 改写落地后的刷新：原位换正文（不卸载视图，圈选卡片还开着），侧栏照常刷新。 */
+async function reloadDoc(id: string): Promise<void> {
+  const spaceId = k.activeSpaceId.value;
+  if (activeDocId.value === id) await k.reloadDocument(id);
+  if (spaceId) await k.loadDocuments(spaceId);
+}
+
 function onEditing(on: boolean): void {
   editingDocId.value = on ? activeDocId.value : null;
 }
@@ -655,6 +662,7 @@ onMounted(() => {
           @reveal="(id) => void onReveal(id)"
           @saved="(id) => refreshDoc(id)"
           @reverted="(id) => refreshDoc(id)"
+          @refresh="(id) => reloadDoc(id)"
           @editing="onEditing"
           @delete="(id) => void onDeleteDoc(id)"
         />
