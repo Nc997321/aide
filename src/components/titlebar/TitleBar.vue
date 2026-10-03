@@ -5,7 +5,6 @@ import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
 import LspIndicator from "./LspIndicator.vue";
 import ProviderSwitcher from "./ProviderSwitcher.vue";
-import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
 import { hostApi } from "@aide/sdk";
@@ -157,9 +156,8 @@ function isRowRunning(cfg: RunConfig): boolean {
   <div class="titlebar" data-tauri-drag-region>
     <!-- Left: brand + project context -->
     <div class="titlebar-left" data-tauri-drag-region>
+      <!-- 品牌（logo + 名称 + 版本）已在侧栏品牌区，标题栏不再重复；这里只留 Host 身份徽标 -->
       <div class="titlebar-logo" data-tauri-drag-region>
-        <AppLogo :size="15" />
-        <span class="titlebar-logo-text">Aide</span>
         <button
           v-if="hostLabel"
           class="titlebar-host"
@@ -381,18 +379,10 @@ function isRowRunning(cfg: RunConfig): boolean {
   flex-shrink: 0;
 }
 
-.titlebar-logo-text {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--aide-text-secondary);
-  letter-spacing: 0.5px;
-}
-
 .titlebar-host {
   font-size: 10px;
   line-height: 1;
   padding: 2px 6px;
-  margin-left: 6px;
   border-radius: var(--aide-radius-sm);
   border: 1px solid var(--aide-border);
   color: var(--aide-text-secondary);
