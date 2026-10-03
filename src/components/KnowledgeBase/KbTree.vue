@@ -12,6 +12,7 @@
 // 行为，测试要分两条写（点击发事件 / 给了折叠集合就不渲染）。
 import { computed, ref } from "vue";
 import Icon from "@/components/Icon.vue";
+import KbNodeIcon from "./KbNodeIcon.vue";
 import { useContextMenu } from "@/composables/useContextMenu";
 import { kbCreateItems, kbLinkMenuItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
 import { useKbLinks } from "@/composables/useKbLinks";
@@ -361,7 +362,7 @@ const vFocus = {
       </button>
       <span v-else class="kb-caret-spacer" />
 
-      <span class="kb-node-glyph"><Icon :name="row.isFolder ? 'folder' : 'file'" :size="12" /></span>
+      <span class="kb-node-glyph"><KbNodeIcon :folder="row.isFolder" :mime="row.doc.mime" /></span>
 
       <input
         v-if="renaming === row.doc.id"
@@ -441,7 +442,7 @@ const vFocus = {
     <div v-if="creating" class="kb-treerow" :style="{ paddingLeft: `${8 + creatingDepth * 16}px` }">
       <span class="kb-caret-spacer" />
       <span class="kb-node-glyph">
-        <Icon :name="creating.kind === 'folder' ? 'folder' : 'file'" :size="12" />
+        <KbNodeIcon :folder="creating.kind === 'folder'" />
       </span>
       <input
         data-kb-new
@@ -521,9 +522,8 @@ const vFocus = {
 .kb-caret:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 .kb-caret-spacer { flex: 0 0 16px; }
 
-.kb-node-glyph { flex: 0 0 auto; display: inline-flex; color: var(--aide-text-secondary); opacity: 0.7; }
-.kb-treerow.is-folder .kb-node-glyph { opacity: 1; }
-.kb-treerow.on .kb-node-glyph { color: var(--aide-accent); opacity: 1; }
+/* 图标自带类型色（KbNodeIcon）；选中态靠行底与标题加亮表达，不再给图标换色 */
+.kb-node-glyph { flex: 0 0 auto; display: inline-flex; }
 
 /* ⚠️ 类型走「字形 + 字重」，不走明度差。早先让文档用更暗的灰，实际渲染出来
    像被禁用；而把文件夹提亮到 text-primary 又会跟选中态抢信号——那等于用同一条
