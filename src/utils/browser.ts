@@ -4,13 +4,34 @@
 import type { NavEventDto, NavStateDto } from "../composables/browser/useEmbeddedBrowser";
 import type { Bookmark, ImportReport } from "../composables/browser/useBrowserBookmarks";
 
+/** 本机 / 局域网主机：开发服务器几乎都是明文 http，补 https:// 必然握手失败。 */
+function isLocalHost(host: string): boolean {
+  if (host === "localhost" || host.endsWith(".localhost") || host === "[::1]") return true;
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return false;
+  return (
+    host === "0.0.0.0" ||
+    /^(127|10)\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+    /^169\.254\./.test(host)
+  );
+}
+
 /**
- * 地址栏输入归一：裸域名补 `https://`（UX 便利）；带 scheme 的原样交给后端 `url_guard` 守门
+ * 地址栏输入归一：裸域名补 scheme（UX 便利）——本机 / 局域网地址（localhost、127.0.0.1、
+ * 192.168.x.x…）补 `http://`，其余补 `https://`；带 scheme 的原样交给后端 `url_guard` 守门
  * —— scheme 白名单在 Rust 侧是唯一真相，前端不复制一份（否则两处规则会漂移）。
+ *
+ * ⚠️ `host:port`（`localhost:8000`）长得像 `scheme:rest`，必须先认出「冒号后跟端口号」，
+ * 否则 `localhost` 会被当成 scheme 原样放行、被 url_guard 拒掉。
  */
 export function normalizeBrowserUrl(raw: string): string {
   const t = raw.trim();
-  return /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(t) ? t : `https://${t}`;
+  const hasPort = /^(?:\[[0-9a-fA-F:]+\]|[^\s/?#:@]+):\d+(?:[/?#]|$)/.test(t);
+  if (!hasPort && /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(t)) return t;
+  const authority = t.split(/[/?#]/, 1)[0] ?? "";
+  const host = authority.replace(/^.*@/, "").replace(/:\d+$/, "").toLowerCase();
+  return `${isLocalHost(host) ? "http" : "https"}://${t}`;
 }
 
 /** 从导航状态里取当前 URL（`idle` 没有 URL）。 */

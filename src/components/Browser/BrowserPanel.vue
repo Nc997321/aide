@@ -741,7 +741,7 @@ onBeforeUnmount(() => {
         ref="addressEl"
         v-model="address"
         class="bp-address"
-        placeholder="输入网址，回车打开（裸域名自动补 https://）"
+        placeholder="输入网址，回车打开（裸域名补 https://，本机/内网地址补 http://）"
         spellcheck="false"
         @keydown.enter="go"
       />
