@@ -172,8 +172,18 @@ pub fn trust_key_from_key(key: &str) -> String {
 /// 路径是否在信任白名单内（按归一键比对）。供 send_message
 /// 等 Rust 侧门控点调用；读 state.json 是轻量 IO，调用方已在 spawn_blocking
 /// 或命令体里。
+///
+/// **「日常」目录恒受信任**：它是 Aide 自己建的、对所有列表隐身的目录，用户没有入口去信任它
+/// （侧栏看不到）；信任门防的是「仓库自带的 CLAUDE.md / .mcp.json / skills」，日常目录里没有这些。
+/// 不恒信任的后果是日常会话拿不到知识库工具、LSP 等一切挂在信任门后的能力。
 pub fn is_path_trusted(path: &str) -> bool {
-    trusted_keys(&crate::app_settings::load_state()).contains(&trust_key_from_path(path))
+    let daily = daily::daily_path_in(&crate::paths::our_config_dir());
+    is_path_trusted_in(&crate::app_settings::load_state(), &daily, path)
+}
+
+/// `is_path_trusted` 的纯函数形态（状态与日常目录由调用方给），便于测试。
+pub fn is_path_trusted_in(config: &serde_json::Value, daily_dir: &std::path::Path, path: &str) -> bool {
+    daily::is_daily_path(daily_dir, path) || trusted_keys(config).contains(&trust_key_from_path(path))
 }
 
 /// 清掉 state 的 workspace（激活）字段。
@@ -748,6 +758,23 @@ mod tests {
             assert_eq!(resolve_path_from_key(&path_to_key(&path)).as_deref(), Some(path.as_str()));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn daily_dir_is_always_trusted() {
+        let daily = PathBuf::from("cfg").join("workspace");
+        let cfg = serde_json::json!({ "trustedWorkspaces": [] });
+        assert!(is_path_trusted_in(&cfg, &daily, &daily.to_string_lossy()));
+    }
+
+    #[test]
+    fn other_dirs_still_need_the_whitelist() {
+        let daily = PathBuf::from("cfg").join("workspace");
+        let other = PathBuf::from("proj").join("a");
+        let key = trust_key_from_path(&other.to_string_lossy());
+        assert!(!is_path_trusted_in(&serde_json::json!({}), &daily, &other.to_string_lossy()));
+        let cfg = serde_json::json!({ "trustedWorkspaces": [key] });
+        assert!(is_path_trusted_in(&cfg, &daily, &other.to_string_lossy()));
     }
 
     #[test]
