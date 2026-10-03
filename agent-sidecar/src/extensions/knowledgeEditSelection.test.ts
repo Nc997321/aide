@@ -21,7 +21,7 @@ const SELECTED = "切流量到旧版本";
 interface FakeServer {
   content: string;
   version: number;
-  puts: { content: string; changeNote?: string }[];
+  puts: { content: string; changeNote?: string; slideMergeWindow?: boolean }[];
   /** 每次 GET 回包前的钩子：模拟「别人同时改了文档」。 */
   afterGet?: (server: FakeServer) => void;
 }
@@ -32,7 +32,7 @@ function stubServer(initial: string): FakeServer {
     const method = init?.method ?? "GET";
     if (method === "PUT") {
       const body = JSON.parse(String(init?.body));
-      server.puts.push({ content: body.content, changeNote: body.changeNote });
+      server.puts.push({ content: body.content, changeNote: body.changeNote, slideMergeWindow: body.slideMergeWindow });
       server.content = body.content;
       server.version += 1;
       return {
@@ -97,6 +97,7 @@ describe("edit_selection", () => {
     expect(written).toContain("第二段不能动，连标点都不能动。");
     expect(written).toContain("把入口流量全部切回上一个稳定版本");
     expect(server.puts[0]!.changeNote).toContain("写得更具体些");
+    expect(server.puts[0]!.slideMergeWindow).toBe(true); // 连续改写顺延服务端的合并窗口
     expect(r.content[0]!.text).toContain("Edited the selection");
     expect(r.content[0]!.text).toContain("everything outside the selection is unchanged");
   });

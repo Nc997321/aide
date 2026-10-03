@@ -22,6 +22,10 @@ pub struct SaveInput {
     pub change_note: Option<String>,
     /// true 时跳过合并窗口，强制开新版本（回滚等场景必须如此）
     pub force_new_version: bool,
+    /// 合并进当前版本时是否把合并窗口顺延（把版本时间刷到现在）。
+    /// 默认窗口从版本**创建**时起算、不随合并移动；连续对话式修改（AI 圈选改写）要「每改一次
+    /// 再给一个窗口」就开它。只在真的发生合并时有意义，对新建版本无影响。
+    pub slide_merge_window: bool,
 }
 
 /// 保存。返回 (revision_id, version_no)。
@@ -70,7 +74,8 @@ pub async fn save_revision(
                       SET title = $2, content = $3,
                           title_tokenized = $4, content_tokenized = $5,
                           search_text = $9,
-                          change_note = COALESCE($6, change_note)
+                          change_note = COALESCE($6, change_note),
+                          created_at = CASE WHEN $10 THEN now() ELSE created_at END
                     WHERE id = $1
                       AND author_id = $7
                       AND created_at > now() - ($8::bigint * interval '1 second')
@@ -85,6 +90,7 @@ pub async fn save_revision(
             .bind(input.author_id)
             .bind(config.revision_merge_window_seconds)
             .bind(&search_text)
+            .bind(input.slide_merge_window)
             .fetch_optional(&mut *conn)
             .await?;
 
@@ -276,6 +282,7 @@ pub async fn revert_to(
             // 必须强制开新版本：否则会命中合并窗口，把刚保存的内容改回旧版本，
             // 而且历史里看不出发生过回滚
             force_new_version: true,
+            slide_merge_window: false,
         },
     )
     .await

@@ -314,6 +314,9 @@ export async function editSelection(client: KbClient, scopes: KbScopeStore, args
     title: cur.data.title,
     content: edit.body,
     changeNote: args.changeNote?.trim() || selectionChangeNote(scope.comment),
+    // 对话式连改：每改一次把服务端「连续保存合并」的窗口顺延，来回追问不会因为跨了 5 分钟就裂成新版本。
+    // 老服务端不认这个字段会忽略它，退回「从版本创建起算 5 分钟」。
+    slideMergeWindow: true,
   });
   if (!saved.ok) return formatFailure(saved.failure);
 

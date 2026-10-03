@@ -191,7 +191,7 @@ say "B 保存（合并窗口内 → 改写 v1 而非新开 v2）"
 body="$(api PUT "/api/documents/$DOC_ID" '{"title":"冒烟测试文档","content":"# 冒烟\n\n第二版内容。关键词：凤凰。","changeNote":"smoke 更新"}' "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
 expect "$STATUS" "200" "updateDocument → 200"
-expect "$(field "$body" versionNo)" "1" "同作者 5 分钟内合并进 v1"
+expect "$(field "$body" versionNo)" "1" "同作者窗口内合并进 v1"
 expect "$(field "$body" merged)" "true" "merged=true"
 
 say "管理员邀成员 E 为空间 editor"
@@ -425,6 +425,30 @@ body="$(api PUT "/api/documents/$HTML_DOC_ID" "$EDIT_BODY" "$TOKEN_B")"
 STATUS="$(cat "$CODE_FILE")"
 expect "$STATUS" "200" "编辑网页条目 → 200"
 expect "$(field "$body" merged)" "true" "同一作者在合并窗口内 → 改写当前版本（正是最容易漏算的那条路）"
+
+say "合并窗口顺延：slideMergeWindow 只在带上时把版本时间刷到现在"
+rev_created() { field "$(api GET "/api/documents/$HTML_DOC_ID/revisions" "" "$TOKEN_B")" 0.createdAt; }
+T0="$(rev_created)"
+sleep 1
+EDIT_SLIDE_OFF="$("$PY" - "$HTML_FIXTURE" <<'PYEOF'
+import sys, json
+raw = open(sys.argv[1], encoding="utf-8").read()
+print(json.dumps({"title": "季度复盘", "content": raw.replace("朱雀", "玄武") + "\n<!-- a -->", "slideMergeWindow": False}))
+PYEOF
+)"
+body="$(api PUT "/api/documents/$HTML_DOC_ID" "$EDIT_SLIDE_OFF" "$TOKEN_B")"
+expect "$(field "$body" merged)" "true" "不带顺延：仍合并"
+expect "$(rev_created)" "$T0" "不带顺延：版本时间不动（窗口从创建时起算，老行为）"
+EDIT_SLIDE_ON="$("$PY" - "$HTML_FIXTURE" <<'PYEOF'
+import sys, json
+raw = open(sys.argv[1], encoding="utf-8").read()
+print(json.dumps({"title": "季度复盘", "content": raw.replace("朱雀", "玄武") + "\n<!-- b -->", "slideMergeWindow": True}))
+PYEOF
+)"
+body="$(api PUT "/api/documents/$HTML_DOC_ID" "$EDIT_SLIDE_ON" "$TOKEN_B")"
+expect "$(field "$body" merged)" "true" "带顺延：仍合并，不新开版本"
+T1="$(rev_created)"
+if [ "$T1" = "$T0" ]; then echo "  ✗ 带顺延：版本时间应当刷新，实际没动 ($T1)"; exit 1; else echo "  ✓ 带顺延：版本时间刷新 ($T0 → $T1)"; fi
 
 body="$(search_kb '玄武' "$TOKEN_B")"
 expect "$(field "$body" hits.0.documentId)" "$HTML_DOC_ID" "改后的词能搜到"
