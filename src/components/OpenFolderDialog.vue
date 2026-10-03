@@ -178,6 +178,7 @@ async function onConfirm() {
 <style scoped>
 .of-overlay {
   position: fixed; inset: 0; background: var(--aide-bg-overlay);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
   display: flex; align-items: center; justify-content: center; z-index: 1100;
   padding: 24px; overflow-y: auto;
   animation: fadeIn 0.12s ease;
@@ -188,6 +189,9 @@ async function onConfirm() {
   border-radius: var(--aide-radius-lg); padding: 18px 20px;
   min-width: 420px; max-width: 560px; box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   max-height: 90vh; display: flex; flex-direction: column;
+  /* 玻璃主题的 bg-raised 是半透明的：不糊掉底下的内容，聊天正文会直接透出来盖住对话框文字。
+     不透明主题 surface-blur 为 none，无副作用。 */
+  backdrop-filter: var(--aide-surface-blur); -webkit-backdrop-filter: var(--aide-surface-blur);
   animation: scaleIn var(--aide-ease-t);
 }
 @keyframes scaleIn { from { opacity: 0; transform: scale(0.96); } to { opacity: 1; transform: scale(1); } }
