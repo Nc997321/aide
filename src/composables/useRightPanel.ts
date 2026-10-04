@@ -5,7 +5,7 @@
 // "面板关了视图还在""切了 tab 视图不跟着走"这类幽灵故障都源自这种分裂。
 //
 // 本模块只认状态与裁决，不认 DOM（宽度绑定见 useResizable + rightPanelWidthSource）。
-import { computed, ref } from "vue";
+import { computed, ref, watch } from "vue";
 
 import type { WidthSource } from "./useResizable";
 
@@ -125,6 +125,49 @@ const widthProfile = computed<"narrow" | "browser">(() =>
   browserActive.value && !maximized.value ? "browser" : "narrow",
 );
 
+// ── 开合 / 换档动画 ──
+//
+// 右栏宽度是 grid 轨道（App.vue 的 gridTemplateColumns），动画就是让轨道过渡。这里只认「现在正在
+// 动吗」：App 据此给 .app-layout 挂过渡 class；**原生浏览器视图**据此推迟露头——它浮在所有 HTML 之上、
+// 不跟 CSS 走，洞还在长的时候露头会逐帧重排网页、还会盖住正在滑出的面板边缘。
+
+/** 与 App.vue 里 .app-layout 的 transition 时长对齐（改一处记得改另一处）。 */
+export const LAYOUT_ANIM_MS = 240;
+
+/** 轨道宽度变化的档位（不含最大化：最大化时轨道是 1fr，与 px 之间不插值，不会动）。 */
+const trackProfile = computed<"narrow" | "browser">(() => (browserActive.value ? "browser" : "narrow"));
+
+const layoutAnimating = ref(false);
+let layoutTimer: ReturnType<typeof setTimeout> | null = null;
+let settleWaiters: Array<() => void> = [];
+
+function endLayoutAnimation() {
+  if (layoutTimer) clearTimeout(layoutTimer);
+  layoutTimer = null;
+  layoutAnimating.value = false;
+  const waiters = settleWaiters;
+  settleWaiters = [];
+  for (const w of waiters) w();
+}
+
+// flush: "sync" —— 必须先于任何依赖开合状态的 watcher 置位（BrowserPanel 的露头闸要读它）。
+watch(
+  [collapsed, trackProfile],
+  () => {
+    if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    layoutAnimating.value = true;
+    if (layoutTimer) clearTimeout(layoutTimer);
+    layoutTimer = setTimeout(endLayoutAnimation, LAYOUT_ANIM_MS + 40);
+  },
+  { flush: "sync" },
+);
+
+/** 轨道动画落定时 resolve；没在动就立即 resolve。 */
+function whenLayoutSettled(): Promise<void> {
+  if (!layoutAnimating.value) return Promise.resolve();
+  return new Promise((resolve) => settleWaiters.push(resolve));
+}
+
 /** 布局量测：App 注入（只有它知道 DOM）。量不到给 0 → 一律按 min 收，宁可容错不猜。 */
 export type LayoutMeasure = () => { appW: number; leftW: number };
 
@@ -171,6 +214,8 @@ export function useRightPanel() {
     widths,
     widthProfile,
     setWidth,
+    layoutAnimating,
+    whenLayoutSettled,
   };
 }
 
@@ -182,4 +227,5 @@ export function __resetRightPanelForTest() {
   browserEverActive.value = false;
   pendingBrowserUrl.value = null;
   widths.value = { narrow: 0, browser: 0 };
+  endLayoutAnimation();
 }

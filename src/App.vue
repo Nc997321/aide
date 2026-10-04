@@ -1056,7 +1056,10 @@ onUnmounted(() => {
 
     <div
       class="app-layout"
-      :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }"
+      :class="{
+        'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value,
+        'right-animating': rightPanel.layoutAnimating.value,
+      }"
       :style="{ gridTemplateColumns }"
     >
       <!-- 贴边热区：未固定时鼠标贴左边缘滑出侧栏（QQ 式自动隐藏）。
@@ -1143,7 +1146,8 @@ onUnmounted(() => {
 
       <!-- Right panel：content + 常驻竖直工具栏（IDEA 式） -->
       <div class="panel-right" :class="{ collapsed: rightCollapsed }">
-        <div v-show="!rightCollapsed" class="panel-right-inner">
+        <!-- 收起动画期间内容留着（否则轨道还在收、里面已经空了）；动画一落定才真摘掉 -->
+        <div v-show="!rightCollapsed || rightPanel.layoutAnimating.value" class="panel-right-inner">
           <div class="tab-content">
             <FileTree
               v-show="rightTab === 'files'"
@@ -1232,6 +1236,15 @@ onUnmounted(() => {
 .app-layout.is-dragging {
   user-select: none;
   cursor: col-resize;
+}
+
+/* 右栏开合 / 窄宽档切换：让 grid 轨道过渡（时长与 useRightPanel 的 LAYOUT_ANIM_MS 对齐）。
+   只在 .right-animating 期间挂——拖动分隔条时 --aide-right-w 逐帧变，挂着过渡会让拖动发黏，
+   故拖动态强制关掉；窗口缩放不改轨道计算值，不会触发。 */
+@media (prefers-reduced-motion: no-preference) {
+  .app-layout.right-animating:not(.is-dragging) {
+    transition: grid-template-columns 0.24s var(--aide-ease);
+  }
 }
 
 /* 五个轨道靠 grid-column 显式钉住，不依赖 DOM 书写顺序的自动布局——

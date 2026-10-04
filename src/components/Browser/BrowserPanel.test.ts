@@ -128,6 +128,9 @@ beforeEach(() => {
     if (cmd === "browser_favicons") return {};
     return undefined;
   });
+  // 右栏开合有动画、原生视图会等它落定再露头；这里的用例测的是露头 / 让位逻辑本身，
+  // 走「减弱动画」路径（与系统开了 prefers-reduced-motion 一致）= 无动画、即时。
+  vi.stubGlobal("matchMedia", (q: string) => ({ matches: q.includes("reduced-motion"), media: q }));
   // 面板开合现在归 useRightPanel：select('browser') = 展开右栏并激活浏览器 tab。
   __resetRightPanelForTest();
   __resetBrowserViewsForTest();

@@ -45,7 +45,7 @@ import {
   type BookmarkFolder,
 } from "../../utils/browser";
 
-const { browserActive, select, pendingBrowserUrl, consumePendingBrowserUrl } = useRightPanel();
+const { browserActive, select, pendingBrowserUrl, consumePendingBrowserUrl, layoutAnimating, whenLayoutSettled } = useRightPanel();
 const browser = useEmbeddedBrowser();
 // 常驻层（App 已安装）：挂载前收到的生命周期事件与 focus 请求都在它那儿缓冲着。
 const { pendingFocusViewId, buffered, takeViewEvents, consumePendingFocus } = useBrowserViews();
@@ -602,6 +602,11 @@ async function takeSnapshot(viewId: string): Promise<string> {
 watch(viewAllowed, async (ok) => {
   const seq = ++visibilitySeq;
   if (ok) {
+    // 右栏正在滑开 / 换档：洞还在长，等动画落定再露头（原生视图不跟 CSS 走，否则逐帧重排网页）
+    if (layoutAnimating.value) {
+      await whenLayoutSettled();
+      if (seq !== visibilitySeq) return; // 等的时候又被收起 / 浮层盖住了
+    }
     // 先让原生视图回到洞里，再撤掉定格画面（反过来会闪一帧灰）
     void consumePendingOpen();
     await showActive();
@@ -628,6 +633,9 @@ watch(viewAllowed, async (ok) => {
  * 那时建视图拿不到尺寸，硬开会失败成一个看不懂的错误——等开关变化时再来。
  */
 async function consumePendingOpen() {
+  if (!pendingBrowserUrl.value) return;
+  // 面板正在滑开（含懒挂载那一拍）：等洞长到位再建视图，否则按一个还在长的尺寸去建
+  if (layoutAnimating.value) await whenLayoutSettled();
   const url = pendingBrowserUrl.value;
   if (!url || !viewAllowed.value) return;
   consumePendingBrowserUrl();
