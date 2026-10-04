@@ -19,7 +19,7 @@ import type { TurnChangesFeed } from "./turnChanges";
  *
  * 为什么在流尾：做"这轮我接不接受"这个决定时人就在流尾（流式输出把视口钉在底部），
  * 而右栏那个 8 分之 1 的图标在视线边缘。它跟随**当前轮**——下一轮开始就变回
- * `正在改`，上一轮的账单退场（面板里留档，`变更面板 ↗` 就是通往它的门）。
+ * 隐藏（进行中不显示任何卡），上一轮的账单退场（面板里留档，`变更面板 ↗` 就是通往它的门）。
  *
  * 数据只有一个来源：App 的 useConversationChanges 唯一实例（TURN_CHANGES_KEY）。
  * **绝不自建第二份**——见 turnChanges.ts 顶部注释。
@@ -39,14 +39,13 @@ const round = computed<ChangeRound | undefined>(() => {
   return list.length ? list[list.length - 1] : undefined;
 });
 
-/** 进行中 = 轮自己还没结算（startRound 建轮 → solidifyRound 落定）。
- *  不用 `sessionState === "running"`：等权限（attention）时轮没结束，按那个判据
- *  会把半成品的账单亮出来。 */
-const live = computed(() => round.value?.pending === true);
+/** 进行中 = 轮自己还没结算（startRound 建轮 → solidifyRound 落定）：不渲染「正在改」卡，
+ *  只在结算后亮出「本轮变更」。不用 `sessionState === "running"`：等权限（attention）时
+ *  轮没结束，按那个判据会把半成品的账单亮出来。 */
+const settled = computed(() => round.value?.pending !== true);
 
-/** 0 个文件的轮整卡不渲染——进行中同样适用：卡在第一个文件落下时才出现，
- *  那一刻的"出现"自带信息量。 */
-const visible = computed(() => isMine.value && !!round.value && round.value.files.length > 0);
+/** 0 个文件的轮整卡不渲染；进行中的轮也不渲染（见上）。 */
+const visible = computed(() => isMine.value && !!round.value && settled.value && round.value.files.length > 0);
 
 const stats = computed(() => roundStats(round.value?.files ?? []));
 const segments = computed(() => barSegments(stats.value));
@@ -67,7 +66,6 @@ const expanded = ref(false);
 watch(() => [props.feed.sid, round.value?.index], () => { expanded.value = false; });
 
 function toggleExpand() {
-  if (live.value) return; // 进行中没有账单可看（spec §3）
   expanded.value = !expanded.value;
 }
 
@@ -112,31 +110,23 @@ async function revertFile(path: string) {
   <div
     v-if="visible"
     class="tf"
-    :class="{ 'tf--live': live }"
     @click="toggleExpand"
   >
     <div class="tf-top">
-      <span v-if="live" class="tf-dot" aria-hidden="true" />
-      <span class="tf-label">{{ live ? "正在改" : "本轮变更" }}</span>
-      <!-- 进行中：文件数占行 1 右端（此刻行 1 没有动作可放） -->
-      <span v-if="live" class="tf-unit tf-unit--end">
-        <span class="tf-unit-n">{{ formatCount(stats.files) }}</span> 个文件
-      </span>
-      <template v-else>
-        <button class="tf-panel-link tf-unit--end" @click.stop="openPanel">变更面板 ↗</button>
-        <button
-          class="tf-pill"
-          :aria-expanded="expanded ? 'true' : 'false'"
-          @click.stop="toggleExpand"
-        >
-          {{ expanded ? "收起" : "展开" }}
-          <span class="tf-caret" :class="{ 'tf-caret--down': expanded }" aria-hidden="true" />
-        </button>
-      </template>
+      <span class="tf-label">本轮变更</span>
+      <button class="tf-panel-link tf-unit--end" @click.stop="openPanel">变更面板 ↗</button>
+      <button
+        class="tf-pill"
+        :aria-expanded="expanded ? 'true' : 'false'"
+        @click.stop="toggleExpand"
+      >
+        {{ expanded ? "收起" : "展开" }}
+        <span class="tf-caret" :class="{ 'tf-caret--down': expanded }" aria-hidden="true" />
+      </button>
     </div>
 
     <div class="tf-nums">
-      <span v-if="!live" class="tf-unit">
+      <span class="tf-unit">
         <span class="tf-unit-n">{{ formatCount(stats.files) }}</span> 个文件
       </span>
       <span v-if="stats.additions > 0" class="tf-big tf-big--add">+{{ formatCount(stats.additions) }}</span>
@@ -156,7 +146,7 @@ async function revertFile(path: string) {
 
     <!-- 展开体：本轮清单（ChangeFileList 的状态徽标 / 文件图标 / 弱化目录段 / hover 出的
          撤回全现成）。@click.stop —— 点文件行或行内图标不该冒泡成"收起卡片"。 -->
-    <div v-if="!live && expanded" class="tf-body" @click.stop>
+    <div v-if="expanded" class="tf-body" @click.stop>
       <ChangeFileList
         :rows="rows"
         :workspace-root="wsRoot"
@@ -189,24 +179,13 @@ async function revertFile(path: string) {
   transition: border-color var(--aide-ease-t), background var(--aide-ease-t);
 }
 
-/* 悬停只给可交互（已结算）的卡：进行中的卡没有任何可点处，亮起来是承诺一个不存在的动作。
-   只动 accent 透明度与底色——加边框会改盒模型让整卡"抖"。 */
-.tf:not(.tf--live) {
+/* 悬停只动 accent 透明度与底色——加边框会改盒模型让整卡"抖"。 */
+.tf {
   cursor: pointer;
 }
-.tf:not(.tf--live):hover {
+.tf:hover {
   border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent);
   background: radial-gradient(130% 190% at 0% 0%, color-mix(in srgb, var(--aide-accent) 22%, transparent), transparent 58%), var(--aide-bg-raised);
-}
-
-/* ── 进行中：灰调 + 呼吸点，与"结算完成的产出"用颜色分开 ── */
-.tf--live {
-  border-color: color-mix(in srgb, var(--aide-text-muted) 22%, transparent);
-  background: var(--aide-bg-base);
-  cursor: default;
-}
-.tf--live .tf-label {
-  color: var(--aide-text-muted);
 }
 
 /* ── 行 1：身份 + 动作 ── */
@@ -223,19 +202,6 @@ async function revertFile(path: string) {
   color: var(--aide-accent);
   text-transform: uppercase;
   white-space: nowrap;
-}
-.tf-dot {
-  flex-shrink: 0;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--aide-accent);
-  opacity: 0.85;
-  animation: tf-breathe 1.7s ease-in-out infinite;
-}
-@keyframes tf-breathe {
-  0%, 100% { opacity: 0.35; transform: scale(0.85); }
-  50%      { opacity: 0.95; transform: scale(1.15); }
 }
 
 /* ── 行 2：全部统计量 ── */
@@ -311,7 +277,7 @@ async function revertFile(path: string) {
   white-space: nowrap;
   cursor: pointer;
 }
-.tf:not(.tf--live):hover .tf-pill {
+.tf:hover .tf-pill {
   background: var(--aide-surface-hover);
   border-color: var(--aide-border-strong);
   color: var(--aide-text-primary);
@@ -356,7 +322,6 @@ async function revertFile(path: string) {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .tf-dot { animation: none; }
   .tf-caret { transition: none; }
 }
 </style>
