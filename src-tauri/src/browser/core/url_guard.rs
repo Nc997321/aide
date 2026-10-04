@@ -5,7 +5,9 @@ use url::Url;
 
 /// 允许加载的 scheme。
 /// - `http`/`https`：通用浏览任意外站。
-/// - `file`：本地内容预览（受额外「白名单根目录」约束，由上层命令管，本函数只放行 scheme）。
+/// - `file`：本地内容预览。本函数只放行 scheme，**没有**根目录白名单（用户地址栏本就是用户自己的
+///   动作；agent 侧本来就有 `eval` / `call_cdp`，给导航单加一道路径白名单拦不住任何东西）。
+///   引擎对 `file:` 须走原生导航，见 `adapter/webview2` 的 `needs_native_navigation`。
 ///
 /// 刻意拒绝 `javascript:`/`data:`/`blob:`/`about:`——它们可绕过同源策略或注入脚本。
 /// 需要时在此显式扩充并补测试，不在调用点散落判断。

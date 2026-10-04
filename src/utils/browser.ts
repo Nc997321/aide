@@ -17,6 +17,26 @@ function isLocalHost(host: string): boolean {
   );
 }
 
+/** 路径里 `encodeURI` 不转义、但在 URL 里有特殊含义的字符（`#` 是片段、`?` 是查询）。 */
+function encodePathForFileUrl(path: string): string {
+  return encodeURI(path).replace(/#/g, "%23").replace(/\?/g, "%3F");
+}
+
+/**
+ * 本地绝对路径 → `file://` URL；不是本地路径返回 `null`。
+ *
+ * 认三种：Windows 盘符（`C:\x\a.html` / `C:/x/a.html`）、UNC（`\\host\share\a.html`）、
+ * POSIX 绝对路径（`/home/x/a.html`）。**必须在 scheme 判断之前**：`C:` 长得像 scheme，
+ * 会被原样放行后被 url_guard 以 `scheme not allowed: c` 拒掉；`/x` 则会被补成
+ * `https:///x`，而 `Url::parse` 把它解析成主机 `x`——静默访问了一个错的网站。
+ */
+function localPathToFileUrl(t: string): string | null {
+  if (/^[a-zA-Z]:[\\/]/.test(t)) return `file:///${encodePathForFileUrl(t.replace(/\\/g, "/"))}`;
+  if (t.startsWith("\\\\")) return `file:${encodePathForFileUrl(t.replace(/\\/g, "/"))}`;
+  if (/^\/(?!\/)/.test(t)) return `file://${encodePathForFileUrl(t)}`;
+  return null;
+}
+
 /**
  * 地址栏输入归一：裸域名补 scheme（UX 便利）——本机 / 局域网地址（localhost、127.0.0.1、
  * 192.168.x.x…）补 `http://`，其余补 `https://`；带 scheme 的原样交给后端 `url_guard` 守门
@@ -27,6 +47,8 @@ function isLocalHost(host: string): boolean {
  */
 export function normalizeBrowserUrl(raw: string): string {
   const t = raw.trim();
+  const local = localPathToFileUrl(t);
+  if (local) return local;
   const hasPort = /^(?:\[[0-9a-fA-F:]+\]|[^\s/?#:@]+):\d+(?:[/?#]|$)/.test(t);
   if (!hasPort && /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(t)) return t;
   const authority = t.split(/[/?#]/, 1)[0] ?? "";

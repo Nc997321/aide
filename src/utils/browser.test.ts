@@ -36,6 +36,22 @@ describe("normalizeBrowserUrl", () => {
     expect(normalizeBrowserUrl("notlocalhost.com")).toBe("https://notlocalhost.com");
   });
 
+  it("本地绝对路径 → file:// URL（Windows 盘符 / UNC / POSIX），不被当成 scheme 或域名", () => {
+    expect(normalizeBrowserUrl("C:\\x\\a.html")).toBe("file:///C:/x/a.html");
+    expect(normalizeBrowserUrl("d:/x/a.html")).toBe("file:///d:/x/a.html");
+    expect(normalizeBrowserUrl("\\\\srv\\share\\a.html")).toBe("file://srv/share/a.html");
+    expect(normalizeBrowserUrl("/home/me/a.html")).toBe("file:///home/me/a.html");
+  });
+
+  it("本地路径里的空格 / # / ? / % 被转义，不会截断成片段或查询", () => {
+    expect(normalizeBrowserUrl("/home/me/my docs/a#1?.html")).toBe("file:///home/me/my%20docs/a%231%3F.html");
+    expect(normalizeBrowserUrl("C:\\x\\100%.html")).toBe("file:///C:/x/100%25.html");
+  });
+
+  it("host:port 不被误认成本地路径", () => {
+    expect(normalizeBrowserUrl("localhost:8000/a")).toBe("http://localhost:8000/a");
+  });
+
   it("带 scheme 的原样（scheme 白名单在 Rust url_guard，前端不复制规则）", () => {
     expect(normalizeBrowserUrl("http://localhost:5173")).toBe("http://localhost:5173");
     expect(normalizeBrowserUrl("file:///C:/x.html")).toBe("file:///C:/x.html");
