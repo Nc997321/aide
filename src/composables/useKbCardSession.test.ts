@@ -61,8 +61,17 @@ describe("buildCardThread：只取人话", () => {
     expect(t[0]!.refs).toBe(1);
   });
 
+  it("浮窗里写的意见随圈选（kbref.comment）发出、正文为空：气泡显示那条意见", () => {
+    const t = buildCardThread([
+      msg("user", [{ type: "kbref", ...ref1 }, { type: "kbref", ...ref1, selectionId: "s2", comment: "再口语些" }]),
+    ]);
+    expect(t).toHaveLength(1);
+    expect(t[0]!.text).toBe("写具体些；再口语些");
+    expect(t[0]!.refs).toBe(2);
+  });
+
   it("没写意见的发送显示占位，气泡不会凭空消失", () => {
-    const t = buildCardThread([msg("user", [{ type: "kbref", ...ref1 }])]);
+    const t = buildCardThread([msg("user", [{ type: "kbref", ...ref1, comment: "  " }])]);
     expect(t).toHaveLength(1);
     expect(t[0]!.text).toContain("只让 AI 看这一段");
   });

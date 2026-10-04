@@ -86,7 +86,8 @@ export interface CardTurn {
 }
 
 /** 消息 → 卡片线程。只取人话：用户写的意见、AI 的文字回复；工具调用、思考块都不进卡片。
- *  没写意见的发送（只让 AI 看这一段）显示成一条占位，不让气泡凭空消失。 */
+ *  卡片浮窗里写的意见不走正文，而是作为圈选的 `comment` 随 kbref 块发出——正文为空时取它；
+ *  两样都没有（只让 AI 看这一段）才显示占位，不让气泡凭空消失。 */
 export function buildCardThread(messages: ChatMessage[]): CardTurn[] {
   const out: CardTurn[] = [];
   for (const m of messages) {
@@ -97,9 +98,16 @@ export function buildCardThread(messages: ChatMessage[]): CardTurn[] {
       .join("\n")
       .trim();
     if (m.role === "user") {
-      const refs = m.blocks.filter((b) => b.type === "kbref").length;
-      if (!text && refs === 0) continue;
-      out.push({ id: m.id, role: "user", text: text || "（没有补充意见，只让 AI 看这一段）", refs, streaming: false });
+      const kbrefs = m.blocks.filter((b): b is Extract<typeof b, { type: "kbref" }> => b.type === "kbref");
+      if (!text && kbrefs.length === 0) continue;
+      const comments = kbrefs.map((b) => b.comment.trim()).filter(Boolean).join("；");
+      out.push({
+        id: m.id,
+        role: "user",
+        text: text || comments || "（没有补充意见，只让 AI 看这一段）",
+        refs: kbrefs.length,
+        streaming: false,
+      });
     } else if (m.role === "assistant" && text) {
       out.push({ id: m.id, role: "ai", text, refs: 0, streaming: !!m.streaming });
     }
