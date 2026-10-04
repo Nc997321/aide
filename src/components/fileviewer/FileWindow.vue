@@ -7,7 +7,6 @@ import { useCallHierarchy } from "../../composables/useCallHierarchy";
 import { useModal } from "../../composables/useModal";
 import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
-import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import type { VimExCommand } from "../../extensions/vimExCommands";
@@ -18,6 +17,7 @@ import { formatContent } from "../../utils/format";
 import { useContextMenu, type MenuItem } from "../../composables/useContextMenu";
 import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
+import { openHtmlInBuiltinBrowser } from "../../composables/useOpenHtml";
 import { marked } from "../../utils/markdown";
 import { lspLangFor } from "../../utils/lspLang";
 
@@ -440,18 +440,7 @@ function openAtFirstChange() {
 }
 
 async function openInBrowser() {
-  try {
-    await api.fileOpen(props.win.filePath);
-  } catch (e) {
-    pushNotification({
-      severity: "error",
-      source: "fileviewer",
-      title: "浏览器打开失败",
-      body: `${props.win.fileName}: ${String(e)}`,
-      timestamp: Date.now(),
-      dedupKey: `fileviewer:open-browser:${props.win.filePath}`,
-    });
-  }
+  await openHtmlInBuiltinBrowser(props.win.filePath);
 }
 
 // ── 格式化（JSON / JSONL）──
@@ -562,7 +551,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
       <button
         v-if="canOpenInBrowser"
         class="fw-icon-btn"
-        v-tooltip="'在浏览器中打开'"
+        v-tooltip="'在内置浏览器中打开'"
         @click.stop="openInBrowser"
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">

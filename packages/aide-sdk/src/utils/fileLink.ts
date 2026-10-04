@@ -31,7 +31,7 @@ export function isHttpUrl(path: string): boolean {
   return /^https?:\/\//i.test(path);
 }
 
-/** HTML 文件使用系统默认浏览器打开；大小写不敏感，忽略查询/片段这类 URL 尾巴。 */
+/** 路径是否指向 HTML 文件（点击走内置浏览器）；大小写不敏感，忽略查询/片段这类 URL 尾巴。 */
 export function isHtmlFilePath(path: string): boolean {
   return /\.html?$/i.test(path.split(/[?#]/, 1)[0] ?? path);
 }

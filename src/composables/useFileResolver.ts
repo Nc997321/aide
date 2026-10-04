@@ -1,7 +1,9 @@
 import { computed, ref } from "vue";
 import { api } from "../api";
 import { useFileViewer } from "./useFileViewer";
-import { resolveFileLinkPath, shouldOpenExternally } from "../utils/fileLink";
+import { isHtmlFilePath, isHttpUrl, resolveFileLinkPath } from "../utils/fileLink";
+import { useRightPanel } from "./useRightPanel";
+import { openHtmlInBuiltinBrowser } from "./useOpenHtml";
 
 /**
  * 聊天文件链接的「智能打开」状态层。
@@ -23,12 +25,16 @@ function basenameOf(p: string): string {
 
 export function useFileResolver() {
   const viewer = useFileViewer();
+  const { openInBrowser } = useRightPanel();
 
   function doOpen(path: string, line?: number, flashCount?: number) {
-    if (shouldOpenExternally(path)) {
-      void api.fileOpen(path).catch((e) => {
-        console.warn(`[file-resolver] failed to open externally: ${path}`, e);
-      });
+    // 网页链接与本地 HTML 都在内置浏览器里开（不再交给系统默认浏览器）。
+    if (isHttpUrl(path)) {
+      openInBrowser(path);
+      return;
+    }
+    if (isHtmlFilePath(path)) {
+      void openHtmlInBuiltinBrowser(path);
       return;
     }
     if (line !== undefined) void viewer.openAndScrollTo(path, line, flashCount);
@@ -38,8 +44,8 @@ export function useFileResolver() {
   async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number, flashCount?: number) {
     const full = resolveFileLinkPath(rawPath, workspacePath);
 
-    // 纯网页 URL 不需要 fs 探测/工作区搜索，直接交给系统默认浏览器。
-    if (shouldOpenExternally(full) && /^https?:\/\//i.test(full)) {
+    // 纯网页 URL 不需要 fs 探测/工作区搜索，直接在内置浏览器打开。
+    if (isHttpUrl(full)) {
       doOpen(full, line, flashCount);
       return;
     }

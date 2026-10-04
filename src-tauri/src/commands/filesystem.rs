@@ -36,6 +36,14 @@ pub fn file_open(window: tauri::Window, path: String) -> Result<(), String> {
     Ok(())
 }
 
+/// Host 路径 → 本机（GUI 这一侧）能直接访问的路径：本机窗口原样，WSL Host 译成
+/// `\\wsl.localhost\…`，SSH Host 如实拒绝。给「用内置浏览器打开 Host 上的 HTML」用——
+/// 内置浏览器跑在本机，跨界必须显式（同 `file_open`）。纯字符串翻译，无 IO。
+#[tauri::command]
+pub fn file_gui_path(window: tauri::Window, path: String) -> Result<String, String> {
+    crate::host_window::gui_path(&window, &path)
+}
+
 #[tauri::command]
 pub fn show_in_explorer(window: tauri::Window, path: String) -> Result<(), String> {
     let _trace = crate::diagnostics::trace_command("show_in_explorer");

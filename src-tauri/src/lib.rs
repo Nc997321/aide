@@ -259,6 +259,7 @@ pub fn run() {
             commands::browser::browser_bookmarks_import,
             commands::browser::browser_favicons,
             commands::filesystem::file_open,
+            commands::filesystem::file_gui_path,
             commands::file_assoc::consume_pending_open_file,
             commands::file_assoc::register_open_with,
             commands::file_assoc::unregister_open_with,

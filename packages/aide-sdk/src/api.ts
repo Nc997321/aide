@@ -320,6 +320,10 @@ export const api = {
   fileOpen(path: string): Promise<void> {
     return getTransport().invoke("file_open", { path });
   },
+  /** Host 路径 → 本机可访问路径（WSL 译成 `\\wsl.localhost\…`，SSH 拒绝）。 */
+  fileGuiPath(path: string): Promise<string> {
+    return getTransport().invoke("file_gui_path", { path });
+  },
   showInExplorer(path: string): Promise<void> {
     return getTransport().invoke("show_in_explorer", { path });
   },

@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   fileExists: vi.fn(),
   findFilesByName: vi.fn(),
   fileOpen: vi.fn(),
+  openHtml: vi.fn(),
+  openInBrowser: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
@@ -15,6 +17,9 @@ vi.mock("../api", () => ({
     fileOpen: mocks.fileOpen,
   },
 }));
+
+vi.mock("./useRightPanel", () => ({ useRightPanel: () => ({ openInBrowser: mocks.openInBrowser }) }));
+vi.mock("./useOpenHtml", () => ({ openHtmlInBuiltinBrowser: mocks.openHtml }));
 
 vi.mock("./useFileViewer", () => ({
   useFileViewer: () => ({
@@ -49,16 +54,17 @@ describe("useFileResolver", () => {
     expect(mocks.viewerOpenAndScrollTo).toHaveBeenCalledWith("C:/repo/src/App.vue", 12, 5);
   });
 
-  it("聊天中的 HTML 文件路径使用系统默认浏览器打开", async () => {
+  it("聊天中的 HTML 文件路径在内置浏览器中打开", async () => {
     const r = useFileResolver();
     await r.openResolved("docs/report.html", "C:/repo", 8);
 
-    expect(mocks.fileOpen).toHaveBeenCalledWith("C:/repo/docs/report.html");
+    expect(mocks.openHtml).toHaveBeenCalledWith("C:/repo/docs/report.html");
+    expect(mocks.fileOpen).not.toHaveBeenCalled();
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
     expect(mocks.viewerOpenAndScrollTo).not.toHaveBeenCalled();
   });
 
-  it("搜索补全后的 HTML 候选也使用系统默认浏览器打开", async () => {
+  it("搜索补全后的 HTML 候选也在内置浏览器中打开", async () => {
     mocks.fileExists.mockResolvedValue(false);
     mocks.findFilesByName.mockResolvedValue(["C:/repo/nested/report.htm"]);
     const r = useFileResolver();
@@ -66,7 +72,8 @@ describe("useFileResolver", () => {
     await r.openResolved("report.htm", "C:/repo");
 
     expect(mocks.findFilesByName).toHaveBeenCalledWith("report.htm", "C:/repo", 50);
-    expect(mocks.fileOpen).toHaveBeenCalledWith("C:/repo/nested/report.htm");
+    expect(mocks.openHtml).toHaveBeenCalledWith("C:/repo/nested/report.htm");
+    expect(mocks.fileOpen).not.toHaveBeenCalled();
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
   });
 
@@ -74,15 +81,17 @@ describe("useFileResolver", () => {
     const r = useFileResolver();
     await r.openResolved("file:///C:/repo/report.html", "C:/repo");
 
-    expect(mocks.fileOpen).toHaveBeenCalledWith("file:///C:/repo/report.html");
+    expect(mocks.openHtml).toHaveBeenCalledWith("file:///C:/repo/report.html");
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
   });
 
-  it("http/https 网页链接直接外部打开，不做文件探测", async () => {
+  it("http/https 网页链接直接在内置浏览器打开，不做文件探测", async () => {
     const r = useFileResolver();
     await r.openResolved("https://blog.csdn.net/chang100111/article/details/159617774", "C:/repo");
 
-    expect(mocks.fileOpen).toHaveBeenCalledWith("https://blog.csdn.net/chang100111/article/details/159617774");
+    expect(mocks.openInBrowser).toHaveBeenCalledWith("https://blog.csdn.net/chang100111/article/details/159617774");
+    expect(mocks.fileOpen).not.toHaveBeenCalled();
+    expect(mocks.openHtml).not.toHaveBeenCalled();
     expect(mocks.fileExists).not.toHaveBeenCalled();
     expect(mocks.findFilesByName).not.toHaveBeenCalled();
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
