@@ -5,6 +5,8 @@ import { useLspStatus, type LspServerStatus } from "../../composables/useLspStat
 import { useWorkspaceJdk } from "../../composables/useWorkspaceJdk";
 import { useSettings } from "../../composables/useSettings";
 import { installGuideFor } from "../../lspInstallGuide";
+import { useLanguagePacks } from "../../composables/useLanguagePacks";
+import { useMarketplace } from "../../composables/useMarketplace";
 import { api } from "../../api";
 import type { JdkEntry } from "../../types";
 import ThemedSelect from "../ThemedSelect.vue";
@@ -28,6 +30,11 @@ const props = defineProps<{ workspaceRoot?: string }>();
 const root = computed(() => props.workspaceRoot ?? "");
 const lsp = useWorkspaceLsp(() => root.value);
 const status = useLspStatus(() => root.value, lsp.enabled);
+// 语言包（插件市场同一份状态）：未安装 / 启动失败的行直接给「一键安装」，装好后重探
+const packs = useLanguagePacks();
+watch(packs.revision, () => {
+  if (lsp.enabled.value) void status.probe();
+});
 
 // ── 面板开关（NotificationBell 同款：点击外关闭 / Esc）──
 const open = ref(false);
@@ -37,6 +44,7 @@ function toggle() {
   open.value = !open.value;
   if (open.value) {
     void status.probe(); // 打开时刷新一次（ensure 幂等）
+    void packs.refresh(); // 窗口可能换绑过 Host，语言包状态每次打开重读
     void loadOverrides(); // 覆盖配置可能有外部改动，每次打开重读
     void detectJava(); // JDK 区块显示条件（与 LSP 开关解耦）
   }
@@ -95,11 +103,25 @@ const badgeTone = computed(() => {
 });
 
 // ── 语言行（面板）──
-const langRows = computed(() => status.langs.value.map((x) => ({
-  ...x,
-  name: installGuideFor(x.lang)?.displayName ?? x.lang,
-  server: installGuideFor(x.lang)?.serverBinary ?? "—",
-})));
+const langRows = computed(() => status.langs.value.map((x) => {
+  const pack = packs.packForLang(x.lang);
+  return {
+    ...x,
+    name: installGuideFor(x.lang)?.displayName ?? x.lang,
+    server: installGuideFor(x.lang)?.serverBinary ?? "—",
+    pack,
+    /** 未装 / 起不来，且有对应语言包没装上：给一键安装 */
+    offerPack: !!pack && !pack.installed && (x.status === "missing" || x.status === "failed"),
+  };
+}));
+
+/** ok 行的来源说明：手动配置 > 语言包 > PATH 发现（与后端查找链同序）。 */
+function okSourceText(row: { lang: string; server: string; pack?: { server: string; installed: { version: string } | null } }): string {
+  const manual = savedOverrides.value[row.lang]?.program;
+  if (manual) return manual;
+  if (row.pack?.installed) return `语言包：${row.pack.server} ${row.pack.installed.version}`;
+  return `PATH 发现：${row.server}`;
+}
 
 // ── 排除目录（浏览工作空间多选弹窗；chips 单个 ✕ 删 + 保存）──
 const localExcludes = ref<string[]>([...lsp.excludes.value]);
@@ -135,6 +157,14 @@ async function setEnabled(v: boolean) {
 }
 
 // ── 安装向导（随包分发的 lsp-install-guide.html，系统浏览器打开）──
+/** 主入口：插件市场「语言服务器」分类（一键安装）。 */
+const marketplace = useMarketplace();
+function openLanguagePacks() {
+  open.value = false;
+  marketplace.openPanel({ category: "langpacks" });
+}
+
+/** 次入口：手动安装说明（还没有语言包的语言，如 Go / Java / Kotlin）。 */
 async function openGuide() {
   try {
     await api.openLspInstallGuide();
@@ -386,6 +416,19 @@ defineExpose({ openPanel });
               <span class="lang-status" :class="row.status">{{ STATUS_TEXT[row.status] }}</span>
             </div>
 
+            <!-- 有对应语言包且没装：一键安装（与插件市场「语言服务器」同一份状态） -->
+            <div v-if="row.offerPack && row.pack" class="pack-cta">
+              <button
+                class="pack-btn"
+                :disabled="!!packs.busy.value[row.pack.id] || row.pack.installing"
+                @click="packs.install(row.pack.id)"
+              >
+                {{ packs.busy.value[row.pack.id] || row.pack.installing ? "安装中…" : `一键安装 ${row.pack.name} 语言包` }}
+              </button>
+              <span class="pack-hint">装到当前窗口连着的机器，或在下方手动指定路径</span>
+              <div v-if="packs.errors.value[row.pack.id]" class="err-hint">{{ packs.errors.value[row.pack.id] }}</div>
+            </div>
+
             <!-- indexing 诚实兜底文案：超 90s 仍无就绪信号时单列一行（仍索引中，不切假就绪） -->
             <div v-if="row.note" class="lang-note-row">{{ row.note }}</div>
 
@@ -416,9 +459,7 @@ defineExpose({ openPanel });
 
             <!-- ok 且未编辑：紧凑只读 + 更改 -->
             <div v-else-if="row.status === 'ok' && !isEditing(row.lang)" class="ok-compact">
-              <span class="path-static">
-                {{ savedOverrides[row.lang]?.program ? savedOverrides[row.lang].program : `PATH 发现：${row.server}` }}
-              </span>
+              <span class="path-static">{{ okSourceText(row) }}</span>
               <button class="change-btn" @click="startEdit(row.lang)">更改…</button>
             </div>
 
@@ -550,9 +591,10 @@ defineExpose({ openPanel });
           </div>
         </div>
 
-        <!-- 安装向导入口（随包 HTML，系统浏览器打开） -->
+        <!-- 安装入口：主 = 插件市场「语言服务器」一键安装；次 = 手动安装说明（随包 HTML，系统浏览器打开） -->
         <div class="guide-row">
-          <button class="guide-btn" @click="openGuide">打开安装向导 ↗</button>
+          <button class="market-btn" @click="openLanguagePacks">在插件市场安装语言服务器</button>
+          <button class="guide-btn" @click="openGuide">手动安装说明 ↗</button>
         </div>
       </div>
     </Transition>
@@ -691,6 +733,17 @@ defineExpose({ openPanel });
 /* ok 紧凑行 */
 .ok-compact { padding: 2px 14px 8px 29px; display: flex; align-items: center; gap: 6px; }
 .path-static { flex: 1; min-width: 0; font-size: 10.5px; color: var(--aide-text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--aide-font-mono); }
+/* ── 语言包一键安装（未安装 / 启动失败行） ── */
+.pack-cta { display: flex; flex-direction: column; gap: 4px; padding: 4px 0 6px 17px; }
+.pack-btn {
+  align-self: flex-start;
+  background: var(--aide-accent); color: var(--aide-text-on-accent);
+  border: 1px solid var(--aide-accent); border-radius: var(--aide-radius-sm);
+  font-size: 11.5px; font-weight: 500; padding: 4px 12px; cursor: pointer; font-family: inherit;
+}
+.pack-btn:hover:not(:disabled) { background: var(--aide-accent-hover); }
+.pack-btn:disabled { opacity: 0.6; cursor: progress; }
+.pack-hint { font-size: 10.5px; color: var(--aide-text-muted); line-height: 1.5; }
 .change-btn { background: none; border: none; color: var(--aide-accent); font-size: 10.5px; cursor: pointer; font-family: inherit; padding: 0; flex-shrink: 0; }
 .change-btn:hover { text-decoration: underline; }
 
@@ -840,19 +893,29 @@ defineExpose({ openPanel });
   border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
 }
 
-/* ── 安装向导入口 ── */
+/* ── 安装入口（插件市场 + 手动安装说明） ── */
 .guide-row {
   border-top: 1px solid var(--aide-border);
   padding: 8px 12px;
-  text-align: right;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   background: linear-gradient(180deg, transparent 0%, var(--aide-border-subtle) 100%);
 }
+.market-btn {
+  background: var(--aide-accent-subtle); color: var(--aide-accent);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 22%, transparent);
+  border-radius: var(--aide-radius-sm); font-size: 11px; font-weight: 500;
+  padding: 4px 12px; cursor: pointer; font-family: inherit;
+}
+.market-btn:hover { background: color-mix(in srgb, var(--aide-accent) 18%, transparent); }
 .guide-btn {
   background: none; border: none; cursor: pointer;
-  font-size: 11px; color: var(--aide-accent); font-family: inherit;
+  font-size: 11px; color: var(--aide-text-muted); font-family: inherit;
   padding: 2px 4px; transition: opacity 0.12s;
 }
-.guide-btn:hover { opacity: 0.8; text-decoration: underline; }
+.guide-btn:hover { color: var(--aide-accent); text-decoration: underline; }
 
 /* ── 过渡 ── */
 .lsp-drop-enter-active, .lsp-drop-leave-active { transition: opacity var(--aide-ease-t), transform var(--aide-ease-t); }

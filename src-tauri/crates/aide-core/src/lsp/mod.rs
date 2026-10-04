@@ -11,6 +11,7 @@ pub mod docs;
 pub mod ignore_dirs;
 pub mod jump;
 pub mod manager;
+pub mod packs;
 pub mod profiles;
 pub mod protocol;
 pub mod registry;

@@ -52,7 +52,8 @@ pub fn sdk_entry_path(workspace: &Path) -> Option<String> {
 ///    向上）——monorepo 里工作区是子目录、SDK 被 hoist 到祖先时，靠它保持与 TLS 一致
 /// 2. **一级子目录**（TLS 看不见；`frontend/` 这类布局靠它）——跳过重目录/点目录，
 ///    与 `detector`/`vue_plugin` 共用同一份跳过表
-/// 3. **PATH 上那个 `tsc`** 对应的 SDK（最后兜底：TLS 的 bundled 在很多机器上无效，
+/// 3. **TypeScript 语言包自带的那份**（插件市场装的，钉在 5.x、必有 `lib/tsserver.js`）
+/// 4. **PATH 上那个 `tsc`** 对应的 SDK（最后兜底：TLS 的 bundled 在很多机器上无效，
 ///    全局装的常是 typescript 7.x——Go 重写版没有 `lib/tsserver.js`）
 ///
 /// TLS tier2 里另有 Yarn PnP 的两种布局（`.yarn/sdks`、`.vscode/pnpify`）：不在这里重复，
@@ -63,6 +64,7 @@ fn candidate_modules(workspace: &Path) -> Vec<PathBuf> {
         .map(|base| base.join("node_modules").join("typescript"))
         .collect();
     out.extend(subdir_modules(workspace));
+    out.extend(crate::lsp::packs::bundled_typescript_module());
     out.extend(from_path_tsc());
     out
 }

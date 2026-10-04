@@ -102,6 +102,9 @@ pub enum ServerSource {
     Which { binary: String },
     /// 用户设置显式覆盖的 program + args。
     Explicit { program: String, args: Vec<String> },
+    /// 插件市场装的语言包（`lsp::packs`）：program + 前置参数（npm 系是 `node <script>`）。
+    /// 语言特有参数（`--stdio` 等）仍由 profile 追加，与 Which 同一套。
+    Pack { program: String, args: Vec<String> },
 }
 
 /// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：resources 拿随包 lsp 目录、
@@ -113,9 +116,13 @@ pub struct LaunchCtx<'a> {
 }
 
 /// 纯函数：按优先级选 source。无 IO，单测核心。
-/// 优先级：用户覆盖 > 捆绑 > PATH 发现。三者皆 None → None（该语言无可用 server）。
+/// 优先级：用户覆盖 > 语言包 > 捆绑 > PATH 发现。全为 None → None（该语言无可用 server）。
+///
+/// 语言包排在捆绑与 PATH 之前：它是用户在插件市场里**明确为这台 Host 装的**；PATH 上的
+/// 常是别的来路（WSL 的 PATH 里混着 /mnt/c 的 Windows 版，Linux Host 根本起不来）。
 pub fn pick_source(
     override_cfg: Option<&ServerOverride>,
+    pack: Option<ServerSource>,
     bundled: Option<ServerSource>,
     which: Option<ServerSource>,
 ) -> Option<ServerSource> {
@@ -127,19 +134,21 @@ pub fn pick_source(
             });
         }
     }
-    bundled.or(which)
+    pack.or(bundled).or(which)
 }
 
-/// 解析某语言的 server 启动来源。优先级：settings.lsp.servers[lang] > 捆绑(resource_dir) > which(binary)。
+/// 解析某语言的 server 启动来源。优先级：settings.lsp.servers[lang] > 语言包 > 捆绑(resource_dir) > which(binary)。
 pub fn resolve(
     lang: LanguageId,
     settings: &AppSettings,
     resources: &dyn crate::resources::HostResources,
 ) -> Option<ServerSource> {
     let override_cfg = settings.lsp.servers.get(lang.id_str());
+    let pack = crate::lsp::packs::launch_for(lang, resources)
+        .map(|(program, args)| ServerSource::Pack { program, args });
     let bundled = bundled_source(lang, resources);
     let which = which_source(lang);
-    pick_source(override_cfg, bundled, which)
+    pick_source(override_cfg, pack, bundled, which)
 }
 
 fn bundled_source(lang: LanguageId, resources: &dyn crate::resources::HostResources) -> Option<ServerSource> {
@@ -185,6 +194,11 @@ pub fn to_command(
             (format!("lsp/{subdir}/{binary}"), p.launch_args(data_dir))
         }
         ServerSource::Which { binary } => (binary.clone(), p.launch_args(data_dir)),
+        ServerSource::Pack { program, args } => {
+            let mut full = args.clone();
+            full.extend(p.launch_args(data_dir));
+            (program.clone(), full)
+        }
         ServerSource::Explicit { program, args } => {
             let mut full = args.clone();
             p.supplement_explicit(&mut full, data_dir);
@@ -228,7 +242,7 @@ mod tests {
         let which = Some(ServerSource::Which {
             binary: "rust-analyzer".into(),
         });
-        let picked = pick_source(settings.lsp.servers.get("rust"), bundled, which);
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, bundled, which);
         match picked {
             Some(ServerSource::Explicit { program, .. }) => {
                 assert_eq!(program, "/my/custom/rust-analyzer");
@@ -243,14 +257,14 @@ mod tests {
         let which = Some(ServerSource::Which {
             binary: "gopls".into(),
         });
-        let picked = pick_source(settings.lsp.servers.get("go"), None, which);
+        let picked = pick_source(settings.lsp.servers.get("go"), None, None, which);
         assert!(matches!(picked, Some(ServerSource::Which { .. })));
     }
 
     #[test]
     fn all_missing_returns_none() {
         let settings = empty_settings();
-        let picked = pick_source(settings.lsp.servers.get("rust"), None, None);
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, None, None);
         assert!(picked.is_none());
     }
 
@@ -268,7 +282,7 @@ mod tests {
             lsp: LspSettings { servers },
             ..Default::default()
         };
-        let picked = pick_source(settings.lsp.servers.get("rust"), None, None);
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, None, None);
         match picked {
             Some(ServerSource::Explicit { program, args }) => {
                 assert_eq!(program, "/x/rust-analyzer");
@@ -336,6 +350,31 @@ mod tests {
     }
 
     #[test]
+    fn pack_beats_bundled_and_path_but_not_user_override() {
+        let pack = || Some(ServerSource::Pack { program: "/h/.aide/node".into(), args: vec!["/h/.aide/lsp/packs/typescript/cli.mjs".into()] });
+        let which = || Some(ServerSource::Which { binary: "/mnt/c/windows-tls".into() });
+        let bundled = || Some(ServerSource::Bundled { subdir: "typescript".into(), binary: "tls".into() });
+        assert!(matches!(pick_source(None, pack(), bundled(), which()), Some(ServerSource::Pack { .. })));
+        let settings = override_for("typescript", "/my/tls");
+        assert!(matches!(
+            pick_source(settings.lsp.servers.get("typescript"), pack(), bundled(), which()),
+            Some(ServerSource::Explicit { .. })
+        ));
+    }
+
+    #[test]
+    fn to_command_pack_keeps_prefix_args_then_profile_args() {
+        let src = ServerSource::Pack { program: "/n/node".into(), args: vec!["/p/cli.mjs".into()] };
+        let (prog, args) = to_command(LanguageId::TypeScript, &src, None);
+        assert_eq!(prog, "/n/node");
+        assert_eq!(args, vec!["/p/cli.mjs".to_string(), "--stdio".to_string()]);
+        // rust-analyzer 不收 --stdio（profile 决定），语言包来源同样遵守
+        let ra = ServerSource::Pack { program: "/p/rust-analyzer".into(), args: vec![] };
+        let (_, args) = to_command(LanguageId::Rust, &ra, None);
+        assert!(args.is_empty(), "{args:?}");
+    }
+
+    #[test]
     fn empty_program_override_is_ignored() {
         // program 空串的 override 视作未配置 → 落 bundled/which。
         let mut servers = HashMap::new();
@@ -354,7 +393,7 @@ mod tests {
             subdir: "rust".into(),
             binary: "rust-analyzer".into(),
         });
-        let picked = pick_source(settings.lsp.servers.get("rust"), bundled, None);
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, bundled, None);
         assert!(matches!(picked, Some(ServerSource::Bundled { .. })));
     }
 

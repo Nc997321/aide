@@ -49,6 +49,7 @@ macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foun
 
 Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公共层（`manager.rs` / `mod.rs` / `protocol.rs` / `cmLsp.ts`）必须语言无关，新命令按文件扩展名分派（`lang_from_ext_of`）。
 
+- **语言服务器的安装走语言包**（插件市场「语言服务器」，`aide-core/src/lsp/packs/`）：装到当前 Host 的 `~/.aide/lsp/packs/`，查找链 = 手动配置 > 语言包 > 捆绑 > PATH。加语言 = 在 `packs/catalog.rs` 加一条数据（版本钉死、下载必须可校验），安装器与查找链不许出现语言特判。设计见 docs/superpowers/specs/2026-10-04-lsp-language-packs-design.md。
 - **扩展名三条轴别混用**：服务归属 `LanguageId::from_ext`（唯一权威表；`.vue`/`.tsx` 归 TypeScript、`.jsx` 归 JavaScript，**没有独立的 vue 语言**）；文档 languageId `document_lang_id`（`.vue` 发 `"vue"`、`.tsx`/`.jsx` 发 `*react`）；探针靶子 `probe_exts`（只递 server 原生能解析的形态）。语言探测必须下钻。前端影子表 `src/utils/lspLang.ts` 与 `from_ext` 同步（`check:lsp-parity` 兜）。
 - **TS 的 typescript SDK 由 `lsp/profiles/ts_sdk.rs` 解析后经 `initializationOptions.tsserver.path` 递进去**（TLS 只在工作区根及祖先找 SDK；路径须平台原生分隔符）。**且恒发 `disableAutomaticTypingAcquisition: true`**：否则 tsserver 会在用户工作区跑包管理器装 `@types/*`，实测把 `frontend/` 的顶层依赖挪进 `node_modules/.ignored/` 让前端跑不起来，用户既没批准也不可见。
 - **agent 的 LSP 工具每一发都必须比 grep 值**：定义带函数体、引用带行文本与所在函数、没答上时同一发给文本兜底（标 UNVERIFIED）；grep 顺带作答 hook（`lspGlance.ts`）**未命中必须廉价**（预算 1.5s + 负缓存）；按名查询命中要挪到名字本身（`agent_nav::refine_to_name`，否则查的是 `export` 关键字 → 假「确认没有」）。

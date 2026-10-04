@@ -29,6 +29,11 @@ percent-encoding = "2"
 futures-util = "0.3"
 # Aide Link：Host 自己的手机网关（协议 / 安全通道 / 传输适配器）。aide-link 不依赖 aide-core，没有环。
 aide-link = { path = "../aide-link", features = ["transport"] }
+# 语言包安装（lsp/packs）：下载件的解压与完整性校验。全部纯 Rust（flate2 走 miniz_oxide 后端）。
+flate2 = "1"
+tar = "0.4"
+zip = { version = "8", default-features = false, features = ["deflate-flate2"] }
+sha2 = "0.10"
 # 配对二维码（纯 Rust，输出 SVG 给任何前端直接显示）
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 

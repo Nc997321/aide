@@ -1114,6 +1114,7 @@ onUnmounted(() => {
         <MarketplaceTab
           v-else-if="marketplace.panelOpen.value"
           class="h-full"
+          :workspace-root="workspacePath"
           @go-settings="openSettings"
         />
         <MemoryObservatory

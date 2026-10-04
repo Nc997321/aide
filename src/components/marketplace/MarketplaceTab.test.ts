@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { mount, flushPromises } from "@vue/test-utils";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { mount, flushPromises, enableAutoUnmount } from "@vue/test-utils";
 import type { PluginEntry, InstalledPlugin } from "../../types/marketplace";
 
 vi.mock("@tauri-apps/plugin-shell", () => ({ open: vi.fn() }));
@@ -18,8 +18,23 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("../../api/marketplace", () => ({ marketplaceApi: api }));
 
+const packsApi = vi.hoisted(() => ({ list: vi.fn(), install: vi.fn(), uninstall: vi.fn() }));
+vi.mock("@aide/sdk/api/lspPacks", () => ({ lspPacksApi: packsApi }));
+const sdkApi = vi.hoisted(() => ({ lspDetectLanguages: vi.fn() }));
+vi.mock("../../api", async (orig) => ({ ...(await orig<object>()), api: sdkApi }));
+
 import MarketplaceTab from "./MarketplaceTab.vue";
+
+// 市场状态是模块级单例：上一个用例挂着的组件会继续监听（如 requestedCategory）并抢先消费
+enableAutoUnmount(afterEach);
 import { useMarketplace } from "../../composables/useMarketplace";
+import { __resetLanguagePacksForTest } from "../../composables/useLanguagePacks";
+
+const tsPack = {
+  id: "typescript", name: "TypeScript / JavaScript", server: "typescript-language-server", summary: "ts",
+  langs: ["typescript", "javascript"], version: "5.3.0", method: "npm", installed: null, installing: false,
+};
+const pyPack = { ...tsPack, id: "python", name: "Python", server: "pyright", summary: "py", langs: ["python"] };
 
 const catalogEntry: PluginEntry[] = [
   {
@@ -43,8 +58,9 @@ const installedLocal: InstalledPlugin[] = [
   },
 ];
 
-async function mountTab() {
+async function mountTab(props: { workspaceRoot?: string } = {}) {
   const w = mount(MarketplaceTab, {
+    props,
     global: {
       directives: { tooltip: {} },
       stubs: { Icon: { template: "<span class='icon-stub' />" } },
@@ -56,6 +72,9 @@ async function mountTab() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetLanguagePacksForTest();
+  packsApi.list.mockResolvedValue([pyPack, tsPack]);
+  sdkApi.lspDetectLanguages.mockResolvedValue([]);
   api.listMarketplaceSources.mockResolvedValue([
     { id: "claude-plugins-official", name: "官方", repo: "o/r", enabled: true },
   ]);
@@ -158,5 +177,45 @@ describe("MarketplaceTab 推荐视图（精选首页）", () => {
     expect(w.findAll(".ftag").some((t) => t.text().includes("推荐"))).toBe(false);
     const allTag = w.findAll(".ftag").find((t) => t.text().includes("全部"));
     expect(allTag!.classes()).toContain("active");
+  });
+});
+
+describe("MarketplaceTab「语言服务器」分类", () => {
+  // 搜索词是模块级单例：前面的搜索用例会留下关键词，把语言包也过滤掉
+  beforeEach(() => {
+    useMarketplace().searchQuery.value = "";
+  });
+
+  it("有语言包时出现该分类；点进去列出语言包，当前项目在用的置顶并标出", async () => {
+    sdkApi.lspDetectLanguages.mockResolvedValue(["typescript"]);
+    const w = await mountTab({ workspaceRoot: "/ws" });
+    const tag = w.findAll(".ftag").find((t) => t.text().includes("语言服务器"));
+    expect(tag?.text()).toContain("2");
+    await tag!.trigger("click");
+    const names = w.findAll(".card .name").map((n) => n.text());
+    expect(names).toEqual(["TypeScript / JavaScript", "Python"]);
+    expect(w.findAll(".inuse")).toHaveLength(1);
+  });
+
+  it("推荐首页：当前项目在用但没装的语言包在精选上方提示", async () => {
+    api.fetchMarketplace.mockResolvedValue([{ ...catalogEntry[0]!, isFeatured: true }]);
+    sdkApi.lspDetectLanguages.mockResolvedValue(["python"]);
+    const w = await mountTab({ workspaceRoot: "/ws" });
+    expect(w.text()).toContain("为当前项目装上语言服务器");
+    expect(w.findAll(".card .name").map((n) => n.text())).toContain("Python");
+  });
+
+  it("从「语言环境」面板打开（openPanel 带分类）：直接落到「语言服务器」，市场已开着也会跳过去", async () => {
+    const m = useMarketplace();
+    m.openPanel({ category: "langpacks" });
+    const w = await mountTab();
+    expect(w.find(".pack-intro").exists()).toBe(true);
+    expect(m.requestedCategory.value).toBeNull();
+
+    await w.findAll(".ftag").find((t) => t.text().includes("全部"))!.trigger("click");
+    expect(w.find(".pack-intro").exists()).toBe(false);
+    m.openPanel({ category: "langpacks" });
+    await flushPromises();
+    expect(w.find(".pack-intro").exists()).toBe(true);
   });
 });

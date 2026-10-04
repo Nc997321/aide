@@ -14,6 +14,7 @@ pub mod bus;
 pub mod automation;
 pub mod link;
 pub mod lsp;
+pub mod mirrors;
 pub mod commands;
 pub mod host;
 pub mod paths;

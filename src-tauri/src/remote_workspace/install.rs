@@ -28,13 +28,8 @@ use super::path::HostId;
 
 /// sidecar 锁定的 Claude Agent SDK 版本（CLI 平台包必须同版本）。
 const SIDECAR_PACKAGE_JSON: &str = include_str!("../../../agent-sidecar/package.json");
-/// 目标机缺 node 时代下的版本（LTS）。
-const NODE_VERSION: &str = "v22.12.0";
-const NODE_MIN_MAJOR: u32 = 18;
-
-/// npm registry 候选：官方源优先，国内镜像兜底（同一 tarball，路径同构）。
-const NPM_REGISTRIES: &[&str] = &["https://registry.npmjs.org", "https://registry.npmmirror.com"];
-const NODE_MIRRORS: &[&str] = &["https://nodejs.org/dist", "https://npmmirror.com/mirrors/node"];
+// node 版本与下载源：与语言包安装器共用一份（aide_core::mirrors）。
+use aide_core::mirrors::{NODE_MIN_MAJOR, NODE_MIRRORS, NODE_VERSION, NPM_REGISTRIES};
 
 /// 安装完成后 agent 启动所需的全部路径（目标机路径）。
 #[derive(Debug, Clone)]

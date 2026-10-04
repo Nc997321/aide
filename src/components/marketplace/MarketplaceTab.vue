@@ -1,9 +1,16 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { useMarketplace } from "../../composables/useMarketplace";
-import { openExternal } from "../../api";
+import { useLanguagePacks } from "../../composables/useLanguagePacks";
+import { api, openExternal } from "../../api";
 import MarketplacePluginCard from "./MarketplacePluginCard.vue";
+import LanguagePackCard from "./LanguagePackCard.vue";
 import Icon from "../Icon.vue";
+
+const props = defineProps<{
+  /** 当前工作区：探测它用到哪些语言，对应的语言包标「当前项目在用」并置顶。 */
+  workspaceRoot?: string;
+}>();
 
 const emit = defineEmits<{
   "go-settings": [];
@@ -28,7 +35,43 @@ const {
   refreshSource,
   getInstalled,
   closePanel,
+  requestedCategory,
 } = useMarketplace();
+
+const languagePacks = useLanguagePacks();
+/** 当前工作区探测到的语言（lspDetectLanguages 的键：typescript / python / rust…）。 */
+const detectedLangs = ref<string[]>([]);
+
+async function detectLangs() {
+  const root = props.workspaceRoot;
+  if (!root) {
+    detectedLangs.value = [];
+    return;
+  }
+  try {
+    detectedLangs.value = await api.lspDetectLanguages(root);
+  } catch {
+    detectedLangs.value = [];
+  }
+}
+watch(() => props.workspaceRoot, () => void detectLangs());
+
+function packInUse(langs: string[]): boolean {
+  return langs.some((l) => detectedLangs.value.includes(l));
+}
+
+/** 语言包：当前项目在用的置顶；搜索词同样作用于名称 / 服务器名 / 介绍。 */
+const visiblePacks = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase();
+  return [...languagePacks.packs.value]
+    .filter((p) => !q || [p.name, p.server, p.summary].some((t) => t.toLowerCase().includes(q)))
+    .sort((a, b) => Number(packInUse(b.langs)) - Number(packInUse(a.langs)));
+});
+
+/** 推荐首页上方的提示栏：当前项目在用、但还没装的语言包。 */
+const suggestedPacks = computed(() =>
+  languagePacks.packs.value.filter((p) => packInUse(p.langs) && !p.installed),
+);
 
 const activeCategory = ref("all");
 const showHidden = ref(false);
@@ -36,13 +79,27 @@ const sourcesRef = ref<HTMLElement | null>(null);
 const highlightSources = ref(false);
 
 onMounted(async () => {
+  void languagePacks.refresh();
+  void detectLangs();
   await fetchSources();
   await Promise.all([fetchPlugins(), refreshInstalled()]);
-  // 有精选插件时默认落「推荐」视图（仿设计稿首屏：Hero + 精选网格）
+  // 外部要求直接落到某个分类（「语言环境」面板 →「语言服务器」）优先；
+  // 否则有精选插件时默认落「推荐」视图（仿设计稿首屏：Hero + 精选网格）
+  if (takeRequestedCategory()) return;
   if (featuredPlugins.value.length > 0 && activeCategory.value === "all") {
     activeCategory.value = "featured";
   }
 });
+
+function takeRequestedCategory(): boolean {
+  const cat = requestedCategory.value;
+  if (!cat) return false;
+  activeCategory.value = cat;
+  requestedCategory.value = null;
+  return true;
+}
+// 市场已经开着时再被要求跳分类（面板里又点了一次入口）
+watch(requestedCategory, () => void takeRequestedCategory());
 
 // 插件开发文档（Hero 横幅入口）
 function openPluginDevDocs() {
@@ -124,6 +181,10 @@ const categories = computed(() => {
   if (installedVisibleCount.value > 0) {
     all.unshift({ key: "installed", label: "已安装", count: installedVisibleCount.value });
   }
+  // 「语言服务器」伪分类：Aide 自己的语言包（一键装到当前 Host），不来自任何市场源。
+  if (languagePacks.packs.value.length > 0) {
+    all.unshift({ key: "langpacks", label: "语言服务器", count: languagePacks.packs.value.length });
+  }
   // 「推荐」伪分类（精选推荐视图）置于最前，仅在有精选插件时出现。
   if (featuredPlugins.value.length > 0) {
     all.unshift({ key: "featured", label: "推荐", count: featuredPlugins.value.length });
@@ -134,7 +195,7 @@ const categories = computed(() => {
 // 右侧栏「热门标签」：真实分类按插件数排序取前 8（不含伪分类），点击跳转分类。
 const sideTags = computed(() =>
   categories.value
-    .filter((c) => !["featured", "installed", "all"].includes(c.key))
+    .filter((c) => !["featured", "installed", "all", "langpacks"].includes(c.key))
     .slice(0, 8),
 );
 
@@ -253,6 +314,12 @@ const enabledCount = computed(() => {
           </div>
         </div>
 
+        <template v-if="suggestedPacks.length">
+          <h3 class="sec-title">为当前项目装上语言服务器</h3>
+          <div class="sec-hint">装好后即可跳转定义、查找引用、查看调用层级；AI 的代码导航也会用上它。</div>
+          <LanguagePackCard v-for="p in suggestedPacks" :key="p.id" :pack="p" in-use />
+        </template>
+
         <h3 class="sec-title">精选推荐</h3>
         <div class="featured-grid">
           <MarketplacePluginCard
@@ -261,6 +328,20 @@ const enabledCount = computed(() => {
             :entry="p"
             variant="featured"
           />
+        </div>
+      </template>
+
+      <template v-else-if="activeCategory === 'langpacks'">
+        <div class="pack-intro">
+          <div class="pack-intro-title">语言服务器</div>
+          <div class="pack-intro-sub">
+            一键安装到当前窗口连着的机器（本机、WSL、SSH 各装各的）。装好后即可跳转定义、查找引用、查看调用层级，AI 的代码导航也会用上它。
+          </div>
+        </div>
+        <LanguagePackCard v-for="p in visiblePacks" :key="p.id" :pack="p" :in-use="packInUse(p.langs)" />
+        <div v-if="visiblePacks.length === 0" class="empty">
+          <div class="empty-icon"><Icon name="search" :size="32" /></div>
+          <div class="empty-text">没有匹配的语言服务器</div>
         </div>
       </template>
 
@@ -569,6 +650,30 @@ const enabledCount = computed(() => {
   font-size: 13.5px;
   font-weight: 600;
   color: var(--aide-text-primary);
+}
+
+.sec-hint {
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  line-height: 1.5;
+}
+
+/* 「语言服务器」分类头 */
+.pack-intro {
+  padding: 4px 0 2px;
+}
+
+.pack-intro-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--aide-text-primary);
+}
+
+.pack-intro-sub {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  line-height: 1.55;
 }
 
 /* 精选推荐网格：自适应 2~3 列（仿设计稿卡片墙） */

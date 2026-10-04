@@ -295,6 +295,22 @@ impl LspManager {
         }
     }
 
+    /// 按语言回收全部工作区的 server，并清掉该语言的启动失败冷却。
+    ///
+    /// 语言包装上 / 卸掉时用：下一次请求按新的查找链重启（换成刚装的那份）；之前因为
+    /// PATH 上的错误版本启动失败而进入冷却的，也要立刻能重试，不用等冷却期过去。
+    pub async fn kill_lang(&self, lang: LanguageId) {
+        self.failures.lock().await.retain(|(_, l), _| *l != lang);
+        let removed: Vec<Arc<ServerHandle>> = {
+            let mut map = self.handles.lock().await;
+            let keys: Vec<_> = map.keys().filter(|(_, l)| *l == lang).cloned().collect();
+            keys.into_iter().filter_map(|k| map.remove(&k)).collect()
+        };
+        for h in removed {
+            shutdown_handle(&h).await;
+        }
+    }
+
     /// 预留：按语言单独回收 server（`kill_workspace` 的细粒度版）。v1 仅用
     /// `kill_workspace`（关区即杀），per-lang 回收待「禁用某语言 LSP」类开关接入。
     #[allow(dead_code)]
