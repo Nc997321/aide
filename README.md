@@ -27,16 +27,19 @@ Aide bundles the Claude Agent SDK runtime through Anthropic's official distribut
 - **File viewer & editor** — CodeMirror-based editing with syntax highlighting
 - **Workspace scanning** — lists all projects you've used Claude with
 - **Right-click menus** — context-aware menus on files, directories, sessions, and messages
-- **Multiple themes** — glass (default), warm-dark, catppuccin, smoky-pink-glass
+- **Multiple themes** — glass (default), warm-dark, smoky-pink-glass
 - **Session search** — quick search across sessions
 - **Git panel** — branch and file status at a glance
 - **LSP integration** — go-to-definition and diagnostics for supported languages
 - **Plugin marketplace** — browse and install plugins from the marketplace
 - **Background tasks (btw)** — run long-running tasks alongside the chat
-- **Remote access** — connect from a browser via the remote PWA + relay server
+- **Hosts: local / WSL / SSH** — one window = one Host. The whole backend (sessions, agent, files, git, terminal, LSP, plugins, memory, providers) runs on the Host; remote Hosts are persistent daemons, so sessions survive disconnects. See [docs/host-model.md](docs/host-model.md)
+- **Built-in browser** — embedded browser panel the agent can drive through a built-in MCP server
+- **Knowledge base** — team knowledge base ([knowledge-server/](knowledge-server/)) in the sidebar; select a passage in a document to let the agent edit just that range
+- **Automation** — scheduled / repeatable agent tasks
+- **Workbench terminal** — integrated terminal
+- **Mobile remote (Aide Link)** — pair a phone by scanning a QR code; traffic is end-to-end encrypted (Noise) through a relay that only bridges bytes. One paired device at a time. Protocol: [docs/aide-link-protocol.md](docs/aide-link-protocol.md)
 - **Ctrl+N** — quick new session
-
-See [PLANS.md](./PLANS.md) for the product backlog.
 
 ## Prerequisites
 
@@ -47,7 +50,7 @@ See [PLANS.md](./PLANS.md) for the product backlog.
 - **pnpm** 11+
 - **Windows SDK** 10.0.26100+
 
-macOS and Linux should work but have not been tested.
+Windows is the primary platform. macOS builds are checked by CI (`cargo check` + tests); Linux should work but is less exercised.
 
 ## Quick start
 
@@ -56,22 +59,19 @@ macOS and Linux should work but have not been tested.
 git clone https://github.com/<your-username>/aide.git
 cd aide
 
-# Install dependencies
+# Install dependencies (the sidecar is intentionally outside the pnpm workspace)
 pnpm install
+pnpm --dir agent-sidecar install
 
-# Launch in dev mode
-# Windows (PowerShell):
-.\dev.ps1
-# Git Bash / Linux / macOS:
-./dev.sh
+# Launch in dev mode (builds the sidecar first)
+pnpm tauri dev
 ```
-
-The dev scripts handle MSVC environment setup on Windows. On other platforms, `pnpm tauri dev` should work if Rust is installed.
 
 ## Build
 
 ```bash
-pnpm tauri build
+# Full release: sidecar binary + remote kit (aide-host static binary) + Tauri bundle
+pnpm release
 ```
 
 ## Project structure
@@ -80,39 +80,43 @@ pnpm tauri build
 aide/
 ├── src/                    # Vue 3 frontend
 │   ├── App.vue             # Layout + theme bootstrap
-│   ├── components/         # ChatPanel, SidebarLeft, FileTree, GitPanel, ...
-│   ├── composables/        # useChatSession, useSettings, useGit, ...
-│   ├── themes/             # Theme tokens (glass / warm-dark / catppuccin / smoky-pink-glass)
+│   ├── components/         # ChatPanel, SidebarLeft, FileTree, GitPanel, Browser, KnowledgeBase, ...
+│   ├── composables/        # useSettings, useGit, ...
+│   ├── themes/             # Theme tokens (glass / warm-dark / smoky-pink-glass)
 │   └── ui/                 # Shared UI primitives (AButton, AInput, ...)
-├── src-tauri/              # Rust / Tauri backend
+├── src-tauri/              # Tauri shell (GUI front door)
 │   ├── src/
 │   │   ├── lib.rs          # App entry point
-│   │   ├── commands/       # Tauri commands (filesystem, git, session, settings, ...)
-│   │   ├── remote/         # Remote protocol v2 (relay client + RPC whitelist)
-│   │   ├── lsp/            # LSP integration
-│   │   └── ...             # policy, runtime, diagnostics, skills, ...
-│   ├── Cargo.toml
+│   │   ├── host_door.rs    # Dispatches commands to the local Host in-process or forwards to a remote Host
+│   │   ├── host_window.rs  # Window ↔ Host binding
+│   │   └── ...             # browser, runtime, diagnostics, ...
+│   ├── crates/
+│   │   ├── aide-core/      # The command table + Host state (sessions, fs, git, LSP, providers, ...); no Tauri dependency
+│   │   ├── aide-host/      # `aide-host serve` — headless Host daemon for WSL / SSH
+│   │   ├── aide-link/      # Aide Link phone protocol (QR pairing, Noise E2E, exposed command catalog)
+│   │   └── aide-workspace/ # Workspace operations (fs / search / git), shared by desktop and aide-host
 │   └── tauri.conf.json
 ├── packages/aide-sdk/      # @aide/sdk — shared SDK facade (types, api, transport, useChatSession)
-├── agent-sidecar/          # Node.js sidecar — Claude Agent SDK workers
-├── remote-pwa/             # Remote PWA client (WebSocket)
-├── relay-server/           # Relay server for remote connections
-├── package.json
-├── vite.config.ts
-└── PLANS.md                # Product backlog & architecture notes
+├── agent-sidecar/          # Node.js sidecar — Claude Agent SDK workers (engine / extensions / desktop)
+├── remote-pwa/             # Mobile web client
+├── ohos/                   # HarmonyOS client (ArkTS, outside the pnpm workspace)
+├── relay-server/           # Dumb relay for Aide Link
+├── knowledge-server/       # Team knowledge base service (Rust)
+└── docs/                   # Architecture & protocol docs
 ```
 
 ## How it works
 
 ```
 User types message
-  → Vue forwards it to the agent runtime (sidecar) via Tauri IPC
-    → Node.js worker runs Claude Agent SDK query() with streaming input
-      → SDK events stream back to the UI
-        → Vue appends text to chat bubble (marked renders Markdown)
+  → Vue calls the @aide/sdk api facade → Tauri IPC
+    → host_door runs the command on the window's Host (in-process for local, forwarded for WSL / SSH)
+      → aide-core hands it to the Node.js sidecar, which runs Claude Agent SDK query() with streaming input
+        → SDK events are broadcast on the Host's event bus to every connected client
+          → Vue renders the chat (marked renders Markdown)
 ```
 
-Desktop and remote PWA share the same SDK facade (`@aide/sdk`): a transport abstraction swaps Tauri IPC for WebSocket, so the chat logic is identical in both.
+Desktop and mobile clients share the same SDK facade (`@aide/sdk`): a transport abstraction swaps Tauri IPC for Aide Link, so the chat logic is identical. UI state follows the broadcast event stream, so all clients attached to a session stay in sync.
 
 Session data lives in `~/.aide/claude/` (aide-managed `CLAUDE_CONFIG_DIR`), in Claude Code's native storage format. Aide never duplicates your conversations into a private database — it reads and displays what the runtime already stores.
 
