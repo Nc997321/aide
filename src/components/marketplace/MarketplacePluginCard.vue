@@ -135,12 +135,12 @@ function openGit() {
       <div class="desc">{{ entry.description }}</div>
       <div class="f-tags">
         <span class="badge" :class="badgeClass">{{ sourceLabel }}</span>
+        <span v-if="installed?.version || entry.version" class="ver">v{{ installed?.version || entry.version }}</span>
         <span v-if="entry.category" class="cat">{{ entry.category }}</span>
       </div>
       <span v-if="entry.availability === 'mixed'" class="caveat">{{ caveatText }}</span>
       <span v-if="entry.providesLsp" class="caveat" :title="LSP_TAKEOVER_TIP">{{ LSP_TAKEOVER_NOTE }}</span>
       <div class="f-foot">
-        <span class="f-meta">{{ sourceLabel }}<span v-if="installed?.version || entry.version" class="f-ver"> · {{ installed?.version || entry.version }}</span></span>
         <div class="btns">
           <button
             v-if="hasUpdate(entry)"
@@ -312,20 +312,8 @@ function openGit() {
   padding-top: 8px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 8px;
-}
-
-.card.featured .f-meta {
-  font-size: 11px;
-  color: var(--aide-text-secondary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.card.featured .f-ver {
-  color: var(--aide-text-muted);
 }
 
 .card .name {
@@ -475,6 +463,7 @@ function openGit() {
   font-family: inherit;
   font-size: 12px;
   font-weight: 500;
+  white-space: nowrap;
   padding: 6px 14px;
   border-radius: var(--aide-radius-sm);
   cursor: pointer;
