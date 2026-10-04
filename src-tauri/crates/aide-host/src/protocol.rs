@@ -76,6 +76,7 @@ pub struct Notification {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HelloInfo {
     pub protocol: u32,
+    /// 守护进程的构建身份（套件安装目录名 `<版本>-<内容哈希>`，见 `build_id`）；旧守护进程报的是裸版本号。
     pub version: String,
     pub os: String,
     pub arch: String,

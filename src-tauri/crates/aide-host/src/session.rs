@@ -183,7 +183,7 @@ fn wire_info(i: &aide_core::bus::AttachInfo) -> AttachInfo {
 fn hello(d: &Daemon, attached: Option<&(ClientId, AttachInfo)>) -> HelloInfo {
     HelloInfo {
         protocol: PROTOCOL_VERSION,
-        version: crate::VERSION.to_string(),
+        version: crate::build_id(),
         os: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
         home: std::env::var("HOME").unwrap_or_default(),

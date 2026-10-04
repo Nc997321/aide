@@ -139,7 +139,9 @@ async fn negotiate(stream: UnixStream, init: &ServeInit) -> Result<Negotiated, S
     let hello: HelloInfo =
         serde_json::from_value(call(&mut r, &mut w, 1, METHOD_HELLO, Value::Null).await?).map_err(|e| e.to_string())?;
 
-    let current = hello.protocol == PROTOCOL_VERSION && hello.version == crate::VERSION;
+    // 按构建身份比（不是包版本号）：开发期每次重构建版本号都不变，见 `crate::build_id`
+    let build = crate::build_id();
+    let current = hello.protocol == PROTOCOL_VERSION && hello.version == build;
     if !current {
         // 空闲的旧守护进程：让它退场，换匹配的新版。正忙的不打断——协议一致就将就着接。
         if hello.clients == 0 {
@@ -155,9 +157,8 @@ async fn negotiate(stream: UnixStream, init: &ServeInit) -> Result<Negotiated, S
             ));
         }
         eprintln!(
-            "[aide-host] daemon is {} (this kit is {}); busy, attaching anyway",
+            "[aide-host] daemon is {} (this kit is {build}); busy, attaching anyway",
             hello.version,
-            crate::VERSION
         );
     }
     let params = serde_json::to_value(init).map_err(|e| e.to_string())?;
