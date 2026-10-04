@@ -90,7 +90,8 @@ fn subdir_modules(workspace: &Path) -> Vec<PathBuf> {
 /// - Unix：`<prefix>/bin/tsc` 是指向 `<prefix>/lib/node_modules/typescript/bin/tsc` 的软链
 ///   → `canonicalize` 后去掉 `bin/tsc` 两段就是模块根
 fn from_path_tsc() -> Vec<PathBuf> {
-    let Ok(tsc) = which::which("tsc") else {
+    // Linux Host 上不认 /mnt/<盘符> 下的 Windows 版（见 registry::which_native）
+    let Some(tsc) = crate::lsp::registry::which_native("tsc") else {
         return Vec::new();
     };
     let mut out = Vec::new();

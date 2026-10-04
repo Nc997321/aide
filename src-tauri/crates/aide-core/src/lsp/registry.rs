@@ -169,11 +169,32 @@ fn bundled_source(lang: LanguageId, resources: &dyn crate::resources::HostResour
     }
 }
 
+/// PATH 上第一个**本机原生**的 `bin`。Linux Host 上跳过 WSL 互操作挂载的 Windows 盘
+/// （`/mnt/<盘符>/…`）：WSL 默认把 Windows 的 PATH 拼进来，npm 在 Windows 全局装的工具还
+/// 带一个无扩展名的 sh 包装——会被找到、也真能用 Linux 的 node 跑起来，但脚本与依赖全经
+/// 9p 跨系统读（慢），且随 Windows 那边的 Node 升级 / 卸载悄悄失效；面板还会把它报成
+/// 「就绪」，让人以为这台 Host 上装了（2026-10-04 实测 WSL 的 TS「就绪」即此来路）。
+/// 语言服务器、tsc、node 这几样在 Linux Host 上一律要 Linux 原生的那份。
+pub fn which_native(bin: &str) -> Option<PathBuf> {
+    which::which_all(bin).ok()?.find(|p| !is_windows_interop_path(p))
+}
+
+/// WSL 自动挂载的 Windows 盘路径（默认 automount 根 `/mnt`，盘符一个字母）。Windows 上恒 false。
+fn is_windows_interop_path(path: &Path) -> bool {
+    if cfg!(windows) {
+        return false;
+    }
+    let mut parts = path.components().skip(1); // 跳过根 `/`
+    let is_mnt = parts.next().is_some_and(|c| c.as_os_str() == "mnt");
+    let drive = parts.next().and_then(|c| c.as_os_str().to_str().map(str::to_owned));
+    is_mnt && drive.is_some_and(|d| d.len() == 1 && d.chars().all(|ch| ch.is_ascii_alphabetic()))
+}
+
 fn which_source(lang: LanguageId) -> Option<ServerSource> {
     let bin = lang.server_binary()?;
     // 存 which 解析出的完整路径（Windows 上含 .exe/.bat/.cmd 扩展名）——spawn 时
     // 需要扩展名判断 .bat/.cmd 必须 cmd /C 包装（CreateProcess 不能直接跑 bat）。
-    let path = which::which(bin).ok()?;
+    let path = which_native(bin)?;
     Some(ServerSource::Which {
         binary: path.to_string_lossy().into_owned(),
     })
@@ -347,6 +368,22 @@ mod tests {
         let (_, args) = to_command(LanguageId::Rust, &explicit_with_stdio, None);
         let stdio_count = args.iter().filter(|a| a.as_str() == "--stdio").count();
         assert_eq!(stdio_count, 1, "用户传的 --stdio 保留, args: {:?}", args);
+    }
+
+    #[test]
+    fn wsl_windows_drive_paths_are_not_native() {
+        let interop = Path::new("/mnt/c/Users/u/AppData/Local/node-v22/typescript-language-server");
+        let native = Path::new("/home/u/.local/bin/typescript-language-server");
+        let not_a_drive = Path::new("/mnt/data/bin/rust-analyzer"); // 普通挂载点，不是盘符
+        if cfg!(windows) {
+            assert!(!is_windows_interop_path(interop));
+        } else {
+            assert!(is_windows_interop_path(interop));
+            assert!(is_windows_interop_path(Path::new("/mnt/D/tools/tsc")));
+        }
+        assert!(!is_windows_interop_path(native));
+        assert!(!is_windows_interop_path(not_a_drive));
+        assert!(!is_windows_interop_path(Path::new("/usr/bin/node")));
     }
 
     #[test]

@@ -132,7 +132,7 @@ fn run(program: &Path, args: &[&str]) -> Result<std::process::Output, String> {
 
 /// 工具链装组件。工具链不存在 = Ok(None)；装了但失败 = Err（调用方退回发行包）。
 fn via_toolchain(tc: &Toolchain) -> Result<Option<PathBuf>, String> {
-    let Ok(program) = which::which(tc.program) else {
+    let Some(program) = crate::lsp::registry::which_native(tc.program) else {
         return Ok(None);
     };
     let out = run(&program, tc.install_args)?;

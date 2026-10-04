@@ -62,7 +62,7 @@ fn candidates(workspace: &str) -> Vec<PathBuf> {
     ];
     out.extend(subdir_plugin_dirs(ws));
     out.extend(pnpm_plugin_dirs(&ws.join("node_modules")));
-    if let Some(node_dir) = which::which("node").ok().and_then(|n| n.parent().map(PathBuf::from)) {
+    if let Some(node_dir) = crate::lsp::registry::which_native("node").and_then(|n| n.parent().map(PathBuf::from)) {
         out.push(node_dir.join("node_modules").join(PLUGIN_NAME));
         out.push(nested(&node_dir.join("node_modules")));
     }

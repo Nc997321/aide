@@ -73,7 +73,7 @@ pub fn find(resources: &dyn HostResources) -> Option<PathBuf> {
     if let Some(p) = managed_dir().map(|d| node_in(&d)).filter(|p| p.is_file()) {
         return Some(p);
     }
-    if let Some(p) = which::which("node").ok().filter(|p| usable(p)) {
+    if let Some(p) = crate::lsp::registry::which_native("node").filter(|p| usable(p)) {
         return Some(p);
     }
     // sidecar 的启动程序是 node 时（开发态 / 远程 Host）借用它；发布版桌面是打包好的 aide-agent，不是 node。
