@@ -133,7 +133,7 @@ html, body, #app {
   background-clip: padding-box;
 }
 
-/* ── Tooltip (v-tooltip directive) ── */
+/* ── Tooltip（v-tooltip 指令 + 全局接管的原生 title，见 directives/tooltip.ts） ── */
 
 .aide-tooltip {
   position: fixed;
