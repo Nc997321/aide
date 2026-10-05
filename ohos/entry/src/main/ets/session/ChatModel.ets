@@ -22,7 +22,8 @@
  *    激活（系统默认 get_default_models，第三方配置推导）；当前值会话记忆优先、
  *    不在选项集内回落默认；存活会话切换 = set_model/set_effort 运行时 +
  *    set_session_meta 记忆双写（返回 false = 无活进程走 deferred）；空会话选择
- *    只入 store，随首条消息 initialModel/initialEffort 带出；存活会话跨
+ *    只入 store，模型随首条消息 initialModel 带出，effort 则每条消息都带
+ *    （deferred/重启兑现的唯一通道，见 dispatchSend）；存活会话跨
  *    供应商选型在 pickModel 拦截（'blocked'，不改 store.model）
  * 未过筛（随 UI 扩容）：evict 字节降级、页级回收 recycle、权限模式选择器、
  * btw 支线、nextMode（「进入自动模式/计划批准」UI
@@ -228,10 +229,15 @@ export class ChatModel {
         display: display,
         provider: null,
         resumeId: spawn ? null : sid,
-        // spawn 才带 chip 选择（空 = 未选，由桌面按供应商默认解析）；存活会话
-        // 的切换已由 pickModel 经 set_model/set_session_model 落定，不重复携带
+        // spawn 才带 initialModel（空 = 未选，由桌面按供应商默认解析）；存活会话
+        // 的切换已由 pickModel 经 set_model/set_session_meta 落定，不重复携带
         initialModel: spawn && this.store.model !== '' ? this.store.model : null,
-        initialEffort: spawn && this.store.effort !== '' ? this.store.effort : null,
+        // effort 每条消息都带（对照桌面 ChatInputBox / PWA ChatView：同值幂等无
+        // 回执）。只在 spawn 带会让「快速」在非新会话永不生效——历史会话重启时
+        // 新 worker 读不到档位（回落 provider 默认），存活会话则触发不了 Rust 侧
+        // thinking_enabled=false 的思考漂移重建（thinking 在 query 创建时固定，
+        // 热切 effort 不关思考块）
+        initialEffort: this.store.effort !== '' ? this.store.effort : null,
         permissionMode: null,
         jumpQueue: wasBusy
       });
