@@ -42,10 +42,10 @@ enum Stage {
     Dead,
 }
 
+/// **一条 `Connection` = 一次手机连接 = 一条专属的线上腿**（直连 WebSocket / 中继桥接腿，生灭同步）。
+/// 它不负责「这条腿后来换了手机」——腿从不被复用；腿一断，驱动循环返回、`Connection` 被丢弃，
+/// 会话 / 总线订阅 / 加密泵随之一起结束（见 [`Drop`]）。
 pub struct Connection {
-    /// 可重启：同一条底层连接上允许先后出现多次握手（中继把空闲的 Host 连接「重新挂起」给下一次
-    /// 手机连接，而不告诉 Host 手机换了——新手机的 `sc_init` 就是唯一的信号）。直连 WebSocket 不开。
-    restartable: bool,
     backend: Arc<dyn Backend>,
     identity: Arc<Identity>,
     wire: UnboundedSender<WireFrame>,
@@ -56,22 +56,7 @@ pub struct Connection {
 
 impl Connection {
     pub fn new(backend: Arc<dyn Backend>, identity: Arc<Identity>, wire: UnboundedSender<WireFrame>) -> Self {
-        Self { restartable: false, backend, identity, wire, stage: Stage::Init, started: Instant::now(), pump: None }
-    }
-
-    /// 允许在同一条连接上重新握手（见字段说明）。
-    pub fn restartable(mut self, yes: bool) -> Self {
-        self.restartable = yes;
-        self
-    }
-
-    /// 丢弃当前这次握手 / 会话，回到等 `sc_init` 的初始态（旧会话的订阅随之退掉）。
-    fn restart(&mut self) {
-        if let Some(p) = self.pump.take() {
-            p.abort();
-        }
-        self.stage = Stage::Init;
-        self.started = Instant::now();
+        Self { backend, identity, wire, stage: Stage::Init, started: Instant::now(), pump: None }
     }
 
     pub fn is_closed(&self) -> bool {
@@ -103,10 +88,6 @@ impl Connection {
             return;
         }
         let parsed = serde_json::from_str::<WireFrame>(text);
-        // 新的握手 = 新的一次连接（可重启时，任何阶段都从头来）
-        if self.restartable && matches!(parsed, Ok(WireFrame::ScInit { .. })) && !matches!(self.stage, Stage::Init) {
-            self.restart();
-        }
         if matches!(self.stage, Stage::Dead) || self.is_closed() {
             return;
         }
@@ -225,5 +206,14 @@ impl Connection {
             }
         }));
         self.stage = Stage::Open { transport, session: Box::new(session) };
+    }
+}
+
+impl Drop for Connection {
+    /// 腿没了就别再往线上封帧：泵是独立任务，丢掉 `JoinHandle` 不会停它。
+    fn drop(&mut self) {
+        if let Some(p) = self.pump.take() {
+            p.abort();
+        }
     }
 }

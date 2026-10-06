@@ -62,6 +62,11 @@ fn wanted(sessions: &Option<Vec<String>>, name: &str, payload: &Value) -> bool {
 }
 
 impl FakeBus {
+    /// 当前还挂着的订阅数（测试用：断言「手机走了订阅立刻退」）。
+    pub fn consumer_count(&self) -> usize {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner).consumers.len()
+    }
+
     pub fn emit(&self, name: &str, payload: Value) {
         let mut st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
         let seq = st.ring.len() as u64 + 1;

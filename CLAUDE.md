@@ -59,6 +59,7 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 `aide-link` 的 `Identity` 只存**一把**已配对的手机公钥——**新设备配对 = 覆盖旧公钥 = 旧设备被踢（`bye{superseded}`）**。这是安全设计；改成多设备共存是**安全降级**（二维码泄露后恶意设备静默共存）。
 
 - **中继地址是产品内置固定值**（`aide-core/src/link/mod.rs` 的 `DEFAULT_RELAY_URL` = `wss://relay.aideai.store`）：不是设置、UI 不展示；唯一覆盖口是环境变量 `AIDE_RELAY_URL`。
+- **Host ↔ 中继 = 控制腿 + 一次性桥接腿，腿永不复用**（2026-10-06 推翻旧「重挂复用」模型）：Host `register{proto:2}` 的控制腿只传 `incoming{bridge_id}`，每来一部手机 Host 新开一条出站腿 `attach`，桥接结束中继关腿。**一条腿 = 一个 `Connection`，会话边界就是腿本身**——禁止再引入「可重启连接 / 靠下一个 `sc_init` 发现手机换了」：旧模型下手机走后旧会话仍订阅总线，往复用的腿里泵旧密钥密文，撞上下一部手机的握手（回归测试 `a_departed_phone_leaves_no_zombie_session_behind`，旧架构下必挂）。中继与 Host 必须同版本模型（旧 Host 被 `register_error{unsupported_proto}` 拒），**先发布中继再发布桌面**。手机端协议零改动。
 - **relay（`relay-server/`）是不被信任的哑管道**：只按 `device_id` 做 WS 桥接，业务数据端到端加密；Host 不在线 = `connect_error{device_offline}`。改 relay 帧 = 改 `relay-server/src/protocol.rs` + `docs/aide-link-protocol.md` §2.2，并告知手机端。
 - **手机 ↔ Host 协议 = Aide Link**（[docs/aide-link-protocol.md](docs/aide-link-protocol.md)）：协议本体、帧、暴露目录、配对规则只改 `crates/aide-link`，同步 `docs/aide-link/frames.d.ts`（有对账测试）并补 `tests/fixtures/` 一致性向量；Host 端网关在 `aide-core/src/link/`（`link_*` 命令是 Host 设置面板用的，不对手机开放）。**配对靠扫二维码**（Host 公钥 + 一次性 psk），帧经 Noise 端到端加密，手机静态密钥即凭据——别退回短码 / 明文。本地测试 Host：`cargo run -p aide-link --features transport --example test_host`。
 

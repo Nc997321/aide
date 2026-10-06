@@ -21,7 +21,7 @@ pub async fn serve(listener: TcpListener, host: LinkHost) {
         tokio::spawn(async move {
             match accept_async(stream).await {
                 Ok(ws) => {
-                    let end = drive(ws, &host, false).await;
+                    let end = drive(ws, &host).await;
                     tracing::debug!("link direct: {peer} ended: {end:?}");
                 }
                 Err(e) => tracing::debug!("link direct: {peer} handshake failed: {e}"),

@@ -10,16 +10,15 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
 use crate::protocol::{
-    DESKTOP_PING_MAX_MISS, DESKTOP_PING_SECS, PHONE_SILENCE_SECS,
+    ATTACH_TIMEOUT_SECS, DESKTOP_PING_MAX_MISS, DESKTOP_PING_SECS, PHONE_SILENCE_SECS,
 };
 
-/// register 日志限频窗口（秒）：与 handler::DROP_LOG_WINDOW_SECS 同值。防注册
+/// register 日志限频窗口（秒）。防注册
 /// 风暴刷爆 stderr——2026-09-18 实测桌面双实例互踢 ~500 行/秒、六天 6.5GB。
 const REGISTER_LOG_WINDOW_SECS: u64 = 60;
 
-/// 单设备 register 日志限频器（语义镜像 handler::IdleDropLog，两点差异：
-/// 跨任务存活于 RelayState——register 每次都是新连接新任务，per-task 状态
-/// 拦不住风暴；无 flush_tail 对应物——限频器常驻，存量计数到点必结算，不丢）。
+/// 单设备 register 日志限频器：跨任务存活于 RelayState——register 每次都是新连接新任务，
+/// per-task 状态拦不住风暴；限频器常驻，存量计数到点必结算，不丢。
 struct RegisterLog {
     last_emit: Option<Instant>,
     suppressed: u64,
@@ -30,15 +29,21 @@ pub type Ws = WebSocketStream<TcpStream>;
 pub type WsSink = SplitSink<Ws, Message>;
 pub type WsStream = SplitStream<Ws>;
 
-/// connect 向某设备的看守/桥接任务请求交回连接
-pub type Claim = oneshot::Sender<(WsSink, WsStream)>;
+/// 一条 Host 出站连接的两半（WebSocket 读写）。
+pub type HostLeg = (WsSink, WsStream);
 
-/// 一条已注册桌面连接在路由表中的登记项：
-/// gen 是代数号（同 device_id 重连/重挂后自增，旧任务凭它避免误删新登记）；
-/// claim 用来请当前持有者（看守或桥接）把连接交还给新的 connect。
-pub struct DeviceConn {
+/// 已注册 Host 的**控制腿**在路由表中的登记项。控制腿只传 `incoming` 通知：
+/// gen 是代数号（同 device_id 重新注册后自增，旧任务凭它避免误删新登记）；
+/// incoming 是给控制腿任务递 `bridge_id` 的通道（发送端被覆盖/丢弃 = 控制腿被顶替，任务据此收尾）。
+pub struct HostConn {
     pub gen: u64,
-    pub claim: mpsc::Sender<Claim>,
+    pub incoming: mpsc::Sender<String>,
+}
+
+/// 某设备当前的手机桥接（至多一条）：新的 connect 经 `kick` 顶替它。
+struct ActiveBridge {
+    gen: u64,
+    kick: mpsc::Sender<()>,
 }
 
 /// TTL 与活体调参：生产默认值见 protocol 常量；测试注入短值走真实时钟，
@@ -48,6 +53,8 @@ pub struct LivenessCfg {
     pub phone_silence: Duration,
     pub desktop_ping: Duration,
     pub ping_max_miss: u32,
+    /// 发出 `incoming` 后等 Host `attach` 的上限。
+    pub attach_timeout: Duration,
 }
 
 impl Default for LivenessCfg {
@@ -56,16 +63,19 @@ impl Default for LivenessCfg {
             phone_silence: Duration::from_secs(PHONE_SILENCE_SECS),
             desktop_ping: Duration::from_secs(DESKTOP_PING_SECS),
             ping_max_miss: DESKTOP_PING_MAX_MISS,
+            attach_timeout: Duration::from_secs(ATTACH_TIMEOUT_SECS),
         }
     }
 }
 
-/// 路由表：device_id → Host 连接（看守/桥接任务托管，经 claim 领回）。**只按 device_id 路由**——不存在任何
-/// 配对码 / 配对秘密（配对在端到端加密的通道里完成，中继看不到）。
+/// 路由表：device_id → Host 控制腿；bridge_id → 等待 Host 拨回的手机连接；device_id → 当前桥接。
+/// **只按 device_id 路由**——不存在任何配对码 / 配对秘密（配对在端到端加密的通道里完成，中继看不到）。
 /// 哑管道——不理解应用协议，只做路由 + 双向帧转发。
 #[derive(Default)]
 pub struct RelayState {
-    pub devices: HashMap<String, DeviceConn>,
+    hosts: HashMap<String, HostConn>,
+    pending: HashMap<String, oneshot::Sender<HostLeg>>,
+    bridges: HashMap<String, ActiveBridge>,
     register_logs: HashMap<String, RegisterLog>,
     next_gen: u64,
     pub liveness: LivenessCfg,
@@ -80,22 +90,69 @@ impl RelayState {
         }
     }
 
-    /// 登记一条新代连接，返回代数号
-    pub fn insert_device(&mut self, device_id: String, claim: mpsc::Sender<Claim>) -> u64 {
+    fn bump(&mut self) -> u64 {
         let gen = self.next_gen;
         self.next_gen += 1;
-        self.devices.insert(device_id, DeviceConn { gen, claim });
         gen
     }
 
-    /// 摘除指定代数的连接登记；代数不匹配（已重连换新）则不动
-    pub fn remove_device_if(&mut self, device_id: &str, gen: u64) {
-        if self.devices.get(device_id).is_some_and(|c| c.gen == gen) {
-            self.devices.remove(device_id);
+    /// 登记一条新代控制腿（覆盖旧的），返回代数号。
+    pub fn insert_host(&mut self, device_id: String, incoming: mpsc::Sender<String>) -> u64 {
+        let gen = self.bump();
+        self.hosts.insert(device_id, HostConn { gen, incoming });
+        gen
+    }
+
+    /// 摘除指定代数的控制腿登记；代数不匹配（已重新注册）则不动。
+    pub fn remove_host_if(&mut self, device_id: &str, gen: u64) {
+        if self.hosts.get(device_id).is_some_and(|c| c.gen == gen) {
+            self.hosts.remove(device_id);
         }
     }
 
-    /// register 日志限频（按设备）：首条立即出（保留素指纹），窗口内静默计数，
+    pub fn host_registered(&self, device_id: &str) -> bool {
+        self.hosts.contains_key(device_id)
+    }
+
+    pub fn host_incoming(&self, device_id: &str) -> Option<mpsc::Sender<String>> {
+        self.hosts.get(device_id).map(|h| h.incoming.clone())
+    }
+
+    /// 开始一次桥接：顶替该设备此前的桥接（单设备模型：同一 Host 同时只服务一部手机），
+    /// 返回代数号与「被顶替」通知的接收端。
+    pub fn begin_bridge(&mut self, device_id: &str) -> (u64, mpsc::Receiver<()>) {
+        let gen = self.bump();
+        let (kick, kick_rx) = mpsc::channel(1);
+        if let Some(old) = self.bridges.insert(device_id.to_string(), ActiveBridge { gen, kick }) {
+            let _ = old.kick.try_send(());
+        }
+        (gen, kick_rx)
+    }
+
+    /// 桥接收尾：仅当登记仍是本代才摘（被顶替后新代已占位，不能误删）。
+    pub fn end_bridge_if(&mut self, device_id: &str, gen: u64) {
+        if self.bridges.get(device_id).is_some_and(|b| b.gen == gen) {
+            self.bridges.remove(device_id);
+        }
+    }
+
+    /// 登记一个等 Host 拨回的桥接请求。
+    pub fn add_pending(&mut self, bridge_id: String) -> oneshot::Receiver<HostLeg> {
+        let (tx, rx) = oneshot::channel();
+        self.pending.insert(bridge_id, tx);
+        rx
+    }
+
+    /// Host 拨回：认领（一次性）。
+    pub fn take_pending(&mut self, bridge_id: &str) -> Option<oneshot::Sender<HostLeg>> {
+        self.pending.remove(bridge_id)
+    }
+
+    pub fn drop_pending(&mut self, bridge_id: &str) {
+        self.pending.remove(bridge_id);
+    }
+
+/// register 日志限频（按设备）：首条立即出（保留素指纹），窗口内静默计数，
     /// 到点带计数结算；superseded 单独计数——它是双实例互踢战争的直接证据
     /// （正常单实例下永不出现）。返回 Some(完整文案) = 该打；文案恒含
     /// `registered device {id}` grep 指纹。时钟经参数注入（now），纯逻辑可单测。
@@ -139,7 +196,7 @@ impl RelayState {
 
 pub type SharedState = Arc<Mutex<RelayState>>;
 
-/// 锁毒化恢复（与桌面侧 src-tauri/src/remote/mod.rs::lock_recover 同语义）：
+/// 锁毒化恢复：
 /// 毒锁只说明「持锁期间有 task panic」，路由表/码表值守恒（整体赋值语义），
 /// 取回守卫继续——比 unwrap 让每次 register/connect  panic 级联、毒死全 relay 强。
 pub fn lock_recover<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

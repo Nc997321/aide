@@ -30,15 +30,15 @@ where
     sink.send(Message::Text(text)).await.map_err(|e| e.to_string())
 }
 
-/// 驱动一条 WebSocket 直到结束。`restartable`（中继）：Host 终止一次会话后连接保持，等下一次 `sc_init`；
-/// 否则（直连）Host 终止 = 关连接。
-pub async fn drive<S>(ws: WebSocketStream<S>, host: &LinkHost, restartable: bool) -> End
+/// 驱动一条 WebSocket 直到结束：一条腿 = 一个 [`Connection`]，对端关 / Host 终止（`bye` / `sc_err`）= 这条腿的终点，
+/// 返回时 `Connection` 随之丢弃（会话与总线订阅一并结束）。直连与中继桥接腿共用。
+pub async fn drive<S>(ws: WebSocketStream<S>, host: &LinkHost) -> End
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let (mut sink, mut stream) = ws.split();
     let (wire_tx, mut wire_rx) = unbounded_channel::<WireFrame>();
-    let mut conn = host.connection(wire_tx).restartable(restartable);
+    let mut conn = host.connection(wire_tx);
     let mut tick = tokio::time::interval(Duration::from_secs(1));
     loop {
         tokio::select! {
@@ -63,10 +63,8 @@ where
                     return End::Error(e);
                 }
             }
-            if !restartable {
-                let _ = sink.close().await;
-                return End::HostClosed;
-            }
+            let _ = sink.close().await;
+            return End::HostClosed;
         }
     }
 }

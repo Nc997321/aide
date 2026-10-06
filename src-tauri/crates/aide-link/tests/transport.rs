@@ -155,8 +155,8 @@ async fn wait_registered(status: &RelayStatus) {
     panic!("Host never registered with the relay: {}", status.last_error());
 }
 
-/// 经真实中继：Host 出站注册（无配对码），手机按 device_id 寻址 → 握手 → 调用；手机离开后 **同一条** Host 连接
-/// 接下一次手机会话（可重启）；另一台手机配对会顶掉前一台。
+/// 经真实中继：Host 出站注册控制腿（无配对码），手机按 device_id 寻址 → Host 拨回专属桥接腿 → 握手 → 调用；
+/// 手机离开后下一次连接是**新的**桥接腿；另一台手机配对会顶掉前一台。
 #[tokio::test]
 async fn through_a_real_relay_sessions_restart_and_supersede() {
     let relay_url = start_relay().await;
@@ -173,11 +173,11 @@ async fn through_a_real_relay_sessions_restart_and_supersede() {
     assert_eq!(a.recv().await["type"], "hello_ok");
     assert_eq!(a.call(1, "list_sessions").await["value"], json!(["s1", "s2"]));
 
-    // A 离开；中继把 Host 连接重新挂起；A 再来一次——同一条 Host 连接上的新会话
+    // A 离开（桥接腿随之被关）；A 再来一次——新的桥接腿、新的会话
     a.ws.close(None).await.ok();
     drop(a);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let mut a2 = Phone::connect(&ws_url, &h, Some(&id), Mode::Resume, PHONE_A_SECRET).await.expect("A resumes again on the same Host connection");
+    let mut a2 = Phone::connect(&ws_url, &h, Some(&id), Mode::Resume, PHONE_A_SECRET).await.expect("A resumes again on a fresh bridge leg");
     a2.send(json!({"type":"hello"})).await;
     assert_eq!(a2.recv().await["type"], "hello_ok");
 
@@ -238,4 +238,56 @@ async fn the_relay_only_ever_sees_ciphertext() {
     assert!(!wire.contains(&psk_b64));
     let _ = register_frame("x"); // 引用公开 API（注册帧不含配对码）
     assert!(!register_frame("x").contains("pairing_code"));
+}
+
+/// 回归（鸿蒙手机内网连接反复瞬断的根因）：手机走后，Host 侧的会话与总线订阅必须**立刻**结束，
+/// 否则旧会话继续往线上泵旧密钥的密文，下一部手机一连上就撞到「握手前的密文」。
+/// 事件一直在涌（GUI 活跃）的条件下，连续「A 订阅 → A 突然消失 → B 立刻握手」，B 每次都必须握手成功。
+#[tokio::test]
+async fn a_departed_phone_leaves_no_zombie_session_behind() {
+    let relay_url = start_relay().await;
+    let h = FakeHarness::new();
+    let status = Arc::new(RelayStatus::default());
+    tokio::spawn(relay::run(host(&h), relay_url.clone(), Arc::clone(&status)));
+    wait_registered(&status).await;
+    let ws_url = relay::ws_url(&relay_url);
+    let id = h.identity.device_id().to_string();
+
+    // GUI 一直在产生事件
+    let backend = Arc::clone(&h.backend);
+    let pump = tokio::spawn(async move {
+        loop {
+            backend.bus.emit("chat-event", json!({"type":"x","session_id":"s1"}));
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+    });
+
+    for round in 0..5 {
+        let mut a = Phone::connect(&ws_url, &h, Some(&id), Mode::Resume, PHONE_A_SECRET).await.expect("A resumes");
+        a.send(json!({"type":"hello"})).await;
+        assert_eq!(a.recv().await["type"], "hello_ok");
+        a.send(json!({"type":"subscribe","sessions":null})).await;
+        assert_eq!(a.recv().await["type"], "subscribed");
+        drop(a); // 不发 Close：移动网络静默消失
+
+        // B（同一部手机重连也一样）立刻握手：不许撞上旧会话的残帧
+        let mut b = Phone::connect(&ws_url, &h, Some(&id), Mode::Resume, PHONE_A_SECRET)
+            .await
+            .unwrap_or_else(|e| panic!("round {round}: next phone's handshake was disturbed: {e}"));
+        b.send(json!({"type":"hello"})).await;
+        assert_eq!(b.recv().await["type"], "hello_ok", "round {round}");
+        drop(b);
+    }
+
+    // 最后一部手机走后，订阅在秒级内全部退掉（旧模型要等 75 s 的 DEAD_AFTER）
+    let mut left = 0;
+    for _ in 0..40 {
+        left = h.backend.bus.consumer_count();
+        if left == 0 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    pump.abort();
+    assert_eq!(left, 0, "a departed phone's bus subscription must end with its bridge leg");
 }
