@@ -20,6 +20,8 @@ export interface LinkStatus {
   paired: boolean;
   /** 当前是否有一个有效的配对二维码。 */
   offerActive: boolean;
+  /** 此刻生效的中继地址；`null` = 用户还没配（**没有出厂默认**，没配就出不了码）。 */
+  relayUrl: string | null;
 }
 
 /** 配对二维码。 */
@@ -37,6 +39,10 @@ export const linkApi = {
   },
   setEnabled(enabled: boolean): Promise<LinkStatus> {
     return getTransport().invoke("link_set_enabled", { enabled });
+  },
+  /** 设置用户填的中继地址（空串 = 清除 = 未配置）。改地址后会立即重连；已配对的手机需重新扫码。 */
+  setRelayUrl(url: string): Promise<LinkStatus> {
+    return getTransport().invoke("link_set_relay_url", { url });
   },
   /** 生成配对二维码（会自动启用网关）。 */
   createOffer(): Promise<LinkOffer> {

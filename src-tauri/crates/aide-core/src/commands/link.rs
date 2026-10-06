@@ -10,6 +10,7 @@ use crate::{command, Core};
 pub static COMMANDS: &[HostCommand] = &[
     command!("link_status", link_status),
     command!("link_set_enabled", link_set_enabled),
+    command!("link_set_relay_url", link_set_relay_url),
     command!("link_create_offer", link_create_offer),
     command!("link_cancel_offer", link_cancel_offer),
     command!("link_revoke", link_revoke),
@@ -26,6 +27,16 @@ struct SetEnabledArgs {
 
 async fn link_set_enabled(core: Arc<Core>, a: SetEnabledArgs) -> Result<LinkStatus, String> {
     blocking(move || core.link.set_enabled(&core, a.enabled)).await
+}
+
+/// 用户填的中继地址（空串 = 清除 = 未配置）。中继地址没有出厂默认：没填就出不了码、连不上。
+#[derive(serde::Deserialize)]
+struct SetRelayUrlArgs {
+    url: String,
+}
+
+async fn link_set_relay_url(core: Arc<Core>, a: SetRelayUrlArgs) -> Result<LinkStatus, String> {
+    blocking(move || core.link.set_relay_url(&core, &a.url)).await
 }
 
 async fn link_create_offer(core: Arc<Core>, _: crate::commands::NoArgs) -> Result<OfferView, String> {

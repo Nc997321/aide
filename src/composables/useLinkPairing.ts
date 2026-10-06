@@ -1,5 +1,5 @@
-// 「手机连接（Aide Link）」的状态机：网关状态轮询 + 配对二维码的生命周期（生成 / 过期 / 被用掉 / 撤销）。
-// 设置面板的 LinkPairingSection 与侧栏状态栏的 LinkConnectPopover 共用——**别在视图里各抄一份**。
+// 「手机连接（Aide Link）」的状态机：网关状态轮询 + 配对二维码的生命周期（生成 / 过期 / 被用掉 / 撤销）
+// + 中继地址草稿（用户填、点「生成」才落盘）。唯一 UI 是侧栏的 LinkConnectPopover → LinkConnectCard。
 //
 // 管的是**这台 Host** 的网关（窗口连着哪台就是哪台）。二维码 SVG 来自 Host：只当 <img> 的 data URL 显示。
 // 组件卸载时若二维码还开着就撤掉：关掉界面 = 不再展示二维码，也就不该留着一把有效的一次性密钥。
@@ -15,6 +15,9 @@ export function useLinkPairing() {
   const note = ref("");
   const busy = ref(false);
   const now = ref(Date.now());
+  /** 中继地址输入框的草稿。首次拿到状态时用**生效值**预填一次；之后是用户的，轮询不覆盖。 */
+  const relayDraft = ref("");
+  let draftSeeded = false;
   let timer: ReturnType<typeof setInterval> | null = null;
 
   const qrSrc = computed(() => (offer.value ? `data:image/svg+xml;utf8,${encodeURIComponent(offer.value.qrSvg)}` : ""));
@@ -25,6 +28,7 @@ export function useLinkPairing() {
     if (!s) return "…";
     if (!s.enabled) return "未启用";
     if (s.relaySuppressed) return "已启用，但本构建不连中继（dev 构建与安装版共用同一台设备身份，同时注册会在中继上互踢；要调试：先退出安装版，再用 AIDE_DEV_REMOTE=1 启动 dev）";
+    if (!s.relayUrl) return "未配置中继地址";
     return s.connected ? "已就绪，手机可以连接" : "已启用，正在连接…";
   });
 
@@ -32,6 +36,10 @@ export function useLinkPairing() {
     try {
       status.value = await linkApi.status();
       now.value = Date.now();
+      if (!draftSeeded) {
+        relayDraft.value = status.value.relayUrl ?? "";
+        draftSeeded = true;
+      }
       // 二维码打开期间：手机配对成功（二维码被用掉）或过期，就收起它
       if (offer.value) {
         if (status.value.paired && !status.value.offerActive) {
@@ -92,5 +100,18 @@ export function useLinkPairing() {
     await refresh();
   });
 
-  return { status, offer, error, note, busy, qrSrc, secondsLeft, mmss, stateText, setEnabled, showOffer, hideOffer, revoke };
+  /** 「生成」：地址变了先落盘（Host 立即按新地址重连），再出码。没有地址就不发请求（后端也会拒）。 */
+  const regenerate = (url: string) => guard(async () => {
+    const want = url.trim();
+    if (want !== (status.value?.relayUrl ?? "")) {
+      status.value = await linkApi.setRelayUrl(want);
+      relayDraft.value = status.value.relayUrl ?? "";
+      note.value = want ? "中继地址已更新；已配对的手机需重新扫码配对。" : "中继地址已清除——填好地址才能生成二维码。";
+    }
+    if (!status.value?.relayUrl) return;
+    offer.value = await linkApi.createOffer();
+    await refresh();
+  });
+
+  return { status, offer, error, note, busy, qrSrc, secondsLeft, mmss, stateText, relayDraft, setEnabled, showOffer, hideOffer, regenerate, revoke };
 }

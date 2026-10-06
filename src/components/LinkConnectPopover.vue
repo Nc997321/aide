@@ -5,8 +5,6 @@
 import { nextTick, onBeforeUnmount, ref } from "vue";
 import LinkConnectCard from "./LinkConnectCard.vue";
 
-const emit = defineEmits<{ "open-settings": [] }>();
-
 const open = ref(false);
 const btn = ref<HTMLElement | null>(null);
 const card = ref<HTMLElement | null>(null);
@@ -51,11 +49,6 @@ function close() {
   window.removeEventListener("resize", place);
 }
 
-function openSettings() {
-  close();
-  emit("open-settings");
-}
-
 onBeforeUnmount(close);
 </script>
 
@@ -76,7 +69,7 @@ onBeforeUnmount(close);
          多根（fragment）会丢；Teleport 把它实际挂到 body，DOM 上并不在按钮内 -->
     <Teleport to="body">
       <div v-if="open" ref="card" class="link-connect-pop" :style="{ left: `${pos.left}px`, bottom: `${pos.bottom}px` }" @click.stop>
-        <LinkConnectCard @open-settings="openSettings" />
+        <LinkConnectCard />
       </div>
     </Teleport>
   </button>
@@ -98,5 +91,8 @@ onBeforeUnmount(close);
   box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   backdrop-filter: var(--aide-surface-blur);
   -webkit-backdrop-filter: var(--aide-surface-blur);
+  /* 卡片内容随「中继地址 + 权限模式」变高：矮窗口时别顶出屏幕，超出就滚动 */
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 </style>

@@ -87,34 +87,25 @@ describe("SettingsPanel", () => {
     // 2026-08-08 搬走（JDK 管理迁入 LspIndicator 面板 JDK 区块，工作区级语义）。
     // 权限 tab 于 2026-08-16 迁入右侧 rail（工作区级语义，不再属于公共设置）。
     // 编辑器 tab 在通用之后；「关于」tab 固定在末尾（2026-08-09 新增，版本与声明）。
-    // 远程控制 tab 于 2026-08-16 加在诊断之后、关于之前。
+    // 远程控制 tab 于 2026-08-16 加在诊断之后、关于之前；2026-10-05 整个删除——
+    // 配对 / 中继地址 / 权限模式都搬进侧栏「连接移动端」卡片（LinkConnectPopover → LinkConnectCard）。
     // 主题样式 tab 于 2026-08-25 加在通用之后（主题切换 + 会话列表样式，主题从通用搬入）。
     // 代码索引 tab 于 2026-08-31 迁出（工作区级开关下沉右侧栏「代码索引」tab）。
     // 市场 tab 于 2026-09-03 迁出：插件市场成为一级主区视图，入口在左侧栏「插件」。
     expect(labels).toEqual([
-      "通用", "主题样式", "编辑器", "模型", "扩展", "诊断", "远程控制", "关于",
+      "通用", "主题样式", "编辑器", "模型", "扩展", "诊断", "关于",
     ]);
   });
 
-  it("places the Remote tab after Diagnostics (fixed order)", () => {
+  it("no longer offers a Remote tab (moved into the sidebar link card)", () => {
     mountPanel();
     const labels = Array.from(document.body.querySelectorAll(".nav-label")).map(
       (el) => el.textContent?.trim() ?? "",
     );
-    expect(labels[labels.length - 2]).toBe("远程控制");
-    expect(labels[labels.length - 1]).toBe("关于");
-  });
-
-  it("renders the remote tab: Link pairing section + permission mode; no relay URL field, no legacy pairing code", async () => {
-    mountPanel("remote");
+    expect(labels).not.toContain("远程控制");
     const text = document.body.textContent ?? "";
-    // 面板测试把子组件整体 stub 了：这里只证明「手机连接」区块挂在远程 tab 上（它自己的行为见 LinkPairingSection.test）
-    expect(document.body.querySelector("link-pairing-section-stub")).not.toBeNull();
-    expect(text).not.toContain("中继 URL"); // 中继是内置的，不给改、不展示
-    expect(document.body.querySelector("input[placeholder^='wss://']")).toBeNull();
-    expect(text).toContain("远程会话权限模式");
+    expect(text).not.toContain("远程会话权限模式");
     expect(text).not.toContain("配对码（10 分钟有效）");
-    expect(text).not.toContain("吊销设备");
   });
 
   it("offers one-click apply when a live proxy is detected and settings empty", async () => {

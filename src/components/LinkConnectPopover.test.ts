@@ -2,22 +2,36 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises } from "@vue/test-utils";
 
-const { statusMock, setEnabledMock, createOfferMock, cancelOfferMock, revokeMock } = vi.hoisted(() => ({
+const { statusMock, setEnabledMock, setRelayUrlMock, createOfferMock, cancelOfferMock, revokeMock, updateMock } = vi.hoisted(() => ({
   statusMock: vi.fn(),
   setEnabledMock: vi.fn(),
+  setRelayUrlMock: vi.fn(),
   createOfferMock: vi.fn(),
   cancelOfferMock: vi.fn(),
   revokeMock: vi.fn(),
+  updateMock: vi.fn(),
 }));
 
 vi.mock("@aide/sdk", () => ({
   linkApi: {
     status: statusMock,
     setEnabled: setEnabledMock,
+    setRelayUrl: setRelayUrlMock,
     createOffer: createOfferMock,
     cancelOffer: cancelOfferMock,
     revoke: revokeMock,
   },
+}));
+
+// 权限模式落盘走 useSettings：只断言 update 收到什么（视觉翻转不在本测试范围）
+vi.mock("../composables/useSettings", () => ({
+  useSettings: () => ({ settings: { remote: { permissionMode: "auto" } }, update: updateMock }),
+}));
+
+// AppLogo 顶层 `import iconUrl from "/icon.png"`（public 资源）在 vitest 下解析成 file:///icon.png
+// 触发 fs 报错——mock 掉整个模块（与 TitleBar / ChatPanel 测试同款处理）。
+vi.mock("./AppLogo.vue", () => ({
+  default: { name: "AppLogo", template: '<div class="app-logo-stub"/>' },
 }));
 
 import LinkConnectPopover from "./LinkConnectPopover.vue";
@@ -31,6 +45,7 @@ const base = {
   hostName: "devbox",
   paired: false,
   offerActive: true,
+  relayUrl: "wss://relay.example.com",
 };
 const offer = () => ({
   uri: "aide-link://pair?v=1",
@@ -40,6 +55,12 @@ const offer = () => ({
 
 const tooltip = { mounted() {}, updated() {} };
 const q = (id: string) => document.body.querySelector(`[data-testid="${id}"]`) as HTMLElement | null;
+const setDraft = async (v: string) => {
+  const input = q("link-relay-input") as HTMLInputElement;
+  input.value = v;
+  input.dispatchEvent(new Event("input"));
+  await flushPromises();
+};
 
 // 断言失败也要卸载：残留的卡片会串进下一条用例
 const mounted: Array<{ unmount: () => void }> = [];
@@ -57,9 +78,11 @@ describe("LinkConnectPopover", () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
     statusMock.mockReset().mockResolvedValue({ ...base });
     setEnabledMock.mockReset().mockImplementation(async (enabled: boolean) => ({ ...base, enabled }));
+    setRelayUrlMock.mockReset().mockImplementation(async (url: string) => ({ ...base, relayUrl: url.trim() || null }));
     createOfferMock.mockReset().mockResolvedValue(offer());
     cancelOfferMock.mockReset().mockResolvedValue(undefined);
     revokeMock.mockReset().mockResolvedValue(undefined);
+    updateMock.mockReset();
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -81,6 +104,67 @@ describe("LinkConnectPopover", () => {
     expect(createOfferMock).toHaveBeenCalledTimes(1);
     expect(q("link-connect-qr")!.getAttribute("src")).toMatch(/^data:image\/svg\+xml;utf8,/);
     expect(document.body.innerHTML).not.toContain("<script");
+  });
+
+  it("中继地址：初值 = 生效地址；填新值点「生成」→ 先落盘（立即重连）再出码，并提示重新扫码", async () => {
+    await openCard();
+    expect((q("link-relay-input") as HTMLInputElement).value).toBe("wss://relay.example.com");
+    const before = createOfferMock.mock.calls.length;
+    await setDraft("wss://vps.example:8443");
+    q("link-relay-generate")!.click();
+    await flushPromises();
+    expect(setRelayUrlMock).toHaveBeenCalledWith("wss://vps.example:8443");
+    expect(createOfferMock.mock.calls.length).toBe(before + 1);
+    expect(setRelayUrlMock.mock.invocationCallOrder[0]).toBeLessThan(
+      createOfferMock.mock.invocationCallOrder[before],
+    );
+    expect(q("link-connect-note")!.textContent).toContain("重新扫码");
+  });
+
+  it("地址没变就不会白跑一次 setRelayUrl（点生成 = 只出码）", async () => {
+    await openCard();
+    const before = createOfferMock.mock.calls.length;
+    q("link-relay-generate")!.click();
+    await flushPromises();
+    expect(setRelayUrlMock).not.toHaveBeenCalled();
+    expect(createOfferMock.mock.calls.length).toBe(before + 1);
+  });
+
+  it("非法地址：前端给提示、禁用生成、不打扰后端", async () => {
+    await openCard();
+    await setDraft("http://relay.example.com");
+    expect(q("link-relay-hint")!.textContent).toContain("ws://");
+    expect((q("link-relay-generate") as HTMLButtonElement).disabled).toBe(true);
+    expect(setRelayUrlMock).not.toHaveBeenCalled();
+  });
+
+  it("清空地址点生成：落盘为空（= 未配置），并提示要填地址", async () => {
+    await openCard();
+    const before = createOfferMock.mock.calls.length;
+    await setDraft("");
+    q("link-relay-generate")!.click();
+    await flushPromises();
+    expect(setRelayUrlMock).toHaveBeenCalledWith("");
+    expect(createOfferMock.mock.calls.length).toBe(before); // 没地址不发 createOffer
+    expect(q("link-connect-note")!.textContent).toContain("清除");
+  });
+
+  it("没配地址（没有出厂默认）：空态提示先填地址，不自动出码", async () => {
+    statusMock.mockResolvedValue({ ...base, relayUrl: null, enabled: false, offerActive: false });
+    await openCard();
+    expect(q("link-connect-empty")!.textContent).toContain("请先填写中继地址");
+    expect(createOfferMock).not.toHaveBeenCalled();
+    expect((q("link-relay-input") as HTMLInputElement).value).toBe("");
+  });
+
+  it("权限模式：分段控件改档 → 落盘 settings.remote.permissionMode", async () => {
+    await openCard();
+    const seg = q("link-permission-mode")!;
+    const buttons = Array.from(seg.querySelectorAll("button"));
+    expect(buttons.find((b) => b.textContent === "自动")!.getAttribute("aria-pressed")).toBe("true");
+    buttons.find((b) => b.textContent === "手动")!.click();
+    await flushPromises();
+    expect(updateMock).toHaveBeenCalledWith({ remote: { permissionMode: "manual" } });
   });
 
   it("已配对：不自动出码（配对新手机会顶掉旧的），要用户明确点「配对新手机」", async () => {
@@ -122,14 +206,6 @@ describe("LinkConnectPopover", () => {
     await flushPromises();
     expect(q("link-connect-card")).toBeNull();
     expect(cancelOfferMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("不展示中继：卡片里没有任何 URL / 中继字样（中继是产品内置的）", async () => {
-    await openCard();
-    const text = q("link-connect-card")!.textContent ?? "";
-    expect(text).not.toMatch(/wss?:\/\//);
-    expect(text).not.toContain("中继");
-    expect(q("link-connect-card")!.querySelector("input[type=text]")).toBeNull();
   });
 
   it("二维码中心压着 logo；正常时不露状态行，也没有「关闭二维码」按钮", async () => {

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import LinkPairingSection from "./LinkPairingSection.vue";
 import { ref, watch, onMounted, computed } from "vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
 import { useSettings } from "../composables/useSettings";
@@ -46,7 +45,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "diagnostics" | "about" | "remote";
+type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "diagnostics" | "about";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -218,24 +217,10 @@ function removeVimBinding(mode: keyof VimBindings, index: number) {
   persistVimBindings();
 }
 
-// ── 手机连接 ──
-// 启停 / 配对 / 撤销在 LinkPairingSection（Host 自己的网关）；这里只剩远程会话权限模式，走 update 落盘。
-// 中继地址是产品内置的固定值（aide-core `DEFAULT_RELAY_URL`），不是设置、不展示。
-const remotePermissionModeOptions = [
-  { value: "auto", label: "自动模式（自动批准非危险工具）" },
-  { value: "manual", label: "手动模式（不推荐远程使用）" },
-];
-/** 旧值迁移：权限模式 id 由 `default` 更名为 `manual`（对齐 CLI 命名）。已存盘的
- *  "default" 读回来匹配不上新清单，映射成 manual，别让下拉显示空白。 */
-function normalizePermissionMode(v: string | undefined): string {
-  return !v || v === "default" ? "manual" : v;
-}
-const remotePermissionMode = ref(normalizePermissionMode(settings.remote.permissionMode));
-
-function onRemotePermissionModeChange(v: string) {
-  remotePermissionMode.value = v;
-  update({ remote: { ...settings.remote, permissionMode: v } });
-}
+// ── 手机连接（已迁出本面板）──
+// 2026-10-05：远程控制 tab 整个删除——启停 / 配对 / 撤销 / **中继地址** / 远程会话权限模式
+// 全部搬进侧栏「连接移动端」卡片（LinkConnectPopover → LinkConnectCard）。中继地址不再内置默认，
+// 由用户填（Host 密钥库 `link/relayUrl`）；权限模式落盘仍在 settings.remote.permissionMode。
 
 // ── JDK 注册表（已搬走）──
 // 2026-08-08：JDK 管理（注册表扫描/手动添加/移除 + 工作区 JDK 选择）整体迁入
@@ -460,14 +445,6 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="agent" :size="16" />
               <span class="nav-label">诊断</span>
-            </button>
-            <button
-              class="nav-item"
-              :class="{ active: activeTab === 'remote' }"
-              @click="activeTab = 'remote'"
-            >
-              <Icon class="nav-icon" name="globe" :size="16" />
-              <span class="nav-label">远程控制</span>
             </button>
             <button
               class="nav-item"
@@ -796,22 +773,6 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 诊断 Tab ── -->
             <div v-else-if="activeTab === 'diagnostics'" class="tab-diagnostics">
               <DiagnosticsDashboard />
-            </div>
-
-            <!-- ── 远程控制 Tab ── -->
-            <div v-else-if="activeTab === 'remote'" class="tab-remote">
-              <!-- 手机扫码直连这台 Host（Aide Link，端到端加密） -->
-              <LinkPairingSection />
-
-              <div class="settings-field">
-                <label class="field-label">远程会话权限模式</label>
-                <ThemedSelect
-                  :model-value="remotePermissionMode"
-                  :options="remotePermissionModeOptions"
-                  @update:model-value="onRemotePermissionModeChange"
-                />
-                <span class="field-hint">远程会话每次执行时读取，可随时切换、立即生效</span>
-              </div>
             </div>
 
             <!-- ── 关于 Tab ── -->
