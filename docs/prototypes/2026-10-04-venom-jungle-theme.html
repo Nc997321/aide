@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-tex="grain+moss" data-radius="sharp" data-glow="on">
+<head>
+<meta charset="utf-8">
+<title>丛林毒液 · 主题确认 v1</title>
+<style>
+/* ════════════════════════════════════════════════════════════════
+   丛林毒液 Venom Jungle —— ThemeTokens 实值（落地时抄进 src/themes/venom-jungle.ts）
+   ════════════════════════════════════════════════════════════════ */
+:root{
+  color-scheme: dark;
+
+  --aide-bg-deep:#040806;            /* 编辑器/终端实底：保持不透明，代码区不上纹理 */
+  --aide-bg-base:#071009;
+  --aide-bg-raised:#0d1a12;
+  --aide-bg-overlay:rgba(2,6,4,.78);
+
+  --aide-surface-default:#13221a;
+  --aide-surface-hover:#1b2f23;
+  --aide-surface-active:#24402f;
+  --aide-selection-bg:#2c5a37;       /* 毒液绿选中：白字仍 7.5:1 */
+
+  --aide-text-primary:#eefaf0;
+  --aide-text-secondary:#a9c6ae;
+  --aide-text-muted:#6f8d75;
+  --aide-text-on-accent:#06180a;
+
+  --aide-accent:#8ce23f;             /* 毒液绿：兽瞳/毒腺 */
+  --aide-accent-hover:#a8f45c;
+  --aide-accent-subtle:rgba(140,226,63,.14);
+
+  --aide-success:#3ad98a;
+  --aide-warning:#f5c451;
+  --aide-danger:#ff5a36;
+  --aide-info:#5b9cf0;
+  --aide-agent-accent:#b479f2;       /* 生物荧光紫——真菌光，代理活动的"第二个声音" */
+
+  --aide-chart-1:#3987e5;
+  --aide-chart-2:#d95926;
+  --aide-chart-3:#199e70;
+  --aide-chart-4:#c98500;
+  --aide-chart-5:#d55181;
+  --aide-chart-fallback:rgba(190,240,190,.28);
+
+  --aide-border:rgba(150,240,110,.13);
+  --aide-border-subtle:rgba(150,240,110,.06);
+  --aide-border-strong:rgba(160,250,120,.26);
+
+  --aide-highlight-inset:inset 0 1px 0 rgba(190,255,150,.10);
+  --aide-accent-gradient:linear-gradient(180deg,#a8f45c,#6dbb28);
+  --aide-accent-glow:0 0 22px rgba(140,226,63,.34), 0 6px 22px rgba(0,0,0,.55);
+  --aide-accent-ring:0 0 0 3px rgba(140,226,63,.30);
+  --aide-ambient-glow:radial-gradient(760px 260px at 50% -70px, rgba(140,226,63,.13), transparent 70%);
+
+  --aide-shadow-sm:0 1px 2px rgba(0,0,0,.5);
+  --aide-shadow-md:0 8px 24px rgba(0,0,0,.55), 0 1px 4px rgba(0,0,0,.4);
+  --aide-shadow-lg:0 22px 64px rgba(0,0,0,.7), 0 4px 16px rgba(0,0,0,.5);
+  --aide-shadow-inset:inset 0 1px 4px rgba(0,0,0,.55);
+
+  --aide-radius-sm:2px;              /* 全开 = 锐角 */
+  --aide-radius-md:4px;
+  --aide-radius-lg:6px;
+
+  --aide-space-unit:4px;
+  --aide-ease:cubic-bezier(.16,.9,.3,1);
+  --aide-ease-t:.16s cubic-bezier(.16,.9,.3,1);
+  --aide-surface-blur:none;
+
+  --aide-syntax-keyword:#c39cf7;
+  --aide-syntax-number:#f0c14b;
+
+  /* ── 纹理层（候选，落地时内联进 ambientScene / ambientGlow） ── */
+  --tex-noise:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.8' numOctaves='4' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)' opacity='.40'/%3E%3C/svg%3E");
+  /* 苔斑：大尺度湍流（低 baseFrequency），峰值 alpha ≈.12——有呼吸感但不压文字。
+     调过 .55/-.18 和 .20/-.085 两档，前者把正文洗成绿雾，后者是现在这个。 */
+  --tex-moss:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='420' height='420'%3E%3Cfilter id='b'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.012' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='matrix' values='0 0 0 0 .55 0 0 0 0 .85 0 0 0 0 .35 0 0 0 .20 -0.085'/%3E%3C/filter%3E%3Crect width='420' height='420' filter='url(%23b)'/%3E%3C/svg%3E");
+  --tex-vignette:radial-gradient(125% 125% at 50% 45%, transparent 38%, rgba(0,0,0,.62) 100%);
+  /* 对话区纹理层 = 最终落进 --aide-ambient-glow 的那一份（真实应用里是 .chat-messages::before） */
+  --tex-chat:var(--tex-noise);
+
+  --aide-ambient-scene:
+    var(--tex-noise),
+    var(--tex-moss),
+    var(--tex-vignette),
+    radial-gradient(900px 420px at 50% -8%, rgba(140,226,63,.10), transparent 68%),
+    radial-gradient(680px 520px at 94% 4%, rgba(58,217,138,.07), transparent 70%),
+    radial-gradient(760px 480px at 4% 102%, rgba(180,121,242,.07), transparent 72%);
+}
+
+/* 纹理档位切换 */
+html[data-tex="none"]{ --tex-noise:none; --tex-moss:none; --tex-chat:none; }
+html[data-tex="grain"]{ --tex-moss:none; }
+html[data-tex="grain+moss"]{ --tex-chat:var(--tex-noise), var(--tex-moss); }
+/* 圆角档位切换 */
+html[data-radius="soft"]{ --aide-radius-sm:6px; --aide-radius-md:9px; --aide-radius-lg:13px; }
+html[data-radius="square"]{ --aide-radius-sm:0; --aide-radius-md:0; --aide-radius-lg:0; }
+/* 辉光档位切换 */
+html[data-glow="off"]{ --aide-accent-glow:0 6px 20px rgba(0,0,0,.5); --aide-accent-ring:0 0 0 2.5px rgba(140,226,63,.18); }
+
+*{margin:0;padding:0;box-sizing:border-box}
+body{
+  font-family:'Maple Mono NF CN','Inter Variable','PingFang SC','Microsoft YaHei',sans-serif;
+  font-size:13px;color:var(--aide-text-primary);line-height:1.6;
+  background-color:var(--aide-bg-base);
+  background-image:var(--aide-ambient-scene);
+  min-height:100vh;padding:22px 26px 90px;-webkit-font-smoothing:antialiased;
+}
+code,.mono{font-family:'Maple Mono NF CN','JetBrains Mono','Cascadia Code',Consolas,monospace}
+
+/* ── 页头 + 控制台 ── */
+.page-head{max-width:1120px}
+h1{font-size:17px;font-weight:700;letter-spacing:.4px}
+h1 .v{color:var(--aide-accent);font-weight:700}
+.page-head p{margin-top:8px;font-size:12px;color:var(--aide-text-muted);line-height:1.85;max-width:1000px}
+.page-head b{color:var(--aide-text-secondary);font-weight:600}
+.page-head code{font-size:11.5px;color:var(--aide-text-secondary)}
+.ctl{display:flex;flex-wrap:wrap;gap:22px;margin-top:16px;padding:11px 14px;
+  background:var(--aide-bg-deep);border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);
+  box-shadow:var(--aide-shadow-sm),var(--aide-highlight-inset)}
+.ctl .g{display:flex;align-items:center;gap:7px}
+.ctl .lbl{font-size:11px;color:var(--aide-text-muted);letter-spacing:.4px;margin-right:2px}
+.ctl button{font:inherit;font-size:11.5px;padding:4px 11px;cursor:pointer;
+  color:var(--aide-text-secondary);background:var(--aide-surface-default);
+  border:1px solid var(--aide-border);border-radius:var(--aide-radius-sm);
+  transition:var(--aide-ease-t)}
+.ctl button:hover{background:var(--aide-surface-hover);color:var(--aide-text-primary)}
+.ctl button[aria-pressed="true"]{color:var(--aide-text-on-accent);background:var(--aide-accent-gradient);
+  border-color:transparent;box-shadow:var(--aide-accent-glow)}
+
+h2.sec{font-size:13px;font-weight:600;color:var(--aide-text-secondary);margin:34px 0 4px;letter-spacing:.4px}
+h2.sec .idx{color:var(--aide-accent);font-family:'Maple Mono NF CN',monospace;font-size:11px;margin-right:7px}
+.sec-note{font-size:11.5px;color:var(--aide-text-muted);line-height:1.8;margin-bottom:14px;max-width:1000px}
+.sec-note b{color:var(--aide-text-secondary);font-weight:600}
+.sec-note code{color:var(--aide-text-secondary)}
+
+/* ── 应用模拟外壳 ── */
+.app{display:grid;grid-template-columns:236px 1fr;height:640px;
+  border:1px solid var(--aide-border-strong);border-radius:var(--aide-radius-lg);
+  overflow:hidden;box-shadow:var(--aide-shadow-lg),var(--aide-highlight-inset);
+  background:var(--aide-bg-base)}
+.app.right{grid-template-columns:236px 1fr 300px}
+
+/* 标题栏 */
+.titlebar{grid-column:1/-1;height:38px;display:flex;align-items:center;gap:10px;padding:0 12px;
+  background:var(--aide-bg-deep);border-bottom:1px solid var(--aide-border);
+  box-shadow:var(--aide-highlight-inset)}
+.tb-logo{width:15px;height:15px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-accent-gradient);box-shadow:var(--aide-accent-glow)}
+.tb-name{font-size:12px;font-weight:600;color:var(--aide-text-primary);letter-spacing:.3px}
+.tb-tabs{display:flex;gap:4px;margin-left:8px}
+.tb-tab{font-size:11.5px;padding:3px 10px;color:var(--aide-text-muted);
+  border:1px solid transparent;border-radius:var(--aide-radius-sm);cursor:pointer}
+.tb-tab.on{color:var(--aide-text-primary);background:var(--aide-surface-default);
+  border-color:var(--aide-border);box-shadow:var(--aide-highlight-inset)}
+.tb-spacer{flex:1}
+.tb-chip{font-size:11px;padding:2px 8px;border-radius:var(--aide-radius-sm);
+  border:1px solid var(--aide-border);color:var(--aide-text-secondary);
+  background:var(--aide-surface-default);font-family:'Maple Mono NF CN',monospace}
+.tb-chip .dot{color:var(--aide-success)}
+
+/* 侧栏 */
+.sidebar{background:var(--aide-bg-deep);border-right:1px solid var(--aide-border);
+  display:flex;flex-direction:column;overflow:hidden}
+.sb-search{margin:10px;padding:6px 9px;font-size:11.5px;color:var(--aide-text-muted);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-sm);display:flex;align-items:center;gap:7px}
+.sb-search .k{margin-left:auto;font-size:10px;padding:1px 5px;border-radius:var(--aide-radius-sm);
+  border:1px solid var(--aide-border);color:var(--aide-text-muted)}
+.sb-group{font-size:10px;letter-spacing:.9px;color:var(--aide-text-muted);
+  padding:10px 12px 5px;text-transform:uppercase}
+.sb-item{padding:7px 12px;border-left:2px solid transparent;cursor:pointer}
+.sb-item:hover{background:var(--aide-surface-hover)}
+.sb-item.on{background:var(--aide-surface-default);border-left-color:var(--aide-accent);
+  box-shadow:inset 0 0 22px rgba(140,226,63,.06)}
+.sb-item .t{font-size:12px;color:var(--aide-text-primary);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sb-item.on .t{color:var(--aide-accent-hover)}
+.sb-item .m{font-size:10.5px;color:var(--aide-text-muted);margin-top:2px}
+.sb-item .m .live{color:var(--aide-warning)}
+
+/* 聊天区 */
+.chat{position:relative;background:var(--aide-bg-deep);display:flex;flex-direction:column;overflow:hidden}
+.chat-scroll{position:relative;flex:1;overflow:hidden;padding:18px 22px 10px}
+/* 对话区顶部环境光晕 + 纹理（真实应用里这块是 .chat-messages::before） */
+.chat-scroll::before{content:'';position:absolute;inset:0;pointer-events:none;z-index:0;
+  background-image:var(--tex-chat),var(--aide-ambient-glow)}
+.chat-inner{position:relative;z-index:1;display:flex;flex-direction:column;gap:15px}
+
+/* 用户气泡 */
+.msg-user{align-self:flex-end;max-width:78%;background:var(--aide-surface-default);
+  border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);
+  padding:8px 12px;font-size:12.5px;box-shadow:var(--aide-highlight-inset)}
+.mention{color:var(--aide-accent);background:var(--aide-accent-subtle);
+  border-radius:var(--aide-radius-sm);padding:0 4px;font-family:'Maple Mono NF CN',monospace;font-size:11.5px}
+
+/* 助手正文 */
+.msg-ai{max-width:100%;font-size:12.5px;line-height:1.85;color:var(--aide-text-primary)}
+.msg-ai h3{font-size:13px;font-weight:700;margin:2px 0 7px;letter-spacing:.2px}
+.msg-ai p{margin-bottom:9px;color:var(--aide-text-secondary)}
+.msg-ai strong{color:var(--aide-text-primary);font-weight:700}
+.msg-ai ul{margin:0 0 9px 2em;color:var(--aide-text-secondary)}
+.msg-ai li{margin-bottom:3px}
+.msg-ai li::marker{color:var(--aide-accent)}
+.msg-ai a{color:var(--aide-accent);text-decoration:none;border-bottom:1px solid var(--aide-border-strong)}
+.msg-ai .ic{background:var(--aide-surface-default);border:1px solid var(--aide-border-subtle);
+  border-radius:var(--aide-radius-sm);padding:1px 5px;font-size:11.5px;
+  font-family:'Maple Mono NF CN',monospace;color:var(--aide-accent-hover)}
+
+/* 思考块：agentAccent 竖线 */
+.thinking{border-left:2px solid var(--aide-agent-accent);padding:2px 0 2px 11px;margin-bottom:11px;
+  box-shadow:-1px 0 12px -2px rgba(180,121,242,.5)}
+.thinking .th{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--aide-agent-accent);
+  letter-spacing:.4px;margin-bottom:3px;font-weight:600}
+.thinking .th .tri{font-size:14px;line-height:1}
+.thinking .tx{font-size:11.5px;color:var(--aide-text-muted);font-style:italic;line-height:1.75}
+
+/* 工具卡 */
+.tool{background:var(--aide-bg-raised);border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-md);overflow:hidden;box-shadow:var(--aide-shadow-sm),var(--aide-highlight-inset)}
+.tool-h{display:flex;align-items:center;gap:8px;padding:7px 11px;font-size:11.5px;
+  border-bottom:1px solid var(--aide-border-subtle);background:rgba(255,255,255,.015)}
+.tool-h .nm{font-family:'Maple Mono NF CN',monospace;color:var(--aide-text-primary);font-weight:600}
+.tool-h .pill{font-size:10px;padding:1px 7px;border-radius:var(--aide-radius-sm);
+  border:1px solid var(--aide-border);color:var(--aide-text-muted)}
+.tool-h .ok{margin-left:auto;color:var(--aide-success);font-size:11px}
+.tool-b{padding:9px 11px;font-size:11.5px;font-family:'Maple Mono NF CN',monospace;
+  color:var(--aide-text-secondary);line-height:1.7;background:var(--aide-bg-deep)}
+
+/* 代码块 */
+.code{background:var(--aide-bg-deep);border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-md);overflow:hidden;margin-bottom:11px;box-shadow:var(--aide-highlight-inset)}
+.code-h{display:flex;align-items:center;gap:8px;padding:6px 11px;font-size:11px;
+  color:var(--aide-text-muted);border-bottom:1px solid var(--aide-border-subtle);
+  font-family:'Maple Mono NF CN',monospace}
+.code-h .cp{margin-left:auto;font-size:10px;padding:1px 6px;border-radius:var(--aide-radius-sm);
+  border:1px solid var(--aide-border);cursor:pointer}
+.code pre{padding:10px 12px;font-size:11.5px;line-height:1.75;overflow:hidden;
+  font-family:'Maple Mono NF CN',monospace}
+.k{color:var(--aide-syntax-keyword)}.n{color:var(--aide-syntax-number)}
+.s{color:var(--aide-accent-hover)}.c{color:var(--aide-text-muted);font-style:italic}
+.f{color:var(--aide-info)}.ty{color:var(--aide-warning)}
+
+/* diff */
+.diff{background:var(--aide-bg-deep);border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-md);overflow:hidden;font-family:'Maple Mono NF CN',monospace;
+  font-size:11.5px;line-height:1.7}
+.diff div{padding:0 12px}
+.d-add{background:rgba(58,217,138,.10);color:var(--aide-success)}
+.d-del{background:rgba(255,90,54,.10);color:var(--aide-danger)}
+
+/* 输入区 */
+.input-wrap{padding:10px 22px 14px;background:var(--aide-bg-deep);border-top:1px solid var(--aide-border)}
+.input-box{background:var(--aide-bg-raised);border:1px solid var(--aide-border-strong);
+  border-radius:var(--aide-radius-md);box-shadow:var(--aide-shadow-inset),var(--aide-accent-glow)}
+.input-txt{padding:9px 12px 5px;font-size:12.5px;color:var(--aide-text-primary);min-height:38px}
+.input-txt .caret{display:inline-block;width:1.5px;height:14px;background:var(--aide-accent);
+  vertical-align:-2px;box-shadow:0 0 8px var(--aide-accent)}
+.input-bar{display:flex;align-items:center;gap:6px;padding:5px 8px 7px}
+.chip{font-size:11px;padding:2px 8px;border-radius:var(--aide-radius-sm);color:var(--aide-text-secondary);
+  background:var(--aide-surface-default);border:1px solid var(--aide-border);cursor:pointer}
+.chip:hover{background:var(--aide-surface-hover);color:var(--aide-text-primary)}
+.chip.agent{color:var(--aide-agent-accent);border-color:rgba(180,121,242,.3)}
+.chip.acc{color:var(--aide-accent);border-color:var(--aide-border-strong)}
+.send{margin-left:auto;width:26px;height:26px;border-radius:var(--aide-radius-sm);
+  background:var(--aide-accent-gradient);box-shadow:var(--aide-accent-glow);border:none;cursor:pointer;
+  color:var(--aide-text-on-accent);font-size:13px;line-height:1;font-weight:700}
+
+/* ── 右侧：用量面板 ── */
+.usage{background:var(--aide-bg-deep);border-left:1px solid var(--aide-border);padding:12px;overflow:hidden}
+.usage h4{font-size:12px;font-weight:600;margin-bottom:10px;color:var(--aide-text-secondary)}
+.bar{display:flex;height:9px;border-radius:var(--aide-radius-sm);overflow:hidden;gap:2px;margin-bottom:11px}
+.bar i{display:block}
+.leg{display:flex;flex-direction:column;gap:6px}
+.leg .row{display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--aide-text-secondary)}
+.leg .dot{width:7px;height:7px;border-radius:50%;flex:none}
+.leg .v{margin-left:auto;font-family:'Maple Mono NF CN',monospace;color:var(--aide-text-muted)}
+
+/* ── 组件展台 ── */
+.grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;align-items:start}
+.card{background:var(--aide-bg-raised);border:1px solid var(--aide-border);
+  border-radius:var(--aide-radius-lg);padding:14px;box-shadow:var(--aide-shadow-sm),var(--aide-highlight-inset)}
+.card .cap{font-size:11px;color:var(--aide-text-muted);margin-bottom:10px;letter-spacing:.3px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.btn{font:inherit;font-size:12px;padding:5px 13px;border-radius:var(--aide-radius-md);cursor:pointer;
+  border:1px solid var(--aide-border);background:var(--aide-surface-default);color:var(--aide-text-primary);
+  transition:var(--aide-ease-t);box-shadow:var(--aide-highlight-inset)}
+.btn:hover{background:var(--aide-surface-hover)}
+.btn.primary{background:var(--aide-accent-gradient);color:var(--aide-text-on-accent);
+  border-color:transparent;font-weight:600;box-shadow:var(--aide-accent-glow)}
+.btn.ghost{background:transparent;color:var(--aide-text-secondary)}
+.btn.danger{border-color:rgba(255,90,54,.4);color:var(--aide-danger)}
+.badge{font-size:10.5px;padding:1.5px 7px;border-radius:var(--aide-radius-sm);border:1px solid var(--aide-border);
+  color:var(--aide-text-secondary);background:var(--aide-surface-default)}
+.badge.ok{color:var(--aide-success);border-color:rgba(58,217,138,.35)}
+.badge.warn{color:var(--aide-warning);border-color:rgba(245,196,81,.35)}
+.badge.err{color:var(--aide-danger);border-color:rgba(255,90,54,.35)}
+.badge.agent{color:var(--aide-agent-accent);border-color:rgba(180,121,242,.35)}
+.field{background:var(--aide-bg-deep);border:1px solid var(--aide-border-strong);
+  border-radius:var(--aide-radius-md);padding:7px 10px;font-size:12px;color:var(--aide-text-primary);
+  box-shadow:var(--aide-shadow-inset)}
+.field.focus{border-color:var(--aide-accent);box-shadow:var(--aide-accent-ring),var(--aide-shadow-inset)}
+.toggle{width:34px;height:19px;border-radius:99px;background:var(--aide-accent-gradient);
+  box-shadow:var(--aide-accent-glow);position:relative;display:inline-block}
+.toggle::after{content:'';position:absolute;right:2px;top:2px;width:15px;height:15px;border-radius:50%;
+  background:var(--aide-text-on-accent)}
+.toggle.off{background:var(--aide-surface-active);box-shadow:none}
+.toggle.off::after{right:auto;left:2px;background:var(--aide-text-muted)}
+
+/* token 表 */
+table.tok{width:100%;border-collapse:collapse;font-size:11.5px}
+table.tok th{text-align:left;font-weight:600;color:var(--aide-text-muted);font-size:10.5px;
+  letter-spacing:.7px;text-transform:uppercase;padding:0 10px 7px 0;border-bottom:1px solid var(--aide-border)}
+table.tok td{padding:4px 10px 4px 0;border-bottom:1px solid var(--aide-border-subtle);
+  color:var(--aide-text-secondary);vertical-align:middle}
+table.tok td.mono{color:var(--aide-text-primary);font-size:11px}
+.sw{display:inline-block;width:22px;height:12px;border-radius:var(--aide-radius-sm);
+  border:1px solid var(--aide-border-strong);vertical-align:-2px;margin-right:7px}
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>丛林毒液 <span class="v">Venom Jungle</span> · 主题确认 v1</h1>
+  <p>
+    意象：<b>雨林夜里的毒腺</b>——墨绿黑底盘（比纯黑偏绿 4~6°，像湿叶背光），荧光毒绿只给"需要你注意"的东西。
+    代理活动换成<b>生物荧光紫</b>（会发光的真菌）——绿色留给焦点，紫色标记"这是它自己想的事"，两个声音不会糊在一起。
+    <br>
+    全部数值取自 <code>ThemeTokens</code>，无一处硬编码色。落地 = 新增 <code>src/themes/venom-jungle.ts</code> + 注册两处，<b>组件零改动</b>。
+    对比度实测：正文 <b>18:1</b>、次要 10.5:1、毒液绿 12:1（均 AAA），危险色 6.2:1。
+  </p>
+
+  <div class="ctl">
+    <div class="g"><span class="lbl">纹理</span>
+      <button data-k="tex" data-v="none">无</button>
+      <button data-k="tex" data-v="grain">颗粒</button>
+      <button data-k="tex" data-v="grain+moss">颗粒 + 苔斑（全开）</button>
+    </div>
+    <div class="g"><span class="lbl">圆角</span>
+      <button data-k="radius" data-v="square">直角</button>
+      <button data-k="radius" data-v="sharp">锐（2/4/6）</button>
+      <button data-k="radius" data-v="soft">软（6/9/13，同现有主题）</button>
+    </div>
+    <div class="g"><span class="lbl">辉光</span>
+      <button data-k="glow" data-v="on">开</button>
+      <button data-k="glow" data-v="off">关</button>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">01</span>真机形态（左侧栏 + 对话 + 输入区 + 用量面板）</h2>
+<div class="sec-note">
+  按 Aide 真实布局摆的：<code>bg-deep</code> 铺面板（编辑器/终端实底，<b>不透明</b>，代码区不上纹理），
+  对话区顶部的环境光晕是纹理真正的落点（真实应用里 <code>.chat-messages::before</code> 就是这一层）。
+</div>
+
+<div class="app right">
+  <div class="titlebar">
+    <div class="tb-logo"></div>
+    <div class="tb-name">Aide</div>
+    <div class="tb-tabs"><span class="tb-tab on">毒液主题</span><span class="tb-tab">重构 LSP 探针</span><span class="tb-tab">+</span></div>
+    <div class="tb-spacer"></div>
+    <div class="tb-chip"><span class="dot">●</span> sonnet-5</div>
+    <div class="tb-chip">aide · master</div>
+  </div>
+
+  <div class="sidebar">
+    <div class="sb-search">搜索会话<span class="k">Ctrl+K</span></div>
+    <div class="sb-group">今天</div>
+    <div class="sb-item on"><div class="t">毒液主题：配色与纹理</div><div class="m"><span class="live">● 运行中</span> · 2 分钟前</div></div>
+    <div class="sb-item"><div class="t">重构 LSP 探针</div><div class="m">14:02</div></div>
+    <div class="sb-group">昨天</div>
+    <div class="sb-item"><div class="t">远程工作区 e2e 验收</div><div class="m">昨天 21:40</div></div>
+    <div class="sb-item"><div class="t">变更卡基线来源</div><div class="m">昨天 16:15</div></div>
+    <div class="sb-item"><div class="t">知识库圈选编辑</div><div class="m">昨天 11:08</div></div>
+  </div>
+
+  <div class="chat">
+    <div class="chat-scroll">
+      <div class="chat-inner">
+        <div class="msg-user">把 <span class="mention">@src/themes/tokens.ts</span> 的槽位说明补进新主题，顺便看下对比度</div>
+
+        <div class="msg-ai">
+          <div class="thinking">
+            <div class="th"><span class="tri">▶</span>思考中…</div>
+            <div class="tx">先算对比度再定色。毒液绿压得太亮会刺眼，压太暗又不像活的——18:1 那个档位应该刚好。</div>
+          </div>
+
+          <h3>配色已定，正文对比度 18:1</h3>
+          <p>底盘取墨绿黑 <span class="ic">#071009</span>，强调色是荧光毒绿 <span class="ic">#8ce23f</span>。两者差 <strong>12:1</strong>，绿色既够亮又不会糊成一片荧光。详见 <a href="#">tokens.ts</a>。</p>
+          <ul>
+            <li>代理活动改紫色，避免和焦点绿抢读</li>
+            <li>圆角收到 2/4/6px，边界变硬</li>
+            <li>代码区保持实底，不叠纹理</li>
+          </ul>
+
+          <div class="tool">
+            <div class="tool-h">
+              <span class="nm">Read</span><span class="pill">src/themes/tokens.ts</span>
+              <span class="ok">✓ 完成</span>
+            </div>
+            <div class="tool-b">95 lines · 3.1 KB · 12ms</div>
+          </div>
+
+          <div class="code">
+            <div class="code-h">src/themes/venom-jungle.ts<span class="cp">复制</span></div>
+<pre><span class="c">// 毒液绿：只给需要你注意的东西</span>
+<span class="k">export const</span> <span class="f">venomJungle</span>: <span class="ty">ThemeTokens</span> = {
+  bgDeep: <span class="s">"#040806"</span>,        <span class="c">// 编辑器实底</span>
+  accent: <span class="s">"#8ce23f"</span>,        <span class="c">// 12:1 on bgBase</span>
+  agentAccent: <span class="s">"#b479f2"</span>,   <span class="c">// 真菌光</span>
+  radiusMd: <span class="s">"4px"</span>,          <span class="n">// 全开 = 锐角</span>
+};</pre>
+          </div>
+
+          <div class="diff">
+            <div class="d-del">-  accent: "#d9ab78",</div>
+            <div class="d-add">+  accent: "#8ce23f",</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-wrap">
+      <div class="input-box">
+        <div class="input-txt">再把用量面板的色板也对一遍<span class="caret"></span></div>
+        <div class="input-bar">
+          <span class="chip acc">⊕ 附件</span>
+          <span class="chip agent">◆ Opus 5</span>
+          <span class="chip">medium</span>
+          <span class="chip">计划模式</span>
+          <button class="send">↑</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="usage">
+    <h4>上下文用量</h4>
+    <div class="bar">
+      <i style="flex:38;background:var(--aide-chart-1)"></i>
+      <i style="flex:22;background:var(--aide-chart-2)"></i>
+      <i style="flex:18;background:var(--aide-chart-3)"></i>
+      <i style="flex:12;background:var(--aide-chart-4)"></i>
+      <i style="flex:10;background:var(--aide-chart-5)"></i>
+    </div>
+    <div class="leg">
+      <div class="row"><span class="dot" style="background:var(--aide-chart-1)"></span>系统提示<span class="v">38%</span></div>
+      <div class="row"><span class="dot" style="background:var(--aide-chart-2)"></span>工具<span class="v">22%</span></div>
+      <div class="row"><span class="dot" style="background:var(--aide-chart-3)"></span>消息<span class="v">18%</span></div>
+      <div class="row"><span class="dot" style="background:var(--aide-chart-4)"></span>MCP<span class="v">12%</span></div>
+      <div class="row"><span class="dot" style="background:var(--aide-chart-5)"></span>技能<span class="v">10%</span></div>
+    </div>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">02</span>控件与状态色</h2>
+<div class="sec-note">按钮/徽章/输入框/开关/选中/滚动条，全部走语义 token。注意<b>毒液绿只出现在"可操作"和"当前焦点"上</b>，紫色只出现在代理由自己发起的活动上。</div>
+
+<div class="grid2">
+  <div class="card">
+    <div class="cap">按钮层级</div>
+    <div class="row">
+      <button class="btn primary">发送</button>
+      <button class="btn">次要</button>
+      <button class="btn ghost">幽灵</button>
+      <button class="btn danger">中断</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <span class="badge ok">✓ 通过</span>
+      <span class="badge warn">⚠ 待确认</span>
+      <span class="badge err">✕ 失败</span>
+      <span class="badge agent">◆ 子代理 · 后台</span>
+      <span class="badge">中性</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="cap">输入框（默认 / 聚焦）与开关</div>
+    <div class="field" style="margin-bottom:9px">未聚焦的输入</div>
+    <div class="field focus">聚焦中——毒液绿环 + 辉光</div>
+    <div class="row" style="margin-top:12px">
+      <span class="toggle"></span><span style="font-size:11.5px;color:var(--aide-text-secondary)">开</span>
+      <span class="toggle off" style="margin-left:10px"></span><span style="font-size:11.5px;color:var(--aide-text-muted)">关</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="cap">文本层级与选中（选中底色 = 毒液绿实块，白字仍 7.5:1）</div>
+    <div style="font-size:12.5px;color:var(--aide-text-primary);margin-bottom:5px">主文本 textPrimary #eefaf0</div>
+    <div style="font-size:12.5px;color:var(--aide-text-secondary);margin-bottom:5px">次要文本 textSecondary #a9c6ae</div>
+    <div style="font-size:12.5px;color:var(--aide-text-muted);margin-bottom:9px">弱化文本 textMuted #6f8d75</div>
+    <div style="font-size:12.5px">这段是<span style="background:var(--aide-selection-bg)">被选中的文字</span>，底色跟着主题走</div>
+  </div>
+
+  <div class="card">
+    <div class="cap">代码语法（keyword 走紫 / number 走琥珀——沿用现有暗色主题的"关键字=紫"家法）</div>
+<pre class="mono" style="font-size:11.5px;line-height:1.8;background:var(--aide-bg-deep);border:1px solid var(--aide-border);border-radius:var(--aide-radius-md);padding:10px 12px"><span class="k">fn</span> <span class="f">resolve</span>(p: &amp;<span class="ty">Path</span>) -&gt; <span class="ty">Result</span>&lt;<span class="ty">String</span>&gt; {
+  <span class="k">let</span> n = <span class="n">42</span>;
+  <span class="f">warn</span>(<span class="s">"跑错项目"</span>);
+}</pre>
+  </div>
+</div>
+
+<h2 class="sec"><span class="idx">03</span>Token 全量</h2>
+<div class="sec-note">右侧为落地时写进 <code>venom-jungle.ts</code> 的值。带 <b>△</b> 的是"全开"特有的选择，可单独回退。</div>
+<div class="card" style="margin-top:12px">
+<table class="tok">
+<tr><th>槽位</th><th>值</th><th>说明</th></tr>
+<tr><td class="mono">bgDeep</td><td class="mono"><span class="sw" style="background:#040806"></span>#040806</td><td>编辑器/终端实底，不透明</td></tr>
+<tr><td class="mono">bgBase</td><td class="mono"><span class="sw" style="background:#071009"></span>#071009</td><td>应用壳</td></tr>
+<tr><td class="mono">bgRaised</td><td class="mono"><span class="sw" style="background:#0d1a12"></span>#0d1a12</td><td>卡片/菜单/浮层</td></tr>
+<tr><td class="mono">bgOverlay</td><td class="mono"><span class="sw" style="background:#020604"></span>rgba(2,6,4,.78)</td><td>模态遮罩（环境场景透过来）</td></tr>
+<tr><td class="mono">surfaceDefault</td><td class="mono"><span class="sw" style="background:#13221a"></span>#13221a</td><td>—</td></tr>
+<tr><td class="mono">surfaceHover</td><td class="mono"><span class="sw" style="background:#1b2f23"></span>#1b2f23</td><td>—</td></tr>
+<tr><td class="mono">surfaceActive</td><td class="mono"><span class="sw" style="background:#24402f"></span>#24402f</td><td>—</td></tr>
+<tr><td class="mono">selectionBg</td><td class="mono"><span class="sw" style="background:#2c5a37"></span>#2c5a37</td><td>△ 毒液绿实块（暗色主题惯例是中性灰）</td></tr>
+<tr><td class="mono">textPrimary</td><td class="mono"><span class="sw" style="background:#eefaf0"></span>#eefaf0</td><td>18:1</td></tr>
+<tr><td class="mono">textSecondary</td><td class="mono"><span class="sw" style="background:#a9c6ae"></span>#a9c6ae</td><td>10.5:1</td></tr>
+<tr><td class="mono">textMuted</td><td class="mono"><span class="sw" style="background:#6f8d75"></span>#6f8d75</td><td>5.3:1</td></tr>
+<tr><td class="mono">textOnAccent</td><td class="mono"><span class="sw" style="background:#06180a"></span>#06180a</td><td>绿底上的字 11.4:1</td></tr>
+<tr><td class="mono">accent</td><td class="mono"><span class="sw" style="background:#8ce23f"></span>#8ce23f</td><td>毒液绿</td></tr>
+<tr><td class="mono">accentHover</td><td class="mono"><span class="sw" style="background:#a8f45c"></span>#a8f45c</td><td>—</td></tr>
+<tr><td class="mono">accentSubtle</td><td class="mono">rgba(140,226,63,.14)</td><td>—</td></tr>
+<tr><td class="mono">success / warning / danger / info</td><td class="mono">
+  <span class="sw" style="background:#3ad98a"></span><span class="sw" style="background:#f5c451"></span><span class="sw" style="background:#ff5a36"></span><span class="sw" style="background:#5b9cf0"></span>#3ad98a / #f5c451 / #ff5a36 / #5b9cf0</td><td>info 压到 219° 蓝，与紫、青拉开</td></tr>
+<tr><td class="mono">agentAccent</td><td class="mono"><span class="sw" style="background:#b479f2"></span>#b479f2</td><td>△ 生物荧光紫（装饰色，跟气质走）</td></tr>
+<tr><td class="mono">border / subtle / strong</td><td class="mono">rgba(150,240,110,.13 / .06) · rgba(160,250,120,.26)</td><td>△ 边框带绿，且比现有主题更显</td></tr>
+<tr><td class="mono">radius sm/md/lg</td><td class="mono">2px / 4px / 6px</td><td>△ 全开 = 锐角</td></tr>
+<tr><td class="mono">accentGradient</td><td class="mono"><span class="sw" style="background:linear-gradient(180deg,#a8f45c,#6dbb28)"></span>linear-gradient(180deg,#a8f45c,#6dbb28)</td><td>主按钮/开关/发送键</td></tr>
+<tr><td class="mono">accentGlow</td><td class="mono">0 0 22px rgba(140,226,63,.34), 0 6px 22px rgba(0,0,0,.55)</td><td>△ 外发光（现有主题只有下投影）</td></tr>
+<tr><td class="mono">accentRing</td><td class="mono">0 0 0 3px rgba(140,226,63,.30)</td><td>聚焦环加粗到 3px</td></tr>
+<tr><td class="mono">syntaxKeyword / Number</td><td class="mono"><span class="sw" style="background:#c39cf7"></span><span class="sw" style="background:#f0c14b"></span>#c39cf7 / #f0c14b</td><td>—</td></tr>
+<tr><td class="mono">chart1~5</td><td class="mono"><span class="sw" style="background:#3987e5"></span><span class="sw" style="background:#d95926"></span><span class="sw" style="background:#199e70"></span><span class="sw" style="background:#c98500"></span><span class="sw" style="background:#d55181"></span>基准组</td><td>暗底已过校验的基准组，落地前重跑校验器</td></tr>
+<tr><td class="mono">ambientScene</td><td class="mono">噪点 SVG + 暗角 + 三段绿/紫辉光</td><td>模态遮罩与半透明面板才是它露脸的地方</td></tr>
+</table>
+</div>
+
+<h2 class="sec"><span class="idx">04</span>诚实交代：纹理能落在哪、落不到哪</h2>
+<div class="sec-note">
+  主题系统只认 <code>--aide-*</code>，不许改组件。所以"颗粒/光隙"只能走两个现成出口：<br>
+  <b>① ambientScene</b>（根层 background-image）——但 Aide 的面板几乎全是 <code>bg-deep</code> 实底，只有<b>模态遮罩</b>和半透明表面能看见它。
+  把 <code>bg-deep</code> 做透明能让纹理铺满全屏，代价是<b>代码和终端背景会透出噪点</b>——不建议。<br>
+  <b>② ambientGlow</b>（对话区顶部光晕，<code>.chat-messages::before</code> 满铺）——<b>这是纹理真正能被看见的主战场</b>，上面 01 区就能看到。落地时把噪点/苔斑内联进 <code>ambientGlow</code> 这个字符串即可。<br>
+  纹理两层各管一件事：<b>颗粒</b>（180px 高频湍流，alpha .40）给"皮肤质感"，远处看不出、近看有砂砾；<b>苔斑</b>（420px 低频湍流，峰值 alpha ≈.12）给"湿气流动"，让暗部不是死平的。
+  苔斑这档调过两次：alpha 峰 .37 时正文被洗成绿雾，压到 .12 才对。<br>
+  再往上，兽感靠的是<b>锐角 + 更显的绿边框 + 外发光 + 选中实块</b>，这几项在所有面板上都能看见。<br>
+  <b>没做的：</b>把 <code>bg-deep</code> 做透明让颗粒铺满全屏——代码/终端会透出噪点，不值当。
+</div>
+
+<script>
+const BTNS = document.querySelectorAll('.ctl button');
+function paint(){
+  const r = document.documentElement;
+  BTNS.forEach(b => b.setAttribute('aria-pressed',
+    String(r.dataset[b.dataset.k] === b.dataset.v)));
+}
+BTNS.forEach(b => b.addEventListener('click', () => {
+  document.documentElement.dataset[b.dataset.k] = b.dataset.v;
+  paint();
+}));
+paint();
+</script>
+</body>
+</html>
