@@ -73,6 +73,7 @@ import type { PaletteResult } from "./ui/ACommandPalette.vue";
 import OpenFolderDialog from "./components/OpenFolderDialog.vue";
 import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
+import { useUsageTips } from "./composables/useUsageTips";
 
 const leftCollapsed = ref(false);
 // 右侧栏状态的主人是 useRightPanel（模块单例）：折叠态、当前 tab、最大化、两档宽度都在那里，
@@ -740,6 +741,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     sidebarRef.value?.newSession();
+    useUsageTips().markUsed("new-session");
   }
 
   // Ctrl+Shift+B：内嵌浏览器（右栏 tab；已激活则折叠，与 rail 点击同语义）
@@ -747,6 +749,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     rightPanel.select("browser");
+    useUsageTips().markUsed("browser");
     return;
   }
 

@@ -35,6 +35,9 @@ import { defaultEffortFor } from "./effortDefault";
 import { inputPlaceholder } from "./inputPlaceholder";
 import type { ChatMode } from "./modes";
 import { memoryObservatoryApi } from "@aide/sdk/api";
+import UsageTipText from "./UsageTipText.vue";
+import type { UsageTip } from "./usageTips";
+import { useUsageTips } from "@/composables/useUsageTips";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -95,6 +98,9 @@ const rootEl = ref<HTMLElement | null>(null);
 defineExpose({ rootEl });
 
 const identity = useSessionIdentityView();
+/** 使用小提示：用过某功能就让讲它的提示退役（markUsed 散在各功能入口），
+ *  时机提示的出场逻辑见下方「时机提示」段。 */
+const usageTips = useUsageTips();
 
 const displayModels = computed<ModelOption[]>(() => identity.displayModels.value);
 const displayPermissionModes = computed<PermissionModeOption[]>(() => props.permissionModes);
@@ -213,6 +219,7 @@ function fallbackEffort(): string {
 }
 
 function handleEffortChange(value: string) {
+  if (value === "low") usageTips.markUsed("effort-low");
   effortTouchedByUser = true;
   lastEffortUserActionAt = Date.now();
   selectedEffort.value = value;
@@ -443,6 +450,7 @@ const placeholder = computed(() =>
 const BTW_SELECTOR_HINT = "支线跟随主会话，不可单独设置";
 function toggleBtw() {
   btwMode.value = !btwMode.value;
+  if (btwMode.value) usageTips.markUsed("btw");
 }
 const btwRevertToast = ref(false);
 let btwToastTimer: number | undefined;
@@ -567,6 +575,7 @@ watch(() => props.sessionId, () => {
 
 function selectSkill(skill: SkillMeta | undefined) {
   if (!skill) return;
+  usageTips.markUsed("slash");
   inputText.value = "/" + skill.name + " ";
   slashDropdownVisible.value = false;
   nextTick(() => textareaEl.value?.focus());
@@ -589,6 +598,7 @@ watch(
     if (!props.focused) return;
     const m = mentionInserter.consumeMention();
     if (!m) return;
+    usageTips.markUsed(m.range ? "range-mention" : "file-mention");
     if (!pendingMentions.value.some((x) => mentionKey(x.path, x.range) === mentionKey(m.path, m.range))) {
       pendingMentions.value.push({ path: m.path, isDir: m.isDir, range: m.range });
     }
@@ -736,6 +746,97 @@ const rejectedDirs = computed(() => (props.sessionId ? attachStore.rejectedOf(pr
 /** 活体扩根失败的原文（有值 = 本轮没扩成功，下条消息/新会话会再落）。 */
 const attachError = computed(() => (props.sessionId ? attachStore.errorOf(props.sessionId) : undefined));
 
+// ── 时机提示（使用小提示里「在用户正需要它时出现」的那几条，文案见 usageTips.ts）──
+// 每条一出场就锁住（latch）直到这一时机结束：出场计数在出场瞬间 +1，若按「是否还在役」
+// 实时算，第 maxShows 次会刚出来就自己消失。只有聚焦的输入框出提示。
+
+/** 生成中开始打字 → 「直接发会排队；只想顺便问一句用 /btw」。一个忙碌期至多出一次，
+ *  出来后留到这一轮结束（或进了 btw 模式）。 */
+const busyTypingTip = ref<UsageTip | null>(null);
+let busyTypingLatched = false;
+watch(
+  [() => props.isBusy, () => inputText.value.trim().length > 0, btwMode, () => props.focused],
+  ([busy, typing, inBtw, focused]) => {
+    if (!busy) busyTypingLatched = false;
+    if (!busy || inBtw || !focused) {
+      busyTypingTip.value = null;
+      return;
+    }
+    if (!typing || busyTypingLatched) return;
+    const tip = usageTips.slotTip("busy-typing");
+    if (!tip) return;
+    busyTypingLatched = true;
+    usageTips.markShown(tip.id);
+    busyTypingTip.value = tip;
+  },
+);
+
+/** 上下文用量过线（与圆环转 warning 同一条 80% 线）→ 提示 /compact。每个会话至多出一次。 */
+const CONTEXT_TIP_PCT = 80;
+const contextHighTip = ref<UsageTip | null>(null);
+const contextTipSessions = new Set<string>();
+watch(
+  [() => props.contextUsage?.percentage ?? 0, () => props.sessionId, () => props.focused],
+  ([pct, sid, focused]) => {
+    if (!sid || !focused || pct < CONTEXT_TIP_PCT) {
+      contextHighTip.value = null;
+      return;
+    }
+    if (contextHighTip.value || contextTipSessions.has(sid)) return;
+    const tip = usageTips.slotTip("context-high");
+    if (!tip) return;
+    contextTipSessions.add(sid);
+    usageTips.markShown(tip.id);
+    contextHighTip.value = tip;
+  },
+);
+
+/** 输入框上方的提示行：生成中打字优先（那一刻正要做决定）。 */
+const inputHintTip = computed(() => busyTypingTip.value ?? contextHighTip.value);
+function dismissInputHint() {
+  const tip = inputHintTip.value;
+  if (!tip) return;
+  usageTips.dismiss(tip.id);
+  if (busyTypingTip.value?.id === tip.id) busyTypingTip.value = null;
+  else contextHighTip.value = null;
+}
+
+/** @ 菜单里出现了别的项目 → 「@ 另一个项目 = 授权它的目录」。每次菜单打开至多计一次。 */
+const mentionProjectTip = ref<UsageTip | null>(null);
+watch(
+  [suggestVisible, () => suggestItems.value.some((it) => it.origin === "project")],
+  ([visible, hasProject]) => {
+    if (!visible) {
+      mentionProjectTip.value = null;
+      return;
+    }
+    if (!hasProject || mentionProjectTip.value) return;
+    const tip = usageTips.slotTip("mention-project");
+    if (!tip) return;
+    usageTips.markShown(tip.id);
+    mentionProjectTip.value = tip;
+  },
+);
+
+/** 本会话里第一次授权了别的项目（附加目录 0 → 有）→ 说明它整个会话有效、怎么解除。
+ *  同时这就是「会跨项目了」的信号。切会话即收起（重开老会话不算「刚授权」）。 */
+const attachedTip = ref<UsageTip | null>(null);
+watch(
+  [() => props.sessionId, () => attachedDirs.value.length],
+  ([sid, len], [prevSid, prevLen]) => {
+    if (sid !== prevSid) {
+      attachedTip.value = null;
+      return;
+    }
+    if (!(prevLen === 0 && len > 0)) return;
+    usageTips.markUsed("cross-project");
+    const tip = usageTips.slotTip("project-attached");
+    if (!tip) return;
+    usageTips.markShown(tip.id);
+    attachedTip.value = tip;
+  },
+);
+
 // ── 键盘 / 粘贴 / 拖放 ──
 function handleTabKey(e: KeyboardEvent) {
   // Shift+Tab = 循环权限模式（CLI 同款），与 slash 补全互斥
@@ -760,6 +861,7 @@ function cyclePermissionMode(e: KeyboardEvent) {
   const next = nextPermissionMode(selectedPermissionMode.value, displayPermissionModes.value);
   if (!next) return;
   e.preventDefault();
+  usageTips.markUsed("perm-cycle");
   handlePermissionModeChange(next);
 }
 
@@ -829,6 +931,7 @@ async function applyPasteResolution(res: PasteResolution) {
     // 转换立即发生，不必等用户再按键。纯文本扫描无 token 即 no-op。
     void scanMentions();
   }
+  if (res.imagePaths.length) usageTips.markUsed("paste-image");
   let failed = 0;
   for (const imgPath of res.imagePaths) {
     try {
@@ -924,6 +1027,7 @@ async function handleDrop(e: DragEvent) {
   }
 
   const res = resolvePastePayload(paths, null, null, "");
+  if (paths.length) usageTips.markUsed("file-mention");
   await applyPasteResolution(res);
   if (entry) clearFileClipboard();
 }
@@ -977,6 +1081,7 @@ async function performSend() {
           return;
         }
         emit("send-btw", mentionPrefix + args);
+        usageTips.markUsed("btw");
         awaitingBtwLaunch.value = true;
         return;
       }
@@ -1039,6 +1144,7 @@ async function performSend() {
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
   sentKbIds = kbrefs.map((r) => r.selectionId);
+  if (kbrefs.length) usageTips.markUsed("kb-selection");
   const sendOpts: SendOptions = {
     images: images.length ? images : undefined,
     kbrefs: kbrefs.length ? kbrefs : undefined,
@@ -1068,6 +1174,7 @@ async function performSend() {
 // useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认。
 // 菜单点击与手打 /name 统一走 runPromptAction——取消确认则什么都不发、不入队、不推气泡。
 async function runPromptAction(action: QuickAction, prompt: string): Promise<boolean> {
+  if (action.id === "compact" || action.id === "clear") usageTips.markUsed("compact");
   if (action.confirm) {
     const ok = await useModal().confirm(
       action.label,
@@ -1179,6 +1286,9 @@ const { actions: quickActions } = useQuickActions();
           >→ 进入</button>
         </span>
       </div>
+      <div v-if="mentionProjectTip" class="mention-tip">
+        <UsageTipText :text="mentionProjectTip.text" />
+      </div>
       <div class="mention-foot">
         <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
         <span><kbd>→</kbd> 进入目录</span>
@@ -1189,6 +1299,10 @@ const { actions: quickActions } = useQuickActions();
     <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
          不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
     <!-- 忙碌时排队、正在等安全边界（当前回合结束）的消息：sidecar 已登记，不可撤回 -->
+    <div v-if="inputHintTip" class="input-tip-row">
+      <UsageTipText :text="inputHintTip.text" />
+      <button type="button" class="input-tip-x" v-tooltip="'知道了，不再提示'" @click="dismissInputHint">×</button>
+    </div>
     <div v-if="pendingJumps?.length" class="jump-strip">
       <div v-for="(p, i) in pendingJumps" :key="i" class="jump-item">
         <span class="jump-item-tag">排队</span>
@@ -1269,6 +1383,7 @@ const { actions: quickActions } = useQuickActions();
           <span class="attach-chip-name">{{ mentionName(d) }}</span>
           <span class="attach-chip-tag">已授权</span>
         </div>
+        <UsageTipText v-if="attachedTip" class="attach-tip" :text="attachedTip.text" />
         <div v-if="rejectedDirs.length" class="attach-warn" v-tooltip="rejectedDirs.join('\n')">
           未注册，已忽略：{{ mentionName(rejectedDirs[0])
           }}<span v-if="rejectedDirs.length > 1"> 等 {{ rejectedDirs.length }} 个</span>
@@ -1363,7 +1478,7 @@ const { actions: quickActions } = useQuickActions();
             v-if="contextUsage"
             ref="usageRingRef"
             :usage="contextUsage"
-            @open="usagePanelOpen = true"
+            @open="usagePanelOpen = true; usageTips.markUsed('context-ring')"
           />
           <ChatSendButton
             :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
@@ -1776,6 +1891,48 @@ const { actions: quickActions } = useQuickActions();
   border: 1px solid var(--aide-border);
   border-radius: 3px;
   padding: 0 4px;
+}
+
+/* ── 使用小提示（时机提示）── */
+.input-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 3px 4px 3px 8px;
+  min-width: 0;
+}
+
+.input-tip-row > .usage-tip {
+  flex: 1;
+}
+
+.input-tip-x {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.input-tip-x:hover {
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-hover);
+}
+
+.mention-tip {
+  display: flex;
+  padding: 4px 10px;
+  border-top: 1px solid var(--aide-border-subtle);
+  background: var(--aide-bg-raised);
+}
+
+.attach-tip {
+  align-self: center;
 }
 
 .jump-strip {
