@@ -7,7 +7,12 @@ use aide_link::secure::WireFrame;
 
 fn dts() -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/aide-link/frames.d.ts");
-    std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+    // 归一成 LF 再切块：Windows 上 core.autocrlf 会把检出变成 CRLF，而下面的块边界找的是
+    // `;\n\n`——不归一化就永不匹配，块会一路吃到文件尾（把中继帧也算进来）、错误码那个直接
+    // unwrap 到 None，红线测试在主力开发平台上静默失效。
+    std::fs::read_to_string(&p)
+        .unwrap_or_else(|e| panic!("{}: {e}", p.display()))
+        .replace("\r\n", "\n")
 }
 
 /// 取某个 `export type <name> =` 联合块里所有 `type: "xxx"`。
