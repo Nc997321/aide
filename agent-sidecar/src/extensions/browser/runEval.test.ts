@@ -69,6 +69,21 @@ describe("runEval 主路径（CDP）", () => {
     expect((await p) as any).toMatchObject({ ok: true, value: 42 });
   });
 
+  it("scoped：脚本包进块语句（顶层 const 跨调用可重复声明），其余参数不变", async () => {
+    const { events, emit } = emitCollector();
+    const p = runEval("const rows = [1]; rows.length", { scoped: true }, emit);
+
+    const q = events[0] as any;
+    // 换行必须在：脚本末尾的 `//` 注释会把同一行的右括号吞掉
+    expect(q.params.expression).toBe("{\nconst rows = [1]; rows.length\n}");
+    expect(q.params.awaitPromise).toBe(true);
+    // replMode 不 await 完成值（async IIFE 会回 {}）——这条钉住别换回去
+    expect(q.params.replMode).toBeUndefined();
+    await answerEval(events, 0, { result: { type: "number", value: 1 } });
+
+    expect((await p) as any).toMatchObject({ ok: true, value: 1 });
+  });
+
   it("多语句脚本原样送（这是包装器曾经弄坏的那个用法）", async () => {
     const { events, emit } = emitCollector();
     const p = runEval("var x = 1; x + 2", {}, emit);

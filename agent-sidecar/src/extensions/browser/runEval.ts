@@ -23,6 +23,8 @@
  * 唯一曾经由它带来的东西是页面自述状态，那个改用一次**独立的廉价求值**拿（见 `runEval`），
  * 代价是一次本地往返，换来的是零语义偏移。
  *
+ * （唯一的例外是 `browser_eval` 的**块语句**作用域：收语句不收表达式，完成值不变——见 `EvalOptions.scoped`。）
+ *
  * 失败的形状也顺带干净了：不加包装时 `nope()` 报 `Uncaught ReferenceError: …`；
  * 加了包装它会被报成 `Uncaught (in promise) ReferenceError: …`——多出来的那截是我们自己
  * 制造的噪音，不是页面的性质。
@@ -72,6 +74,25 @@ export interface EvalOptions {
   viewId?: string;
   /** 帧级读取用：在指定执行上下文里求值（由 `Page.createIsolatedWorld` 得到）。 */
   contextId?: number;
+  /**
+   * `true` = 把脚本包进一个**块语句** `{\n…\n}` 再送：顶层 `let`/`const`/`class` 落进块作用域，
+   * 跨调用可以重复声明。
+   *
+   * 原样送脚本的代价是顶层声明落进页面的全局词法作用域——第二次 `const rows = …` 直接报
+   * `Identifier 'rows' has already been declared`（2026-10-07 agent 实测反馈）。
+   *
+   * 这**不是**文件头禁掉的那种包装：那是**表达式**形状（`await (…)`），吃不下多语句；块语句收的
+   * 是语句，块的完成值就是块内最后一条语句的值——`var x = 1; x + 2` 照样回 3，async IIFE 照样由
+   * awaitPromise 解开，`var`/函数声明照样落到全局（V8 实测）。换行是为了脚本末尾的 `//` 注释
+   * 吞不掉右括号。
+   *
+   * 为什么不用 CDP 的 `replMode`：REPL 模式只 await 顶层 `await`，**不** await 完成值本身——
+   * `(async () => 42)()` 会回一个 Promise（returnByValue 下是 `{}`），agent 最常见的写法静默变空。
+   *
+   * 只给 `browser_eval` 的主文档路径开：内部脚本全是 IIFE，没有顶层声明；帧级求值每次新建隔离
+   * 世界，本来就不串。降级通道（ExecuteScript）照旧原样送。
+   */
+  scoped?: boolean;
 }
 
 /** 内部：`unavailable` 是**唯一**该触发降级的性质，不外泄。 */
@@ -191,7 +212,7 @@ async function viaCdp(
   emit: (e: ChatEvent) => void,
 ): Promise<Attempt> {
   const params: Record<string, unknown> = {
-    expression: script,
+    expression: opts.scoped ? `{\n${script}\n}` : script,
     awaitPromise: true,
     returnByValue: true,
   };

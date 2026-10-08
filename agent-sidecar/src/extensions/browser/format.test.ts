@@ -284,6 +284,19 @@ describe("formatEval", () => {
     expect(s).toContain('"count": 2');
   });
 
+  it("脚本自己 stringify 过的 JSON 串 → 美化一次，不再套一层转义", () => {
+    const s = formatEval({ viewId: "browser-1", value: JSON.stringify({ rows: [{ id: 1 }] }), probe: VISIBLE });
+    expect(s).toContain("script result (string):");
+    expect(s).toContain('"id": 1');
+    expect(s).not.toContain('\\"');
+  });
+
+  it("普通字符串原样印（含看着像数字的），表头标明是字符串", () => {
+    const s = formatEval({ viewId: "browser-1", value: "a \"quoted\"\nline", probe: VISIBLE });
+    expect(s).toContain('a "quoted"\nline');
+    expect(formatEval({ viewId: "browser-1", value: "123", probe: VISIBLE })).toContain("(string):\n123");
+  });
+
   it("undefined 结果如实写 undefined（不是空串）", () => {
     expect(formatEval({ viewId: "browser-1", value: undefined, probe: VISIBLE })).toContain("undefined");
   });

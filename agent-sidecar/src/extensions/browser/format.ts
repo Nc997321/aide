@@ -446,6 +446,32 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
   return out.join("\n");
 }
 
+/** 求值结果的渲染上限（字符）。 */
+const EVAL_TEXT_CAP = 20000;
+
+/**
+ * 求值结果 → 文本。
+ *
+ * **字符串原样印**：脚本自己 `JSON.stringify` 过的结果再 stringify 一层，就是满屏 `\"` 与
+ * `\n` 的转义串（2026-10-07 agent 实测反馈）——模型读得费劲、token 也翻倍。能解析成对象/数组的
+ * 字符串按 JSON 美化一次；其余字符串（含 `"123"`）原样给出。表头的 `(string)` 交代它本来就是串，
+ * 不让模型把 `"123"` 误当成数字 123。
+ */
+function renderEvalValue(value: unknown): { kind: string; text: string } {
+  if (typeof value === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      parsed = undefined;
+    }
+    const pretty = typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed, null, 2) : value;
+    return { kind: " (string)", text: pretty.slice(0, EVAL_TEXT_CAP) };
+  }
+  const rendered = JSON.stringify(value, null, 2);
+  return { kind: "", text: rendered === undefined ? "undefined" : rendered.slice(0, EVAL_TEXT_CAP) };
+}
+
 /**
  * `browser_eval` 在**跨域帧**里的结果。
  *
@@ -461,11 +487,8 @@ export function formatFrameEval(outcome: FrameEvalOutcome): string {
     }
     return lines.join("\n");
   }
-  const rendered = JSON.stringify(outcome.value, null, 2);
-  const lines = [
-    `frame ${outcome.url} — script result:`,
-    rendered === undefined ? "undefined" : rendered.slice(0, 20000),
-  ];
+  const r = renderEvalValue(outcome.value);
+  const lines = [`frame ${outcome.url} — script result${r.kind}:`, r.text];
   if (outcome.probe) lines.push("", ...evalNotes(outcome.probe));
   return lines.join("\n");
 }
@@ -474,11 +497,8 @@ export function formatFrameEval(outcome: FrameEvalOutcome): string {
 
 export function formatEval(view: EvalView): string {
   const v = asRecord(view) ?? {};
-  const rendered = JSON.stringify(v["value"], null, 2);
-  const lines = [
-    `view ${str(v["viewId"]) || "?"} — script result:`,
-    rendered === undefined ? "undefined" : rendered.slice(0, 20000),
-  ];
+  const r = renderEvalValue(v["value"]);
+  const lines = [`view ${str(v["viewId"]) || "?"} — script result${r.kind}:`, r.text];
   const notes = evalNotes(v["probe"]);
   if (notes.length) lines.push("", ...notes);
   return lines.join("\n");

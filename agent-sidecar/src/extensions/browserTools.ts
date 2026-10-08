@@ -174,7 +174,10 @@ export function buildBrowserEvalTool(
           // 「抛异常回 null」是 ExecuteScript 那条老通道的说法，已过时：CDP 路径（常态）把异常
           // 原文报回来（runEval"exception"分支）。写错会让模型以为"没报错 = 值为空"。
           "A JavaScript EXPRESSION; the last value comes back JSON-serialised. " +
-            "A throw is reported to you as an error with its text (not as null).",
+            "A throw is reported to you as an error with its text (not as null). " +
+            "Each call gets its own block scope: top-level let/const can be re-declared in a later call " +
+            "(park values on `window` to carry them across calls). " +
+            "Return objects directly — do not JSON.stringify them yourself.",
         ),
       frame: z
         .string()
@@ -191,7 +194,7 @@ export function buildBrowserEvalTool(
           const outcome = await evalInFrame(args.view_id, args.frame, args.script, emit);
           return textResult(formatFrameEval(outcome));
         }
-        const r = await runEval(args.script, { viewId: args.view_id }, emit);
+        const r = await runEval(args.script, { viewId: args.view_id, scoped: true }, emit);
         if (!r.ok) return textResult(r.error);
         return textResult(formatEval({ value: r.value, viewId: r.viewId, probe: r.probe }));
       } catch (e) {
