@@ -472,6 +472,54 @@ describe("browser_act fill：值真的落了吗", () => {
 });
 
 /**
+ * fill 按 `text` 找的是**字段**（2026-10-07 agent 实测反馈）：输入框没有自己的文字，旧路径只认
+ * 元素文字 → 落到 notFound → 列一份可点元素，跟要找的输入框不是一类。
+ */
+describe("browser_act fill：按字段名找、找不到列字段", () => {
+  it("按 name 精确命中（输入框没有文字，旧路径找不到它）", () => {
+    const other = field("input", { attrs: { name: "username" } });
+    const cred = field("input", { attrs: { name: "satoken" } });
+    const out = runFill({ text: "satoken" }, "abc", stubDom({ candidates: [other, cred] }));
+
+    expect(out["ok"]).toBe(true);
+    expect(cred["value"]).toBe("abc");
+    expect(other["value"]).toBe("");
+  });
+
+  it("按 placeholder 包含命中；精确优先于包含", () => {
+    const loose = field("input", { attrs: { placeholder: "请输入 token 前缀" } });
+    const exact = field("input", { attrs: { placeholder: "token" } });
+    const out = runFill({ text: "token" }, "t", stubDom({ candidates: [loose, exact] }));
+
+    expect(out["ok"]).toBe(true);
+    expect(exact["value"]).toBe("t");
+  });
+
+  it("找不到 → 候选列的是页面上的**字段**（带 name/placeholder），不是可点元素", () => {
+    const a = field("input", { attrs: { name: "cred", placeholder: "粘贴凭据" } });
+    const btn = el("button", { text: "提交", markup: true });
+    const out = runFill(
+      { text: "satoken" },
+      "x",
+      stubDom({ candidates: [a], clickableHints: [btn] }),
+    );
+
+    expect(out["ok"]).toBe(false);
+    expect(out["candidatesKind"]).toBe("fields");
+    expect(String(out["error"])).toContain("no form field is named");
+    const c = (out["candidates"] as Record<string, unknown>[])[0];
+    expect(c).toMatchObject({ tag: "input", name: "cred", placeholder: "粘贴凭据" });
+  });
+
+  it("selector 歧义那份候选照旧（下一步是给 index，不是换字段）", () => {
+    const a = field("input"), b = field("input");
+    const out = runFill({ selector: "input" }, "x", stubDom({ candidates: [a, b] }));
+
+    expect(out["candidatesKind"]).toBe("selector-matches");
+  });
+});
+
+/**
  * 按键（`action:"press"`）的两条脚本：**键落在谁身上**必须先确定，再交给 CDP 派发。
  * 没给目标时按 `activeElement` 走（"fill 之后按回车"就是这个形状），而**页面上什么都没聚焦**
  * 必须如实失败——发一个没人接的键，回来就是"按了没反应"的幽灵故障。

@@ -290,7 +290,13 @@ export function buildBrowserActTool(
           "click = mouse click; fill = set a field's value; hover = move the mouse over it (opens hover " +
             "menus/tooltips); press = send a real key to the focused element, or to `text`/`selector` when given",
         ),
-      text: z.string().optional().describe("Visible label of the target (preferred). Most specific match wins."),
+      text: z
+        .string()
+        .optional()
+        .describe(
+          "Visible label of the target (preferred). Most specific match wins. For action=fill it names the " +
+            "FIELD: its label (as browser_read lists it), name, id or placeholder.",
+        ),
       selector: z
         .string()
         .optional()

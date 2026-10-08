@@ -27,6 +27,7 @@
  * - 目标解析不到时回 `ok:false` + 候选清单，让模型改口径重试，而不是点错元素。
  */
 import { CLICKABLE_JS, CLICKABLE_MARKUP_SELECTOR } from "./clickable.js";
+import { FIELD_LABEL_JS } from "./fieldLabel.js";
 
 /** 目标描述：`selector` 与 `text` 至少给一个；两个都给时 `selector` 优先。 */
 export interface ActTarget {
@@ -65,6 +66,7 @@ function preamble(target: ActTarget): string {
   var TARGET = ${JSON.stringify(target)};
   var TEXT_CANDIDATES = ${JSON.stringify(TEXT_CANDIDATE_SELECTOR)};
 ${CLICKABLE_JS}
+${FIELD_LABEL_JS}
   function visible(el) {
     if (!el || !el.getBoundingClientRect) return false;
     var r = el.getBoundingClientRect();
@@ -329,6 +331,91 @@ ${CLICKABLE_JS}
     out.candidatesKind = 'clickable';
     return out;
   }
+
+  // ---- fill 的目标：**字段**，不是可点元素（2026-10-07 agent 实测反馈） ----
+  //
+  // 按 text 找输入框时，用户说的是「satoken 那个框」——它的标签 / name / id / placeholder，
+  // 而文本候选池认的是**元素自己的文字**（输入框没有），于是落到 notFound、再列一份可点元素，
+  // 跟要找的东西不是一类。判据与 browser_read 印的 label= 共用（fieldLabel.ts）。
+
+  /** 一个字段能被叫出来的所有名字（read 里印得出来的都在这里）。 */
+  function fieldNames(el) {
+    var names = [fieldLabelOf(el)];
+    var attrs = ['name', 'id', 'placeholder', 'aria-label'];
+    for (var i = 0; i < attrs.length; i++) {
+      var v = el.getAttribute && el.getAttribute(attrs[i]);
+      if (v) names.push(fieldNorm(v));
+    }
+    return names;
+  }
+
+  /** 按名字找字段：精确池优先、包含池兜底（同 textPools 的去空白容错）。没有就回 null。 */
+  function byField() {
+    var found;
+    try { found = document.querySelectorAll(TARGET.tag || FIELD_SELECTOR); } catch (e) { return null; }
+    var want = String(TARGET.text), wantTight = tight(want);
+    var exact = [], partial = [];
+    for (var i = 0; i < found.length; i++) {
+      var el = found[i];
+      if (!visible(el)) continue;
+      var names = fieldNames(el), hitExact = false, hitPartial = false;
+      for (var j = 0; j < names.length; j++) {
+        var n = names[j];
+        if (!n) continue;
+        var nt = tight(n);
+        if (n === want || (wantTight && nt === wantTight)) { hitExact = true; break; }
+        if (n.indexOf(want) >= 0 || (wantTight && nt.indexOf(wantTight) >= 0)) hitPartial = true;
+      }
+      if (hitExact) exact.push(el); else if (hitPartial) partial.push(el);
+    }
+    var pool = exact.length ? exact : partial;
+    if (!pool.length) return null;
+    var used = Math.min(TARGET.index || 0, pool.length - 1);
+    return { el: pool[used], count: pool.length, used: used };
+  }
+
+  /**
+   * fill 的解析：selector 照旧；text 先按**字段名**找，找不到再走通用文本解析——命中的是
+   * label 时换成它关联的控件（点 label 本来就是聚焦它的那个框）。
+   */
+  function resolveField() {
+    if (TARGET.selector || !TARGET.text) return resolve();
+    var f = byField();
+    if (f) return f;
+    var r = resolve();
+    if (r.el && r.el.tagName === 'LABEL' && r.el.control) r.el = r.el.control;
+    if (r.error) {
+      r.error = 'no form field is named ' + JSON.stringify(String(TARGET.text)) +
+        ' (matched against label, name, id and placeholder)';
+      r.candidates = null;
+    }
+    return r;
+  }
+
+  /** 字段的自述：describe 的形状，文字换成字段标签，另带 type / placeholder。 */
+  function describeField(el) {
+    var d = describe(el);
+    d.text = fieldLabelOf(el).slice(0, 120);
+    d.type = el.type ? String(el.type) : null;
+    d.placeholder = (el.getAttribute && el.getAttribute('placeholder')) || null;
+    return d;
+  }
+
+  /**
+   * fill 解析失败：selector 歧义那份候选照旧（下一步是给 index）；其余一律列**页面上的字段**
+   * ——可点元素清单对「找输入框」没有用。
+   */
+  function fieldFailure(err, extra) {
+    if (extra && extra.candidatesKind === 'selector-matches') return failure(err, extra);
+    var out = { ok: false, error: err, candidates: [], candidatesKind: 'fields' };
+    try {
+      var all = document.querySelectorAll(FIELD_SELECTOR);
+      for (var i = 0; i < all.length && out.candidates.length < 15; i++) {
+        if (visible(all[i])) out.candidates.push(describeField(all[i]));
+      }
+    } catch (e) { /* 候选只是锦上添花 */ }
+    return out;
+  }
 `;
 }
 
@@ -404,8 +491,8 @@ export function buildResolveScript(target: ActTarget, opts: { scroll?: boolean }
 export function buildFillScript(target: ActTarget, value: string): string {
   return `(() => {${preamble(target)}
   try {
-    var r = resolve();
-    if (r.error) return failure(r.error, r);
+    var r = resolveField();
+    if (r.error) return fieldFailure(r.error, r);
     var el = r.el;
     var VALUE = ${JSON.stringify(value)};
     try { el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); } catch (e) { /* 非必需 */ }

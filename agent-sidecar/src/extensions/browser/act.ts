@@ -72,15 +72,21 @@ export function describeResolveFailure(v: Record<string, unknown>): string {
         ? "Elements carrying that text (not recognized as clickable — retry with a `selector` from one of these):"
         : v["candidatesKind"] === "selector-matches"
           ? "Elements the selector matched (nothing was written — retry with `index`, or narrow the `selector`):"
-          : "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):",
+          : v["candidatesKind"] === "fields"
+            ? "Form fields currently on the page (retry with `text` = one of these labels/names, or a `selector`):"
+            : "Clickable elements currently on the page (retry with `text` or a `selector` from one of these):",
     );
     for (const c of candidates) {
       const r = asRecord(c);
       if (!r) continue;
-      const bits = [`<${String(r["tag"])}>`, `"${String(r["text"])}"`];
+      // 字段常常没有标签（只有 name/placeholder）——空引号像是"标签就叫空串"，直说没有。
+      const text = String(r["text"] ?? "");
+      const bits = [`<${String(r["tag"])}>`, text ? `"${text}"` : "(no label)"];
       if (r["id"]) bits.push(`#${String(r["id"])}`);
       else if (r["cls"]) bits.push(`.${String(r["cls"])}`);
       if (r["name"]) bits.push(`name=${String(r["name"])}`);
+      if (r["type"]) bits.push(`type=${String(r["type"])}`);
+      if (r["placeholder"]) bits.push(`placeholder="${String(r["placeholder"])}"`);
       lines.push(`- ${bits.join(" ")}`);
     }
   }

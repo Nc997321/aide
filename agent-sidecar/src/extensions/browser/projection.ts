@@ -35,6 +35,7 @@
  * - 可见性只看「有没有盒」：`visibility:hidden` / `opacity:0` 藏的东西仍会列出来（逐元素算样式太贵）。
  */
 import { CLICKABLE_JS } from "./clickable.js";
+import { FIELD_LABEL_JS } from "./fieldLabel.js";
 
 /** 投影选项。 */
 export interface ProjectionOptions {
@@ -84,36 +85,9 @@ export function buildProjectionScript(opts: ProjectionOptions = {}): string {
     return t.length > n ? t.slice(0, n) + '\\u2026' : t;
   }
 ${CLICKABLE_JS}
-  // ---- 标签关联（"这个框填什么"的唯一可靠答案） ----
-  // 四级兜底，最后一级是**表格布局启发式**：国内企业后台大量用 <td>标签</td><td><input></td>
-  // 而不用 label/for。这是通用启发式（任何表格布局页面都成立），不是站点适配。
-  function labelOf(el) {
-    var aria = el.getAttribute && el.getAttribute('aria-label');
-    if (aria) return cut(aria, LIMITS.text);
-
-    var id = el.id;
-    if (id) {
-      try {
-        var lab = el.ownerDocument.querySelector('label[for="' + CSS.escape(id) + '"]');
-        if (lab) return cut(lab.textContent, LIMITS.text);
-      } catch (e) { /* CSS.escape 不支持则跳过这一级 */ }
-    }
-
-    try {
-      var wrap = el.closest && el.closest('label');
-      if (wrap) return cut(wrap.textContent, LIMITS.text);
-    } catch (e) { /* ignore */ }
-
-    try {
-      var td = el.closest && el.closest('td,th');
-      if (td && td.previousElementSibling) {
-        return cut(td.previousElementSibling.textContent, LIMITS.text);
-      }
-    } catch (e) { /* ignore */ }
-
-    var ph = el.getAttribute && el.getAttribute('placeholder');
-    return ph ? cut(ph, LIMITS.text) : '';
-  }
+  // ---- 标签关联（"这个框填什么"的唯一可靠答案；判据住在 fieldLabel.ts，与 fill 的字段查找共用） ----
+${FIELD_LABEL_JS}
+  function labelOf(el) { return cut(fieldLabelOf(el), LIMITS.text); }
 
   // ---- 表格 ----
   function tableOf(t) {
