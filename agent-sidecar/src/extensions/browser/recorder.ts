@@ -24,7 +24,7 @@
  * 对本批的核心场景这是**对的**（要看的就是那个新文档自己加载期的请求），但"点了个按钮 →
  * 请求失败 → 页面跳走了"这种跨导航追查拿不到——见 spec §5.1 的明确决策。
  *
- * # 落地必须守的四条（改源码时容易丢）
+ * # 落地必须守的五条（改源码时容易丢）
  *
  * 1. **幂等**：`if (window.__aideRec) return` —— 注册会重发（每个视图一次），重复包装会套娃。
  * 2. **不改页面行为**：fetch 的失败分支继续 `throw`；`res.clone()` 不动原响应；console 转发原实现。
@@ -34,6 +34,9 @@
  *    ⚠️ skip 是**非错误的事实**，所以它有自己的字段：`err` 只留"这条请求真的失败了"
  *    （`'body unreadable'` / fetch 抛出的错误 / 拒绝的原因）。混进 `err` 会让读脚本的
  *    失败计数把一条 200 算成失败——摘要行（agent 最先看的那行）就在最要紧的路径上撒谎。
+ * 5. **请求体脱敏**：`reqBody` 里键名像凭据的值（password / token / secret …，见 `SECRET_KEY_PATTERN`）一律
+ *    `[redacted]`——与 `browser_read` 不读密码框同一条线：用户的凭据不进模型上下文。只认得出
+ *    JSON 与 urlencoded 两种形状里的键；FormData 逐项过同一个判据，二进制体只报形状和字节数。
  *
  * # 这一层不认识"页面语义"
  *
@@ -58,6 +61,17 @@ export const RECORDER_TEXT_CAP = 300;
  * 所以事件流另有一条按 `content-type` 判的 skip（那种体根本没有长度，见 fetch 分支）。
  */
 export const RECORDER_BODY_GATE = 262144;
+/**
+ * 请求体片段的字符上限。比响应体宽：问请求体的典型问题是"字段名对不对"（`publish` 还是
+ * `toPublish`，2026-10-07 agent 实测反馈），300 字符常常还没到那个字段就截断了。
+ */
+export const RECORDER_REQ_CAP = 600;
+/**
+ * 请求体里要脱敏的键名（不区分大小写，**子串**匹配：`satoken` / `accessToken` / `x-auth` 都算）。
+ * 宁可多遮：遮错一个普通字段，agent 看见 `[redacted]` 会自己去 eval 里问；漏遮一个凭据就进了上下文。
+ */
+export const SECRET_KEY_PATTERN =
+  "^pass$|passw|passcode|pwd|secret|token|auth(?!or)|credential|cookie|session|captcha|otp|private.?key";
 
 export const RECORDER_SOURCE = `(function () {
   if (window.__aideRec) return 'already armed';
@@ -70,6 +84,66 @@ export const RECORDER_SOURCE = `(function () {
     var t = String(s === null || s === undefined ? '' : s);
     return t.length > n ? { text: t.slice(0, n), cut: true, len: t.length } : { text: t, cut: false, len: t.length };
   }
+  var SECRET_KEY = new RegExp(${JSON.stringify(SECRET_KEY_PATTERN)}, 'i');
+  var REQ = ${RECORDER_REQ_CAP};
+  function redactJson(v, depth) {
+    if (depth > 8 || v === null || typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(function (x) { return redactJson(x, depth + 1); });
+    var out = {};
+    for (var k in v) {
+      if (!Object.prototype.hasOwnProperty.call(v, k)) continue;
+      out[k] = SECRET_KEY.test(k) ? '[redacted]' : redactJson(v[k], depth + 1);
+    }
+    return out;
+  }
+  function redactForm(s) {
+    return s.split('&').map(function (pair) {
+      var eq = pair.indexOf('=');
+      var key = eq < 0 ? pair : pair.slice(0, eq);
+      var name = key;
+      try { name = decodeURIComponent(key.replace(/\\+/g, ' ')); } catch (e) { /* 原样判 */ }
+      return eq >= 0 && SECRET_KEY.test(name) ? key + '=[redacted]' : pair;
+    }).join('&');
+  }
+  /** 文本体：JSON 按键脱敏、像 urlencoded 的按键脱敏，其余原样（认不出键就没有可遮的）。 */
+  function redactText(t) {
+    var head = t.replace(/^\\s+/, '').charAt(0);
+    if (head === '{' || head === '[') {
+      try { return JSON.stringify(redactJson(JSON.parse(t), 0)); } catch (e) { /* 不是 JSON，往下走 */ }
+    }
+    if (/^[^\\s=&]+=[^\\s]*(&[^\\s=&]+=[^\\s]*)*$/.test(t)) return redactForm(t);
+    return t;
+  }
+  /**
+   * 请求体 → 可读文本。**同步**：不读 Blob/流（那要异步、且可能很大），只报形状。
+   * 返回 null = 没有请求体。
+   */
+  function describeReqBody(b) {
+    if (b === null || b === undefined) return null;
+    try {
+      if (typeof b === 'string') return redactText(b);
+      if (typeof URLSearchParams !== 'undefined' && b instanceof URLSearchParams) return redactForm(b.toString());
+      if (typeof FormData !== 'undefined' && b instanceof FormData) {
+        var parts = [];
+        b.forEach(function (val, key) {
+          if (SECRET_KEY.test(key)) parts.push(key + '=[redacted]');
+          else if (typeof val === 'string') parts.push(key + '=' + val);
+          else parts.push(key + '=[file ' + (val && val.name ? val.name + ', ' : '') + (val && val.size) + ' bytes]');
+        });
+        return 'multipart: ' + parts.join('; ');
+      }
+      if (typeof Blob !== 'undefined' && b instanceof Blob) return '[blob ' + b.size + ' bytes' + (b.type ? ', ' + b.type : '') + ']';
+      if (typeof ArrayBuffer !== 'undefined' && (b instanceof ArrayBuffer || ArrayBuffer.isView(b))) return '[binary ' + b.byteLength + ' bytes]';
+      if (typeof ReadableStream !== 'undefined' && b instanceof ReadableStream) return '[stream]';
+      return redactText(String(b));
+    } catch (e) { return '[request body unreadable]'; }
+  }
+  function setReq(rec, b) {
+    var d = describeReqBody(b);
+    if (d === null) return;
+    var c = clip(d, REQ); rec.reqBody = c.text; rec.reqCut = c.cut; rec.reqLen = c.len;
+  }
+
   function gate(raw) { var n = Number(raw); return raw !== null && raw !== undefined && raw !== '' && n > GATE ? n : null; }
 
   var of = window.fetch;
@@ -80,7 +154,12 @@ export const RECORDER_SOURCE = `(function () {
       var rec = { kind: 'fetch', method: String(method).toUpperCase(),
                   url: clip((typeof input === 'string') ? input : ((input && input.url) || ''), 400).text,
                   t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0,
-                  err: null, bodyNote: null, done: false };
+                  err: null, bodyNote: null, done: false, reqBody: null, reqCut: false, reqLen: 0 };
+      if (init && init.body !== undefined) setReq(rec, init.body);
+      else if (input && typeof input !== 'string' && input.body && input.clone) {
+        // Request 对象自带体：只能异步读，读克隆（原请求照样发出去）
+        try { input.clone().text().then(function (t) { setReq(rec, t); }, function () {}); } catch (e) { /* 读不到就不报 */ }
+      }
       push(R.reqs, rec);
       return of.apply(this, arguments).then(function (res) {
         rec.status = res.status; rec.ms = now() - t0;
@@ -122,7 +201,8 @@ export const RECORDER_SOURCE = `(function () {
       var rec = { kind: 'xhr', method: String(x.__m || 'GET').toUpperCase(),
                   url: clip(x.__u || '', 400).text,
                   t: t0, status: null, ms: null, body: null, bodyCut: false, bodyLen: 0,
-                  err: null, bodyNote: null, done: false };
+                  err: null, bodyNote: null, done: false, reqBody: null, reqCut: false, reqLen: 0 };
+      setReq(rec, arguments[0]);
       push(R.reqs, rec);
       x.addEventListener('loadend', function () {
         rec.status = x.status; rec.ms = now() - t0;
@@ -245,7 +325,8 @@ export function buildRecorderReadScript(opts: RecorderReadOptions): string {
     if (KIND === 'reqs') {
       return { kind: e.kind, method: e.method, url: e.url, status: e.status, done: e.done === true,
                ms: e.done === true ? e.ms : (nowMs - e.t), body: e.body, bodyCut: e.bodyCut === true,
-               bodyLen: e.bodyLen, err: e.err, bodyNote: e.bodyNote };
+               bodyLen: e.bodyLen, err: e.err, bodyNote: e.bodyNote,
+               reqBody: e.reqBody, reqCut: e.reqCut === true, reqLen: e.reqLen };
     }
     return { lvl: e.lvl, t: e.t, text: e.text, cut: e.cut === true, len: e.len };
   });

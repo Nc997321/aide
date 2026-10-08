@@ -664,7 +664,8 @@ export function buildBrowserNetworkTool(
 ) {
   return tool(
     "browser_network",
-    "List the XHR/fetch requests the page has made — method, URL, status, duration and a clipped response body, " +
+    "List the XHR/fetch requests the page has made — method, URL, status, duration, the request body (`req:`, " +
+      "clipped; credential-like fields such as password/token show as [redacted]) and a clipped response body, " +
       "newest last. This is how you answer \"what did that request actually return?\": a blank page, an action that " +
       "never advanced, a 500 behind a swallowed error. Unfinished requests show as pending. The recorder is installed " +
       "on demand and lives in the CURRENT document only (it is cleared by any navigation); if this call installs it, " +

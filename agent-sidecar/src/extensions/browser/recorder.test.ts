@@ -202,6 +202,68 @@ describe("recorder：有界与如实标截断", () => {
   });
 });
 
+describe("recorder：请求体（脱敏 + 截断）", () => {
+  function armed() {
+    const { win } = makeWindow({ fetch: fetchStub({ body: "{}" }) });
+    run(RECORDER_SOURCE, win, { log: () => {} });
+    return win;
+  }
+
+  it("JSON 体：照原样记录字段名，凭据类键（含嵌套）一律 [redacted]", async () => {
+    const win = armed();
+    await win.fetch("http://x/api/publish", {
+      method: "POST",
+      body: JSON.stringify({ toPublish: true, user: { password: "hunter2", satoken: "abc", author: "me" } }),
+    });
+    const rec = win.__aideRec.reqs[0];
+    expect(rec.reqBody).toContain('"toPublish":true');
+    expect(rec.reqBody).toContain('"author":"me"');
+    expect(rec.reqBody).not.toContain("hunter2");
+    expect(rec.reqBody).not.toContain("abc");
+    expect(rec.reqBody).toContain('"password":"[redacted]"');
+  });
+
+  it("urlencoded 体与 URLSearchParams：按键脱敏", async () => {
+    const win = armed();
+    await win.fetch("http://x/login", { method: "POST", body: "username=bob&pwd=s3cret" });
+    await win.fetch("http://x/login", { method: "POST", body: new URLSearchParams({ a: "1", access_token: "t" }) });
+    expect(win.__aideRec.reqs[0].reqBody).toBe("username=bob&pwd=[redacted]");
+    expect(win.__aideRec.reqs[1].reqBody).toBe("a=1&access_token=[redacted]");
+  });
+
+  it("超长体如实标 reqCut 与原长；没有体就是 null", async () => {
+    const win = armed();
+    const big = JSON.stringify({ data: "x".repeat(2000) });
+    await win.fetch("http://x/big", { method: "POST", body: big });
+    await win.fetch("http://x/get");
+    const [a, b] = win.__aideRec.reqs;
+    expect(a.reqCut).toBe(true);
+    expect(a.reqLen).toBe(big.length);
+    expect(b.reqBody).toBeNull();
+  });
+
+  it("XHR send(body) 同样记录", () => {
+    class FakeXHR {
+      open() {}
+      send() {}
+      addEventListener() {}
+    }
+    const { win } = makeWindow({ XMLHttpRequest: FakeXHR });
+    run(RECORDER_SOURCE, win, { log: () => {} });
+    const x = new (win.XMLHttpRequest as any)();
+    x.open("POST", "http://x/api");
+    x.send('{"secret":"s","id":1}');
+    expect(win.__aideRec.reqs[0].reqBody).toBe('{"secret":"[redacted]","id":1}');
+  });
+
+  it("读脚本把 reqBody 带进 items", async () => {
+    const win = armed();
+    await win.fetch("http://x/api", { method: "POST", body: '{"a":1}' });
+    const out = run(buildRecorderReadScript({ kind: "reqs", limit: 10 }), win, { log: () => {} });
+    expect(out.items[0]).toMatchObject({ reqBody: '{"a":1}', reqCut: false });
+  });
+});
+
 describe("recorder：XHR 包装", () => {
   it("open/send 被记录，loadend 时补上状态码与响应体", () => {
     // 最小 XHR 桩：只实现 recorder 会碰的那些成员。

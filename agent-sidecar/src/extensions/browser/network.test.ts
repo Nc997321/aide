@@ -165,4 +165,23 @@ describe("renderNetwork", () => {
     expect(s).toContain("1 of 3 failed — first failure #1");
     expect(s).toContain("Failed to fetch");
   });
+
+  it("有请求体时印 req:，响应体随之标 res:；截断要说原长", () => {
+    const s = renderNetwork(
+      envelope({ items: [req({ method: "POST", reqBody: '{"toPublish":true}', reqCut: false })] }),
+      notes(),
+    );
+    expect(s).toContain('req: {"toPublish":true}  res: {"ok":true}');
+    const cut = renderNetwork(
+      envelope({ items: [req({ reqBody: "{abc", reqCut: true, reqLen: 900 })] }),
+      notes(),
+    );
+    expect(cut).toContain("req: {abc…(900 chars)");
+  });
+
+  it("没有请求体时不印 req:，响应体不加标签（老格式不变）", () => {
+    const s = renderNetwork(envelope(), notes());
+    expect(s).not.toContain("req:");
+    expect(s).not.toContain("res:");
+  });
 });

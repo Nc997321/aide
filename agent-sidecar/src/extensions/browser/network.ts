@@ -30,7 +30,18 @@ function renderRow(item: Record<string, unknown>, n: number): string {
   const url = str(item["url"]) || "(no url)";
   const ms = Number(item["ms"]);
   const timing = item["done"] === true ? `  ${Number.isFinite(ms) ? `${Math.round(ms)}ms` : "?ms"}` : "";
-  return `#${n} ${method} ${url}  → ${statusText(item)}${timing}${bodyText(item)}`;
+  const req = reqText(item);
+  return `#${n} ${method} ${url}  → ${statusText(item)}${timing}${req}${bodyText(item, req !== "")}`;
+}
+
+/**
+ * 请求体片段（`req: …`）。脱敏在页面侧已做完（见 recorder 的 `SECRET_KEY_PATTERN`），这里只
+ * 负责截断标记——**截了要说**，否则模型会把半截 JSON 当成整份请求去核字段。
+ */
+function reqText(item: Record<string, unknown>): string {
+  const body = str(item["reqBody"]);
+  if (!body) return "";
+  return `  req: ${item["reqCut"] === true ? `${body}…(${Number(item["reqLen"]) || 0} chars)` : body}`;
 }
 
 /** 状态那一列：pending / 真状态码 / 没有状态码（CORS、中止、未结束），三者不许混。 */
@@ -42,16 +53,18 @@ function statusText(item: Record<string, unknown>): string {
 }
 
 /**
- * 响应体片段（含截断标记、**没读体的旁注**、失败原因）。
+ * 响应体片段（含截断标记、**没读体的旁注**、失败原因）。`labelled` = 这一行前面已有 `req:`。
  *
  * `bodyNote` 与 `err` 是**两回事**，所以分开取：bodyNote = "我没读体"（体积闸门 / 事件流，
  * 关于**读取**的事实，与这条请求成没成无关）；err = "这条请求失败了"。渲染层把两者都印出来，
  * 但只有 err 该进失败摘要——摘要行的分子在页面侧就数好了（见 recorder 读脚本）。
  */
-function bodyText(item: Record<string, unknown>): string {
+function bodyText(item: Record<string, unknown>, labelled = false): string {
   const bits: string[] = [];
   const body = str(item["body"]);
-  if (body) bits.push(item["bodyCut"] === true ? `${body}…(${Number(item["bodyLen"]) || 0} chars)` : body);
+  // 前面印了 `req:` 时响应体也要标 `res:`——两段 JSON 并排，没有标签分不清哪段是哪段。
+  const tag = labelled ? "res: " : "";
+  if (body) bits.push(tag + (item["bodyCut"] === true ? `${body}…(${Number(item["bodyLen"]) || 0} chars)` : body));
   const note = str(item["bodyNote"]);
   if (note) bits.push(note);
   const err = str(item["err"]);
