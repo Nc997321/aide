@@ -1,6 +1,6 @@
 [package]
 name = "aide-core"
-version = "0.8.0"
+version = "1.0.0"
 edition = "2021"
 description = "Aide Host core: the command table and host state behind every front door (desktop in-process, aide-host on WSL / SSH). No Tauri dependency."
 
