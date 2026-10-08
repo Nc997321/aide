@@ -16,10 +16,10 @@
 //
 // 项目无 ESLint 基础设施，以 node 脚本代偿——形态对齐 scripts/check-tauri-imports.mjs。
 //
-// 例外在此集中登记并写明理由，否则检查失败：
-//   - onboarding.rs::claude_credentials_exist：单次 metadata() stat（探凭据文件在不在），
-//     微秒级且无写入路径，达不到能冻住主线程的量级；埋点噪音大于收益。
-// 新增例外必须在此登记，否则构建失败。
+// 例外在此集中登记并写明理由，否则检查失败（当前为空）。新增例外必须在此登记，否则构建失败。
+//
+// Host 模型（docs/host-model.md）：已迁入 aide-core 的命令一律 async + blocking，不经过
+// 本守卫；随迁移推进，这里扫描的同步命令会越来越少。
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,12 +28,7 @@ const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SCAN_DIR = "src-tauri/src";
 
 /** 例外登记：键为 `相对路径::函数名`。 */
-const EXCEPTIONS = new Map([
-  [
-    "src-tauri/src/commands/onboarding.rs::claude_credentials_exist",
-    "单次 metadata() stat，微秒级无写入",
-  ],
-]);
+const EXCEPTIONS = new Map([]);
 
 // 只认真正会阻塞主线程的调用：文件/目录读写、子进程。
 // 刻意不收 `Path::new`/`PathBuf::from`（纯构造，无 IO）。
@@ -50,6 +45,11 @@ const IO_RE = new RegExp(
     String.raw`\bOpenOptions\b`,
     String.raw`\bFile::`,
     String.raw`\.metadata\(\)`,
+    // 工作区操作的实现住在 aide-workspace（与远程 aide-host 共用）：Tauri 命令只剩
+    // 一行转调，IO 藏在 crate 里——按调用入口认，否则薄包装会漏出守卫。
+    String.raw`\bfs_ops::`,
+    String.raw`\baide_workspace::`,
+    String.raw`\bgit::[a-z_]+::git_`,
   ].join("|"),
 );
 

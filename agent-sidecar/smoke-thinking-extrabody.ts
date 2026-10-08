@@ -18,7 +18,7 @@
 //   npx tsx smoke-thinking-extrabody.ts
 import { existsSync } from "node:fs";
 import { query } from "@anthropic-ai/claude-agent-sdk";
-import { check, report } from "./smoke-headless-lib.js";
+import { check, report } from "./smoke-ledger.js";
 
 export {};
 

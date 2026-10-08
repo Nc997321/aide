@@ -81,6 +81,14 @@
   --aide-syntax-number: #e8a87c;
 }
 
+/* 关连字：随包的 Maple Mono 经 calt 把 `//` `/*` `=>` `!=` 等相邻字符合成一个连字字形，
+   `//h` 看上去像丢了一个斜杠（文本其实还在，光标/复制都能证明）。用户手打的文字必须
+   所见即所得，所以全局关掉。必须选 `*`：input/textarea 的 UA 样式用 `font` 简写重置了
+   font-variant，写在 body 上继承不到输入框。 */
+*, *::before, *::after {
+  font-variant-ligatures: none;
+}
+
 html, body, #app {
   height: 100%;
   width: 100%;
@@ -125,7 +133,7 @@ html, body, #app {
   background-clip: padding-box;
 }
 
-/* ── Tooltip (v-tooltip directive) ── */
+/* ── Tooltip（v-tooltip 指令 + 全局接管的原生 title，见 directives/tooltip.ts） ── */
 
 .aide-tooltip {
   position: fixed;
@@ -255,6 +263,9 @@ html, body, #app {
 }
 .msg-text ol {
   list-style-type: decimal;
+  /* 编号在 padding 区里绘制，等宽字体下 "1." 就要 ~2ch + 标记间距，20px 不够会被
+     容器 overflow 裁掉半个（只剩 "L."）；2em 够放到 "10."。无序圆点窄，仍用 20px。 */
+  padding-left: 2em;
 }
 .msg-text li {
   margin: 2px 0;

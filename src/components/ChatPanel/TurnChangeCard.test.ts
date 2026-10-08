@@ -61,8 +61,8 @@ beforeEach(() => {
   mocks.workspaceOf.mockReturnValue({ wsKey: "C--repo", wsPath: "C:/repo" });
 });
 
-describe("TurnChangeCard — 三态（隐藏 / 进行中 / 已结算）", () => {
-  it("0 个文件的轮整卡不渲染——进行中同样适用（不显示「正在改 · 0 个文件」）", () => {
+describe("TurnChangeCard — 两态（隐藏 / 已结算）", () => {
+  it("0 个文件的轮整卡不渲染——进行中同样适用", () => {
     const w = mountCard(makeFeed(reactive([round(1, [], true)])));
     expect(w.find(".tf").exists()).toBe(false);
   });
@@ -72,21 +72,15 @@ describe("TurnChangeCard — 三态（隐藏 / 进行中 / 已结算）", () => 
     expect(w.find(".tf").exists()).toBe(false);
   });
 
-  it("进行中：卡名「正在改」+ 呼吸点，显示文件数，但无面板入口、无展开", () => {
+  it("进行中（pending）：不渲染任何卡，没有「正在改」", () => {
     const w = mountCard(makeFeed(reactive([round(1, [f("a.ts", 12, 0)], true)])));
-
-    expect(w.get(".tf").classes()).toContain("tf--live");
-    expect(w.get(".tf-label").text()).toBe("正在改");
-    expect(w.get(".tf-dot").exists()).toBe(true);
-    expect(w.find(".tf-panel-link").exists()).toBe(false);
-    expect(w.find(".tf-pill").exists()).toBe(false);
-    expect(w.get(".tf-big--add").text()).toBe("+12");
+    expect(w.find(".tf").exists()).toBe(false);
   });
 
-  it("等权限（attention）时轮没结束 → 仍是进行中的形态（判据是 round.pending，不是 sessionState）", () => {
+  it("等权限（attention）时轮没结束 → 仍不渲染（判据是 round.pending，不是 sessionState）", () => {
     // pending 是归集器/轮次自己的"账单还没结"，等权限不会清它；按 sessionState === "running" 判会在这里露馅
     const w = mountCard(makeFeed(reactive([round(1, [f("a.ts", 3, 1)], true)])));
-    expect(w.get(".tf-label").text()).toBe("正在改");
+    expect(w.find(".tf").exists()).toBe(false);
   });
 
   it("已结算：卡名「本轮变更」，两个出口都在", () => {
@@ -138,13 +132,10 @@ describe("TurnChangeCard — 数字与文案（spec §2.5）", () => {
     expect(pure.find(".tf-bar-seg--del").exists()).toBe(false);
   });
 
-  it("行 1 / 行 2 分工：已结算态统计量全在行 2，进行中态文件数在行 1", () => {
+  it("文件数在行 2，行 1 没有", () => {
     const settled = mountCard(makeFeed(reactive([round(1, [f("a.ts", 203, 2)])])));
     expect(settled.get(".tf-nums .tf-unit").text()).toBe("1 个文件");
-
-    const live = mountCard(makeFeed(reactive([round(1, [f("a.ts", 12, 0)], true)])));
-    expect(live.get(".tf-top .tf-unit").text()).toBe("1 个文件");
-    expect(live.find(".tf-nums .tf-unit").exists()).toBe(false);
+    expect(settled.find(".tf-top .tf-unit").exists()).toBe(false);
   });
 });
 
@@ -254,7 +245,7 @@ describe("TurnChangeCard — 展开、清单与两个出口", () => {
 });
 
 describe("TurnChangeCard — 生命周期（展开态属于这一张账单）", () => {
-  it("下一轮开始 → 卡名回到「正在改」，展开态不复用", async () => {
+  it("下一轮开始 → 卡隐藏，展开态不复用", async () => {
     const rounds = reactive([round(1, [f("a.ts", 7, 2)])]);
     const w = mountCard(makeFeed(rounds));
     await w.get(".tf").trigger("click");
@@ -263,8 +254,13 @@ describe("TurnChangeCard — 生命周期（展开态属于这一张账单）", 
     rounds.push(round(2, [f("b.ts", 3, 0)], true));
     await nextTick();
 
+    expect(w.find(".tf").exists()).toBe(false);
+
+    rounds[1].pending = false;
+    await nextTick();
+
+    expect(w.get(".tf-label").text()).toBe("本轮变更");
     expect(w.find(".tf-body").exists()).toBe(false);
-    expect(w.get(".tf-label").text()).toBe("正在改");
   });
 
   it("换会话（feed.sid 变）→ 展开态不继承", async () => {

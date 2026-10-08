@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { sessionSectionMenuItems, automationSectionMenuItems } from "./contextMenus";
+import { sessionSectionMenuItems, automationSectionMenuItems, workspaceMenuItems } from "./contextMenus";
 
 /** 侧栏分区导航行 ⋯ 菜单：纯构造函数（零分支），验证项内容与 action 透传。 */
 describe("sidebar section menus", () => {
@@ -21,5 +21,26 @@ describe("sidebar section menus", () => {
     expect(item?.label).toBe("新建自动化任务");
     item?.action?.();
     expect(onNew).toHaveBeenCalledOnce();
+  });
+});
+
+describe("workspaceMenuItems", () => {
+  const ws = { key: "k", name: "/p/aide", missing: false };
+
+  it("「新增会话」排第一，action 透传回调", () => {
+    const onNew = vi.fn();
+    const items = workspaceMenuItems(ws, undefined, undefined, undefined, onNew);
+    expect(items[0]?.label).toBe("新增会话");
+    items[0]?.action?.();
+    expect(onNew).toHaveBeenCalledOnce();
+    expect(items[1]?.label).toBe("切换到此工作区");
+  });
+
+  it("不传回调（远程登记）或目录丢失：没有「新增会话」", () => {
+    expect(workspaceMenuItems(ws).some((i) => i.label === "新增会话")).toBe(false);
+    expect(
+      workspaceMenuItems({ ...ws, missing: true }, undefined, undefined, undefined, vi.fn())
+        .some((i) => i.label === "新增会话"),
+    ).toBe(false);
   });
 });

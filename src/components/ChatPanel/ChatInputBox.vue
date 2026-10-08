@@ -19,6 +19,7 @@ import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
+import { useKbSelections } from "@/composables/useKbSelections";
 import { useMentionSuggest, applyPick, type MentionSuggestion } from "@/composables/useMentionSuggest";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
@@ -34,6 +35,9 @@ import { defaultEffortFor } from "./effortDefault";
 import { inputPlaceholder } from "./inputPlaceholder";
 import type { ChatMode } from "./modes";
 import { memoryObservatoryApi } from "@aide/sdk/api";
+import UsageTipText from "./UsageTipText.vue";
+import type { UsageTip } from "./usageTips";
+import { useUsageTips } from "@/composables/useUsageTips";
 
 const props = defineProps<{
   sessionId: string | null;
@@ -94,6 +98,9 @@ const rootEl = ref<HTMLElement | null>(null);
 defineExpose({ rootEl });
 
 const identity = useSessionIdentityView();
+/** 使用小提示：用过某功能就让讲它的提示退役（markUsed 散在各功能入口），
+ *  时机提示的出场逻辑见下方「时机提示」段。 */
+const usageTips = useUsageTips();
 
 const displayModels = computed<ModelOption[]>(() => identity.displayModels.value);
 const displayPermissionModes = computed<PermissionModeOption[]>(() => props.permissionModes);
@@ -212,6 +219,7 @@ function fallbackEffort(): string {
 }
 
 function handleEffortChange(value: string) {
+  if (value === "low") usageTips.markUsed("effort-low");
   effortTouchedByUser = true;
   lastEffortUserActionAt = Date.now();
   selectedEffort.value = value;
@@ -442,6 +450,7 @@ const placeholder = computed(() =>
 const BTW_SELECTOR_HINT = "支线跟随主会话，不可单独设置";
 function toggleBtw() {
   btwMode.value = !btwMode.value;
+  if (btwMode.value) usageTips.markUsed("btw");
 }
 const btwRevertToast = ref(false);
 let btwToastTimer: number | undefined;
@@ -566,6 +575,7 @@ watch(() => props.sessionId, () => {
 
 function selectSkill(skill: SkillMeta | undefined) {
   if (!skill) return;
+  usageTips.markUsed("slash");
   inputText.value = "/" + skill.name + " ";
   slashDropdownVisible.value = false;
   nextTick(() => textareaEl.value?.focus());
@@ -588,6 +598,7 @@ watch(
     if (!props.focused) return;
     const m = mentionInserter.consumeMention();
     if (!m) return;
+    usageTips.markUsed(m.range ? "range-mention" : "file-mention");
     if (!pendingMentions.value.some((x) => mentionKey(x.path, x.range) === mentionKey(m.path, m.range))) {
       pendingMentions.value.push({ path: m.path, isDir: m.isDir, range: m.range });
     }
@@ -595,6 +606,18 @@ watch(
   },
 );
 
+// ── 知识库圈选（在文档里圈出来的一处 + 意见）──────────────────────────────────
+// 圈选的草稿在 useKbSelections（模块级）。文档里的卡片自己发（一篇文档一个会话，见
+// useKbCardSession）；没发出的「待发送」在这里以芯片出现，也能从这里发。
+// 只有聚焦（选中会话）的输入框认领它们——与文件引用芯片同一条规则。
+const kbSel = useKbSelections();
+const kbChips = computed(() => (props.focused ? kbSel.all.value.filter((r) => r.status === "pending") : []));
+/** 本次发送带走的圈选 id；发送坐实（sendConfirmedNonce）时把它们标成「已发出」。 */
+let sentKbIds: string[] = [];
+function kbChipLabel(r: { ref: { title: string; lineStart: number; lineEnd: number } }): string {
+  const lines = r.ref.lineStart === r.ref.lineEnd ? `第 ${r.ref.lineStart} 行` : `第 ${r.ref.lineStart}–${r.ref.lineEnd} 行`;
+  return `${r.ref.title || "未命名文档"} · ${lines}`;
+}
 // 输入框 `@path `→mention 芯片转换层（与来源无关：手打/粘贴/拖入都走这）。
 // paste/drop 管道把文件引用以 `@path ` 文本插进 textarea，这里统一扫描转换。
 const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
@@ -723,6 +746,97 @@ const rejectedDirs = computed(() => (props.sessionId ? attachStore.rejectedOf(pr
 /** 活体扩根失败的原文（有值 = 本轮没扩成功，下条消息/新会话会再落）。 */
 const attachError = computed(() => (props.sessionId ? attachStore.errorOf(props.sessionId) : undefined));
 
+// ── 时机提示（使用小提示里「在用户正需要它时出现」的那几条，文案见 usageTips.ts）──
+// 每条一出场就锁住（latch）直到这一时机结束：出场计数在出场瞬间 +1，若按「是否还在役」
+// 实时算，第 maxShows 次会刚出来就自己消失。只有聚焦的输入框出提示。
+
+/** 生成中开始打字 → 「直接发会排队；只想顺便问一句用 /btw」。一个忙碌期至多出一次，
+ *  出来后留到这一轮结束（或进了 btw 模式）。 */
+const busyTypingTip = ref<UsageTip | null>(null);
+let busyTypingLatched = false;
+watch(
+  [() => props.isBusy, () => inputText.value.trim().length > 0, btwMode, () => props.focused],
+  ([busy, typing, inBtw, focused]) => {
+    if (!busy) busyTypingLatched = false;
+    if (!busy || inBtw || !focused) {
+      busyTypingTip.value = null;
+      return;
+    }
+    if (!typing || busyTypingLatched) return;
+    const tip = usageTips.slotTip("busy-typing");
+    if (!tip) return;
+    busyTypingLatched = true;
+    usageTips.markShown(tip.id);
+    busyTypingTip.value = tip;
+  },
+);
+
+/** 上下文用量过线（与圆环转 warning 同一条 80% 线）→ 提示 /compact。每个会话至多出一次。 */
+const CONTEXT_TIP_PCT = 80;
+const contextHighTip = ref<UsageTip | null>(null);
+const contextTipSessions = new Set<string>();
+watch(
+  [() => props.contextUsage?.percentage ?? 0, () => props.sessionId, () => props.focused],
+  ([pct, sid, focused]) => {
+    if (!sid || !focused || pct < CONTEXT_TIP_PCT) {
+      contextHighTip.value = null;
+      return;
+    }
+    if (contextHighTip.value || contextTipSessions.has(sid)) return;
+    const tip = usageTips.slotTip("context-high");
+    if (!tip) return;
+    contextTipSessions.add(sid);
+    usageTips.markShown(tip.id);
+    contextHighTip.value = tip;
+  },
+);
+
+/** 输入框上方的提示行：生成中打字优先（那一刻正要做决定）。 */
+const inputHintTip = computed(() => busyTypingTip.value ?? contextHighTip.value);
+function dismissInputHint() {
+  const tip = inputHintTip.value;
+  if (!tip) return;
+  usageTips.dismiss(tip.id);
+  if (busyTypingTip.value?.id === tip.id) busyTypingTip.value = null;
+  else contextHighTip.value = null;
+}
+
+/** @ 菜单里出现了别的项目 → 「@ 另一个项目 = 授权它的目录」。每次菜单打开至多计一次。 */
+const mentionProjectTip = ref<UsageTip | null>(null);
+watch(
+  [suggestVisible, () => suggestItems.value.some((it) => it.origin === "project")],
+  ([visible, hasProject]) => {
+    if (!visible) {
+      mentionProjectTip.value = null;
+      return;
+    }
+    if (!hasProject || mentionProjectTip.value) return;
+    const tip = usageTips.slotTip("mention-project");
+    if (!tip) return;
+    usageTips.markShown(tip.id);
+    mentionProjectTip.value = tip;
+  },
+);
+
+/** 本会话里第一次授权了别的项目（附加目录 0 → 有）→ 说明它整个会话有效、怎么解除。
+ *  同时这就是「会跨项目了」的信号。切会话即收起（重开老会话不算「刚授权」）。 */
+const attachedTip = ref<UsageTip | null>(null);
+watch(
+  [() => props.sessionId, () => attachedDirs.value.length],
+  ([sid, len], [prevSid, prevLen]) => {
+    if (sid !== prevSid) {
+      attachedTip.value = null;
+      return;
+    }
+    if (!(prevLen === 0 && len > 0)) return;
+    usageTips.markUsed("cross-project");
+    const tip = usageTips.slotTip("project-attached");
+    if (!tip) return;
+    usageTips.markShown(tip.id);
+    attachedTip.value = tip;
+  },
+);
+
 // ── 键盘 / 粘贴 / 拖放 ──
 function handleTabKey(e: KeyboardEvent) {
   // Shift+Tab = 循环权限模式（CLI 同款），与 slash 补全互斥
@@ -747,6 +861,7 @@ function cyclePermissionMode(e: KeyboardEvent) {
   const next = nextPermissionMode(selectedPermissionMode.value, displayPermissionModes.value);
   if (!next) return;
   e.preventDefault();
+  usageTips.markUsed("perm-cycle");
   handlePermissionModeChange(next);
 }
 
@@ -794,7 +909,12 @@ async function handlePaste(e: ClipboardEvent) {
     // 同进程并发打开会互斥失败（粘贴偶发为空的真实根因），先 files 后 image。
     const filesRes = await api.clipboardReadFiles();
     const img = await api.clipboardReadImage();
-    const res = resolvePastePayload(filesRes.paths, img, peekFileClipboard(), plainText);
+    // 剪贴板里的文件与截图都在 GUI 这台机器上：先让它们进到本窗口的 Host（本机窗口原样）
+    const local = img ? [...filesRes.paths, img] : filesRes.paths;
+    const onHost = local.length ? await api.uploadLocalFiles(local) : [];
+    const hostFiles = img ? onHost.slice(0, -1) : onHost;
+    const hostImg = img ? (onHost[onHost.length - 1] ?? null) : null;
+    const res = resolvePastePayload(hostFiles, hostImg, peekFileClipboard(), plainText);
     await applyPasteResolution(res);
   } catch {
     if (plainText) insertAtCursor(plainText);
@@ -811,6 +931,7 @@ async function applyPasteResolution(res: PasteResolution) {
     // 转换立即发生，不必等用户再按键。纯文本扫描无 token 即 no-op。
     void scanMentions();
   }
+  if (res.imagePaths.length) usageTips.markUsed("paste-image");
   let failed = 0;
   for (const imgPath of res.imagePaths) {
     try {
@@ -866,6 +987,7 @@ async function handleDrop(e: DragEvent) {
 
   const dropped = Array.from(dt.files ?? []);
   let paths: string[] = [];
+  const localPaths: string[] = [];
   let entry: ReturnType<typeof peekFileClipboard> = null;
 
   let stagedFailed = 0;
@@ -873,7 +995,7 @@ async function handleDrop(e: DragEvent) {
     for (const file of dropped) {
       const fp = (file as File & { path?: string }).path;
       if (typeof fp === "string" && fp) {
-        paths.push(fp);
+        localPaths.push(fp);
       } else {
         try {
           const buf = new Uint8Array(await file.arrayBuffer());
@@ -886,6 +1008,15 @@ async function handleDrop(e: DragEvent) {
         }
       }
     }
+    // 带 File.path 的是 GUI 机器上的路径：进到本窗口的 Host（本机窗口原样）
+    if (localPaths.length) {
+      try {
+        paths.push(...(await api.uploadLocalFiles(localPaths)));
+      } catch (e) {
+        stagedFailed += localPaths.length;
+        console.warn("[ChatInputBox] 拖入文件上传到 Host 失败，已跳过:", e);
+      }
+    }
     if (stagedFailed > 0) showToast(`${stagedFailed} 个文件读取失败已跳过`, "danger");
   } else {
     // 内部文件树拖入：onDragStart 调的是 cut(path)，而 resolvePastePayload 只认
@@ -896,6 +1027,7 @@ async function handleDrop(e: DragEvent) {
   }
 
   const res = resolvePastePayload(paths, null, null, "");
+  if (paths.length) usageTips.markUsed("file-mention");
   await applyPasteResolution(res);
   if (entry) clearFileClipboard();
 }
@@ -922,13 +1054,14 @@ async function handleSend() {
 async function performSend() {
   const text = inputText.value.trim();
   const hasImages = pendingImages.value.length > 0;
+  const kbrefs = kbChips.value.map((r) => ({ ...r.ref }));
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
   // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
   const mentionPrefix = pendingMentions.value.length
     ? pendingMentions.value.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
     : "";
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
-  if (!text && !hasImages && !mentionPrefix) return;
+  if (!text && !hasImages && !mentionPrefix && !kbrefs.length) return;
 
   // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
   // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
@@ -948,6 +1081,7 @@ async function performSend() {
           return;
         }
         emit("send-btw", mentionPrefix + args);
+        usageTips.markUsed("btw");
         awaitingBtwLaunch.value = true;
         return;
       }
@@ -1009,8 +1143,11 @@ async function performSend() {
   const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  sentKbIds = kbrefs.map((r) => r.selectionId);
+  if (kbrefs.length) usageTips.markUsed("kb-selection");
   const sendOpts: SendOptions = {
     images: images.length ? images : undefined,
+    kbrefs: kbrefs.length ? kbrefs : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
     initialModel: selectedModel.value || undefined,
@@ -1037,6 +1174,7 @@ async function performSend() {
 // useChatSession.dispatchSend）。/clear 不可逆，执行前弹 useModal.confirm 二次确认。
 // 菜单点击与手打 /name 统一走 runPromptAction——取消确认则什么都不发、不入队、不推气泡。
 async function runPromptAction(action: QuickAction, prompt: string): Promise<boolean> {
+  if (action.id === "compact" || action.id === "clear") usageTips.markUsed("compact");
   if (action.confirm) {
     const ok = await useModal().confirm(
       action.label,
@@ -1073,6 +1211,9 @@ async function handleQuickAction(action: QuickAction) {
 // 发送坐实（ChatPanel 门控通过/确认后递增 nonce）：清空输入。取消确认不递增，
 // 输入保留——与旧实现「取消时内容回退对话框」语义一致。
 watch(() => props.sendConfirmedNonce, () => {
+  // 圈选：发出去了 → 标成 sent（之后的状态只由聊天事件推进）。无论是不是文档侧发起的都要标。
+  if (sentKbIds.length) kbSel.markSent(sentKbIds, props.sessionId ?? undefined);
+  sentKbIds = [];
   inputText.value = "";
   pendingImages.value = [];
   pendingMentions.value = [];
@@ -1145,6 +1286,9 @@ const { actions: quickActions } = useQuickActions();
           >→ 进入</button>
         </span>
       </div>
+      <div v-if="mentionProjectTip" class="mention-tip">
+        <UsageTipText :text="mentionProjectTip.text" />
+      </div>
       <div class="mention-foot">
         <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
         <span><kbd>→</kbd> 进入目录</span>
@@ -1155,6 +1299,10 @@ const { actions: quickActions } = useQuickActions();
     <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
          不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
     <!-- 忙碌时排队、正在等安全边界（当前回合结束）的消息：sidecar 已登记，不可撤回 -->
+    <div v-if="inputHintTip" class="input-tip-row">
+      <UsageTipText :text="inputHintTip.text" />
+      <button type="button" class="input-tip-x" v-tooltip="'知道了，不再提示'" @click="dismissInputHint">×</button>
+    </div>
     <div v-if="pendingJumps?.length" class="jump-strip">
       <div v-for="(p, i) in pendingJumps" :key="i" class="jump-item">
         <span class="jump-item-tag">排队</span>
@@ -1187,6 +1335,14 @@ const { actions: quickActions } = useQuickActions();
           <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
         </div>
       </Transition>
+      <!-- 知识库圈选芯片：在文档里圈出来、还没发送的几处。× = 不要这一处（文档里的角标同步消失） -->
+      <div v-if="kbChips.length" class="mention-strip">
+        <div v-for="(r, i) in kbChips" :key="r.ref.selectionId" class="mention-chip kb-chip" v-tooltip="r.ref.text">
+          <span class="kb-chip-pin">{{ i + 1 }}</span>
+          <span class="mention-chip-name">{{ kbChipLabel(r) }}<span v-if="r.ref.comment" class="kb-chip-note"> · {{ r.ref.comment }}</span></span>
+          <button class="mention-chip-remove" @click="kbSel.discard(r.ref.selectionId)">×</button>
+        </div>
+      </div>
       <!-- 文件引用芯片（文件树右键「添加到对话」）：发送时展开成 @path 前缀 -->
       <div v-if="pendingMentions.length" class="mention-strip">
         <div
@@ -1227,6 +1383,7 @@ const { actions: quickActions } = useQuickActions();
           <span class="attach-chip-name">{{ mentionName(d) }}</span>
           <span class="attach-chip-tag">已授权</span>
         </div>
+        <UsageTipText v-if="attachedTip" class="attach-tip" :text="attachedTip.text" />
         <div v-if="rejectedDirs.length" class="attach-warn" v-tooltip="rejectedDirs.join('\n')">
           未注册，已忽略：{{ mentionName(rejectedDirs[0])
           }}<span v-if="rejectedDirs.length > 1"> 等 {{ rejectedDirs.length }} 个</span>
@@ -1321,10 +1478,10 @@ const { actions: quickActions } = useQuickActions();
             v-if="contextUsage"
             ref="usageRingRef"
             :usage="contextUsage"
-            @open="usagePanelOpen = true"
+            @open="usagePanelOpen = true; usageTips.markUsed('context-ring')"
           />
           <ChatSendButton
-            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length) || sending"
+            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
             :busy="isBusy && !btwMode"
             :actions="quickActions"
             :btw-active="btwMode"
@@ -1736,6 +1893,48 @@ const { actions: quickActions } = useQuickActions();
   padding: 0 4px;
 }
 
+/* ── 使用小提示（时机提示）── */
+.input-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  padding: 3px 4px 3px 8px;
+  min-width: 0;
+}
+
+.input-tip-row > .usage-tip {
+  flex: 1;
+}
+
+.input-tip-x {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.input-tip-x:hover {
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-hover);
+}
+
+.mention-tip {
+  display: flex;
+  padding: 4px 10px;
+  border-top: 1px solid var(--aide-border-subtle);
+  background: var(--aide-bg-raised);
+}
+
+.attach-tip {
+  align-self: center;
+}
+
 .jump-strip {
   display: flex;
   flex-direction: column;
@@ -1866,6 +2065,26 @@ const { actions: quickActions } = useQuickActions();
 }
 
 /* 选区引用的行号后缀：弱化成次要色，不与文件名抢视线 */
+.kb-chip {
+  max-width: 320px;
+  border-color: color-mix(in srgb, var(--aide-accent) 40%, var(--aide-border));
+  background: color-mix(in srgb, var(--aide-accent) 8%, var(--aide-surface-default));
+}
+.kb-chip-pin {
+  display: inline-grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--aide-accent-gradient, var(--aide-accent));
+  color: var(--aide-text-on-accent);
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.kb-chip-note {
+  color: var(--aide-text-primary);
+}
 .mention-chip-range {
   color: var(--aide-text-muted);
 }

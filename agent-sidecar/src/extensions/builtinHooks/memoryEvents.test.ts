@@ -66,7 +66,10 @@ describe("classifyOp", () => {
     const f = path.join(configDir, "projects", key, "memory", "w.md");
     writeFileSync(f, "x");
     expect(classifyOp("Write", f)).toBe("created");
-    utimesSync(f, new Date(2020, 0, 1), new Date(2020, 0, 1));
+    // 把 mtime 拨到「未来」而不是过去：macOS 上 mtime 早于 birthtime 时系统会把 birthtime
+    // 一并拽回去（两者重新相等 → 误判 created）；往后拨不会动 birthtime，三平台一致。
+    const later = new Date(Date.now() + 3600_000);
+    utimesSync(f, later, later);
     expect(classifyOp("Write", f)).toBe("updated");
     expect(classifyOp("Write", path.join(root, "nope.md"))).toBe("updated");
   });

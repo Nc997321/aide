@@ -13,7 +13,7 @@ const cfg = (over: Partial<AutomationConfig> = {}): AutomationConfig => ({
   runId: "run_x",
   preset: "auto",
   tools: ["*"],
-  mcpAllowlist: ["aide-codegraph"],
+  mcpAllowlist: ["aide-lsp"],
   taskDir: "C:\\Users\\h\\.aide\\automations\\aut_x",
   sessionDir: "",
   ...over,
@@ -21,7 +21,7 @@ const cfg = (over: Partial<AutomationConfig> = {}): AutomationConfig => ({
 
 describe("parseMcpServerKey", () => {
   it("parses standard mcp tool names", () => {
-    expect(parseMcpServerKey("mcp__aide-codegraph__find_symbol")).toBe("aide-codegraph");
+    expect(parseMcpServerKey("mcp__aide-lsp__definition")).toBe("aide-lsp");
     expect(parseMcpServerKey("mcp__aide-docs__read_docx")).toBe("aide-docs");
   });
   it("server key with single underscore is preserved", () => {
@@ -45,7 +45,7 @@ describe("automationHookVerdict", () => {
     expect(automationHookVerdict("Read", {}, cfg({ preset: "full" }))).toBe("allow");
   });
   it("MCP 工具按连接器白名单，与预设无关", () => {
-    expect(automationHookVerdict("mcp__aide-codegraph__find_symbol", {}, cfg())).toBe("allow");
+    expect(automationHookVerdict("mcp__aide-lsp__definition", {}, cfg())).toBe("allow");
     expect(automationHookVerdict("mcp__evil-server__pwn", {}, cfg())).toBe("deny");
     // full 预设也不能白拿未预授权的连接器
     expect(automationHookVerdict("mcp__evil-server__pwn", {}, cfg({ preset: "full" }))).toBe("deny");
@@ -110,11 +110,11 @@ describe("automationQueryOverrides", () => {
 describe("filterMcpServers", () => {
   it("keeps only allowlisted servers", () => {
     const servers = {
-      "aide-codegraph": { type: "sdk" },
       "aide-docs": { type: "sdk" },
+      "aide-lsp": { type: "sdk" },
       "user-server": { command: "x" },
     };
-    expect(Object.keys(filterMcpServers(servers, ["aide-codegraph"]))).toEqual(["aide-codegraph"]);
+    expect(Object.keys(filterMcpServers(servers, ["aide-lsp"]))).toEqual(["aide-lsp"]);
     expect(filterMcpServers(servers, [])).toEqual({});
   });
 });

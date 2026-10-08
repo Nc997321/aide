@@ -63,7 +63,7 @@ export function ensureDispatchManifest(pluginRoot: string, name: string): boolea
  *
  * - lightweight → []
  * - 用户级：claude home = process.env.CLAUDE_CONFIG_DIR（fallback ~/.aide/claude，
- *   与 codegraphSkill.ts:50 同源）。目录存在 + ensureDispatchManifest 成功 → 注入
+ *   ）。目录存在 + ensureDispatchManifest 成功 → 注入
  * - 项目级：{cwd}/.aide/claude，仅 trusted。同样门控
  * - 每条 skipMcpDiscovery:true（散装 plugin 不贡献 MCP，与 Aide strictMcpConfig 隔离）
  * - 目录不存在 / ensure 失败 → 跳过该条（降级，不阻塞）

@@ -20,19 +20,6 @@ describe("browserMcpRegistration — 门控矩阵", () => {
   it("!trusted → null（受限模式不暴露浏览器读写）", () => {
     expect(browserMcpRegistration(noopEmit, {} as NodeJS.ProcessEnv, false)).toBeNull();
   });
-
-  /**
-   * headless **不摘除注册**——这是刻意的：工具列表跨宿主稳定，模型拿到的是明确信号
-   * （「本环境没有内嵌浏览器」），而不是工具消失后自己发明 curl 去抓页面。
-   * 短路在 browserTools 的 host 检查里做，那一条由 browserTools.test.ts 覆盖。
-   */
-  it("headless 标记不影响注册（短路在工具层，不在注册层）", () => {
-    const spec = browserMcpRegistration(
-      noopEmit,
-      { AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv,
-    );
-    expect(spec).not.toBeNull();
-  });
 });
 
 describe("放行规则是**工具级**的（server 级会连 eval 之外的语义一起放行）", () => {
@@ -68,7 +55,7 @@ describe("放行规则是**工具级**的（server 级会连 eval 之外的语�
 /**
  * 注册谱的序列化形态。SDK server 实例内含 zod v4 schema（内部 root 自引用），
  * 直接 JSON.stringify 会抛 circular structure —— 用 WeakSet replacer 去环
- * （knowledgeMcp.test.ts / codegraphTools.test.ts 先例）。
+ * （knowledgeMcp.test.ts 先例）。
  */
 function serializedSpec(): string {
   const spec = browserMcpRegistration(noopEmit, {} as NodeJS.ProcessEnv);
@@ -96,7 +83,6 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     // parking 之后"没显示"不再等于"没渲染"——这条反向说明是给模型的**行为许可**：
     // 不必为了"让页面动起来"去要求用户把 tab 切到前台。删了它会退回旧的世界观。
     expect(json).toContain("A VIEW YOU CANNOT SEE KEEPS WORKING");
-    expect(json).toContain("DESKTOP ONLY");
   });
 
   /**

@@ -20,7 +20,12 @@ const hiddenCount = ref(0);
  *  true 时 App.vue 用 MarketplaceTab 盖住 PaneLayout，PaneLayout v-show 保活；
  *  选中会话时 App 调 closePanel 切回聊天）。 */
 const panelOpen = ref(false);
-function openPanel() { panelOpen.value = true; }
+/** 打开时要直接落到的分类（如「语言服务器」= "langpacks"）；MarketplaceTab 取用后清空。 */
+const requestedCategory = ref<string | null>(null);
+function openPanel(opts?: { category?: string }) {
+  if (opts?.category) requestedCategory.value = opts.category;
+  panelOpen.value = true;
+}
 function closePanel() { panelOpen.value = false; }
 function togglePanel() { panelOpen.value = !panelOpen.value; }
 
@@ -154,7 +159,7 @@ export function useMarketplace() {
   return {
     sources, plugins, installedPlugins, loading, installing, updating,
     error, errorActions, searchQuery, hiddenCount, filteredPlugins, allEntries, featuredPlugins,
-    panelOpen, openPanel, closePanel, togglePanel,
+    panelOpen, openPanel, closePanel, togglePanel, requestedCategory,
     isInstalled, isInstalling, getInstalled, hasUpdate,
     fetchSources, fetchPlugins, refreshInstalled,
     installPlugin, uninstallPlugin, updatePlugin, setEnabled, refreshSource, setSourceEnabled,

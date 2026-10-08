@@ -1,11 +1,10 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// mock api: lspDefinition / lspReferences / codegraphGotoDefinition / grepSymbol
+// mock api: lspDefinition / lspReferences / grepSymbol
 vi.mock("../api", () => ({
   api: {
     lspDefinition: vi.fn(),
     lspReferences: vi.fn(),
-    codegraphGotoDefinition: vi.fn(),
     grepSymbol: vi.fn(),
     workspaceSetLspEnabled: vi.fn().mockResolvedValue(undefined),
   },
@@ -23,7 +22,7 @@ describe("useGotoDefinition.search provider chain", () => {
     vi.clearAllMocks();
   });
 
-  it("lsp_first_then_codegraph_then_grep", async () => {
+  it("lsp_first_no_grep_when_hit", async () => {
     (api.lspDefinition as any).mockResolvedValue({
       status: "ok",
       results: [
@@ -37,32 +36,32 @@ describe("useGotoDefinition.search provider chain", () => {
     expect(api.lspDefinition).toHaveBeenCalled();
     expect(results.value.length).toBe(1);
     expect(results.value[0].source).toBe("lsp");
-    expect(api.codegraphGotoDefinition).not.toHaveBeenCalled();
+    expect(api.grepSymbol).not.toHaveBeenCalled();
   });
 
-  it("lsp_error_falls_through_to_codegraph", async () => {
+  it("lsp_error_falls_through_to_grep", async () => {
     (api.lspDefinition as any).mockRejectedValue(new Error("server dead"));
-    (api.codegraphGotoDefinition as any).mockResolvedValue([
-      { symbol: { name: "foo", file: "p/a.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null },
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/a.rs", line: 9 },
     ]);
     // 开 LSP（直接置 enabled）
     useLsp().lspEnabledWorkspaces.value.add("/p");
     const { search, results } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 3 });
-    expect(api.codegraphGotoDefinition).toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalled();
     expect(results.value.length).toBe(1);
-    expect(results.value[0].source).toBe("ast");
+    expect(results.value[0].source).toBe("grep");
   });
 
-  it("lsp_off_skips_lsp_goes_codegraph", async () => {
-    (api.codegraphGotoDefinition as any).mockResolvedValue([
-      { symbol: { name: "foo", file: "p/a.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null },
+  it("lsp_off_skips_lsp_goes_grep", async () => {
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/a.rs", line: 9 },
     ]);
     // LSP 未开
     const { search } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs" });
     expect(api.lspDefinition).not.toHaveBeenCalled();
-    expect(api.codegraphGotoDefinition).toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalled();
   });
 
   it("lsp_self_ref_filtered_when_absolute_path", async () => {
@@ -91,37 +90,37 @@ describe("useGotoDefinition.search provider chain", () => {
     const { search, results, searching, degraded } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 3, sourceWordColumn: 3 });
     expect(api.lspDefinition).toHaveBeenCalledTimes(1);
-    expect(api.codegraphGotoDefinition).not.toHaveBeenCalled();
+    expect(api.grepSymbol).not.toHaveBeenCalled();
     expect(degraded.value).toBe("timeout");
     expect(results.value.length).toBe(0);
     expect(searching.value).toBe(false);
   });
 
-  it("not_ready_falls_to_codegraph_with_degraded", async () => {
+  it("not_ready_falls_to_grep_with_degraded", async () => {
     (api.lspDefinition as any).mockResolvedValue({ status: "not_ready", results: [] });
-    (api.codegraphGotoDefinition as any).mockResolvedValue([
-      { symbol: { name: "foo", file: "p/a.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null },
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/a.rs", line: 9 },
     ]);
     useLsp().lspEnabledWorkspaces.value.add("/p");
     const { search, results, degraded } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 3 });
     expect(api.lspDefinition).toHaveBeenCalledTimes(1); // not_ready 不重试
-    expect(api.codegraphGotoDefinition).toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalled();
     expect(results.value.length).toBe(1);
-    expect(results.value[0].source).toBe("ast");
+    expect(results.value[0].source).toBe("grep");
     expect(degraded.value).toBe("not_ready");
   });
 
-  it("gone_falls_to_codegraph_no_degraded", async () => {
+  it("gone_falls_to_grep_no_degraded", async () => {
     (api.lspDefinition as any).mockResolvedValue({ status: "gone", results: [] });
-    (api.codegraphGotoDefinition as any).mockResolvedValue([
-      { symbol: { name: "foo", file: "p/a.rs", line: 9, column: 0, kind: "Function", parent: null }, confidence: "Structure", score: null },
+    (api.grepSymbol as any).mockResolvedValue([
+      { file: "p/a.rs", line: 9 },
     ]);
     useLsp().lspEnabledWorkspaces.value.add("/p");
     const { search, results, degraded } = useGotoDefinition();
     await search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 3 });
     expect(api.lspDefinition).toHaveBeenCalledTimes(1);
-    expect(api.codegraphGotoDefinition).toHaveBeenCalled();
+    expect(api.grepSymbol).toHaveBeenCalled();
     expect(results.value.length).toBe(1);
     expect(degraded.value).toBe(null);
   });
@@ -157,14 +156,13 @@ describe("useGotoDefinition.search provider chain", () => {
   it("searching_true_while_lsp_pending", async () => {
     let resolveLsp: (v: any) => void = () => {};
     (api.lspDefinition as any).mockImplementationOnce(() => new Promise<any>(r => { resolveLsp = r; }));
-    (api.codegraphGotoDefinition as any).mockResolvedValue([]);
     (api.grepSymbol as any).mockResolvedValue([]);
     useLsp().lspEnabledWorkspaces.value.add("/p");
     const { search, searching } = useGotoDefinition();
     const p = search("foo", "/p", { sourceFile: "p/main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 1, sourceExt: "rs", sourceColumn: 3 });
     // LSP pending 期间 searching 应为 true（浮层显示「跳转中…」而非「未找到定义」）
     expect(searching.value).toBe(true);
-    resolveLsp({ status: "ok", results: [] }); // ok 空 → 落本地索引（也 mock 空）
+    resolveLsp({ status: "ok", results: [] }); // ok 空 → 落本地回退（也 mock 空）
     await p;
     expect(searching.value).toBe(false);
   });
@@ -241,7 +239,6 @@ describe("useGotoDefinition.searchAllReferences provider chain", () => {
     await searchAllReferences("foo", "/p", { sourceFile: "main.rs", sourceFileAbs: "/p/main.rs", sourceLine: 3, sourceExt: "rs", sourceColumn: 6, sourceWordColumn: 5 });
     expect(api.lspReferences).toHaveBeenCalledTimes(1);
     expect(api.grepSymbol).not.toHaveBeenCalled(); // LSP 命中不落兜底
-    expect(api.codegraphGotoDefinition).not.toHaveBeenCalled(); // 引用链不走 codegraph（定义冒充使用点）
     expect(results.value.length).toBe(1);
     expect(results.value[0].source).toBe("lsp");
     expect(results.value[0].symbol.file).toBe("/p/other.rs");

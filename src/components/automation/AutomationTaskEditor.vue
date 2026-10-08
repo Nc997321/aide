@@ -152,8 +152,8 @@ const missedPolicyOptions = [
 ];
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 
-// 连接器：内置两个 + 用户配置的 MCP server（名字即 server key）
-const connectorOptions = ref<string[]>(["aide-codegraph", "aide-docs"]);
+// 连接器：内置一个 + 用户配置的 MCP server（名字即 server key）
+const connectorOptions = ref<string[]>(["aide-docs"]);
 onMounted(async () => {
   try {
     const items = await mcpServerApi.list();

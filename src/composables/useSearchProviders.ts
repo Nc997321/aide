@@ -1,6 +1,5 @@
 import { api } from "../api";
 import type { Session } from "../types";
-import { createCodegraphProvider } from "./useSearchProviders/codegraph";
 import type { SearchProvider, SearchResult } from "./useSearchProviders/types";
 import { useFileViewer } from "./useFileViewer";
 
@@ -120,8 +119,8 @@ function createFileProvider(
 }
 
 /**
- * Initialize the search provider registry with the built-in session, file,
- * and codegraph providers. Call once from App.vue during mount, passing
+ * Initialize the search provider registry with the built-in session and
+ * file providers. Call once from App.vue during mount, passing
  * callback functions so the providers can interact with the rest of the app
  * without direct component dependencies.
  */
@@ -132,7 +131,6 @@ function initProviders(
 ) {
   register(createSessionProvider(getSessionList, onSessionSelect));
   register(createFileProvider(getWorkspacePath));
-  register(createCodegraphProvider(getWorkspacePath));
 }
 
 function getProviders(): SearchProvider[] {

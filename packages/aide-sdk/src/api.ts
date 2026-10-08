@@ -7,14 +7,13 @@ import type {
   AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
   GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
-  SkillMeta, BuildIndexResult, BuildProgress, RescanResult, QueryResult, LspJumpResult,
+  SkillMeta, QueryResult, LspJumpResult,
   AppNotification, NotificationRecord,
   CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
-  RemoteStatus,
 } from "./types";
 import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
@@ -288,9 +287,14 @@ export const api = {
   clipboardReadImage(): Promise<string | null> {
     return getTransport().invoke("clipboard_read_image");
   },
-  // 外部拖入的 OS 文件落到临时目录，返回路径（仅当 WebView2 不暴露 File.path 时兜底）
+  // 外部拖入的 OS 文件落到**本窗口 Host** 的暂存目录，返回 Host 路径（WebView2 不暴露 File.path 时）
   stageDroppedFile(name: string, base64: string): Promise<string> {
     return getTransport().invoke("stage_dropped_file", { name, base64 });
+  },
+  /** GUI 这台机器上的文件路径（剪贴板文件 / 粘贴的截图 / 拖入带 File.path 的文件）→ 本窗口 Host
+   *  能看见的路径：本机窗口原样返回；Host 窗口把文件上传到 Host 暂存目录（一个窗口 = 一个 Host）。 */
+  uploadLocalFiles(paths: string[]): Promise<string[]> {
+    return getTransport().invoke("upload_local_files", { paths });
   },
 
   // 文件
@@ -315,6 +319,10 @@ export const api = {
   },
   fileOpen(path: string): Promise<void> {
     return getTransport().invoke("file_open", { path });
+  },
+  /** Host 路径 → 本机可访问路径（WSL 译成 `\\wsl.localhost\…`，SSH 拒绝）。 */
+  fileGuiPath(path: string): Promise<string> {
+    return getTransport().invoke("file_gui_path", { path });
   },
   showInExplorer(path: string): Promise<void> {
     return getTransport().invoke("show_in_explorer", { path });
@@ -660,23 +668,10 @@ export const api = {
   detectAvailableProxy(): Promise<string | null> {
     return getTransport().invoke("detect_available_proxy");
   },
-  setSettings(settings: Partial<AppSettings> | { codegraphEmbedder: Record<string, unknown> }): Promise<void> {
+  setSettings(settings: Partial<AppSettings>): Promise<void> {
     return getTransport().invoke("set_settings", { settings });
   },
 
-  // 远程控制网关
-  remoteGetStatus(): Promise<RemoteStatus> {
-    return getTransport().invoke("remote_get_status");
-  },
-  remoteSetEnabled(enabled: boolean): Promise<void> {
-    return getTransport().invoke("remote_set_enabled", { enabled });
-  },
-  remoteRefreshPairingCode(): Promise<string> {
-    return getTransport().invoke("remote_refresh_pairing_code");
-  },
-  remoteRevoke(): Promise<void> {
-    return getTransport().invoke("remote_revoke");
-  },
 
   // JDK 注册表（机器级；工作区选哪个走 workspace_get/set_jdk）
   scanJdks(): Promise<JdkEntry[]> {
@@ -782,39 +777,6 @@ export const api = {
     return getTransport().invoke("clear_recent", { category: category ?? null });
   },
 
-  // CodeGraph — enhanced code navigation
-  /** opts.force=true 全量重建（跳过增量快速路径）；默认增量。裸 bool 具名化。 */
-  // TODO: useCodeGraphProgress.ts:280 的 (root, true) 调用点待 B 路同步为 { force: true }
-  codegraphBuildIndex(projectRoot: string, opts: { force?: boolean } = {}): Promise<BuildIndexResult> {
-    return getTransport().invoke("codegraph_build_index", { projectRoot, force: opts.force ?? false });
-  },
-  codegraphGotoDefinition(
-    word: string,
-    file: string,
-    line: number,
-    column: number,
-    projectRoot: string,
-  ): Promise<QueryResult[]> {
-    return getTransport().invoke("codegraph_goto_definition", { word, file, line, column, projectRoot });
-  },
-  codegraphClose(projectRoot: string): Promise<void> {
-    return getTransport().invoke("codegraph_close", { projectRoot });
-  },
-  codegraphReindexFile(
-    projectRoot: string,
-    file: string,
-  ): Promise<{ reindexed: boolean; skipped?: string } | undefined> {
-    return getTransport().invoke("codegraph_reindex_file", { projectRoot, file });
-  },
-  /** 增量重扫：只 reindex mtime > indexed_at 的文件（手动「更新索引」）。 */
-  codegraphRescan(projectRoot: string): Promise<RescanResult> {
-    return getTransport().invoke("codegraph_rescan", { projectRoot });
-  },
-  /** 粗粒度构建进度（纯原子读，同步 inline 命令）。前端定时 poll。 */
-  codegraphBuildProgress(): Promise<BuildProgress> {
-    return getTransport().invoke("codegraph_build_progress");
-  },
-
   // ── LSP ──
 
   lspDetectLanguages(workspaceRoot: string): Promise<string[]> {
@@ -909,17 +871,6 @@ export const api = {
   untrustWorkspace(path: string): Promise<number> {
     return getTransport().invoke("untrust_workspace", { path });
   },
-  /** 读某工作区的代码索引开关（每工作区默认关，后端权威）。 */
-  isWorkspaceCodegraphEnabled(path: string): Promise<boolean> {
-    return getTransport().invoke("workspace_get_codegraph_enabled", { workspaceRoot: path });
-  },
-  /** 设某工作区的代码索引开关（每工作区默认关；信任把关在建索引门，不在写开关处）。 */
-  setWorkspaceCodegraphEnabled(path: string, enabled: boolean): Promise<void> {
-    return getTransport().invoke("workspace_set_codegraph_enabled", {
-      workspaceRoot: path,
-      enabled,
-    });
-  },
 
   /**
    * 把知识库凭据镜像给 Rust（→ `~/.aide/` 下的凭据文件，名称随构建档位：
@@ -934,10 +885,29 @@ export const api = {
       token: input.token,
     });
   },
+  /** 知识库「关联项目」全表：`{ 文档或文件夹 id: [工作区 key] }`。**本 Host 自持**（工作区与记忆都是
+   *  Host 的），不同步、不对手机开放。 */
+  kbLinks(): Promise<Record<string, string[]>> {
+    return getTransport().invoke("kb_links", {});
+  },
+  /** 设置某个文档 / 文件夹**直接**关联的工作区（全量覆盖；空数组 = 清掉）。返回写入后的全表。 */
+  setKbLinks(nodeId: string, wsKeys: string[]): Promise<Record<string, string[]>> {
+    return getTransport().invoke("set_kb_links", { nodeId, wsKeys });
+  },
 };
 
 export { permissionsApi } from "./api/permissions";
 export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
+export {
+  remoteWorkspaceApi,
+  REMOTE_WORKSPACE_STATUS_EVENT,
+  parseRemotePath,
+} from "./api/remoteWorkspace";
+export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remoteWorkspace";
+export { hostApi, HOST_OPEN_FOLDER_EVENT } from "./api/host";
+export { linkApi } from "./api/link";
+export type { LinkStatus, LinkOffer } from "./api/link";
+export type { CurrentHost, HostRecents, HostRecentProject } from "./api/host";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

@@ -11,7 +11,7 @@
 
 import { isAbsolute, join } from "node:path";
 // bun 反斜杠兜底（toForwardSlashes / safeDirname / WIN_DRIVE_ABS）抽到共享 winPaths，
-// 供 docx + winBashEnv + codegraphSkill 复用，单一真相源。bun 1.3.14 三缺陷见 winPaths 注释。
+// 供 docx + winBashEnv 复用，单一真相源。bun 1.3.14 三缺陷见 winPaths 注释。
 import {
   toForwardSlashes,
   safeDirname,

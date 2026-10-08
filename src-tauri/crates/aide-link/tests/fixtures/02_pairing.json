@@ -1,0 +1,81 @@
+[
+  {
+    "name": "scanning the QR code pairs: the first valid frame confirms, and the phone can resume afterwards",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "connection": "later" },
+      { "connect": { "mode": "resume", "as": "b" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } }
+    ]
+  },
+  {
+    "name": "the QR code is single-use: a second scan of the same code is refused",
+    "channel": "pair",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "connection": "second scan" },
+      { "connect": { "mode": "pair", "as": "stranger", "psk": "offer" } },
+      { "wire_expect": { "type": "sc_err", "code": "no_pairing_offer" } }
+    ]
+  },
+  {
+    "name": "a wrong one-time secret never pairs, and does not burn the offer",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "pair", "as": "stranger", "psk": "wrong" } },
+      { "tick_secs": 20 },
+      { "wire_expect": { "type": "sc_err", "code": "timeout" } },
+      { "connection": "the real phone" },
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } }
+    ]
+  },
+  {
+    "name": "a handshake that is never confirmed does not pair the device",
+    "channel": "none",
+    "steps": [
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "connection": "other" },
+      { "connect": { "mode": "resume", "as": "b" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
+    ]
+  },
+  {
+    "name": "single device: pairing a second phone kicks the first with bye superseded",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "connection": "phone b" },
+      { "connect": { "mode": "pair", "as": "b", "psk": "offer" } },
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "connection": "default" },
+      { "tick_secs": 1 },
+      { "expect": { "type": "bye", "code": "superseded", "message": "<string>" } },
+      { "expect_closed": true },
+      { "connection": "phone a again" },
+      { "connect": { "mode": "resume", "as": "a" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
+    ]
+  },
+  {
+    "name": "link.unpair: the Host answers, ends the connection, and the phone can no longer resume",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "call", "id": 1, "method": "link.unpair", "params": {} } },
+      { "expect": { "type": "result", "id": 1, "value": null } },
+      { "expect": { "type": "bye", "code": "revoked" } },
+      { "expect_closed": true },
+      { "connection": "after" },
+      { "connect": { "mode": "resume", "as": "a" } },
+      { "wire_expect": { "type": "sc_err", "code": "unauthorized" } }
+    ]
+  }
+]

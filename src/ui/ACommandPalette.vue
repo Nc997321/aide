@@ -27,6 +27,8 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
+  /** 输入框拿到焦点 / 被点击：请求父级把 open 置 true（Ctrl+P 也是父级置 open，两条入口汇到同一个状态）。 */
+  open: [];
   close: [];
 }>();
 
@@ -34,6 +36,7 @@ const query = ref("");
 const results = ref<PaletteResult[]>([]);
 const selectedIndex = ref(0);
 const inputRef = ref<HTMLInputElement | null>(null);
+const panelRef = ref<HTMLElement | null>(null);
 let searchFn: ((q: string, limit: number) => Promise<PaletteResult[]>) | null = null;
 
 function setSearchFn(fn: (q: string, limit: number) => Promise<PaletteResult[]>) {
@@ -97,23 +100,35 @@ watch(query, (q) => {
 watch(
   () => props.open,
   async (v) => {
-    if (v) {
+    if (!v) {
+      // 关闭 = 收起面板 + 失焦（面板点击靠 mousedown.prevent 保焦点，不主动失焦的话
+      // 选完一项后输入框仍占着焦点，再点它就不会触发 focus、面板打不开）
       query.value = "";
-      results.value = [];
-      selectedIndex.value = 0;
-      await nextTick();
-      inputRef.value?.focus();
-      if (recentFn) {
-        try {
-          results.value = await recentFn();
-          selectedIndex.value = 0;
-        } catch {
-          results.value = [];
-        }
+      inputRef.value?.blur();
+      return;
+    }
+    query.value = "";
+    results.value = [];
+    selectedIndex.value = 0;
+    await nextTick();
+    // Ctrl+P 进来时焦点还不在输入框；点击进来时已经在，focus() 是空操作
+    if (document.activeElement !== inputRef.value) inputRef.value?.focus();
+    if (recentFn) {
+      try {
+        results.value = await recentFn();
+        selectedIndex.value = 0;
+      } catch {
+        results.value = [];
       }
     }
   },
 );
+
+// 方向键移动高亮时让它留在可视区内（最近会话 + 最近文件 + 搜索结果可能超过面板高度）
+watch(selectedIndex, async () => {
+  await nextTick();
+  panelRef.value?.querySelector(".a-palette-item--selected")?.scrollIntoView?.({ block: "nearest" });
+});
 
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
@@ -121,6 +136,7 @@ function onKeydown(e: KeyboardEvent) {
     emit("close");
     return;
   }
+  if (e.isComposing) return; // 中文选词的 Enter/方向键不是在操作面板
   if (results.value.length === 0) return;
 
   if (e.key === "ArrowDown") {
@@ -139,74 +155,120 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-function onOverlayClick(e: MouseEvent) {
-  if (e.target === e.currentTarget) {
-    emit("close");
-  }
+/** 点击 / Tab 进输入框都算"开始搜索"。 */
+function requestOpen() {
+  if (!props.open) emit("open");
+}
+
+/** 失焦 = 收起（点面板外、Tab 走开、切窗口）。面板内点击靠 mousedown.prevent 不会走到这。 */
+function onBlur() {
+  if (props.open) emit("close");
 }
 
 defineExpose({ setSearchFn, setRecentFn });
 </script>
 
 <template>
-  <Teleport to="body">
+  <!-- 标题栏里的搜索框（VS Code 式）：点击原地输入，结果挂在输入框正下方，不再弹居中模态。
+       输入框常驻（不是 v-if）；只有下拉面板随 open 出现。 -->
+  <div class="a-search">
+    <div class="a-search-field" :class="{ 'a-search-field--open': open }">
+      <span class="a-palette-icon"><Icon name="search" :size="13" /></span>
+      <input
+        ref="inputRef"
+        v-model="query"
+        class="a-palette-input"
+        placeholder="搜索会话、文件或命令..."
+        @focus="requestOpen"
+        @click="requestOpen"
+        @blur="onBlur"
+        @keydown="onKeydown"
+      />
+      <kbd v-if="!open" class="a-search-kbd">Ctrl+P</kbd>
+    </div>
+    <!-- 面板盖在主区之上：登记到浮层登记处，让内嵌浏览器的原生视图让位（否则被网页吃掉下半截）。
+         mousedown.prevent：点面板（含滚动条）不抢输入框焦点，否则 blur 先于 click 把面板收了 -->
     <Transition name="a-palette">
-      <div v-if="open" class="a-palette-overlay" v-overlay-layer @click="onOverlayClick">
-        <div class="a-palette-box">
-          <div class="a-palette-input-row">
-            <span class="a-palette-icon"><Icon name="search" :size="15" /></span>
-            <input
-              ref="inputRef"
-              v-model="query"
-              class="a-palette-input"
-              placeholder="搜索会话、文件或命令..."
-              @keydown="onKeydown"
-            />
-          </div>
-          <div v-if="results.length > 0" class="a-palette-results">
-            <template v-for="(items, group) in grouped" :key="group">
-              <div class="a-palette-section">{{ group }}</div>
-              <div
-                v-for="item in items"
-                :key="item.id"
-                v-tooltip="item.tooltip"
-                class="a-palette-item"
-                :class="{ 'a-palette-item--selected': results.indexOf(item) === selectedIndex }"
-                @click="item.action(); emit('close')"
-                @mouseenter="selectedIndex = results.indexOf(item)"
-              >
-                <span class="a-palette-item-icon"><IconOrChar :text="item.icon || 'file'" :size="14" /></span>
-                <div class="a-palette-item-text">
-                  <div class="a-palette-item-label">{{ item.label }}</div>
-                  <div v-if="item.description" class="a-palette-item-desc">{{ item.description }}</div>
-                </div>
+      <div v-if="open" ref="panelRef" class="a-palette-box" v-overlay-layer @mousedown.prevent>
+        <div v-if="results.length > 0" class="a-palette-results">
+          <template v-for="(items, group) in grouped" :key="group">
+            <div class="a-palette-section">{{ group }}</div>
+            <div
+              v-for="item in items"
+              :key="item.id"
+              v-tooltip="item.tooltip"
+              class="a-palette-item"
+              :class="{ 'a-palette-item--selected': results.indexOf(item) === selectedIndex }"
+              @click="item.action(); emit('close')"
+              @mouseenter="selectedIndex = results.indexOf(item)"
+            >
+              <span class="a-palette-item-icon"><IconOrChar :text="item.icon || 'file'" :size="14" /></span>
+              <div class="a-palette-item-text">
+                <div class="a-palette-item-label">{{ item.label }}</div>
+                <div v-if="item.description" class="a-palette-item-desc">{{ item.description }}</div>
               </div>
-            </template>
-          </div>
-          <div v-else class="a-palette-empty">{{ emptyHint }}</div>
+            </div>
+          </template>
         </div>
+        <div v-else class="a-palette-empty">{{ emptyHint }}</div>
       </div>
     </Transition>
-  </Teleport>
+  </div>
 </template>
 
 <style>
-.a-palette-overlay {
-  position: fixed;
-  inset: 0;
-  background: var(--aide-bg-overlay);
-  display: flex;
-  justify-content: center;
-  padding-top: 80px;
-  z-index: 10000;
-  backdrop-filter: blur(3px);
-  -webkit-backdrop-filter: blur(3px);
+/* 标题栏居中的搜索框：占位与尺寸沿用原触发按钮（flex:1 / 最宽 360 / 居中） */
+.a-search {
+  position: relative;
+  flex: 1;
+  max-width: 360px;
+  margin: 0 auto;
 }
 
+.a-search-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--aide-surface-default);
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-md);
+  padding: 5px 12px;
+  color: var(--aide-text-muted);
+  font-size: 12px;
+  cursor: text;
+  box-shadow: var(--aide-highlight-inset);
+  transition: all var(--aide-ease-t);
+}
+.a-search-field:hover {
+  background: var(--aide-surface-hover);
+}
+.a-search-field--open {
+  background: var(--aide-bg-raised);
+  border-color: var(--aide-accent);
+  box-shadow: var(--aide-accent-ring);
+}
+
+.a-search-kbd {
+  margin-left: auto;
+  background: var(--aide-bg-deep);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 10px;
+  color: var(--aide-text-muted);
+  border: 1px solid var(--aide-border);
+  font-family: inherit;
+}
+
+/* 下拉面板：挂在输入框正下方、水平居中，比输入框宽（结果行要放得下路径） */
 .a-palette-box {
-  width: 100%;
-  max-width: 480px;
-  max-height: 400px;
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 520px;
+  max-width: calc(100vw - 32px);
+  max-height: min(420px, 70vh);
+  z-index: 10000;
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
@@ -218,16 +280,6 @@ defineExpose({ setSearchFn, setRecentFn });
   overflow: hidden;
 }
 
-.a-palette-input-row {
-  display: flex;
-  align-items: center;
-  padding: 13px 16px;
-  gap: 10px;
-  border-bottom: 1px solid var(--aide-border-subtle);
-  font-size: 14px;
-  color: var(--aide-text-muted);
-}
-
 .a-palette-icon {
   display: inline-flex;
   align-items: center;
@@ -237,11 +289,12 @@ defineExpose({ setSearchFn, setRecentFn });
 
 .a-palette-input {
   flex: 1;
+  min-width: 0;
   background: none;
   border: none;
   outline: none;
   color: var(--aide-text-primary);
-  font-size: 14px;
+  font-size: 12px;
   font-family: inherit;
 }
 
@@ -338,38 +391,14 @@ defineExpose({ setSearchFn, setRecentFn });
   box-shadow: 0 1px 0 var(--aide-border);
 }
 
-/* Transitions */
-.a-palette-enter-active {
-  transition: opacity var(--aide-ease-t);
-}
-
-.a-palette-enter-active .a-palette-box {
-  transition: transform var(--aide-ease-t), opacity var(--aide-ease-t);
-}
-
+/* Transitions：面板自身淡入 + 轻微下移（translateX 居中要一并写进 transform） */
+.a-palette-enter-active,
 .a-palette-leave-active {
-  transition: opacity var(--aide-ease-t);
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
 }
-
-.a-palette-leave-active .a-palette-box {
-  transition: transform var(--aide-ease-t), opacity var(--aide-ease-t);
-}
-
-.a-palette-enter-from {
-  opacity: 0;
-}
-
-.a-palette-enter-from .a-palette-box {
-  opacity: 0;
-  transform: scale(0.96);
-}
-
+.a-palette-enter-from,
 .a-palette-leave-to {
   opacity: 0;
-}
-
-.a-palette-leave-to .a-palette-box {
-  opacity: 0;
-  transform: scale(0.96);
+  transform: translateX(-50%) translateY(-4px);
 }
 </style>

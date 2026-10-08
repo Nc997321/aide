@@ -34,6 +34,10 @@ pub struct UpdateDocumentBody {
     pub title: String,
     pub content: String,
     pub change_note: Option<String>,
+    /// 合并保存时把合并窗口顺延（见 `SaveInput::slide_merge_window`）。缺省 false = 老行为；
+    /// 老客户端不带这个字段，新字段对它们透明。
+    #[serde(default)]
+    pub slide_merge_window: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -383,6 +387,7 @@ pub async fn update(
             change_note: body.change_note,
             // 合并窗口交给领域层判断：前端不需要知道这个规则
             force_new_version: false,
+            slide_merge_window: body.slide_merge_window,
         },
     )
     .await?;

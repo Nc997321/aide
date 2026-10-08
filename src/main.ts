@@ -4,7 +4,7 @@ import "@fontsource-variable/inter";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/500.css";
 import "./styles/global.css";
-import { vTooltip } from "./directives/tooltip";
+import { installTitleTooltips, vTooltip } from "./directives/tooltip";
 import { vScrollMemory } from "./directives/scrollMemory";
 import { initPlatform } from "./utils/platform";
 import { startDiagnostics } from "./composables/useDiagnostics";
@@ -45,6 +45,9 @@ const app = createApp(App);
 app.directive("tooltip", vTooltip);
 app.directive("scroll-memory", vScrollMemory);
 app.mount("#app");
+
+// 原生 title 提示统一换成主题化提示（与 v-tooltip 同外观），见 installTitleTooltips
+installTitleTooltips();
 
 // 卡死诊断黑匣子：心跳 + 指标采集（Rust watchdog 检测断流落盘报告）
 startDiagnostics();

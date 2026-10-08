@@ -79,20 +79,20 @@ describe("loadUserHooks", () => {
 });
 
 describe("assembleMcpServers", () => {
-  it("codegraph（in-process）与用户（stdio/sse/http）按 name 共存", () => {
-    const codegraph = { codegraph: { type: "in-process" } };
+  it("内建（in-process）与用户（stdio/sse/http）按 name 共存", () => {
+    const builtin = { builtin: { type: "in-process" } };
     const user = { myServer: { command: "npx", args: ["-y", "x"] }, sse: { type: "sse", url: "http://x" } };
-    expect(assembleMcpServers(codegraph, user)).toEqual({
-      codegraph: { type: "in-process" },
+    expect(assembleMcpServers(builtin, user)).toEqual({
+      builtin: { type: "in-process" },
       myServer: { command: "npx", args: ["-y", "x"] },
       sse: { type: "sse", url: "http://x" },
     });
   });
-  it("codegraph 为 null 时只返回用户项", () => {
+  it("内建为 null 时只返回用户项", () => {
     const user = { a: { command: "x" } };
     expect(assembleMcpServers(null, user)).toEqual({ a: { command: "x" } });
   });
-  it("name 冲突时用户项覆盖 codegraph", () => {
+  it("name 冲突时用户项覆盖内建", () => {
     expect(assembleMcpServers({ dup: { type: "in-process" } }, { dup: { command: "x" } })).toEqual({
       dup: { command: "x" },
     });

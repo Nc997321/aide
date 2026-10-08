@@ -1,5 +1,5 @@
 // 退役规则的判据测试。夹具是**真的插件目录**（不是假设的形状）——踩过的坑：
-// 夹具照假设写 = 测试只验证了假设（见 lspStatusText 的 `undefined:undefined:1`）。
+// 夹具照假设写 = 测试只验证了假设（见 lspFormat 的 `undefined:undefined:1` 旧事故）。
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
 import { readdirSync } from "node:fs";

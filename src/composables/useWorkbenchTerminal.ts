@@ -28,6 +28,16 @@ import {
   resetWorkbenchState,
   type WbTabKind,
 } from "./workbenchTerminalState";
+import { hostApi } from "@aide/sdk";
+
+/** 本窗口 Host 的系统（`windows` / `linux` / `macos`）；拿不到时回落 GUI 所在系统。 */
+async function hostOs(): Promise<string> {
+  try {
+    return (await hostApi.current()).os.toLowerCase();
+  } catch {
+    return navigator.platform.toLowerCase();
+  }
+}
 
 // 仅保留 xterm/div 物理对象；tab 元数据/分组/激活全在核心
 interface WbSession {
@@ -251,7 +261,9 @@ export function useWorkbenchTerminal() {
     const stg = settingsRef!;
     try {
       await api.ptySpawnShell(id, s.terminal.rows, s.terminal.cols, cwd, stg.shellPath ?? "");
-      const plat = navigator.platform.toLowerCase();
+      // shell 跑在本窗口连着的 Host 上：默认 shell 名跟 Host 的系统走，不跟 GUI 所在系统走
+      // （Windows 上的 WSL 窗口开的是 Linux 登录 shell）。
+      const plat = await hostOs();
       s.shellName = stg.shellPath
         ? deriveShellName(stg.shellPath)
         : (plat.includes("win") ? "PowerShell" : plat.includes("mac") ? "zsh" : "bash");

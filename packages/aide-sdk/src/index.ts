@@ -5,6 +5,16 @@ export { api } from "./api";
 export type { SendMessageParams, PermissionResponseParams, BtwAskParams, DiagHeartbeatPayload } from "./api";
 export { permissionsApi } from "./api/permissions";
 export { memoryObservatoryApi, CLAUDE_MD_ALIAS } from "./api/memoryObservatory";
+export {
+  remoteWorkspaceApi,
+  REMOTE_WORKSPACE_STATUS_EVENT,
+  parseRemotePath,
+} from "./api/remoteWorkspace";
+export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remoteWorkspace";
+export { hostApi, HOST_OPEN_FOLDER_EVENT } from "./api/host";
+export { linkApi } from "./api/link";
+export type { LinkStatus, LinkOffer } from "./api/link";
+export type { CurrentHost, HostRecents, HostRecentProject } from "./api/host";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

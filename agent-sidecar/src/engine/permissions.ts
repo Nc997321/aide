@@ -47,9 +47,9 @@ interface PendingEntry {
 // 「是否拒绝 + 拒绝理由」，前端据此渲染拒绝态。**改前两个外框必须同步那边的前缀**，
 // 否则 UI 静默退化成普通报错（不崩、只是认不出来）。
 //
-// ⚠️ 第三种外框 `unansweredDenyMessage`（无人应答，见下）**刻意未同步**：它只服务
-// headless 会话，而 headless 的转录不由本产品 UI 渲染（网关自己的界面消费），故
-// parseToolDenial 认不出它也不产生任何用户可见降级。将来若把 automation 的两处裸
+// ⚠️ 第三种外框 `unansweredDenyMessage`（无人应答，见下）**刻意未同步**：桌面三端恒发
+// 扁平形态，只有不可判的应答形状才落到这条外框，故 parseToolDenial 认不出它也不产生
+// 常规路径上的用户可见降级。将来若把 automation 的两处裸
 // 文案（本文件的 makeGuardedCanUseTool、policy/sessionHook.ts 的「连接器未预授权」）
 // 收编到这条外框上，**必须同步 toolDenial.ts 的前缀**——automation 的转录会进会话
 // 查看器，不同步就仍是普通报错态。

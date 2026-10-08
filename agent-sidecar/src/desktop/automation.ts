@@ -1,6 +1,6 @@
 import type { SidecarCommand } from "../engine/types.js";
 
-/** 自动化运行（无人值守 headless 会话）的配置与纯函数判定。
+/** 自动化运行（无人值守会话）的配置与纯函数判定。
  *
  *  与 btw 支线的关键区别：
  *  - 转录要落盘（persistSession 不动，默认 true）——运行历史复用会话查看器；
@@ -20,7 +20,7 @@ export interface AutomationConfig {
   preset: "auto" | "full";
   /** 内建工具可见性白名单；两档预设都是 ["*"]（全量可见）——收口在行为层。 */
   tools: string[];
-  /** 预授权 MCP server key（连接器），如 "aide-codegraph"。 */
+  /** 预授权 MCP server key（连接器），如 "aide-lsp"。 */
   mcpAllowlist: string[];
   /** 任务目录（~/.aide/automations/<id>/）的绝对路径：写工具落进此目录即放行
    *  （playbook.md / scripts/ 的蒸馏写入与运行中的手册自愈合写回都在 cwd 之外，

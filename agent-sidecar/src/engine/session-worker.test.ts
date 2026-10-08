@@ -463,58 +463,6 @@ describe("SessionWorker — 一次性会话回合结束自毁（automation）", 
 });
 
 /**
- * codegraph MCP 工具注册：SessionWorker 组装的 query options 应带
- * mcpServers["aide-codegraph"] 和 allowedTools 放行前缀；
- * AIDE_CODEGRAPH_TOOLS=off 时整体不注册。
- */
-
-describe("SessionWorker — codegraph MCP registration", () => {
-  it("registers aide-codegraph MCP server and allow rule in query options", async () => {
-    let captured: any;
-    const fakeQuery = ((args: any) => {
-      captured = args?.options ?? args;
-      return (async function* () {})();
-    }) as any;
-    const worker = new SessionWorker("s-cg", () => {}, {
-      queryFn: fakeQuery,
-      cwd: "/proj",
-    });
-    worker.handleCommand({
-      // 生产协议恒发 codegraph_enabled（主进程四处构造点下发）——fixture 同形
-      cmd: "send", session_id: "s-cg", prompt: "你好", cwd: "/proj", env: {}, auto_title: false, codegraph_enabled: true,
-    } as any);
-    await vi.waitFor(() => expect(captured).toBeDefined());
-    worker.stop();
-    expect(captured?.mcpServers?.["aide-codegraph"]).toBeDefined();
-    expect(captured?.allowedTools).toContain("mcp__aide-codegraph");
-  });
-
-
-  it("AIDE_CODEGRAPH_TOOLS=off skips MCP registration", async () => {
-    process.env.AIDE_CODEGRAPH_TOOLS = "off";
-    try {
-      let captured: any;
-      const fakeQuery = ((args: any) => {
-        captured = args?.options ?? args;
-        return (async function* () {})();
-      }) as any;
-      const worker = new SessionWorker("s-cg-off", () => {}, {
-        queryFn: fakeQuery,
-        cwd: "/proj",
-      });
-      worker.handleCommand({
-        cmd: "send", session_id: "s-cg-off", prompt: "你好", cwd: "/proj", env: {}, auto_title: false,
-      } as any);
-      await vi.waitFor(() => expect(captured).toBeDefined());
-      worker.stop();
-      expect(captured?.mcpServers?.["aide-codegraph"]).toBeUndefined();
-    } finally {
-      delete process.env.AIDE_CODEGRAPH_TOOLS;
-    }
-  });
-});
-
-/**
  * knowledge MCP 放行规则：**工具级**（mcp__aide-knowledge__xxx）而非 server 级
  * （mcp__aide-knowledge）。server 级规则会把 P2 的写工具一起放行，破坏「写必弹窗」
  * （设计 spec §7）——P1 只有读工具，这条断言就是 P2 的防回归网。
@@ -529,7 +477,7 @@ describe("SessionWorker — knowledge MCP 放行规则（工具级）", () => {
     }) as any;
     const worker = new SessionWorker("kb-write-rule", () => {}, { queryFn: fakeQuery, cwd: "/proj" });
     worker.handleCommand({
-      cmd: "send", session_id: "kb-write-rule", prompt: "你好", cwd: "/proj", env: {}, codegraph_enabled: true,
+      cmd: "send", session_id: "kb-write-rule", prompt: "你好", cwd: "/proj", env: {},
     } as any);
     await vi.waitFor(() => expect(captured).toBeDefined());
     worker.stop();
@@ -545,7 +493,7 @@ describe("SessionWorker — knowledge MCP 放行规则（工具级）", () => {
  *
  * 关键不变量：
  * - 只有「全新会话」（非 resume / 非 btw / 非 provider_switched）才生成
- * - auto_title:false（自动化/headless 内部 opt-out）不生成
+ * - auto_title:false（自动化内部 opt-out）不生成
  * - 每个 worker 只命名一次
  * - 首条消息为空白时不发事件（会话保留默认名）
  */
@@ -585,7 +533,7 @@ describe("SessionWorker — 会话自动命名", () => {
     // 标题在 send 时同步产出——不调模型、不等助手回复，无需等待
     const evt = events.find((e) => e.type === "session_title");
     expect(evt).toBeDefined();
-    expect(evt.title).toBe("帮我修登录页 bug");
+    expect(evt.title).toBe("修登录页 bug");
     worker.stop();
   });
 
@@ -615,7 +563,7 @@ describe("SessionWorker — 会话自动命名", () => {
     worker.stop();
   });
 
-  it("auto_title:false（自动化/headless 内部 opt-out）不生成标题", async () => {
+  it("auto_title:false（自动化内部 opt-out）不生成标题", async () => {
     const { worker, events } = makeTitleWorker();
     worker.handleCommand({
       cmd: "send", session_id: "s-title", prompt: "帮我修登录页 bug", cwd: "/tmp", env: {}, auto_title: false,
@@ -798,7 +746,7 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
     });
   });
 
-  // ---- 标签形态（官方推荐；headless 网关用）走完整命令通道 ----
+  // ---- 标签形态（官方推荐形态）走完整命令通道 ----
 
   it("标签形态 unanswered：走官方非人工外框、不冒充用户，且不发 error 帧", async () => {
     const { worker, events } = makeWorker();
@@ -1693,65 +1641,3 @@ describe("SessionWorker — btw 侧问（官方 side_question 通道）", () => 
   });
 });
 
-// 图片附件的线形状归一：接线与**失败可见**。
-//
-// 归一点在 handleSend 入口，下游（buildUserMessage / 插队队列 / display）只认识
-// 内嵌形式——这件事由类型系统钉死（把 wire 形状直接传给 pushUserMessage 编不过）。
-// 这里钉的是运行时那一半：坏路径必须报成非致命 error 帧（N1：失败要让对端看见），
-// 而不是静默丢消息。守卫本身的用例见 imageAttachments.test.ts。
-describe("SessionWorker — send 的图片附件归一（接线与失败可见）", () => {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "worker-img-"));
-  const pngPath = path.join(dir, "photo.png");
-  writeFileSync(pngPath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]));
-
-  afterAll(() => {
-    rmSync(dir, { recursive: true, force: true });
-  });
-
-  it("路径读不到：报非致命 error 帧、该条 send 拒发、不推进队列", async () => {
-    const { worker, events } = makeWorker();
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "test-sid",
-      prompt: "看看这张图",
-      cwd: dir,
-      images: [{ path: path.join(dir, "missing.jpg") }],
-    } as any);
-    // 文件读走 libuv 线程池，不是 microtask——固定 flush 等不到（既有纪律：一律 vi.waitFor）
-    await vi.waitFor(() => {
-      expect(events.filter((e) => e.type === "error")).toHaveLength(1);
-    });
-    const err = events.find((e: any) => e.type === "error") as any;
-    expect(err.fatal).toBe(false);
-    expect(err.message).toContain("图片读取失败");
-    expect(worker._testQueueLength()).toBe(0);
-  });
-
-  it("路径读得到：读出并归一后照常入队，无 error 帧", async () => {
-    let releaseQuery!: () => void;
-    const gate = new Promise<void>((r) => {
-      releaseQuery = r;
-    });
-    const events: any[] = [];
-    const worker = new SessionWorker("sid-img", (e) => events.push(e), {
-      queryFn: (() =>
-        (async function* () {
-          await gate;
-          throw new Error("query cancelled");
-        })()) as any,
-    });
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "sid-img",
-      prompt: "看看这张图",
-      cwd: dir,
-      images: [{ path: pngPath }],
-    } as any);
-    // 入队即证明「读文件 + 嗅探 + 归一」全过（否则会走上面那条 error 帧分支）
-    await vi.waitFor(() => {
-      expect(worker._testQueueLength()).toBe(1);
-    });
-    expect(events.filter((e) => e.type === "error")).toEqual([]);
-    releaseQuery();
-  });
-});

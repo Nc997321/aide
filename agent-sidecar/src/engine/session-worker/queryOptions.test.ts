@@ -16,7 +16,6 @@ vi.mock("../../extensions/dispatchPlugins.js", () => ({
 vi.mock("../claudeExe.js", () => ({ resolveClaudeExe: vi.fn(() => "") }));
 
 import { buildSpawnQueryOptions, type QuerySpawnParts } from "./queryOptions.js";
-import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 
 function parts(over: {
@@ -50,11 +49,26 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.hooks).toEqual({ PreToolUse: [] });
     expect(o.mcpServers).toEqual({ biz: { type: "http" } });
     expect(o.env).toEqual({ PATH: "/bin" });
-    expect(o.allowedTools).toContain(CODEGRAPH_ALLOW_RULE);
     expect(o.allowedTools).toContain(DOCS_ALLOW_RULE);
     expect(o.skills).toBe("all");
     expect(o.settingSources).toEqual([]);
     expect(o.allowDangerouslySkipPermissions).toBe(true);
+  });
+
+  it("会话级 worktree 切换工具被摘除（会改会话 cwd → 档案/基线对不上）；主会话与自动化都带", () => {
+    const main = buildSpawnQueryOptions(parts()) as Opts;
+    expect(main.disallowedTools).toEqual(["EnterWorktree", "ExitWorktree"]);
+    const auto = buildSpawnQueryOptions(
+      parts({
+        branch: {
+          automationConfig: {
+            taskId: "t", runId: "r", preset: "auto", tools: ["Read"], mcpAllowlist: [],
+            taskDir: "", sessionDir: "",
+          },
+        },
+      }),
+    ) as Opts;
+    expect(auto.disallowedTools).toEqual(["EnterWorktree", "ExitWorktree"]);
   });
 
   it("受限工作区（!trusted）→ strictMcpConfig:true", () => {

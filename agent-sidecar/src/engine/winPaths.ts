@@ -10,7 +10,7 @@
 //   verbatim `\\?\` 前缀不能动（破坏前缀语义），取父目录用手动 safeDirname 兜底。
 //
 // 使用方：docx/path.ts（resolveDocxPath）、winBashEnv.ts（bashrc 落地）、
-// codegraphSkill.ts（skill 落地）。新增任何在 aide-agent.exe 里拼 Windows 配置路径 +
+// browserSkill.ts（skill 落地）。新增任何在 aide-agent.exe 里拼 Windows 配置路径 +
 // mkdirSync 的地方都应 import 这里，勿直接用 path.dirname（中文用户目录叠加缺陷必崩）。
 
 /** Windows 盘符绝对路径（`C:\` 或 `C:/`）——bun 的 isAbsolute 对反斜杠盘符路径误判 false 的兜底 */

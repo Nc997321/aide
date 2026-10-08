@@ -3,7 +3,6 @@
  *  大导航行范式——可折叠、右槽位 计数⇄⋯（⋯ = 新建任务菜单）、
  *  有任务在跑时亮呼吸点。数据全走 useAutomation 单例；
  *  选中任务 → 主区 AutomationDetail。 */
-import { ref } from "vue";
 import { useAutomation, scheduleText, shortTime } from "../../composables/useAutomation";
 import { useContextMenu } from "../../composables/useContextMenu";
 import { automationSectionMenuItems } from "../../menus/contextMenus";
@@ -12,7 +11,8 @@ import type { AutomationTask } from "../../api/automation";
 
 const auto = useAutomation();
 const { show } = useContextMenu();
-const collapsed = ref(false);
+/** 折叠态：父级可 v-model 接管（侧栏「全部折叠/展开」），不接管时是组件自己的本地态 */
+const collapsed = defineModel<boolean>("collapsed", { default: false });
 
 /** 导航行 ⋯：新建任务入口（与右键体系同一个 useContextMenu）。 */
 function onSectionMenu(e: MouseEvent) {

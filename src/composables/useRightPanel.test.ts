@@ -1,5 +1,5 @@
-import { describe, it, expect, beforeEach } from "vitest";
-import { useRightPanel, rightPanelWidthSource, __resetRightPanelForTest } from "./useRightPanel";
+import { describe, it, expect, beforeEach, vi } from "vitest";
+import { useRightPanel, rightPanelWidthSource, LAYOUT_ANIM_MS, __resetRightPanelForTest } from "./useRightPanel";
 
 // 模块级单例（与 usePaneLayout 同范式）：用例间共享状态，故每个用例前复位。
 beforeEach(() => __resetRightPanelForTest());
@@ -281,5 +281,46 @@ describe("openInBrowser：待打开地址的待办与消费", () => {
     expect(p.browserEverActive.value).toBe(false);
     p.openInBrowser("http://127.0.0.1:8788/p/abc");
     expect(p.browserEverActive.value).toBe(true);
+  });
+});
+
+describe("开合动画状态（原生浏览器视图据此推迟露头）", () => {
+  it("展开 / 收起 / 换档都置 layoutAnimating，落定后清除并放行等待者", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = useRightPanel();
+      expect(p.layoutAnimating.value).toBe(false);
+
+      p.select("git"); // 展开
+      expect(p.layoutAnimating.value).toBe(true);
+      let settled = false;
+      void p.whenLayoutSettled().then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(LAYOUT_ANIM_MS + 50);
+      expect(p.layoutAnimating.value).toBe(false);
+      expect(settled).toBe(true);
+
+      p.select("browser"); // 窄档 → 宽档
+      expect(p.layoutAnimating.value).toBe(true);
+      await vi.advanceTimersByTimeAsync(LAYOUT_ANIM_MS + 50);
+
+      p.select("browser"); // 收起
+      expect(p.layoutAnimating.value).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("窄档内部切 tab 不触发（轨道没变）；没在动时 whenLayoutSettled 立即 resolve", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = useRightPanel();
+      p.select("git");
+      await vi.advanceTimersByTimeAsync(LAYOUT_ANIM_MS + 50);
+      p.select("search");
+      expect(p.layoutAnimating.value).toBe(false);
+      await expect(p.whenLayoutSettled()).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

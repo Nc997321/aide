@@ -1,26 +1,23 @@
-mod automation;
 // 内嵌浏览器子系统（骨架阶段：纯核心+领域类型+端口签名已落地并单测；adapter/命令待
 // 可视原型定 A/B 后填充）。私有模块，对外经 commands 暴露命令。
 mod browser;
-mod codegraph;
-// commands/remote/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
+// commands/settings 公开给集成测试（tests/ 目录只能访问 crate 公开 API，
 // 测试分离布局要求源文件零测试代码，集成测试是唯一测试面）
 pub mod commands;
 mod conversation;
 mod diagnostics;
-mod filewatch;
-mod lsp;
-mod policy;
-pub mod remote;
+mod host_door;
+mod host_recents;
+mod host_window;
+// 远程 Host（WSL / SSH 目标机上的整个后端，GUI 留在桌面）。手机连 Host 走 Aide Link（`aide-core` 的 `link/`），
+// 与它无关。
+pub(crate) mod remote_workspace;
 pub mod runtime;
 mod settings;
-mod shell;
-mod skills;
 
 use std::path::PathBuf;
 
 use commands::file_assoc::PendingOpenFile;
-use commands::WorkspaceState;
 use tauri::{Emitter, Manager};
 
 fn init_logging() {
@@ -40,6 +37,21 @@ fn init_logging() {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+/// 本构建允不允许手机网关（Aide Link）连中继。
+///
+/// **dev 默认不连**（2026-09-19）：dev 与安装版共用 identifier（com.aide.app）与同一份 Host 密钥库
+/// （Link 的 device_id 同源），双双注册会在 relay 路由表上互踢——2026-09-18 实测 ~500 注册/秒、六天
+/// 6.5GB 日志，手机每次桥接几毫秒内被顶断。这与 `lib.rs` 里 single-instance 对 dev 的豁免是**一对**：
+/// 豁免让两个实例能并存，这条闸门保证并存时不会两个都去 relay 抢同一台设备身份。改一个必须改另一个。
+///
+/// dev 里确实要连真中继（调试远程链路）：先退出安装版，再用 `AIDE_DEV_REMOTE=1 pnpm tauri dev` 启动。
+fn relay_allowed_in_this_build() -> bool {
+    if !cfg!(debug_assertions) {
+        return true;
+    }
+    std::env::var("AIDE_DEV_REMOTE").is_ok_and(|v| !v.is_empty() && v != "0")
+}
+
 pub fn run() {
     // 数据目录改名（~/.claude-code-desktop/ → ~/.aide/，原子 rename）必须在
     // init_logging / load_workspace_state 之前——它们都会触碰 ~/.aide/（建 log/、读
@@ -61,59 +73,30 @@ pub fn run() {
         default_hook(info);
     }));
 
-    let shell_manager = shell::ShellManager::new();
-    // state.json 播种（legacy config.json → state.json 一次性 key 搬迁）必须在
-    // load_workspace_state 之前——它读的就是 state.json。幂等；失败保留 legacy
-    // 文件，设置迁移清理时会重试。
-    if let Err(e) = commands::settings::seed_state_from_legacy(
-        &commands::config_path(),
-        &commands::state_path(),
-    ) {
-        eprintln!("[aide] state.json seeding failed: {e}");
-    }
-    // 工作区显式注册表一次性迁移（扫 claude/projects 播种，marker 幂等）必须在
-    // 活动工作区恢复之前——恢复路径优先查注册表。失败不阻断启动，下次重试。
-    if let Err(e) = commands::workspace::ensure_registry_migrated() {
-        eprintln!("[aide] workspace registry migration failed: {e}");
-    }
-    // 日常目录引导：建目录 + 幂等注册。**刻意不激活**——活动工作区仍由下面的恢复链
-    // 与用户操作决定（「日常」是内部实现细节，不该顶掉用户的当前项目，也不该影响
-    // 引导向导的跳过判据）。失败不阻断启动（与上面同策略）。
-    if let Err(e) = commands::workspace::daily::ensure_daily_workspace() {
-        eprintln!("[aide] daily workspace bootstrap failed: {e}");
-    }
-    let saved_key = commands::load_workspace_state();
-    let workspace_state = WorkspaceState::new();
-    if let Some(key) = saved_key {
-        // 活动工作区 path 解析：注册表优先（真实 path 权威源）；解码回退兜
-        // 注册表落地前的旧数据（resolve_path_from_key 仅存的运行时用途之一）。
-        let path =
-            commands::workspace::registered_path_for_key(&commands::settings::load_state(), &key)
-                .or_else(|| commands::resolve_path_from_key(&key));
-        if let Some(path) = path {
-            *workspace_state.path.lock().unwrap() = Some(std::path::PathBuf::from(&path));
-        }
-        *workspace_state.key.lock().unwrap() = Some(key);
-    }
+    // 本机 Host 启动引导第一段（数据迁移 / 日常目录 / 恢复活动工作区）——与 aide-host serve
+    // 共用同一份（aide_core::host）。
+    let workspace_state = std::sync::Arc::new(aide_core::host::prepare_workspace());
+    // 设置服务是 Host 自持状态：Tauri 与 aide-core 共享同一实例（密钥端口 = OS 钥匙串）。
+    let settings_service = std::sync::Arc::new(settings::SettingsService::new(
+        settings::SettingsPaths::new().expect("settings paths"),
+        std::sync::Arc::new(settings::KeyringSecretStore::new()),
+    ));
 
     let builder = tauri::Builder::default();
     // 单实例（**仅 release**）：二次启动唤出首实例窗口、转发 argv 后立即退出。
     //
     // dev 豁免（`#[cfg(not(debug_assertions))]`）是刻意保留的——开发期要与安装版
     // 并存。但它**与「dev 不连中继」是一对**：两个实例共用 identifier（com.aide.app）
-    // 与同一 settings.json（remote device_id 同源），双双注册会在 relay 上互踢——
+    // 与同一份 Host 密钥库（Link 的 device_id 同源），双双注册会在 relay 上互踢——
     // 2026-09-18 实测 ~500 注册/秒、六天 6.5GB 日志，手机每次桥接几毫秒内被顶断。
-    // 所以豁免的另一半挡在 `remote/mod.rs` 的 relay_allowed_in_this_build()：
+    // 所以豁免的另一半挡在下面的 `relay_allowed_in_this_build()`（setup 里交给 Link 服务）：
     // **改这里必须同时看那里**，只改一边就会把互踢放回来。
     #[cfg(not(debug_assertions))]
     let builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-        // 唤出主窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
+        // 唤出当前窗口：二次启动的最小预期反馈（用户再点图标不该毫无反应）。
         // 窗口可能已被「点 X」隐藏到托盘：必须先 show 再 focus——set_focus
         // 对隐藏窗口无效。
-        if let Some(w) = app.get_webview_window("main") {
-            let _ = w.show();
-            let _ = w.set_focus();
-        }
+        host_window::show_current_window(app);
         // 资源管理器「打开方式 → Aide」以 `aide.exe <path>` 唤起：转发给首个实例。
         if let Some(p) = argv.get(1) {
             let _ = app.emit("open-file-preview", p.clone());
@@ -138,19 +121,10 @@ pub fn run() {
                 )
                 .build(),
         )
-        .manage(shell_manager)
         .manage(diagnostics::DiagnosticsState::new())
-        .manage(std::sync::Arc::new(settings::SettingsService::new(
-            settings::SettingsPaths::new().expect("settings paths"),
-            std::sync::Arc::new(settings::KeyringSecretStore::new()),
-        )))
-        .manage(runtime::AgentRuntimeManager::new())
-        // 后台任务快照注册表：事件泵喂入（runtime/mod.rs），list_bg_tasks RPC 读
-        .manage(std::sync::Arc::new(
-            runtime::bg_registry::BgTaskRegistry::default(),
-        ))
-        .manage(std::sync::Arc::new(skills::SkillRegistry::new()))
-        .manage(workspace_state)
+        .manage(std::sync::Arc::clone(&settings_service))
+        .manage(std::sync::Arc::clone(&workspace_state))
+        .manage(host_window::HostWindows::default())
         .manage(PendingOpenFile(std::sync::Mutex::new(None)))
         // 点标题栏 X = 隐藏到托盘，进程常驻：automation 定时调度、agent runtime
         // （node 常驻）、remote 网关都需要 aide.exe 活着。真正退出的唯一出口是
@@ -162,46 +136,40 @@ pub fn run() {
         // WebView 内容，空框仍钉在原地，观感比没动画更怪。要真收缩得 Rust
         // 侧逐帧 set_size/set_position（内容还被裁不是缩放），代价远大于收益。
         .on_window_event(|window, event| {
+            // 没有「主窗口」：所有窗口平等。关的是应用里**唯一**的一扇窗口 → 收进托盘（应用继续活着，
+            // 本机 Host 的会话 / 手机网关不断）；还有别的窗口 → 真关（Host 窗口关掉会断开那台 Host）。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                let app = window.app_handle();
+                if app.windows().keys().all(|l| l == window.label()) {
                     let _ = window.hide();
                     api.prevent_close();
                 }
             }
+            if let tauri::WindowEvent::Focused(true) = event {
+                window.app_handle().state::<host_window::HostWindows>().note_focus(window.label());
+            }
+            // Host 窗口关掉 = 真关（不进托盘）：解绑，必要时断开那台 Host
+            if let tauri::WindowEvent::Destroyed = event {
+                host_window::on_window_destroyed(window.app_handle(), window.label());
+            }
         })
-        // 工作区文件监听（filewatch.rs）：外部改动自动刷新文件树；
-        // Arc 包装——file_tree_watch 命令把 Arc clone 进 spawn_blocking
-        // （State 引用不能跨 spawn_blocking，CLAUDE.md 红线）
-        .manage(std::sync::Arc::new(filewatch::FileWatchService::default()))
-        // CodeGraph 已进程隔离：主进程只持有 RPC 代理（runner 二进制由它
-        // 惰性拉起，ONNX/向量库/tree-sitter 都不在 aide.exe 里）。
-        .manage(std::sync::Arc::new(codegraph::CodeGraphService::new()))
-        .manage(std::sync::Arc::new(lsp::LspState::new()))
-        .manage(std::sync::Arc::new(automation::AutomationService::new()))
         // 内嵌浏览器：平台引擎（Windows=Webview2Engine）+ 领域视图注册表。
         .manage(std::sync::Arc::new(browser::adapter::PlatformEngine::new()))
         .manage(browser::state::BrowserState::new())
-        .setup(|app| {
+        .setup(move |app| {
+            // 本机 Host 核心：与 Tauri 共享同一个活动工作区实例；事件经 Tauri 广播。
+            app.manage(aide_core::Core::new(
+                std::sync::Arc::clone(&workspace_state),
+                std::sync::Arc::clone(&settings_service),
+                std::sync::Arc::new(host_door::TauriSink(app.handle().clone())),
+                std::sync::Arc::new(host_door::DesktopResources(app.handle().clone())),
+            ));
             app.state::<std::sync::Arc<settings::SettingsService>>()
                 .initialize_blocking()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
 
-            // 远程控制网关：manage 需要 AppHandle，只能在 setup 内注册。
-            // initialize_blocking 必须先于 public_settings（未初始化读会报 NotInitialized）。
-            app.manage(std::sync::Arc::new(remote::RemoteGateway::new(
-                app.handle().clone(),
-            )));
-            // 设置开启则随 app 启动
-            {
-                let gateway = app.state::<std::sync::Arc<remote::RemoteGateway>>();
-                let service = app.state::<std::sync::Arc<settings::SettingsService>>();
-                let enabled = commands::settings::public_settings(service.inner())
-                    .map(|s| s.remote.enabled)
-                    .unwrap_or(false);
-                if enabled {
-                    gateway.start();
-                }
-            }
+            // 远程 Host 连接：manage 需要 AppHandle，只能在 setup 内注册。
+            remote_workspace::manage(app);
 
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
@@ -225,8 +193,9 @@ pub fn run() {
             .disable_drag_drop_handler()
             .build()?;
 
-            #[cfg(target_os = "windows")]
-            apply_window_theme(app);
+            if let Some(main) = app.get_webview_window("main") {
+                style_window(&main);
+            }
 
             // 卡死诊断黑匣子 watchdog（须在主窗口创建之后：要解析 HWND）
             diagnostics::start(app.handle());
@@ -236,84 +205,16 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::selfcheck::selfcheck_on_startup(app.handle());
 
-            // 注入 release 资源目录给 provider catalog 加载器（dev 走 CARGO_MANIFEST_DIR）
-            #[cfg(not(debug_assertions))]
+            // 本机 Host 启动引导第二段（provider 迁移 / agent runtime / 自动化 / 内置插件）——与
+            // aide-host serve 共用同一份（aide_core::host）。GUI 侧钩子（内嵌浏览器 / 冻结诊断）
+            // 必须先挂上，runtime 起来后的第一条事件就要经过它。
             {
-                use tauri::Manager;
-                if let Ok(res_dir) = app.path().resource_dir() {
-                    let catalog_dir = res_dir.join("agent-runtime");
-                    crate::runtime::provider::catalog::set_resource_dir(catalog_dir);
-                    // CodeGraph 本地 ONNX 模型不再由主进程加载：runner 进程
-                    // 拉起时经 env（AIDE_CODEGRAPH_MODEL_DIR）注入同一资源
-                    // 目录（见 codegraph::proxy::spawn_runner）。
-                }
-            }
-
-            // CodeGraph RPC 代理挂上 AppHandle（runner 路径/资源目录/settings
-            // 访问都要它；manage 先于 setup，只能此处补挂）。
-            {
-                let svc = app.state::<std::sync::Arc<codegraph::CodeGraphService>>();
-                svc.attach(app.handle().clone());
-            }
-
-            // 迁移老 provider schema（idempotent）——必须在 spawn_runtime 取 env 之前
-            if let Err(e) = crate::runtime::provider::ensure_migrated() {
-                tracing::error!("provider schema migration failed: {e}（继续用旧配置）");
-            }
-
-            // 启动持久 Agent Runtime（single persistent process，所有会话共享）
-            // tokio::process::Command 需要 reactor——必须跑在 Tokio runtime 上，
-            // setup 闭包是同步的，不能直接调 spawn_runtime。
-            let handle1 = app.handle().clone();
-            let handle2 = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                if let Some(rt) = handle1.try_state::<runtime::AgentRuntimeManager>() {
-                    use crate::runtime::env::build_runtime_env_vars;
-                    let settings_service = handle1
-                        .state::<std::sync::Arc<settings::SettingsService>>()
-                        .inner()
-                        .clone();
-                    let resolved = tokio::task::spawn_blocking(move || {
-                        let active = settings_service
-                            .resolve_active_runtime_provider()
-                            .map_err(|error| error.to_string())?;
-                        let proxy =
-                            crate::commands::settings::public_settings(&settings_service)?.proxy;
-                        Ok::<_, String>((active, proxy))
-                    })
-                    .await;
-                    let Ok(Ok((active, proxy))) = resolved else {
-                        eprintln!("[aide] unable to resolve initial provider settings");
-                        return;
-                    };
-                    let env_vars = build_runtime_env_vars(&active, &proxy);
-                    if let Err(e) = rt.ensure_runtime(handle2, env_vars).await {
-                        eprintln!("[aide] Agent Runtime 启动失败: {e}");
-                    }
-                }
-            });
-
-            // 自动化调度器：常驻 tokio task（30s tick + 启动 missed-run 扫描）。
-            // M1 只观测日志；M2 接通 send_to_runtime 执行链。
-            {
-                let svc = app.state::<std::sync::Arc<automation::AutomationService>>();
-                svc.inner().clone().start(app.handle().clone());
-            }
-
-            // 内置插件：后台确保已安装/版本更新（git 网络 IO，必须 spawn_blocking +
-            // 失败只记日志，不阻塞启动——CLAUDE.md 主线程红线）。用户已卸载（墓碑）
-            // 或手动禁用的内置插件不会被复活/重置，见 marketplace/bundled.rs。
-            {
-                let service = app
-                    .state::<std::sync::Arc<settings::SettingsService>>()
-                    .inner()
-                    .clone();
-                tauri::async_runtime::spawn(async move {
-                    let _ = tokio::task::spawn_blocking(move || {
-                        commands::marketplace::bundled::ensure_bundled_plugins_installed(&service);
-                    })
-                    .await;
-                });
+                let core = app.state::<std::sync::Arc<aide_core::Core>>().inner().clone();
+                core.runtime
+                    .set_hooks(Box::new(runtime::hooks::DesktopAgentHooks(app.handle().clone())));
+                // 手机网关（Aide Link）：dev 构建默认不连中继，见 `relay_allowed_in_this_build`
+                core.link.set_relay_allowed(relay_allowed_in_this_build());
+                tauri::async_runtime::spawn(async move { aide_core::host::start(&core) });
             }
 
             // 冷启动带参：首次即被 `aide.exe <path>` 唤起时，single-instance 回调
@@ -338,7 +239,11 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        // 分派链包在命令表外面：Host 窗口的 core 命令转发给它那台 Host（host_door::forward），
+        // 本机窗口的 core 命令进程内直调（host_door::dispatch），其余交给 Tauri 命令表。
+        .invoke_handler({
+            let commands: Box<dyn Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool + Send + Sync> =
+                Box::new(tauri::generate_handler![
             commands::browser::browser_create,
             commands::browser::browser_navigate,
             commands::browser::browser_set_bounds,
@@ -347,248 +252,44 @@ pub fn run() {
             commands::browser::browser_go_back,
             commands::browser::browser_go_forward,
             commands::browser::browser_close,
+            commands::browser::browser_snapshot,
             commands::browser::browser_bookmarks_list,
             commands::browser::browser_bookmarks_add,
             commands::browser::browser_bookmarks_remove,
             commands::browser::browser_bookmarks_import,
             commands::browser::browser_favicons,
-            commands::shell::pty_write,
-            commands::shell::pty_resize,
-            commands::shell::pty_kill,
-            commands::shell::poll_pty_output,
-            commands::shell::pty_spawn_shell,
-            commands::onboarding::claude_credentials_exist,
-            commands::onboarding::claude_start_login,
-            commands::filesystem::get_project_info,
-            commands::filesystem::list_directory,
-            commands::filesystem::list_fs_roots,
             commands::filesystem::file_open,
-            commands::filesystem::read_file_content,
-            commands::filesystem::read_file_base64,
-            commands::filesystem::read_file_binary,
-            commands::filesystem::write_file_content,
+            commands::filesystem::file_gui_path,
             commands::file_assoc::consume_pending_open_file,
             commands::file_assoc::register_open_with,
             commands::file_assoc::unregister_open_with,
             commands::file_assoc::set_open_with_extensions,
-            commands::filesystem::delete_file,
-            commands::filesystem::create_file,
-            commands::filesystem::create_dir,
             commands::filesystem::show_in_explorer,
-            commands::filesystem::detect_run_command,
-            commands::filesystem::grep_symbol,
-            commands::filesystem::file_exists,
-            commands::filesystem::path_types,
-            commands::filesystem::find_files_by_name,
-            commands::search::search_in_files,
-            commands::search::replace_in_files_preview,
-            commands::search::apply_replacements,
-            commands::filesystem::copy_file,
-            commands::filesystem::move_file,
-            commands::session::list_sessions,
-            automation::commands::list_automations,
-            automation::commands::get_automation,
-            automation::commands::create_automation,
-            automation::commands::update_automation,
-            automation::commands::delete_automation,
-            automation::commands::set_automation_enabled,
-            automation::commands::list_automation_runs,
-            automation::commands::automation_run_stats,
-            automation::commands::run_automation_now,
-            automation::commands::get_automation_playbook,
-            automation::commands::redistill_automation,
-            commands::session::list_sessions_for_workspace,
-            commands::session::create_session,
-            commands::session::delete_session,
-            commands::session::rename_session,
-            commands::session::auto_rename_session,
-            commands::session::set_session_meta,
-            commands::session::set_session_workspace,
-            commands::session::session_model,
-            commands::session::session_effort,
-            commands::session::session_provider,
-            commands::session::session_workspace,
-            commands::session::session_alive,
-            commands::session::session_identity_drift,
-            commands::session::load_messages,
-            commands::session::session_last_event,
-            commands::session::load_session_changes,
-            commands::session::save_session_changes,
-            commands::session::append_session_change,
-            commands::session::session_jsonl_size,
-            commands::session::session_truncate_jsonl,
-            commands::session::find_sessions_since,
-            commands::workspace::list_workspaces,
-            commands::workspace::daily_workspace,
-            commands::workspace::set_workspace,
-            commands::workspace::create_workspace,
-            commands::workspace::remove_workspace,
-            commands::workspace::unhide_workspace,
-            commands::memory_observatory::memory_observatory_scan,
-            commands::memory_observatory::memory_observatory_read_file,
-            commands::memory_observatory::memory_observatory_snapshot,
-            commands::memory_observatory::memory_observatory_delete_file,
-            commands::memory_observatory::memory_observatory_events,
-            commands::memory_observatory::memory_observatory_scan_all,
-            commands::memory_observatory::memory_index_for_dir,
             // 工作区信任（Trusted Workspace）
-            commands::workspace::is_workspace_trusted,
-            commands::workspace::trust_workspace,
-            commands::workspace::untrust_workspace,
-            commands::settings::get_settings,
-            commands::settings::set_settings,
-            commands::proxy::detect_available_proxy,
             commands::settings::notify_send,
-            commands::settings::session_notification_info,
-            commands::permissions::get_permission_settings,
-            commands::permissions::create_permission_rule,
-            commands::permissions::create_permission_rules,
-            commands::permissions::update_permission_rule,
-            commands::permissions::delete_permission_rule,
-            commands::permissions::explain_permission_decision,
-            commands::git::git_diff_files,
-            commands::git::git_stage_all,
-            commands::git::git_stage_file,
-            commands::git::git_unstage_file,
-            commands::git::git_revert_file,
             commands::app::get_app_version,
-            // 托盘菜单「退出 Aide」的出口。刻意不进 remote RPC 白名单——远端
-            // PWA 不该有把桌面端进程干掉的能力。
+            // 托盘菜单「退出 Aide」的出口。刻意不在 Link 的暴露目录里——手机
+            // 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
-            commands::git::git_remote_url,
-            commands::git::git_log,
-            commands::git::git_show,
-            commands::git::git_branches,
-            commands::git::git_checkout,
-            commands::git::git_stash,
-            commands::git::git_stash_pop,
-            commands::git::git_stash_list,
-            commands::git::git_stash_apply,
-            commands::git::git_stash_drop,
-            commands::git::git_fetch,
-            commands::git::git_ahead_behind,
-            commands::git::git_discard_all,
-            commands::git::git_unstage_all,
-            commands::git::git_create_branch,
-            commands::git::git_pull,
-            commands::git::git_delete_branch,
-            commands::git::git_diff_pair,
-            commands::git::git_head_rev,
-            commands::git::git_status,
-            commands::git::git_unpushed_commits,
-            commands::git::git_push,
-            commands::git::git_fingerprint,
-            commands::git::git_commit,
-            commands::git::git_compare_branches,
-            commands::git::git_diff_pair_refs,
-            commands::git::git_tags,
             // Customization commands
-            commands::customizations::list_agents,
-            commands::customizations::get_agent,
-            commands::customizations::create_agent,
-            commands::customizations::update_agent,
-            commands::customizations::delete_agent,
-            commands::customizations::toggle_agent,
-            commands::customizations::list_skills,
-            commands::customizations::get_skill,
-            commands::customizations::create_skill,
-            commands::customizations::update_skill,
-            commands::customizations::delete_skill,
-            commands::customizations::toggle_skill,
-            commands::customizations::get_skill_content,
-            commands::customizations::get_agent_content,
-            commands::customizations::list_instructions,
-            commands::customizations::get_global_instructions,
-            commands::customizations::save_global_instructions,
-            commands::customizations::get_project_instructions,
-            commands::customizations::save_project_instructions,
-            commands::customizations::list_hooks,
-            commands::customizations::create_hook,
-            commands::customizations::update_hook,
-            commands::customizations::delete_hook,
-            commands::customizations::toggle_hook,
-            commands::customizations::list_mcp_servers,
-            commands::customizations::create_mcp_server,
-            commands::customizations::update_mcp_server,
-            commands::customizations::delete_mcp_server,
-            commands::customizations::toggle_mcp_server,
-            commands::customizations::read_skill_script,
-            commands::customizations::write_skill_script,
-            commands::customizations::delete_skill_script,
-            commands::customizations::test_mcp_connection,
             // Provider commands
-            commands::provider::get_providers,
-            commands::provider::set_providers,
-            commands::provider::get_active_provider_id,
-            commands::provider::set_active_provider_id,
-            commands::provider::test_provider_connection,
-            commands::provider::cpa_probe_port,
-            commands::provider::cpa_open_management,
-            commands::provider::cpa_login_status,
-            commands::provider::view_anthropic_quota,
-            commands::provider::refresh_models,
-            commands::provider::refresh_system_default_models,
-            commands::provider::get_provider_catalog,
             // Marketplace commands
-            commands::marketplace::install::fetch_marketplace,
-            commands::marketplace::install::install_plugin,
-            commands::marketplace::install::uninstall_plugin,
-            commands::marketplace::install::list_installed_plugins,
-            commands::marketplace::install::refresh_marketplace,
-            commands::marketplace::install::update_plugin,
-            commands::marketplace::list_marketplace_sources,
-            commands::marketplace::set_marketplace_enabled,
-            commands::marketplace::set_plugin_enabled,
             // Run configuration commands
-            commands::run_configs::list_run_configs,
-            commands::run_configs::save_run_configs,
-            commands::run_configs::detect_run_targets,
             // JDK registry (scan / resolve) — per-project JDK injection
-            commands::jdk::scan_jdks,
-            commands::jdk::resolve_jdk,
             // Run process lifecycle commands
-            commands::run_process::run_process_start,
-            commands::run_process::run_process_stop,
             // Clipboard paste (files / images) into the Claude TUI
             commands::clipboard::clipboard_read_files,
             commands::clipboard::clipboard_write_files,
             // Workspace FS watching: auto-refresh the file tree on external changes
-            filewatch::file_tree_watch,
             commands::clipboard::clipboard_read_image,
             // Stage an externally-dropped OS file to temp (drop-handler fallback
             // when WebView2 doesn't expose File.path)
-            commands::clipboard::stage_dropped_file,
             // Recent access
-            commands::recent::record_recent_session,
-            commands::recent::record_recent_file,
-            commands::recent::list_recent,
-            commands::recent::remove_recent_session,
-            commands::recent::clear_recent,
             // Chat (Agent SDK)
-            commands::chat::send_message,
-            commands::chat::permission_response,
-            commands::chat::interrupt_session,
-            commands::chat::stop_bg_task,
-            commands::chat::set_model,
-            commands::chat::model_switch_confirm_decision,
-            commands::chat::set_effort,
-            commands::chat::set_permission_mode,
-            commands::chat::get_default_models,
-            commands::chat::get_default_permission_modes,
-            commands::chat::stop_chat_session,
-            commands::chat::btw_ask,
             // Knowledge base runtime credentials
             // (→ `~/.aide/` 下的凭据文件，名称随构建档位：dev = knowledge.dev.json，release = knowledge.json)
-            commands::knowledge::knowledge_set_runtime_config,
             // Plugin skills scanning
-            commands::shell::scan_plugin_skills,
             // Code graph
-            codegraph::commands::codegraph_build_index,
-            codegraph::commands::codegraph_goto_definition,
-            codegraph::commands::codegraph_close,
-            codegraph::commands::codegraph_reindex_file,
-            codegraph::commands::codegraph_rescan,
-            codegraph::commands::codegraph_build_progress,
             // 卡死诊断黑匣子
             diagnostics::log_frontend_error,
             diagnostics::diag_heartbeat,
@@ -596,48 +297,32 @@ pub fn run() {
             #[cfg(any(debug_assertions, feature = "devtools"))]
             diagnostics::open_devtools,
             // 通知中心持久化
-            commands::notifications::load_notifications,
-            commands::notifications::save_notifications,
             // 一次性迁移：从用户系统 ~/.claude/ 拷到 Aide 自管理目录
-            commands::migration::check_claude_migration,
-            commands::migration::migrate_claude_data,
-            commands::migration::dismiss_claude_migration,
             // LSP built-in
-            commands::workspace::workspace_set_lsp_enabled,
-            commands::workspace::workspace_set_lsp_excludes,
-            commands::workspace::workspace_get_lsp_excludes,
             // 工作区级代码索引开关（每工作区默认关，右侧栏面板读写）
-            commands::workspace::workspace_get_codegraph_enabled,
-            commands::workspace::workspace_set_codegraph_enabled,
             // 工作区级 JDK（一个工作区一个 JDK，所有运行配置共享）
-            commands::workspace::workspace_get_jdk,
-            commands::workspace::workspace_set_jdk,
-            lsp::lsp_detect_languages,
-            lsp::lsp_ensure_server,
-            lsp::lsp_did_open,
-            lsp::lsp_did_change,
-            lsp::lsp_did_close,
-            lsp::lsp_definition,
-            lsp::lsp_references,
-            lsp::lsp_call_hierarchy,
-            lsp::lsp_inlay_hints,
-            lsp::lsp_completion,
-            lsp::lsp_completion_resolve,
-            lsp::lsp_signature_help,
-            lsp::lsp_semantic_tokens,
-            lsp::lsp_did_save,
-            lsp::lsp_hover,
-            lsp::lsp_implementation,
-            lsp::lsp_document_symbol,
-            lsp::workspace_symbol::lsp_workspace_symbol,
-            lsp::lsp_capabilities,
-            lsp::lsp_shutdown_workspace,
-            lsp::open_lsp_install_guide,
-            commands::remote::remote_get_status,
-            commands::remote::remote_set_enabled,
-            commands::remote::remote_refresh_pairing_code,
-            commands::remote::remote_revoke,
-        ])
+            commands::lsp_guide::open_lsp_install_guide,
+            remote_workspace::remote_ws_targets,
+            remote_workspace::remote_ws_connect,
+            remote_workspace::remote_ws_disconnect,
+            remote_workspace::remote_ws_statuses,
+            host_window::open_host_window,
+            host_window::switch_window_host,
+            host_recents::host_recents_record,
+            host_recents::host_recents_list,
+            host_recents::host_recents_forget,
+            host_window::current_host,
+            host_window::import_local_providers,
+            host_window::upload_local_files,
+            ]);
+            // Host 窗口转发（远程 Host 的 serve）→ 本机 Host 命令表（aide-core）→ 其余 Tauri 命令。
+            move |invoke: tauri::ipc::Invoke<tauri::Wry>| {
+                match host_door::forward(invoke).and_then(host_door::dispatch) {
+                    Some(invoke) => commands(invoke),
+                    None => true,
+                }
+            }
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
@@ -662,7 +347,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .show_menu_on_left_click(false)
         .tooltip("Aide")
         .on_menu_event(|app, event| match event.id().as_ref() {
-            "show" => show_main_window(app),
+            "show" => host_window::show_current_window(app),
             "quit" => {
                 // 退出前必须收常驻子进程（Windows 无级联 kill）。清理是 async，
                 // 交给 tauri 的 async_runtime，收完再 exit(0)。
@@ -674,15 +359,24 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
             }
             _ => {}
         })
-        .on_tray_icon_event(|tray, event| {
-            if let TrayIconEvent::Click {
+        .on_tray_icon_event(|tray, event| match event {
+            TrayIconEvent::Click {
                 button: MouseButton::Left,
                 button_state: MouseButtonState::Up,
                 ..
-            } = event
-            {
-                toggle_main_window(tray.app_handle());
+            } => {
+                if !tray_click_settled() {
+                    return;
+                }
+                toggle_current_window(tray.app_handle());
             }
+            // 双击 = 打开：Windows 的双击是「Up → DoubleClick → 再一个 Up」三个事件，只认 Click 的话
+            // 第二个 Up 会把第一个 Up 刚显示的窗口又藏回去（表现为「双击托盘打不开」）。
+            TrayIconEvent::DoubleClick { button: MouseButton::Left, .. } => {
+                tray_click_settled();
+                host_window::show_current_window(tray.app_handle());
+            }
+            _ => {}
         });
 
     // 图标复用主窗口图标（generate_context! 已内嵌成 Image）。来源按平台分派：
@@ -695,24 +389,32 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     Ok(())
 }
 
-/// 显示并聚焦主窗口（托盘「显示 Aide」与二次启动唤起共用）。
-fn show_main_window(app: &tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
-        let _ = w.show();
-        let _ = w.unminimize();
-        let _ = w.set_focus();
-    }
+/// 略长于 Windows 默认双击间隔（500ms）。
+const TRAY_GESTURE: std::time::Duration = std::time::Duration::from_millis(600);
+
+/// 纯核：距上一次已处理的托盘点击不足一个手势间隔的，视为同一次手势的尾巴（双击里的第二个 Up）。
+fn gesture_settled(last: Option<std::time::Instant>, now: std::time::Instant) -> bool {
+    last.is_none_or(|t| now.duration_since(t) >= TRAY_GESTURE)
 }
 
-/// 左键切换：已显示且聚焦 → 隐藏；否则显示并聚焦。
-fn toggle_main_window(app: &tauri::AppHandle) {
-    use tauri::Manager;
-    if let Some(w) = app.get_webview_window("main") {
+/// 托盘左键的去抖：返回 `true` = 该处理这次点击；同时把「现在」记为最近一次托盘手势。
+fn tray_click_settled() -> bool {
+    use std::sync::{Mutex, OnceLock, PoisonError};
+    static LAST: OnceLock<Mutex<Option<std::time::Instant>>> = OnceLock::new();
+    let mut last = LAST.get_or_init(|| Mutex::new(None)).lock().unwrap_or_else(PoisonError::into_inner);
+    let now = std::time::Instant::now();
+    let settled = gesture_settled(*last, now);
+    *last = Some(now);
+    settled
+}
+
+/// 左键切换：当前窗口已显示且聚焦 → 隐藏；否则显示并聚焦。
+fn toggle_current_window(app: &tauri::AppHandle) {
+    if let Some(w) = host_window::current_window(app) {
         if w.is_visible().unwrap_or(false) && w.is_focused().unwrap_or(false) {
             let _ = w.hide();
         } else {
-            show_main_window(app);
+            host_window::show_current_window(app);
         }
     }
 }
@@ -722,15 +424,17 @@ fn toggle_main_window(app: &tauri::AppHandle) {
 /// 1. Sets the window theme to Dark (→ `DWMWA_USE_IMMERSIVE_DARK_MODE` on Windows).
 /// 2. Sets `DWMWA_CAPTION_COLOR` (Win 11) so the title bar matches the app's
 ///    background (#1e1e2e) instead of generic dark gray.
+///
+/// 主窗口与 Host 窗口共用（无边框窗口的同一套外观）；非 Windows 为空操作。
+pub(crate) fn style_window(window: &tauri::WebviewWindow) {
+    #[cfg(target_os = "windows")]
+    apply_window_theme(window);
+    #[cfg(not(target_os = "windows"))]
+    let _ = window;
+}
+
 #[cfg(target_os = "windows")]
-fn apply_window_theme(app: &mut tauri::App) {
-    use tauri::Manager;
-
-    let window = match app.get_webview_window("main") {
-        Some(w) => w,
-        None => return,
-    };
-
+fn apply_window_theme(window: &tauri::WebviewWindow) {
     // Ensure decorations are off (tauri.conf.json sets this, but
     // window-state plugin may have restored stale state — belt-and-suspenders)
     let _ = window.set_decorations(false);
@@ -770,5 +474,28 @@ fn apply_window_theme(app: &mut tauri::App) {
             &CATPPUCCIN_BASE as *const u32 as *const std::ffi::c_void,
             std::mem::size_of::<u32>() as u32,
         );
+    }
+}
+
+#[cfg(test)]
+mod tray_gesture_tests {
+    use super::{gesture_settled, TRAY_GESTURE};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_double_click_is_one_gesture() {
+        let t0 = Instant::now();
+        // 第一个 Up：之前没有手势 → 处理
+        assert!(gesture_settled(None, t0));
+        // 双击里的 DoubleClick / 第二个 Up 紧随其后 → 吞掉（否则第二个 Up 把刚显示的窗口又藏回去）
+        assert!(!gesture_settled(Some(t0), t0 + Duration::from_millis(120)));
+        assert!(!gesture_settled(Some(t0), t0 + Duration::from_millis(450)));
+    }
+
+    #[test]
+    fn a_later_click_is_a_new_gesture() {
+        let t0 = Instant::now();
+        assert!(gesture_settled(Some(t0), t0 + TRAY_GESTURE));
+        assert!(gesture_settled(Some(t0), t0 + Duration::from_secs(5)));
     }
 }

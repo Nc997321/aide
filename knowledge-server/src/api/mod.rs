@@ -9,11 +9,11 @@ use std::sync::Arc;
 use axum::Router;
 use axum::Json;
 use axum::extract::{DefaultBodyLimit, State};
-use axum::http::{HeaderValue, Method, header};
+use axum::http::{HeaderValue, header};
 use axum::routing::{get, patch, post};
 use serde_json::json;
 use sqlx::PgPool;
-use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::cors::{AllowMethods, AllowOrigin, CorsLayer};
 use tower_http::trace::TraceLayer;
 
 use crate::config::Config;
@@ -69,14 +69,18 @@ pub struct AppState {
 ///
 /// 只放行 `Authorization` 与 `Content-Type` 两个头，且**不开** `allow_credentials`——
 /// 鉴权走 Bearer 而不是 cookie，没有凭证需要跨域携带，开了反而放宽了攻击面。
-fn cors_layer(config: &Config) -> CorsLayer {
-    let listed: Vec<HeaderValue> = config
-        .cors_allowed_origins
+///
+/// 方法**回显预检里请求的那个**，不维护白名单：跨域的边界是来源白名单 + Bearer，
+/// 方法列表守不住任何东西（路由不认的方法照样 405），却会在新增方法时漏改——
+/// 曾经漏了 PATCH，重命名文档/改空间的预检被拒，浏览器只给一个无细节的网络错误，
+/// 前端如实报成「连不上知识库服务」，看起来像服务挂了。
+fn cors_layer(allowed_origins: &[String]) -> CorsLayer {
+    let listed: Vec<HeaderValue> = allowed_origins
         .iter()
         .filter_map(|o| o.parse().ok())
         .collect();
 
-    let origin = if config.cors_allowed_origins.iter().any(|o| o == "*") {
+    let origin = if allowed_origins.iter().any(|o| o == "*") {
         AllowOrigin::any()
     } else {
         AllowOrigin::list(listed)
@@ -84,18 +88,12 @@ fn cors_layer(config: &Config) -> CorsLayer {
 
     CorsLayer::new()
         .allow_origin(origin)
-        .allow_methods([
-            Method::GET,
-            Method::POST,
-            Method::PUT,
-            Method::DELETE,
-            Method::OPTIONS,
-        ])
+        .allow_methods(AllowMethods::mirror_request())
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE])
 }
 
 pub fn build_router(state: AppState) -> AppResult<Router> {
-    let cors = cors_layer(&state.config);
+    let cors = cors_layer(&state.config.cors_allowed_origins);
 
     // CIDR 解析不出来就直接拒绝启动：白名单是安全边界，
     // 静默忽略一条等于悄悄开了个洞，比起不来更糟。
@@ -199,4 +197,51 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         "parsers": state.parsers.backend_ids(),
         "tokenizer": state.tokenizer.id(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::cors_layer;
+    use axum::Router;
+    use axum::body::Body;
+    use axum::http::{Method, Request, StatusCode, header};
+    use axum::routing::patch;
+    use tower::ServiceExt;
+
+    const ORIGIN: &str = "http://tauri.localhost";
+
+    async fn preflight(method: &str, origin: &str) -> axum::http::Response<Body> {
+        let app = Router::new()
+            .route("/api/documents/{id}", patch(|| async { "ok" }))
+            .layer(cors_layer(&[ORIGIN.to_string()]));
+        app.oneshot(
+            Request::builder()
+                .method(Method::OPTIONS)
+                .uri("/api/documents/x")
+                .header(header::ORIGIN, origin)
+                .header(header::ACCESS_CONTROL_REQUEST_METHOD, method)
+                .header(header::ACCESS_CONTROL_REQUEST_HEADERS, "authorization,content-type")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+    }
+
+    /// 重命名文档 / 改空间走 PATCH：预检必须放行，否则前端只能报「连不上」
+    #[tokio::test]
+    async fn preflight_allows_patch() {
+        let res = preflight("PATCH", ORIGIN).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let methods = res.headers()[header::ACCESS_CONTROL_ALLOW_METHODS].to_str().unwrap();
+        assert!(methods.contains("PATCH"), "allow-methods = {methods}");
+        assert_eq!(res.headers()[header::ACCESS_CONTROL_ALLOW_ORIGIN], ORIGIN);
+    }
+
+    /// 方法回显不等于放开来源：白名单外的 origin 拿不到 allow-origin
+    #[tokio::test]
+    async fn preflight_still_rejects_unknown_origin() {
+        let res = preflight("PATCH", "https://evil.example").await;
+        assert!(res.headers().get(header::ACCESS_CONTROL_ALLOW_ORIGIN).is_none());
+    }
 }

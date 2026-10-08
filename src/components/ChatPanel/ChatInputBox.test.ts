@@ -62,6 +62,7 @@ vi.mock("../../composables/useFileClipboard", () => ({
 
 import ChatInputBox from "./ChatInputBox.vue";
 import { useWorkspaces } from "@/composables/useWorkspaces";
+import { __resetUsageTipsForTest } from "@/composables/useUsageTips";
 
 const WORKSPACE = "C:/repo";
 
@@ -76,7 +77,7 @@ function makeProvider(): ProviderConfig {
   };
 }
 
-function mountBox(): VueWrapper {
+function mountBox(over: Record<string, unknown> = {}): VueWrapper {
   return mount(ChatInputBox, {
     props: {
       sessionId: null,
@@ -88,6 +89,7 @@ function mountBox(): VueWrapper {
       sessionProvider: makeProvider(),
       sendConfirmedNonce: 0,
       focused: true,
+      ...over,
     },
     global: { directives: { tooltip: () => {} } },
   });
@@ -287,5 +289,78 @@ describe("ChatInputBox · @ 补全接线", () => {
     await textarea(w).trigger("keydown", { key: "Enter" });
     await flushPromises();
     expect(w.emitted("send-request")).toHaveLength(1);
+  });
+});
+
+describe("ChatInputBox · 使用小提示（时机提示）", () => {
+  const { workspaces } = useWorkspaces();
+  const tipRow = (w: VueWrapper) => w.find(".input-tip-row");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    __resetUsageTipsForTest();
+    workspaces.value = [];
+    listDirectoryMock.mockResolvedValue([]);
+    findFilesByNameMock.mockResolvedValue([]);
+    pathTypesMock.mockImplementation(async (paths) => paths.map(() => "file"));
+  });
+
+  it("生成中开始打字 → 提示排队与 /btw；这一轮结束即收起", async () => {
+    const w = mountBox({ sessionId: "s1", isBusy: true });
+    expect(tipRow(w).exists()).toBe(false); // 没打字不出
+    await typeAt(w, "再改一下");
+    expect(tipRow(w).text()).toContain("/btw");
+    await w.setProps({ isBusy: false });
+    expect(tipRow(w).exists()).toBe(false);
+  });
+
+  it("空闲时打字不出；未聚焦的输入框不出", async () => {
+    const idle = mountBox({ sessionId: "s1" });
+    await typeAt(idle, "hi");
+    expect(tipRow(idle).exists()).toBe(false);
+    const unfocused = mountBox({ sessionId: "s1", isBusy: true, focused: false });
+    await typeAt(unfocused, "hi");
+    expect(tipRow(unfocused).exists()).toBe(false);
+  });
+
+  it("点 × = 这条退役，下一轮生成中打字不再出", async () => {
+    const w = mountBox({ sessionId: "s1", isBusy: true });
+    await typeAt(w, "a");
+    await w.find(".input-tip-x").trigger("click");
+    expect(tipRow(w).exists()).toBe(false);
+    await w.setProps({ isBusy: false });
+    await w.setProps({ isBusy: true });
+    await typeAt(w, "b");
+    expect(tipRow(w).exists()).toBe(false);
+  });
+
+  it("每个忙碌期计一次出场，看满 3 次退役（第 3 次照常显示，不会一出来就消失）", async () => {
+    const w = mountBox({ sessionId: "s1" });
+    for (let i = 0; i < 3; i++) {
+      await w.setProps({ isBusy: true });
+      await typeAt(w, `x${i}`);
+      expect(tipRow(w).exists()).toBe(true);
+      await typeAt(w, `x${i}y`); // 同一轮继续打字不重复计数
+      await w.setProps({ isBusy: false });
+    }
+    await w.setProps({ isBusy: true });
+    await typeAt(w, "z");
+    expect(tipRow(w).exists()).toBe(false);
+  });
+
+  it("@ 菜单里出现别的项目 → 菜单底部提示跨项目授权", async () => {
+    workspaces.value = [{ key: "k1", name: "C:/other/backend-api", missing: false }];
+    const w = mountBox();
+    await typeAt(w, "@");
+    expect(w.find(".mention-tip").text()).toContain("跨项目");
+  });
+
+  it("@ 菜单里没有别的项目 → 不提示", async () => {
+    listDirectoryMock.mockResolvedValue([{ name: "src", is_dir: true }]);
+    const w = mountBox();
+    await typeAt(w, "@");
+    expect(w.find(".mention-dropdown").exists()).toBe(true);
+    expect(w.find(".mention-tip").exists()).toBe(false);
   });
 });

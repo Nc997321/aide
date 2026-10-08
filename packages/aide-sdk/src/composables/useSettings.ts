@@ -1,7 +1,7 @@
 import { reactive, ref, watch } from "vue";
 import { api } from "../api";
 import { MONO_FONT_STACK, UI_FONT_STACK, resolveFontFamily, resolveScopedFontFamily } from "../utils/fonts";
-import type { AppSettings, CodeGraphEmbedderConfig, JdkEntry, OutputStyle, SecretMutation } from "../types";
+import type { AppSettings, JdkEntry, OutputStyle } from "../types";
 
 /** 落盘值 → 合法样式（未知/缺失回落默认）。配置可能被手改、或由不认识新值的旧版
  *  写入，边界处收窄重建不变量——否则非法值会让设置页下拉显示空白（同
@@ -38,14 +38,6 @@ const defaults: AppSettings = {
   openWithExtensions: [],
   recentLimit: 10,
   paneLayouts: {},
-  codegraphEmbedder: {
-    backend: "fastembed",
-    baseUrl: "",
-    apiKeyConfigured: false,
-    model: "nomic-embed-text",
-    format: "ollama",
-    dim: 0,
-  },
   jdkRegistry: [],
   jdkPromptDismissed: [],
   leftSidebarPinned: true,
@@ -53,9 +45,6 @@ const defaults: AppSettings = {
   onboarded: false,
   editor: { indentSize: 4, vimMode: false, vimKeybindings: { normal: [], insert: [], visual: [] } },
   remote: {
-    enabled: false,
-    relayUrl: "",
-    deviceId: "",
     permissionMode: "auto",
   },
 };
@@ -68,7 +57,7 @@ const loaded = ref(false);
 // Runs immediately so CodeMirror / xterm / hardcoded var() references always see the
 // correct value even before load() completes.
 // 无 DOM 环境（node 单测）直接 no-op——CSS 变量同步是浏览器职责，模块被
-// useCodeGraphProgress 等门面间接 import 时不该炸。
+// 其他门面间接 import 时不该炸。
 watch(
   () => settings.fontFamily,
   (v) => {
@@ -110,11 +99,6 @@ export function useSettings() {
       settings.recentLimit = s.recentLimit ?? defaults.recentLimit;
       settings.paneLayouts =
         s.paneLayouts && typeof s.paneLayouts === "object" ? s.paneLayouts : {};
-      // 旧配置缺 codegraphEmbedder → 整块补默认（后端默认 fastembed）
-      settings.codegraphEmbedder = {
-        ...defaults.codegraphEmbedder,
-        ...(s.codegraphEmbedder ?? {}),
-      };
       settings.jdkRegistry = s.jdkRegistry ?? defaults.jdkRegistry;
       settings.jdkPromptDismissed = s.jdkPromptDismissed ?? defaults.jdkPromptDismissed;
       settings.leftSidebarPinned = s.leftSidebarPinned ?? defaults.leftSidebarPinned;
@@ -154,7 +138,6 @@ export function useSettings() {
     if (partial.theme !== undefined) settings.theme = partial.theme;
     if (partial.recentLimit !== undefined) settings.recentLimit = partial.recentLimit;
     if (partial.paneLayouts !== undefined) settings.paneLayouts = partial.paneLayouts;
-    if (partial.codegraphEmbedder !== undefined) settings.codegraphEmbedder = partial.codegraphEmbedder;
     if (partial.leftSidebarPinned !== undefined) settings.leftSidebarPinned = partial.leftSidebarPinned;
     if (partial.sessionListStyle !== undefined) settings.sessionListStyle = partial.sessionListStyle;
     if (partial.onboarded !== undefined) settings.onboarded = partial.onboarded;
@@ -165,22 +148,6 @@ export function useSettings() {
     try {
       await api.setSettings(partial);
     } catch (_) { /* best effort */ }
-  }
-
-  // 专门路径：codegraphEmbedder 整块更新（backend 下拉切 http/fastembed 时
-  // 一次性写回整块，避免逐字段 partial 多次落盘）。下次 build 读新配置，
-  // model_name/dim 变 → meta 不匹配 → 自动全量重建，无需额外 reinit 命令。
-  async function setCodegraphEmbedder(
-    cfg: CodeGraphEmbedderConfig,
-    apiKey: SecretMutation = { action: "unchanged" },
-  ): Promise<void> {
-    await api.setSettings({
-      codegraphEmbedder: { ...cfg, apiKey },
-    });
-    settings.codegraphEmbedder = {
-      ...cfg,
-      apiKeyConfigured: apiKey.action === "clear" ? false : cfg.apiKeyConfigured || apiKey.action === "set",
-    };
   }
 
   // 专门路径：jdkRegistry 整块更新（扫描/添加/删除时一次性写回整块，避免
@@ -212,5 +179,5 @@ export function useSettings() {
     settings.openWithExtensions = exts;
   }
 
-  return { settings, loaded, load, update, setOpenWithExtensions, setCodegraphEmbedder, setJdkRegistry, dismissJdkPrompt };
+  return { settings, loaded, load, update, setOpenWithExtensions, setJdkRegistry, dismissJdkPrompt };
 }

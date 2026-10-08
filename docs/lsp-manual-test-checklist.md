@@ -5,7 +5,7 @@ v1 不进 CI（慢 + 依赖外部安装）。每个 server 跑一遍下列流程
 ## 通用流程（每语言）
 1. 开某语言文件（如 `foo.rs`）→ 编辑器应起该语言 server（DevTools 看 lsp_ensure_server 调用）
 2. 写一个类型错 → 波浪线诊断出现（@codemirror/lint）
-3. Ctrl+Click 一个符号 → 跳到定义（LSP 优先；无 server 落 codegraph/grep）
+3. Ctrl+Click 一个符号 → 跳到定义（LSP 优先；无 server 落 grep）
 4. 键入触发补全 → 弹 `.cm-tooltip-autocomplete`，选项来自 server
 5. 悬停某符号 → 弹 hover tooltip（markdown 渲染）
 6. 关工作区 / 关 LSP toggle → server 进程退出（Task Manager 验）、波浪线消失

@@ -7,7 +7,6 @@ import { useCallHierarchy } from "../../composables/useCallHierarchy";
 import { useModal } from "../../composables/useModal";
 import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
-import { api } from "../../api";
 import CodeEditor from "../CodeEditor.vue";
 import type { GutterGotoPayload } from "../../extensions/cmImplGutter";
 import type { VimExCommand } from "../../extensions/vimExCommands";
@@ -18,6 +17,7 @@ import { formatContent } from "../../utils/format";
 import { useContextMenu, type MenuItem } from "../../composables/useContextMenu";
 import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
+import { openHtmlInBuiltinBrowser } from "../../composables/useOpenHtml";
 import { marked } from "../../utils/markdown";
 import { lspLangFor } from "../../utils/lspLang";
 
@@ -27,7 +27,7 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, projectRoot, gotoOwnerId, indexHintWinId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty, openAndScrollTo } = useFileViewer();
+const { closeWindow, save, projectRoot, gotoOwnerId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty, openAndScrollTo } = useFileViewer();
 const goto = useGotoDefinition();
 const callHierarchy = useCallHierarchy();
 const modal = useModal();
@@ -39,8 +39,6 @@ const gotoPopoverRef = ref<HTMLElement | null>(null);
 const codeEditorRef = ref<InstanceType<typeof CodeEditor> | null>(null);
 
 const dirty = computed(() => isWindowDirty(props.win));
-/** 本窗口是否正在显示「索引已更新」轻量提示（保存成功增量更新后闪现 ~1.5s） */
-const showIndexHint = computed(() => indexHintWinId.value === props.win.id);
 
 // ── 滚动位置记忆（会话级，重启即忘）──
 // 同一文件的编辑器 / 预览 / 只读 pre 滚动度量不同，key 按视图类型分开；
@@ -225,13 +223,10 @@ const gotoModeLabel = computed(() => {
     default: return "定义";
   }
 });
-/** 浮层结果来源标签：按前端 orchestration 层打的 source 四档透明显示，缺 source（旧路径）按 confidence 兜底。
- *  lsp/ast 同 conf-structure 色（LSP 权威 / codegraph AST 结构层），semantic 走 conf-semantic，grep 走 conf-text。 */
+/** 浮层结果来源标签：按前端 orchestration 层打的 source 透明显示（lsp=语言服务权威、grep=文本匹配），
+ *  缺 source（未打标）按 confidence 兜底。 */
 function gotoConf(item: QueryResult): { cls: string; text: string } {
   if (item.source === "lsp") return { cls: "conf-structure", text: "[LSP]" };
-  if (item.source === "ast") return { cls: "conf-structure", text: "[AST]" };
-  if (item.source === "semantic")
-    return { cls: "conf-semantic", text: `[语义·${item.score != null ? Math.round(item.score * 100) : "?"}%]` };
   if (item.source === "grep" || goto.isGrepFallback.value)
     return { cls: "conf-text", text: "[匹配]" };
   if (item.confidence === "Structure") return { cls: "conf-structure", text: "[精确]" };
@@ -343,7 +338,7 @@ function onGutterCallHierarchy(payload: { word: string; line: number; column: nu
 async function onSearchAllReferences() {
   await goto.searchAllReferences(goto.searchWord.value, projectRoot.value);
 }
-/** 降级 hint 链接「用本地索引跳转」：timeout 时用户主动取 codegraph+grep 结果（不调 LSP）。 */
+/** 降级 hint 链接「用本地索引跳转」：timeout 时用户主动取 grep 结果（不调 LSP）。 */
 async function onLocalManualSearch() {
   await goto.localManualSearch();
 }
@@ -353,7 +348,7 @@ function jumpToResult(item: QueryResult) {
   const root = projectRoot.value;
   if (!root) return;
   const separator = root.includes("\\") ? "\\" : "/";
-  // symbol.file 通常是相对工作区（codegraph/LSP 都归一到相对）；LSP 跨工作区定义
+  // symbol.file 通常是相对工作区（LSP 结果也归一到相对）；LSP 跨工作区定义
   // （如外部库源）会是绝对路径——绝对直接用，相对才拼 root，避免拼成 root+绝对（os error 123）。
   const norm = item.symbol.file.replace(/[\\/]/g, separator);
   const isAbs = /^[A-Za-z]:[\\/]/.test(norm) || /^[\\/]/.test(norm);
@@ -445,18 +440,7 @@ function openAtFirstChange() {
 }
 
 async function openInBrowser() {
-  try {
-    await api.fileOpen(props.win.filePath);
-  } catch (e) {
-    pushNotification({
-      severity: "error",
-      source: "fileviewer",
-      title: "浏览器打开失败",
-      body: `${props.win.fileName}: ${String(e)}`,
-      timestamp: Date.now(),
-      dedupKey: `fileviewer:open-browser:${props.win.filePath}`,
-    });
-  }
+  await openHtmlInBuiltinBrowser(props.win.filePath);
 }
 
 // ── 格式化（JSON / JSONL）──
@@ -560,9 +544,6 @@ function runClipboardAction(p: Promise<void> | undefined): void {
       </button>
       <span v-if="dirty" class="fw-dirty" v-tooltip="'有未保存的修改'">●</span>
       <span class="fw-title">{{ win.fileName }}</span>
-      <transition name="fw-index-hint-fade">
-        <span v-if="showIndexHint" key="hint" class="fw-index-hint" aria-live="polite">索引已更新</span>
-      </transition>
       <span class="fw-lang">{{ languageLabel }}</span>
       <span v-if="win.readonly && !isImage" class="fw-readonly-badge">只读</span>
       <span class="fw-path" v-tooltip="win.filePath">{{ win.filePath }}</span>
@@ -570,7 +551,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
       <button
         v-if="canOpenInBrowser"
         class="fw-icon-btn"
-        v-tooltip="'在浏览器中打开'"
+        v-tooltip="'在内置浏览器中打开'"
         @click.stop="openInBrowser"
       >
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -784,27 +765,6 @@ function runClipboardAction(p: Promise<void> | undefined): void {
   color: var(--aide-warning);
   font-size: 11px;
   flex-shrink: 0;
-}
-
-/* 保存成功增量更新索引后的轻量提示：标题栏闪一条「索引已更新」，~1.5s 自消失。
-   不进通知中心（成功是常态），用 success 语义色。transition 控制淡入淡出。 */
-.fw-index-hint {
-  font-size: 10px;
-  color: var(--aide-success);
-  background: color-mix(in srgb, var(--aide-success) 14%, transparent);
-  padding: 2px 8px;
-  border-radius: 4px;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.fw-index-hint-fade-enter-active,
-.fw-index-hint-fade-leave-active {
-  transition: opacity 0.25s ease;
-}
-.fw-index-hint-fade-enter-from,
-.fw-index-hint-fade-leave-to {
-  opacity: 0;
 }
 
 .fw-title {

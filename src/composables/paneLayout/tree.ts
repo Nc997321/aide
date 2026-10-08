@@ -11,6 +11,8 @@
  *   2. 无单孩子 split（拍平提升孩子）
  *   3. 无嵌套同方向 split（并入父级成多孩子 split，同 VS Code）
  *   4. sizes 与 children 等长且和为 1
+ *   6. 一排的格数变了（拆出 / 关掉 / 拍平并入）→ 这一排均分（3 格各 1/3、2 格各 1/2）；
+ *      手动拖出的比例只保留到下一次格数变化为止
  *   5. activeTabId / previewTabId 永远指向组内存在的 tab（或 null）
  *
  * 可能替换根节点的操作一律返回新根，由调用方（usePaneLayout）写回。
@@ -159,8 +161,13 @@ function normalizeSizes(sizes: number[], count: number): number[] {
   return sum > 0 ? s.map((v) => v / sum) : new Array(count).fill(1 / count);
 }
 
+function equalSizes(count: number): number[] {
+  return new Array(count).fill(1 / count);
+}
+
 /**
  * 递归规范化。空组剔除、单孩子 split 拍平、同方向嵌套并入、尺寸归一、组内引用修复。
+ * 格数变了的 split 均分（不变量 6）；格数没变则保留原比例（含手动拖出的）。
  * 整棵树空了返回 null（调用方兜底 createEmptyRoot——零会话欢迎态）。
  */
 export function normalize(node: PaneNode): PaneNode | null {
@@ -188,8 +195,9 @@ export function normalize(node: PaneNode): PaneNode | null {
   });
   if (children.length === 0) return null;
   if (children.length === 1) return children[0];
+  const countChanged = children.length !== node.children.length;
   node.children = children;
-  node.sizes = normalizeSizes(sizes, children.length);
+  node.sizes = countChanged ? equalSizes(children.length) : normalizeSizes(sizes, children.length);
   return node;
 }
 
@@ -220,8 +228,8 @@ export function removeTab(root: PaneNode, groupId: string, tabId: string): PaneN
  * moveActiveTab = false（侧栏「在分屏中打开」）：新组建成空组返回，**调用方必须
  * 立刻塞入一个 tab**（否则违反无空组不变量）——这一约束不跨越 usePaneLayout 边界。
  *
- * 父 split 同方向时直接在旁边插一列（新组分走原组一半宽度），否则原地替换成
- * 二孩子 split。返回可能更换的新根与新组。
+ * 父 split 同方向时直接在旁边插一列、整排均分（不变量 6），否则原地替换成
+ * 二孩子 split（各半）。返回可能更换的新根与新组。
  */
 export function splitGroup(
   root: PaneNode,
@@ -252,10 +260,8 @@ export function splitGroup(
   const parent = findParentSplit(root, groupId);
   if (parent && parent.direction === direction) {
     const i = parent.children.findIndex((c) => c.id === groupId);
-    const half = (parent.sizes[i] ?? 1 / parent.children.length) / 2;
-    parent.sizes[i] = half;
     parent.children.splice(i + 1, 0, newGroup);
-    parent.sizes.splice(i + 1, 0, half);
+    parent.sizes = equalSizes(parent.children.length);
     return { root, newGroup };
   }
 
@@ -364,7 +370,9 @@ export function toSnapshot(
     });
     if (children.length === 0) return null;
     if (children.length === 1) return children[0];
-    return { type: "split", direction: n.direction, sizes: normalizeSizes(sizes, children.length), children };
+    // 空白组不入快照 = 恢复后少一格，与「关掉它」同语义：整排均分（不变量 6）
+    const out = children.length === n.children.length ? normalizeSizes(sizes, children.length) : equalSizes(children.length);
+    return { type: "split", direction: n.direction, sizes: out, children };
   };
   const snapRoot = snap(root);
   if (!snapRoot) return null;

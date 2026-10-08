@@ -31,6 +31,7 @@ import AToast from "../ui/AToast.vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
+import { hostApi } from "@aide/sdk";
 
 // 三档制：快速(low)=关闭思考模式、进阶(high)/极致(max)=开启思考。
 // 历史档位 MEDIUM/XHIGH 由 normalizeEffortOption 迁移到相邻档位，不再出现在选择器。
@@ -160,7 +161,32 @@ watch(
 onMounted(() => {
   void load();
   void loadCatalog();
+  void hostApi
+    .current()
+    .then((h) => {
+      if (h.key !== "local") hostLabel.value = h.label;
+    })
+    .catch(() => {});
 });
+
+// ── 供应商按 Host 自持（一个窗口 = 一个 Host）──
+// Host 窗口里看到 / 编辑的是那台 Host 自己的供应商（密钥存在 Host 上）。本机的供应商要带过去
+// 必须是一次看得见的动作：「从本机复制」——按 id 合并，本机的覆盖同 id 的，Host 独有的保留。
+const hostLabel = ref("");
+const importing = ref(false);
+
+async function handleImportLocal() {
+  importing.value = true;
+  try {
+    const n = await hostApi.importLocalProviders();
+    await load();
+    showToast(n > 0 ? `已从本机复制 ${n} 个供应商到 ${hostLabel.value}` : "本机没有可复制的供应商", "success");
+  } catch (e) {
+    showToast("复制失败：" + String(e), "danger");
+  } finally {
+    importing.value = false;
+  }
+}
 
 function selectProvider(id: string) {
   selectedId.value = id;
@@ -339,6 +365,15 @@ const modelSuggestions = computed<string[]>(() => {
       </div>
 
       <button class="add-btn" @click="handleAdd">+ 添加供应商</button>
+      <button
+        v-if="hostLabel"
+        class="add-btn"
+        :disabled="importing"
+        v-tooltip="`把本机的供应商（含密钥）复制到 ${hostLabel}；同 id 的以本机为准`"
+        @click="handleImportLocal"
+      >
+        {{ importing ? "复制中…" : "从本机复制供应商" }}
+      </button>
     </div>
 
     <!-- Right: edit form -->

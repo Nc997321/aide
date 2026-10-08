@@ -1,7 +1,17 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
+// 关联项目走 Host 命令；这里只关心菜单怎么用它。
+const linkApi = vi.hoisted(() => ({
+  kbLinks: vi.fn(async () => ({}) as Record<string, string[]>),
+  setKbLinks: vi.fn(async (_id: string, _keys: string[]) => ({}) as Record<string, string[]>),
+}));
+vi.mock("@aide/sdk/api", () => ({
+  api: new Proxy(linkApi, { get: (t, k: string) => (k in t ? (t as Record<string, unknown>)[k] : vi.fn(async () => undefined)) }),
+}));
 import KbTree from "./KbTree.vue";
+import { useWorkspaces } from "../../composables/useWorkspaces";
+import { __resetKbLinksForTest } from "../../composables/useKbLinks";
 // 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
 // 那里不套 tsconfig 的 paths——用 `@/` 会满屏 "Cannot find module"（假的）。
 // 同目录的 PermissionDialog.test.ts 也是这个写法。
@@ -117,10 +127,82 @@ describe("KbTree 的 ⋯ 菜单", () => {
   it("文件夹与文档的 ⋯ 菜单一致：都是「对这个节点」的操作（新建有自己的入口）", async () => {
     const w = mountTree();
     await w.find("[data-kb-node='f'] [data-kb-more]").trigger("click");
-    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "关联项目…", "删除"]);
 
     await w.find("[data-kb-node='a'] [data-kb-more]").trigger("click");
-    expect(menuLabels()).toEqual(["重命名", "移动到…", "删除"]);
+    expect(menuLabels()).toEqual(["重命名", "移动到…", "关联项目…", "删除"]);
+  });
+
+  it("「关联项目…」列出本 Host 的工作区：已关联的打勾，继承自上层文件夹的置灰并注明来源；点一下切换", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [
+      { key: "ws-a", name: "/home/u/proj-a", missing: false },
+      { key: "ws-b", name: "/home/u/proj-b", missing: false },
+      { key: "ws-c", name: "/home/u/proj-c", missing: false },
+    ];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], a: ["ws-a"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    await useMenuItem(w, "a", "关联项目…");
+    const items = menuItems.value;
+    expect(items.map((i) => [i.label, i.icon, !!i.disabled])).toEqual([
+      ["proj-a", "✓", false], // 自己直接关联
+      ["proj-b（继承自「f」）", "✓", true], // 来自上层文件夹，这里不能取消
+      ["proj-c", "○", false],
+    ]);
+    linkApi.setKbLinks.mockResolvedValueOnce({});
+    items[2]!.action?.();
+    expect(linkApi.setKbLinks).toHaveBeenCalledWith("a", ["ws-a", "ws-c"]);
+  });
+
+  it("打过的关联项目直接标在行上（不用打开菜单就看得到），文件夹与文档都一样", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [
+      { key: "ws-a", name: "/home/u/proj-a", missing: false },
+      { key: "ws-b", name: "/home/u/proj-b", missing: false },
+      { key: "ws-c", name: "/home/u/proj-c", missing: false },
+    ];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], a: ["ws-a", "ws-b", "ws-c"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    // 文件夹：一个标签
+    expect(w.findAll("[data-kb-node='f'] [data-kb-tag]").map((t) => t.text())).toEqual(["proj-b"]);
+    // 文档：只露两个，其余折成 +N；没打过的行没有标签区
+    expect(w.findAll("[data-kb-node='a'] [data-kb-tag]").map((t) => t.text())).toEqual(["proj-a", "proj-b"]);
+    expect(w.find("[data-kb-node='a'] [data-kb-tag-more]").text()).toBe("+1");
+    expect(w.find("[data-kb-node='g'] [data-kb-tags]").exists()).toBe(false);
+  });
+
+  it("继承来的不重复标在子行上；已不在的工作区标成警示而不是丢掉", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [{ key: "ws-b", name: "/home/u/proj-b", missing: false }];
+    linkApi.kbLinks.mockResolvedValueOnce({ f: ["ws-b"], g: ["gone"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(w.find("[data-kb-node='a'] [data-kb-tags]").exists()).toBe(false); // a 在 f 下，只继承
+    expect(w.find("[data-kb-node='g'] [data-kb-tag]").classes()).toContain("kb-row-tag--missing");
+  });
+
+  it("点标签、点行上的标签按钮，都直接打开关联菜单", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [{ key: "ws-a", name: "/home/u/proj-a", missing: false }];
+    linkApi.kbLinks.mockResolvedValueOnce({ a: ["ws-a"] });
+    const w = mountTree();
+    await new Promise((r) => setTimeout(r, 0));
+    await w.find("[data-kb-node='a'] [data-kb-tag]").trigger("click");
+    expect(menuItems.value.map((i) => i.label)).toEqual(["proj-a"]);
+    hideMenu();
+    await w.find("[data-kb-node='g'] [data-kb-link]").trigger("click");
+    expect(menuItems.value.map((i) => i.label)).toEqual(["proj-a"]);
+    expect(w.emitted("open")).toBeFalsy(); // 点标签不该顺带打开文档
+  });
+
+  it("没有任何已注册工作区：菜单说清楚，不是一个空菜单", async () => {
+    __resetKbLinksForTest();
+    useWorkspaces().workspaces.value = [];
+    const w = mountTree();
+    await useMenuItem(w, "a", "关联项目…");
+    expect(menuLabels()).toEqual(["还没有打开过的工作区"]);
   });
 
   it("删除是危险项（红色）", async () => {
@@ -235,5 +317,50 @@ describe("KbTree 的新建", () => {
     await w.find("[data-kb-new]").setValue("顶层文件夹");
     await w.find("[data-kb-new]").trigger("keydown.enter");
     expect(w.emitted("create")?.[0]).toEqual([null, "folder", "顶层文件夹"]);
+  });
+});
+
+describe("拖拽移动", () => {
+  // 树：f(文件夹) ⊃ a(文档)、g(文件夹)；h 是根上的文档
+  const TREE = [...DOCS, node("h", null, "doc")];
+  const mountDrag = () =>
+    mount(KbTree, {
+      props: { documents: TREE, activeId: null, busy: false, collapsed: new Set<string>() },
+      global: { stubs: { Icon: true } },
+    });
+  const row = (w: ReturnType<typeof mountDrag>, id: string) => w.find(`[data-kb-node="${id}"]`);
+  const dt = () => ({ setData: () => {}, effectAllowed: "" });
+
+  it("拖文档到文件夹上 → patch(parentId = 该文件夹)", async () => {
+    const w = mountDrag();
+    await row(w, "h").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "f").trigger("dragover");
+    await row(w, "f").trigger("drop");
+    expect(w.emitted("patch")?.[0]).toEqual(["h", { parentId: "f" }]);
+  });
+
+  it("拖到树的空白处（根）→ patch(parentId = null)", async () => {
+    const w = mountDrag();
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await w.find(".kb-tree").trigger("drop"); // 事件目标就是容器本身 = 空白处
+    expect(w.emitted("patch")?.[0]).toEqual(["a", { parentId: null }]);
+  });
+
+  it("不能把文件夹拖进自己的子树；拖到原位也不动", async () => {
+    const w = mountDrag();
+    await row(w, "f").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "g").trigger("drop"); // g 在 f 里面
+    expect(w.emitted("patch")).toBeUndefined();
+
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "f").trigger("drop"); // a 本来就在 f 里
+    expect(w.emitted("patch")).toBeUndefined();
+  });
+
+  it("文档行不是放置目标", async () => {
+    const w = mountDrag();
+    await row(w, "a").trigger("dragstart", { dataTransfer: dt() });
+    await row(w, "h").trigger("drop");
+    expect(w.emitted("patch")).toBeUndefined();
   });
 });

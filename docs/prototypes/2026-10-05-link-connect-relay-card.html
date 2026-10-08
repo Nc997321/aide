@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>连接移动端卡片 · 中继地址 + 权限模式（原型）</title>
+<!--
+  2026-10-05 原型：中继地址可填（没有出厂默认）+ 生成二维码 + 权限模式搬进侧栏卡片。
+  CSS 是手抄的（token 名与 src/components/LinkConnectCard.vue 一致，值取 glass 主题的观感），
+  管"动手前"的排版/交互确认；确认后真组件在 harness 里跑真 token。
+  四个状态：① 已配地址+有码 ② 未配置（生成禁用） ③ 已配对 ④ 校验错误
+-->
+<style>
+  :root {
+    --aide-bg-base: #16161c;
+    --aide-surface-default: #1e1e26;
+    --aide-surface-hover: #2a2a34;
+    --aide-border: #3a3a46;
+    --aide-border-subtle: #2e2e38;
+    --aide-text-primary: #e8e8ef;
+    --aide-text-secondary: #b9b9c6;
+    --aide-text-muted: #8b8b9a;
+    --aide-text-on-accent: #0d0d12;
+    --aide-accent: #8ab4ff;
+    --aide-accent-gradient: linear-gradient(135deg, #8ab4ff, #b99bff);
+    --aide-warning: #f0b357;
+    --aide-success: #7fd4a0;
+    --aide-radius-lg: 12px;
+    --aide-radius-md: 8px;
+    --aide-font-mono: "JetBrains Mono", "Maple Mono NF CN", monospace;
+  }
+  body {
+    margin: 0; padding: 28px;
+    background: #0f0f13; color: var(--aide-text-primary);
+    font: 14px/1.5 "Inter", "PingFang SC", "Microsoft YaHei", sans-serif;
+    display: flex; gap: 22px; flex-wrap: wrap; align-items: flex-start;
+  }
+  .hint { position: fixed; right: 16px; bottom: 12px; font-size: 11px; color: #6a6a78; }
+  /* ── 卡片本体（width 300 与真组件一致） ── */
+  .lc-card {
+    display: flex; flex-direction: column; gap: 8px; width: 300px;
+    padding: 16px 18px 14px; border-radius: var(--aide-radius-lg);
+    background: var(--aide-surface-default); border: 1px solid var(--aide-border);
+  }
+  .lc-title { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .lc-qr-box {
+    display: flex; align-items: center; justify-content: center; align-self: center;
+    width: 200px; height: 200px; border: 1px dashed var(--aide-border);
+    border-radius: var(--aide-radius-lg); background: #ffffff; overflow: hidden;
+    font-size: 12px; color: #666;
+  }
+  .lc-qr-box.empty { background: var(--aide-surface-default); color: var(--aide-text-muted); flex-direction: column; gap: 10px; text-align: center; }
+  .lc-caption { margin: 0; text-align: center; font-size: 12px; color: var(--aide-text-muted); }
+  /* ── 新增：中继地址行 ── */
+  .lc-field-label { font-size: 11px; color: var(--aide-text-muted); margin-top: 4px; }
+  .lc-relay-row { display: flex; gap: 8px; }
+  .lc-input {
+    flex: 1; min-width: 0; padding: 5px 9px; font-size: 11.5px;
+    font-family: var(--aide-font-mono);
+    color: var(--aide-text-primary); background: var(--aide-bg-base);
+    border: 1px solid var(--aide-border-subtle); border-radius: var(--aide-radius-md);
+  }
+  .lc-input::placeholder { color: var(--aide-text-muted); }
+  .lc-input:focus { outline: none; border-color: var(--aide-accent); }
+  .lc-input:disabled { opacity: 0.55; }
+  .lc-btn {
+    background: transparent; border: 1px solid var(--aide-border);
+    border-radius: var(--aide-radius-md); color: var(--aide-text-secondary);
+    cursor: pointer; font: inherit; font-size: 11px; padding: 3px 10px;
+  }
+  .lc-btn.primary { border-color: transparent; background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-weight: 600; }
+  .lc-btn:disabled { opacity: 0.4; cursor: default; }
+  .lc-relay-hint { margin: 0; font-size: 11px; color: var(--aide-text-muted); }
+  .lc-warn { color: var(--aide-warning); }
+  .lc-ok { color: var(--aide-success); }
+  /* ── 新增：权限模式分段控件（避开 ThemedSelect 的 Teleport 弹层坑） ── */
+  .lc-seg-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .lc-seg { display: inline-flex; border: 1px solid var(--aide-border-subtle); border-radius: var(--aide-radius-md); overflow: hidden; }
+  .lc-seg button {
+    border: 0; background: transparent; color: var(--aide-text-secondary);
+    font: inherit; font-size: 11px; padding: 4px 12px; cursor: pointer;
+  }
+  .lc-seg button + button { border-left: 1px solid var(--aide-border-subtle); }
+  .lc-seg button[aria-pressed="true"] { background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-weight: 600; }
+  .lc-seg-hint { margin: 0; font-size: 11px; color: var(--aide-text-muted); }
+  .lc-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 2px; padding-top: 12px; border-top: 1px solid var(--aide-border-subtle); }
+  .lc-label { font-size: 13px; }
+  .lc-toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+  .lc-toggle input { display: none; }
+  .lc-toggle span { position: absolute; inset: 0; background: var(--aide-surface-hover); border-radius: 10px; }
+  .lc-toggle span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; background: var(--aide-text-primary); border-radius: 50%; transition: transform .15s; }
+  .lc-toggle input:checked + span { background: var(--aide-accent-gradient); }
+  .lc-toggle input:checked + span::after { transform: translateX(16px); background: var(--aide-text-on-accent); }
+  .lc-state { margin: 0; font-size: 11px; line-height: 1.5; color: var(--aide-text-muted); }
+  .state-name { font-size: 11px; color: #6a6a78; margin: 0 0 6px; }
+</style>
+</head>
+<body>
+
+<!-- ① 已配地址 + 有二维码 -->
+<div>
+  <p class="state-name">① 已配地址 · 有码</p>
+  <div class="lc-card">
+    <h3 class="lc-title">连接移动端</h3>
+    <div class="lc-qr-box">二维码 200×200</div>
+    <p class="lc-caption">使用 Aide 手机端扫码连接电脑</p>
+
+    <span class="lc-field-label">中继地址</span>
+    <div class="lc-relay-row">
+      <input class="lc-input" value="wss://relay.aideai.store" />
+      <button class="lc-btn primary">生成</button>
+    </div>
+    <p class="lc-relay-hint">自建或你信任的中继（ws:// 或 wss://）</p>
+
+    <div class="lc-seg-row">
+      <span class="lc-label">远程会话权限</span>
+      <span class="lc-seg"><button aria-pressed="true">自动</button><button>手动</button></span>
+    </div>
+    <p class="lc-seg-hint">自动批准非危险工具；手动每次询问（不推荐远程用）。</p>
+
+    <div class="lc-row">
+      <span class="lc-label">允许移动端连接此设备</span>
+      <label class="lc-toggle"><input type="checkbox" checked /><span></span></label>
+    </div>
+    <p class="lc-state lc-ok">已就绪，手机可以连接</p>
+  </div>
+</div>
+
+<!-- ② 未配置地址（生成禁用） -->
+<div>
+  <p class="state-name">② 未配置 · 生成禁用</p>
+  <div class="lc-card">
+    <h3 class="lc-title">连接移动端</h3>
+    <div class="lc-qr-box empty">
+      <span>请先填写中继地址</span>
+      <button class="lc-btn" disabled>生成二维码</button>
+    </div>
+    <p class="lc-caption">&nbsp;</p>
+
+    <span class="lc-field-label">中继地址</span>
+    <div class="lc-relay-row">
+      <input class="lc-input" placeholder="wss://你的中继" />
+      <button class="lc-btn primary" disabled>生成</button>
+    </div>
+    <p class="lc-relay-hint">没有内置默认：手机与电脑都连你填的这个地址。</p>
+
+    <div class="lc-seg-row">
+      <span class="lc-label">远程会话权限</span>
+      <span class="lc-seg"><button aria-pressed="true">自动</button><button>手动</button></span>
+    </div>
+
+    <div class="lc-row">
+      <span class="lc-label">允许移动端连接此设备</span>
+      <label class="lc-toggle"><input type="checkbox" /><span></span></label>
+    </div>
+  </div>
+</div>
+
+<!-- ③ 已配对 -->
+<div>
+  <p class="state-name">③ 已配对（换过地址）</p>
+  <div class="lc-card">
+    <h3 class="lc-title">连接移动端</h3>
+    <div class="lc-qr-box empty">
+      <span>已配对 1 台手机</span>
+      <div style="display:flex;gap:8px"><button class="lc-btn">配对新手机</button><button class="lc-btn">撤销</button></div>
+    </div>
+    <p class="lc-caption">配对新手机会顶掉当前这台</p>
+
+    <span class="lc-field-label">中继地址</span>
+    <div class="lc-relay-row">
+      <input class="lc-input" value="wss://relay.aideai.store" />
+      <button class="lc-btn primary">生成</button>
+    </div>
+    <p class="lc-relay-hint lc-warn">地址改过：已配对的手机连的是旧地址，需重新扫码。</p>
+
+    <div class="lc-seg-row">
+      <span class="lc-label">远程会话权限</span>
+      <span class="lc-seg"><button>自动</button><button aria-pressed="true">手动</button></span>
+    </div>
+
+    <div class="lc-row">
+      <span class="lc-label">允许移动端连接此设备</span>
+      <label class="lc-toggle"><input type="checkbox" checked /><span></span></label>
+    </div>
+  </div>
+</div>
+
+<!-- ④ 校验错误 -->
+<div>
+  <p class="state-name">④ 非法地址（前端轻校验）</p>
+  <div class="lc-card">
+    <h3 class="lc-title">连接移动端</h3>
+    <div class="lc-qr-box empty"><span>二维码未生成或已过期</span><button class="lc-btn">生成二维码</button></div>
+    <p class="lc-caption">&nbsp;</p>
+
+    <span class="lc-field-label">中继地址</span>
+    <div class="lc-relay-row">
+      <input class="lc-input" value="http://relay.aideai.store" style="border-color: var(--aide-warning)" />
+      <button class="lc-btn primary" disabled>生成</button>
+    </div>
+    <p class="lc-relay-hint lc-warn">地址需以 ws:// 或 wss:// 开头</p>
+
+    <div class="lc-seg-row">
+      <span class="lc-label">远程会话权限</span>
+      <span class="lc-seg"><button aria-pressed="true">自动</button><button>手动</button></span>
+    </div>
+
+    <div class="lc-row">
+      <span class="lc-label">允许移动端连接此设备</span>
+      <label class="lc-toggle"><input type="checkbox" checked /><span></span></label>
+    </div>
+  </div>
+</div>
+
+<div class="hint">原型：排版/交互确认用（token 名同真组件，值手抄）· 2026-10-05</div>
+</body>
+</html>

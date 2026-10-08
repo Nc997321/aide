@@ -13,6 +13,8 @@ const props = withDefaults(defineProps<{
   multiple?: boolean;
   /** 锁定根：非空时跳过盘符、隐藏 quick-roots、goUp 不跳出根、地址栏只读（限工作空间内）。 */
   root?: string;
+  /** 快速入口覆盖：给了就不列本机盘符（远程工作区选目录：目标机的家目录与 `/`）。 */
+  roots?: FileEntry[];
 }>(), {
   mode: "directory",
   multiple: false,
@@ -68,7 +70,7 @@ onMounted(async () => {
     await expandRoot(props.root);
   } else {
     try {
-      roots.value = await api.listFsRoots();
+      roots.value = props.roots ?? (await api.listFsRoots());
     } catch (_e) {
       roots.value = [];
     }

@@ -62,7 +62,12 @@ function isUsableLspResult(toolName: string, result: string): boolean {
   const text = result.trim();
   if (LSP_FAILED.test(text)) return false;
   if (toolName === BUILTIN_LSP_TOOL) return true;
-  return /:\d+:\d+/.test(text);
+  // 文本兜底（语义层没答上时同一发给出的纯文本命中）带着坐标，但**不是** LSP 的答案：
+  // 它的标记词是 UNVERIFIED（见 agent-sidecar lspFormat.ts 的 textFallbackText）。
+  if (/\bUNVERIFIED\b/.test(text)) return false;
+  // 三种坐标形状（2026-09-29 起的输出，见 lspFormat.ts）：`path:12:5`（定义 / 符号）、
+  // 分组引用的行首 `  12:5`、文件结构的 `L12-40`。
+  return /:\d+:\d+/.test(text) || /^\s+\d+:\d+\s/m.test(text) || /\bL\d+(-\d+)?\b/.test(text);
 }
 
 /** 实时路径的回看扫描上限（块数）：防超长会话 O(n)。 */
@@ -82,13 +87,22 @@ function basenameOf(path: string): string {
  *  没有 file ⇒ 不构成上下文 ⇒ 那次 Read 落中性。**这是刻意的**：一次返回 N 个文件的
  *  引用查询并没有「那一个坐标」，硬凑一个集合会把徽章变成噪声（模块头：误杀方向恒为
  *  中性，宁可少打不可错打）。 */
-function lspInputFilePath(input: unknown): string | null {
+function lspInputFilePath(input: unknown, result?: string): string | null {
   const record = input as Record<string, unknown> | null;
   for (const key of ["filePath", "file"] as const) {
     const value = record?.[key];
     if (typeof value === "string" && value) return value;
   }
-  return null;
+  return result ? singleResultFile(result) : null;
+}
+
+/** 按名调用（`lsp_definition {name}`）没有入参文件，但结果里只指向**一个**文件时，那个
+ *  文件就是接力目标（定义 + 函数体之后 Read 同一文件的某段，是最典型的接力）。
+ *  指向多个文件 ⇒ 没有「那一个坐标」⇒ null（中性），与上面的纪律一致。 */
+function singleResultFile(result: string): string | null {
+  const files = new Set<string>();
+  for (const m of result.matchAll(/([\w./\\:-]+\.[A-Za-z0-9]+):\d+:\d+/g)) files.add(m[1]);
+  return files.size === 1 ? [...files][0] : null;
 }
 
 /**
@@ -126,7 +140,7 @@ export function lastLspContextInMessages(
       if (!isLspToolCall(block.name)) continue;
       if (typeof block.result !== "string" || !block.result) continue;
       if (!isUsableLspResult(block.name, block.result)) continue;
-      const filePath = lspInputFilePath(block.input);
+      const filePath = lspInputFilePath(block.input, block.result);
       if (filePath) return { filePath, result: block.result };
     }
   }
@@ -148,7 +162,7 @@ export function annotateReadRelay(messages: readonly ChatMessage[]): void {
       if (block.type !== "tool_call") continue;
       if (isLspToolCall(block.name)) {
         const result = typeof block.result === "string" ? block.result : "";
-        const filePath = lspInputFilePath(block.input);
+        const filePath = lspInputFilePath(block.input, block.result);
         if (result && filePath && isUsableLspResult(block.name, result)) {
           lsp = { filePath, result };
         }

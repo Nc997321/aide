@@ -45,6 +45,16 @@ vi.mock("./kbClient", () => ({
   KbError: class KbError extends Error {},
 }));
 
+// 圈选层的卡片对话会话在这里不是被测对象，且会接全局聊天事件监听（jsdom 里没有 Tauri）。
+vi.mock("@/composables/useKbCardSession", async () => {
+  const { ref } = await import("vue");
+  return {
+    useKbCardSession: () => ({
+      sid: ref(null), thread: ref([]), permission: ref(null), editRequest: ref(null), busy: ref(false),
+      sendError: ref(null), send: async () => undefined, respond: async () => {}, forget: () => {},
+    }),
+  };
+});
 vi.mock("./kbRuntime", () => ({ pushKnowledgeRuntime: vi.fn(async () => {}) }));
 
 vi.mock("../../composables/useModal", () => ({
@@ -117,6 +127,18 @@ describe("索引态", () => {
 
     expect(w.findAll("[data-kb-node]")).toHaveLength(1);
     expect(w.text()).toContain("数据说明.md");
+  });
+});
+
+describe("聊天需要被看见", () => {
+  it("文档侧发出的圈选被聊天里的确认框拦下（revealChat）→ 面板收起自己，让聊天露出来", async () => {
+    const { useKbSelections } = await import("@/composables/useKbSelections");
+    const w = mountPanel();
+    await settle();
+    expect(w.emitted("close")).toBeUndefined();
+    useKbSelections().revealChat();
+    await flushPromises();
+    expect(w.emitted("close")).toHaveLength(1);
   });
 });
 

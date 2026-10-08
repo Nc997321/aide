@@ -4,10 +4,10 @@
 //! 的红线。这里也是唯一能同时拿到 `AppHandle`（取门面）与 stdin 回写通道的地方。
 //!
 //! **职责边界**：门面只认 id，**不认识「当前该操作哪个视图」**——`view_id` 解析是**策略**，
-//! 住在这一层（机制/用途分离，同 CLAUDE.md headless 的边界口径）。
+//! 住在这一层（机制/用途分离，同 CLAUDE.md 的机制/策略边界）。
 //!
 //! **失败纪律**：不 panic、不静默。任何失败都折成 `{ok:false, error}` 回给 sidecar，由工具层
-//! 转成模型可读文本（照 codegraph 的「失败返回文本不抛错」）。
+//! 转成模型可读文本（「失败返回文本不抛错」）。
 
 use std::sync::Arc;
 
@@ -23,22 +23,22 @@ use crate::browser::agent_bridge::{
 use crate::browser::dto::{BoundsDto, BrowserViewDto, CreateBrowserDto, NavStateDto, OriginDto};
 use crate::browser::facade::{BrowserFacade, FacadeError};
 
-/// 执行一条浏览器查询并回写结果。
-pub async fn handle(app: AppHandle, stdin: Arc<TokioMutex<ChildStdin>>, req: BrowserQueryRequest) {
-    // 可观测性：桥被拦截后既不转发前端也不回任何 UI，没有这行就只剩「成功或 15s 超时」两种
-    // 可见状态，出错时无从定位（2026-09-16 实测踩过：只能靠行为反推链路是否真通）。
-    let op = req.query.op_name();
-    let request_id = req.request_id.clone();
-    let body = run(&app, req.query).await;
+/// 本机 Host 的 agent 用哪个窗口的浏览器：此刻连着本机 Host 的窗口（`host_window::local_window`——
+/// 窗口可以换绑，主窗口不一定是本机）；一扇都没有时落回主窗口标签，由门面如实回「window not found」。
+/// 远程 Host 的 agent 用连着那台 Host 的窗口（`host_window::answer_browser_query`）。
+/// **窗口选择是策略，住在调用方**。
+pub fn local_window(app: &AppHandle) -> String {
+    crate::host_window::local_window(app).unwrap_or_else(|| "main".to_string())
+}
 
-    if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
-        tracing::info!(op, %request_id, "browser bridge: replied ok");
-    } else {
-        let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::warn!(op, %request_id, error, "browser bridge: replied with error");
-    }
-
-    let payload = build_result_command(&req.request_id, body);
+/// 执行一条浏览器查询并回写结果（本机 Host：经 runtime 的 stdin）。
+pub async fn handle(
+    app: AppHandle,
+    window: &str,
+    stdin: Arc<TokioMutex<ChildStdin>>,
+    req: BrowserQueryRequest,
+) {
+    let payload = answer(&app, window, req).await;
     if let Ok(mut line) = serde_json::to_string(&payload) {
         line.push('\n');
         let mut guard = stdin.lock().await;
@@ -46,14 +46,33 @@ pub async fn handle(app: AppHandle, stdin: Arc<TokioMutex<ChildStdin>>, req: Bro
     }
 }
 
+/// 在 `window` 的浏览器里执行一条查询，返回**已打好 `browser_result` 标**的回包命令。
+/// 回包怎么送回 agent 由调用方定（本机 = stdin，远程 Host = `agent_tool_result`）。
+pub async fn answer(app: &AppHandle, window: &str, req: BrowserQueryRequest) -> Value {
+    // 可观测性：桥被拦截后既不转发前端也不回任何 UI，没有这行就只剩「成功或 15s 超时」两种
+    // 可见状态，出错时无从定位（2026-09-16 实测踩过：只能靠行为反推链路是否真通）。
+    let op = req.query.op_name();
+    let request_id = req.request_id.clone();
+    let body = run(app, window, req.query).await;
+
+    if body.get("ok").and_then(|v| v.as_bool()).unwrap_or(false) {
+        tracing::info!(op, %request_id, window, "browser bridge: replied ok");
+    } else {
+        let error = body.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        tracing::warn!(op, %request_id, window, error, "browser bridge: replied with error");
+    }
+    build_result_command(&req.request_id, body)
+}
+
 /// op → 执行体，并把整段折成 stdin 回包体。
-async fn run(app: &AppHandle, query: BrowserQuery) -> Value {
+async fn run(app: &AppHandle, window: &str, query: BrowserQuery) -> Value {
     // 门面调用会在**调用线程**上等 COM 回调（线程契约见 `adapter/webview2/native.rs`），
     // 故整体收进 `spawn_blocking`——既不占 tokio 核心 worker，也不在主线程上阻塞。
     // （澄清：设计文档说的「禁止对这些 COM 调用 spawn_blocking」指的是**绕开 `with_webview`
     //   直接在池线程发 COM 调用**；编组由 `with_webview` 自己做，与调用方线程无关。）
     let app = app.clone();
-    match tokio::task::spawn_blocking(move || exec(&app, query)).await {
+    let window = window.to_string();
+    match tokio::task::spawn_blocking(move || exec(&app, &window, query)).await {
         Ok(body) => body,
         // 执行体 panic：如实回错误而不是让 sidecar 干等超时。
         Err(e) => err_payload(format!("browser executor panicked: {e}")),
@@ -61,8 +80,8 @@ async fn run(app: &AppHandle, query: BrowserQuery) -> Value {
 }
 
 /// 同步执行体（跑在 blocking 线程上）。
-fn exec(app: &AppHandle, query: BrowserQuery) -> Value {
-    let facade = BrowserFacade::new(app);
+fn exec(app: &AppHandle, window: &str, query: BrowserQuery) -> Value {
+    let facade = BrowserFacade::new(app, window);
 
     match query {
         BrowserQuery::Malformed(why) => {

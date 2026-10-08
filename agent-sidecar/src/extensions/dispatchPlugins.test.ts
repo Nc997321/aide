@@ -85,6 +85,8 @@ describe("buildDispatchPluginsOption", () => {
     }
   }
 
+  // 远程车道：用户级插件根 = 桌面用户扩展在目标机上的镜像，不是目标机自己的 claude home。
+
   it("!trusted 仅用户级（项目级不注入）", () => {
     mkdirSync(join(homeDir, "skills", "x"), { recursive: true });
     mkdirSync(join(cwdDir, ".aide", "claude", "skills", "y"), { recursive: true });

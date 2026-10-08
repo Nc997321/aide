@@ -2,7 +2,6 @@ import { describe, it, expect, afterEach } from "vitest";
 import type { ChatEvent } from "../engine/types.js";
 import { buildBrowserTools } from "./browserTools.js";
 import { buildProjectionScript } from "./browser/projection.js";
-import { NO_BROWSER_HOST_TEXT } from "./browser/format.js";
 import { cancelAllBrowserQueries, resolveBrowserResult } from "./browserClient.js";
 
 /** 取工具定义（按名字）并直接调 handler —— 与真实模型调用同一条代码路径。 */
@@ -18,8 +17,8 @@ function emitCollector() {
   return { events, emit: (e: ChatEvent) => events.push(e) };
 }
 
-function toolByName(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void, name: string): AnyTool {
-  const tools = buildBrowserTools(env, emit) as unknown as AnyTool[];
+function toolByName(emit: (e: ChatEvent) => void, name: string): AnyTool {
+  const tools = buildBrowserTools(emit) as unknown as AnyTool[];
   const found = tools.find((t) => t.name === name);
   if (!found) throw new Error(`tool ${name} not built`);
   return found;
@@ -27,46 +26,10 @@ function toolByName(env: NodeJS.ProcessEnv, emit: (e: ChatEvent) => void, name: 
 
 afterEach(() => cancelAllBrowserQueries("test cleanup"));
 
-describe("headless 短路（结构性没有内嵌浏览器）", () => {
-  it("工具照挂，但调用**不发桥**、立即回引导文本", async () => {
-    const { events, emit } = emitCollector();
-    const t = toolByName({ AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv, emit, "browser_read");
-
-    const r = await t.handler({}, {});
-
-    // 核心断言：一条事件都没发出去。发出去 = 白等 15s 超时，
-    // 而超时文案会把「本环境没这能力」伪装成「浏览器卡了」。
-    expect(events).toHaveLength(0);
-    expect(r.content[0].text).toBe(NO_BROWSER_HOST_TEXT);
-  });
-
-  // 清单与工具表一一对应（`browser_console` 落地后是九条；下面那张表的精确数组是同一份清单，
-  // 漏一个这里会当场抛 "tool … not built"）。
-  it("九个工具都短路（漏一个就会有一个挂 15s）", async () => {
-    const env = { AIDE_HEADLESS: "1" } as NodeJS.ProcessEnv;
-    for (const name of [
-      "browser_tabs",
-      "browser_read",
-      "browser_act",
-      "browser_wait",
-      "browser_eval",
-      "browser_screenshot",
-      "browser_tab",
-      "browser_network",
-      "browser_console",
-    ]) {
-      const { events, emit } = emitCollector();
-      const r = await toolByName(env, emit, name).handler({ script: "1", action: "click", text: "x" }, {});
-      expect(events, name).toHaveLength(0);
-      expect(r.content[0].text, name).toBe(NO_BROWSER_HOST_TEXT);
-    }
-  });
-});
-
 describe("browser_tabs", () => {
   it("发 list_views 并渲染视图清单", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_tabs").handler({}, {});
+    const p = toolByName(emit, "browser_tabs").handler({}, {});
 
     const q = events[0] as any;
     expect(q.type).toBe("browser_query");
@@ -86,7 +49,7 @@ describe("browser_tabs", () => {
 describe("browser_read", () => {
   it("发 eval，script 恒为通用投影脚本（不是调用方给的东西）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+    const p = toolByName(emit, "browser_read").handler(
       { view_id: "browser-2" },
       {},
     );
@@ -101,7 +64,7 @@ describe("browser_read", () => {
 
   it("include_hidden:true → 注入的脚本真的把它打开（默认是关的）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+    const p = toolByName(emit, "browser_read").handler(
       { view_id: "browser-2", include_hidden: true },
       {},
     );
@@ -120,7 +83,7 @@ describe("browser_read", () => {
    */
   it("隐藏项计数 → 结果里出一行 NOTE，并给出开关", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+    const p = toolByName(emit, "browser_read").handler(
       { view_id: "browser-2" },
       {},
     );
@@ -152,7 +115,7 @@ describe("browser_read", () => {
    */
   it("Raw text 没过滤成 → 输出里明说（与脚本的 filtered:false 是同一个契约）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+    const p = toolByName(emit, "browser_read").handler(
       { view_id: "browser-2" },
       {},
     );
@@ -186,7 +149,7 @@ describe("browser_read", () => {
    */
   it("调用方塞进来的 script 参数被无视（否则读工具 = 权限旁路）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler(
+    const p = toolByName(emit, "browser_read").handler(
       { script: "fetch('/api/delete', {method:'POST'})" },
       {},
     );
@@ -205,7 +168,7 @@ describe("browser_read", () => {
    */
   it("骨架里有跨域 iframe → 自动追加 CDP 帧级读取并合进结果", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
+    const p = toolByName(emit, "browser_read").handler({}, {});
 
     reply(
       await waitForQuery(events, 0),
@@ -241,7 +204,7 @@ describe("browser_read", () => {
 
   it("骨架里没有跨域帧 → 不追加多余的 CDP 往返", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
+    const p = toolByName(emit, "browser_read").handler({}, {});
     reply(await waitForQuery(events, 0), evalOk({ ok: true, title: "T", frames: [] }));
     await p;
     expect(events).toHaveLength(1); // 只有投影那一发（可见性探测已删）
@@ -249,7 +212,7 @@ describe("browser_read", () => {
 
   it("桥失败 → Rust 的错误文本原样回到模型", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_read").handler({}, {});
+    const p = toolByName(emit, "browser_read").handler({}, {});
     const q = events[0] as any;
     resolveBrowserResult({
       request_id: q.request_id,
@@ -263,7 +226,7 @@ describe("browser_read", () => {
 describe("browser_eval", () => {
   it("透传调用方的 script（这才是任意脚本的正门）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_eval").handler(
+    const p = toolByName(emit, "browser_eval").handler(
       { script: "document.title" },
       {},
     );
@@ -311,7 +274,7 @@ describe("browser_act — 点击的两条路", () => {
 
   it("CDP 可用时走真实输入：mousePressed + mouseReleased 都要发", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新" },
       {},
     );
@@ -342,7 +305,7 @@ describe("browser_act — 点击的两条路", () => {
    */
   it("CDP 不可用时降级为合成事件，并在结果里说清不是可信事件", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新" },
       {},
     );
@@ -365,7 +328,7 @@ describe("browser_act — 点击的两条路", () => {
 
   it("按下成功但抬起失败 → 说清可能停在半按下态，而不是当成点成功", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新" },
       {},
     );
@@ -387,7 +350,7 @@ describe("browser_act — 点击的两条路", () => {
    */
   it("CDP 方法级拒绝（回 ok:true + {error}）→ 绝不报「用真实输入点过了」", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新" },
       {},
     );
@@ -407,7 +370,7 @@ describe("browser_act — 点击的两条路", () => {
 
   it("hover 同样不许把方法级拒绝当成功", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "hover", text: "刷新" },
       {},
     );
@@ -431,7 +394,7 @@ describe("browser_act — 点击的两条路", () => {
    */
   it("点击成功后**没有**可见性告警，也不多发探测那一发", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新" },
       {},
     );
@@ -448,7 +411,7 @@ describe("browser_act — 点击的两条路", () => {
 
   it("目标解析失败 → 带候选清单，且**不发** CDP", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "不存在的按钮" },
       {},
     );
@@ -472,7 +435,7 @@ describe("browser_act — 命中歧义报数", () => {
   /** 用户明确要求：命中歧义**只报一个数字**，不列候选（browser_read 已经能列元素）。 */
   it("命中多个 → 结果里带上 (N elements matched; used index i)", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "click", text: "保存", index: 1 },
       {},
     );
@@ -490,7 +453,7 @@ describe("browser_act — 命中歧义报数", () => {
 
   it("只命中一个 → 不报数（不制造噪音）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler({ action: "click", text: "刷新" }, {});
+    const p = toolByName(emit, "browser_act").handler({ action: "click", text: "刷新" }, {});
     // **必须是真单命中载荷**（`matched: 1, usedIndex: 0` —— 解析脚本对单命中恒回这个形状）。
     // 省掉这两个字段就变成在测 `Number(undefined) === NaN`：`n <= 1` 被改成 `n < 1` 也照样绿，
     // 而每个普通 `browser_act` 都会开始印 `(1 elements matched; used index 0)`。
@@ -511,7 +474,7 @@ describe("browser_act — 命中歧义报数", () => {
    */
   it("fill 命中多个 → 同样带注脚", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "fill", text: "设备名称", value: "泵-01", index: 1 },
       {},
     );
@@ -534,7 +497,7 @@ describe("browser_act — 命中歧义报数", () => {
 describe("browser_act — selector 歧义与 fill 的如实回报", () => {
   it("selector 多命中 → 指向 index/收窄 selector，并列出候选", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "fill", selector: "input", value: "电压异常" },
       {},
     );
@@ -561,7 +524,7 @@ describe("browser_act — selector 歧义与 fill 的如实回报", () => {
 
   it("fill 成功 → 结果里印出派发了哪些事件（模型据此判断要不要补按键/聚焦）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "fill", text: "设备名称", value: "泵-01" },
       {},
     );
@@ -584,7 +547,7 @@ describe("browser_act — selector 歧义与 fill 的如实回报", () => {
 
   it("fill 读回对不上 → 明说没落住，绝不报 Set", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "fill", text: "设备名称", value: "泵-01" },
       {},
     );
@@ -619,7 +582,7 @@ describe("browser_act — selector 歧义与 fill 的如实回报", () => {
 describe("browser_tab — open 时 arm recorder", () => {
   it("open 的载荷带 init_script；同一视图之后读取**不再重复注册**", async () => {
     const { events, emit } = emitCollector();
-    const openP = toolByName({} as NodeJS.ProcessEnv, emit, "browser_tab").handler(
+    const openP = toolByName(emit, "browser_tab").handler(
       { action: "open", url: "http://localhost:5173/" },
       {},
     );
@@ -629,7 +592,7 @@ describe("browser_tab — open 时 arm recorder", () => {
     reply(q0, { ok: true, data: { view_id: "browser-77", view: { id: "browser-77" } } });
     await openP;
 
-    const netP = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler(
+    const netP = toolByName(emit, "browser_network").handler(
       { view_id: "browser-77" },
       {},
     );
@@ -648,7 +611,7 @@ describe("browser_act — press 键盘", () => {
 
   it("先确定键落在谁身上，再走 CDP 真实按键（keyDown + keyUp）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "press", key: "Enter" },
       {},
     );
@@ -670,7 +633,7 @@ describe("browser_act — press 键盘", () => {
 
   it("没给目标 → 走当前焦点（fill 之后那个字段），不要求把元素再说一遍", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "press", key: "Enter" },
       {},
     );
@@ -686,7 +649,7 @@ describe("browser_act — press 键盘", () => {
 
   it("CDP 不可用 → 合成按键兜底，并说清不是可信事件", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "press", key: "Enter" },
       {},
     );
@@ -704,7 +667,7 @@ describe("browser_act — press 键盘", () => {
 
   it("页面上什么都没聚焦 → 如实失败，一发按键都不发", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const p = toolByName(emit, "browser_act").handler(
       { action: "press", key: "Enter" },
       {},
     );
@@ -724,7 +687,6 @@ describe("browser_act — press 键盘", () => {
   });
 
   it("缺 key / 给错修饰键 / 拿 press 打字 → 本地就拒（不发桥）", async () => {
-    const env = {} as NodeJS.ProcessEnv;
     const cases: [Record<string, unknown>, string][] = [
       [{ action: "press" }, "needs `key`"],
       [{ action: "press", key: "Enter", modifiers: ["hyper"] }, "unsupported modifier"],
@@ -732,7 +694,7 @@ describe("browser_act — press 键盘", () => {
     ];
     for (const [args, expectText] of cases) {
       const { events, emit } = emitCollector();
-      const r = await toolByName(env, emit, "browser_act").handler(args, {});
+      const r = await toolByName(emit, "browser_act").handler(args, {});
       expect(r.content[0].text, JSON.stringify(args)).toContain(expectText);
       expect(events, JSON.stringify(args)).toHaveLength(0);
     }
@@ -740,7 +702,7 @@ describe("browser_act — press 键盘", () => {
 
   it("key/modifiers 只属于 press：给了 click 就明说，不静默忽略", async () => {
     const { events, emit } = emitCollector();
-    const r = await toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const r = await toolByName(emit, "browser_act").handler(
       { action: "click", text: "刷新", key: "Enter" },
       {},
     );
@@ -752,7 +714,7 @@ describe("browser_act — press 键盘", () => {
 describe("browser_act — 入参守门（不浪费一次往返）", () => {
   it("既没 text 也没 selector → 直接回文本，不发桥", async () => {
     const { events, emit } = emitCollector();
-    const r = await toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const r = await toolByName(emit, "browser_act").handler(
       { action: "click" },
       {},
     );
@@ -762,7 +724,7 @@ describe("browser_act — 入参守门（不浪费一次往返）", () => {
 
   it("action=fill 缺 value → 直接回文本，不发桥", async () => {
     const { events, emit } = emitCollector();
-    const r = await toolByName({} as NodeJS.ProcessEnv, emit, "browser_act").handler(
+    const r = await toolByName(emit, "browser_act").handler(
       { action: "fill", text: "设备名称" },
       {},
     );
@@ -774,7 +736,7 @@ describe("browser_act — 入参守门（不浪费一次往返）", () => {
 describe("browser_screenshot — 视觉兜底", () => {
   it("默认截**视口**（用户实际看到的那块），回 [文本, 图像] 两块", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
+    const p = toolByName(emit, "browser_screenshot").handler({}, {});
 
     // 第一发就是截图本身：parking 之后不显示的视图照样合成，不再先探可见性
     const q = await waitForQuery(events, 0);
@@ -798,7 +760,7 @@ describe("browser_screenshot — 视觉兜底", () => {
 
   it("full_page=true → captureBeyondViewport", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler(
+    const p = toolByName(emit, "browser_screenshot").handler(
       { full_page: true },
       {},
     );
@@ -812,7 +774,7 @@ describe("browser_screenshot — 视觉兜底", () => {
 
   it("format=png → 不带 quality（CDP 对 png 传它会报错），mimeType 跟着变", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler(
+    const p = toolByName(emit, "browser_screenshot").handler(
       { format: "png" },
       {},
     );
@@ -833,7 +795,7 @@ describe("browser_screenshot — 视觉兜底", () => {
    */
   it("不先探可见性：第一发就是 Page.captureScreenshot，并回图像块", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
+    const p = toolByName(emit, "browser_screenshot").handler({}, {});
 
     const q = await waitForQuery(events, 0);
     expect(q.method).toBe("Page.captureScreenshot");
@@ -851,7 +813,7 @@ describe("browser_screenshot — 视觉兜底", () => {
    */
   it("运行期拒绝 → 回文本说明 + 指向 browser_read/eval，不发图像块", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
+    const p = toolByName(emit, "browser_screenshot").handler({}, {});
     reply(await waitForQuery(events, 0), {
       ok: true,
       data: { value: { error: { code: -32601, message: "'Page.captureScreenshot' wasn't found" } } },
@@ -868,7 +830,7 @@ describe("browser_screenshot — 视觉兜底", () => {
 
   it("回了 ok 但没有图像数据 → 如实报错，不塞空图", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({}, {});
+    const p = toolByName(emit, "browser_screenshot").handler({}, {});
     reply(await waitForQuery(events, 0), { ok: true, data: { value: {} } });
     const r = await p;
     expect(r.content).toHaveLength(1);
@@ -885,7 +847,7 @@ describe("browser_screenshot — 视觉兜底", () => {
 describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
   it("给了 text → 先解析元素，再按它的矩形裁剪截图（clip 是页面坐标 + scale 1）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "保存" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ text: "保存" }, {});
 
     const probe = await waitForQuery(events, 0);
     expectEvalRequest(probe, "TARGET");
@@ -912,7 +874,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
    */
   it("元素没有可见标签 → caption 不留空洞，改说 the element", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: ".icon-btn" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ selector: ".icon-btn" }, {});
     reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "" }, rect: { x: 5, y: 6, w: 24, h: 24 } }));
     reply(await waitForQuery(events, 1), { ok: true, data: { value: { data: "QUJD" } } });
 
@@ -928,7 +890,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
    */
   it("命中多个 → caption 带上命中数（与 browser_act 同一句注脚）", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: ".same" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ selector: ".same" }, {});
     reply(
       await waitForQuery(events, 0),
       evalOk({ ok: true, hit: { tag: "button", text: "确定" }, rect: { x: 1, y: 2, w: 30, h: 30 }, matched: 2, usedIndex: 0 }),
@@ -941,7 +903,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
 
   it("元素找不到 → **如实失败，不退化成整页截图**", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "没有这个" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ text: "没有这个" }, {});
     reply(await waitForQuery(events, 0), evalOk({ ok: false, error: 'no element on the page contains that text "没有这个"' }));
 
     const r = await p;
@@ -952,7 +914,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
 
   it("解析到了但矩形不可用（零尺寸）→ 同样如实失败，不发截图", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ text: "隐藏的东西" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ text: "隐藏的东西" }, {});
     reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "div", text: "隐藏的东西" }, rect: { x: 0, y: 0, w: 0, h: 0 } }));
 
     const r = await p;
@@ -964,7 +926,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
   /** 桥侧失败（视图没了 / 脚本抛了）走 runEval 的文本——照旧原样带出，不加工。 */
   it("解析这一发就失败 → 原样回它的文本，也不发截图", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: "#save" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ selector: "#save" }, {});
     reply(await waitForQuery(events, 0), { ok: false, error: "no embedded browser view is open" });
 
     const r = await p;
@@ -979,7 +941,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
    */
   it("解析脚本回了非对象 → 说脚本形状的问题，**不谎称**找不到目标", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_screenshot").handler({ selector: "#save" }, {});
+    const p = toolByName(emit, "browser_screenshot").handler({ selector: "#save" }, {});
     reply(await waitForQuery(events, 0), evalOk("boom", "string"));
 
     const r = await p;
@@ -994,7 +956,7 @@ describe("browser_screenshot — 元素级裁剪（text / selector）", () => {
 describe("browser_network", () => {
   it("先注册新文档（init_script）再读（求值），并把缓冲渲染出来", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({ view_id: "browser-2" }, {});
+    const p = toolByName(emit, "browser_network").handler({ view_id: "browser-2" }, {});
 
     const reg = await waitForQuery(events, 0);
     // 注入走宿主 API 那条 op —— CDP 的 Page.addScriptToEvaluateOnNewDocument 在本机 WebView2
@@ -1024,7 +986,7 @@ describe("browser_network", () => {
   /** 注册是**每个视图一次**：第二次读不该再发注册（重发 = 每份新文档跑 N 遍 no-op）。 */
   it("同一视图第二次调用不再重发注册", async () => {
     const { events, emit } = emitCollector();
-    const tool = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network");
+    const tool = toolByName(emit, "browser_network");
     // 第一次：注册 + 读
     const p1 = tool.handler({ view_id: "browser-9" }, {});
     reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-9", registered: true } });
@@ -1043,7 +1005,7 @@ describe("browser_network", () => {
 
   it("注册失败（宿主 API 报错）→ **照样能读**，但如实说未来文档没覆盖", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_network").handler({}, {});
+    const p = toolByName(emit, "browser_network").handler({}, {});
     const reg = await waitForQuery(events, 0);
     expect(reg.op).toBe("init_script");
     reply(reg, {
@@ -1065,7 +1027,7 @@ describe("browser_console", () => {
     const { events, emit } = emitCollector();
     // id 挑一个别的用例没碰过的：注册记账（`registeredViews`）是**模块级**的，同文件里复用
     // 上一个用例的 id 会命中记账、第一发就不是注册（读的是"注册的节奏"，不是"读的数"）。
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_console").handler(
+    const p = toolByName(emit, "browser_console").handler(
       { view_id: "browser-console-1", level: "error", limit: 5 },
       {},
     );
@@ -1092,7 +1054,7 @@ describe("browser_console", () => {
   /** 缺省是 `all` + 30 条（spec §8.2）：缺省的读脚本不过滤，表头不提级别。 */
   it("缺省 level=all、limit=30", async () => {
     const { events, emit } = emitCollector();
-    const p = toolByName({} as NodeJS.ProcessEnv, emit, "browser_console").handler({ view_id: "browser-console-2" }, {});
+    const p = toolByName(emit, "browser_console").handler({ view_id: "browser-console-2" }, {});
     reply(await waitForQuery(events, 0), { ok: true, data: { view_id: "browser-console-2", registered: true } });
 
     const read = await waitForQuery(events, 1);
@@ -1112,7 +1074,7 @@ describe("browser_console", () => {
 describe("工具面里不许出现站点名词（换站点 MCP server 一行不动）", () => {
   it("工具名 + 描述 + 投影脚本全无站点痕迹", () => {
     const { emit } = emitCollector();
-    const tools = buildBrowserTools({} as NodeJS.ProcessEnv, emit) as unknown as AnyTool[];
+    const tools = buildBrowserTools(emit) as unknown as AnyTool[];
     expect(tools.map((t) => t.name)).toEqual([
       "browser_tabs",
       "browser_read",

@@ -5,7 +5,7 @@ import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { api } from "../api";
-import type { OutputStyle, RemoteStatus, SessionListStyle, VimBindings } from "../types";
+import type { OutputStyle, SessionListStyle, VimBindings } from "../types";
 import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
 import CustomizationList from "./customizations/CustomizationList.vue";
@@ -45,7 +45,7 @@ const emit = defineEmits<{
   close: [];
 }>();
 
-type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "diagnostics" | "about" | "remote";
+type Tab = "general" | "appearance" | "editor" | "providers" | "extensions" | "diagnostics" | "about";
 
 const activeTab = ref<Tab>((props.initialTab as Tab) || "general");
 
@@ -90,7 +90,7 @@ const recentLimitLocal = ref(settings.recentLimit);
 
 // ── 编辑器 ──
 // 整块写入：任一字段变动都把完整 editor 回写后端（后端 set_settings 按 top-level
-// key 整体覆盖），与 codegraphEmbedder / jdkRegistry 同模式。缩进字符固定 Tab。
+// key 整体覆盖），与 jdkRegistry 同模式。缩进字符固定 Tab。
 const indentSizeLocal = ref(settings.editor.indentSize);
 const vimModeLocal = ref(settings.editor.vimMode);
 
@@ -217,78 +217,10 @@ function removeVimBinding(mode: keyof VimBindings, index: number) {
   persistVimBindings();
 }
 
-// ── 远程控制 ──
-// 开关走专用命令（remote_set_enabled 同时启停网关）；URL/权限模式走 update 落盘。
-// 状态快照（配对码/连接/已签发 token）每次进入 tab 时刷新。
-const remotePermissionModeOptions = [
-  { value: "auto", label: "自动模式（自动批准非危险工具）" },
-  { value: "manual", label: "手动模式（不推荐远程使用）" },
-];
-const remoteEnabled = ref(settings.remote.enabled);
-const remoteRelayUrl = ref(settings.remote.relayUrl);
-/** 旧值迁移：权限模式 id 由 `default` 更名为 `manual`（对齐 CLI 命名）。已存盘的
- *  "default" 读回来匹配不上新清单，映射成 manual，别让下拉显示空白。 */
-function normalizePermissionMode(v: string | undefined): string {
-  return !v || v === "default" ? "manual" : v;
-}
-const remotePermissionMode = ref(normalizePermissionMode(settings.remote.permissionMode));
-const remoteStatus = ref<RemoteStatus | null>(null);
-
-/** 配对时间相对描述。粒度随间隔变粗：分钟 → 小时 → 天 → 具体日期。 */
-function describeIssuedAt(ms: number): string {
-  const diff = Date.now() - ms;
-  // 时钟回拨/未来时间戳不猜，直接给绝对时间
-  if (diff < 0) return new Date(ms).toLocaleString();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "刚刚";
-  if (mins < 60) return `${mins} 分钟前`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours} 小时前`;
-  const days = Math.floor(hours / 24);
-  if (days < 30) return `${days} 天前`;
-  return new Date(ms).toLocaleDateString();
-}
-
-/** 「已配对设备」摘要：当前是单设备模型（新配对踢旧设备），所以最多一台。
- *  旧版签发的 token 没有时间戳记录，降级显示「时间未知」而非编一个。 */
-const pairedDeviceSummary = computed(() => {
-  const st = remoteStatus.value;
-  if (!st?.tokenConfigured) return "无";
-  if (st.tokenIssuedAt == null) return "1 台（配对时间未知）";
-  return `1 台 · 配对於 ${describeIssuedAt(st.tokenIssuedAt)}`;
-});
-
-async function refreshRemoteStatus() {
-  remoteStatus.value = await api.remoteGetStatus();
-}
-onMounted(() => { if (props.initialTab === "remote") refreshRemoteStatus(); });
-watch(activeTab, (t) => { if (t === "remote") refreshRemoteStatus(); });
-
-async function onRemoteEnabledChange(e: Event) {
-  const enabled = (e.target as HTMLInputElement).checked;
-  remoteEnabled.value = enabled;
-  // 同步单例：面板 v-if 重挂载时 remoteEnabled 从单例初始化，不同步则重开设置显示旧值
-  settings.remote.enabled = enabled;
-  await api.remoteSetEnabled(enabled);
-  refreshRemoteStatus();
-}
-function onRemoteRelayUrlChange(e: Event) {
-  const v = (e.target as HTMLInputElement).value;
-  remoteRelayUrl.value = v;
-  update({ remote: { ...settings.remote, relayUrl: v } });
-}
-function onRemotePermissionModeChange(v: string) {
-  remotePermissionMode.value = v;
-  update({ remote: { ...settings.remote, permissionMode: v } });
-}
-async function refreshPairingCode() {
-  await api.remoteRefreshPairingCode();
-  refreshRemoteStatus();
-}
-async function revokeRemote() {
-  await api.remoteRevoke();
-  refreshRemoteStatus();
-}
+// ── 手机连接（已迁出本面板）──
+// 2026-10-05：远程控制 tab 整个删除——启停 / 配对 / 撤销 / **中继地址** / 远程会话权限模式
+// 全部搬进侧栏「连接移动端」卡片（LinkConnectPopover → LinkConnectCard）。中继地址不再内置默认，
+// 由用户填（Host 密钥库 `link/relayUrl`）；权限模式落盘仍在 settings.remote.permissionMode。
 
 // ── JDK 注册表（已搬走）──
 // 2026-08-08：JDK 管理（注册表扫描/手动添加/移除 + 工作区 JDK 选择）整体迁入
@@ -513,14 +445,6 @@ function onOverlayClick(e: MouseEvent) {
             >
               <Icon class="nav-icon" name="agent" :size="16" />
               <span class="nav-label">诊断</span>
-            </button>
-            <button
-              class="nav-item"
-              :class="{ active: activeTab === 'remote' }"
-              @click="activeTab = 'remote'"
-            >
-              <Icon class="nav-icon" name="globe" :size="16" />
-              <span class="nav-label">远程控制</span>
             </button>
             <button
               class="nav-item"
@@ -849,71 +773,6 @@ function onOverlayClick(e: MouseEvent) {
             <!-- ── 诊断 Tab ── -->
             <div v-else-if="activeTab === 'diagnostics'" class="tab-diagnostics">
               <DiagnosticsDashboard />
-            </div>
-
-            <!-- ── 远程控制 Tab ── -->
-            <div v-else-if="activeTab === 'remote'" class="tab-remote">
-              <div class="settings-field">
-                <label class="field-label">启用远程控制</label>
-                <div class="toggle-row">
-                  <span class="field-hint">手机 APP 通过自建中继远程控制本机 aide（发消息、看回复、看历史）</span>
-                  <label class="toggle">
-                    <input type="checkbox" :checked="remoteEnabled" @change="onRemoteEnabledChange" />
-                    <span class="toggle-track"></span>
-                  </label>
-                </div>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">中继 URL</label>
-                <input
-                  :value="remoteRelayUrl"
-                  class="text-input"
-                  placeholder="wss://relay.example.com"
-                  @change="onRemoteRelayUrlChange"
-                />
-                <span class="field-hint">自建中继服务器地址（wss://…），手机 APP 填同一地址</span>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">远程会话权限模式</label>
-                <ThemedSelect
-                  :model-value="remotePermissionMode"
-                  :options="remotePermissionModeOptions"
-                  @update:model-value="onRemotePermissionModeChange"
-                />
-                <span class="field-hint">远程会话每次执行时读取，可随时切换、立即生效</span>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">配对码（10 分钟有效）</label>
-                <div class="field-control">
-                  <span class="remote-code">{{ remoteStatus?.pairingCode ?? "—" }}</span>
-                  <button class="cg-secret-btn" @click="refreshPairingCode">刷新</button>
-                </div>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">连接状态</label>
-                <span class="field-hint">{{ remoteStatus?.connected ? "已连接" : "未连接" }}</span>
-                <!-- dev 构建默认不连中继（避免与安装版抢同一台设备身份互踢）：
-                     不点破的话，这里会一直显示「未连接」，看起来像网络故障。 -->
-                <span v-if="remoteStatus?.relaySuppressed" class="field-hint">
-                  dev 构建不连中继——它与安装版共用同一台设备身份，同时注册会在中继上互踢。
-                  要调试远程链路：先从托盘退出安装版，再用 AIDE_DEV_REMOTE=1 启动 dev。
-                </span>
-              </div>
-
-              <div class="settings-field">
-                <label class="field-label">已配对设备</label>
-                <div class="field-control">
-                  <span class="field-hint">{{ pairedDeviceSummary }}</span>
-                  <button class="cg-secret-btn" @click="revokeRemote">吊销设备</button>
-                </div>
-                <span class="field-hint">
-                  同时只允许一台：新设备配对会自动顶掉当前这台，旧设备将提示重新配对
-                </span>
-              </div>
             </div>
 
             <!-- ── 关于 Tab ── -->
@@ -1511,20 +1370,7 @@ function onOverlayClick(e: MouseEvent) {
   margin: -20px;
 }
 
-/* ── CodeGraph tab ── */
-
-.tab-codegraph {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.cg-secret-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 6px;
-}
+/* ── 设置面板内的小按钮（代理提示「应用 / 忽略」） ── */
 
 .cg-secret-btn {
   border: 1px solid var(--aide-border);
@@ -1543,13 +1389,6 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .cg-secret-btn:disabled { opacity: 0.5; cursor: default; }
-
-.remote-code {
-  font-family: var(--aide-font-mono);
-  font-size: 13px;
-  letter-spacing: 0.08em;
-  color: var(--aide-text-primary);
-}
 
 /* ── Scrollbar ── */
 

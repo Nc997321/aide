@@ -16,6 +16,9 @@ import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
+import UsageTipText from "./UsageTipText.vue";
+import type { UsageTip } from "./usageTips";
+import { useUsageTips } from "@/composables/useUsageTips";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, SubagentBlock, TaskItem } from "@/types/chat";
 import type { WorkspaceInfo } from "@/types";
 import { api } from "@/api";
@@ -451,6 +454,28 @@ watch(() => props.isBusy, (busy) => {
 watch(contextCompactionVal, syncActivityTimer);
 onUnmounted(() => { if (activityTimer) clearInterval(activityTimer); });
 
+// 「正在思考」旁的小提示轮播：思考满 TIP_DELAY_S 秒才出（短回复不闪一下），每
+// TIP_ROTATE_S 秒换一条；骑在上面的秒级计时器上，不另起定时器。只有聚焦的面板轮——
+// 多个分屏同时在跑时各自计一次出场，会把提示过早耗完。
+const TIP_DELAY_S = 3;
+const TIP_ROTATE_S = 9;
+const usageTips = useUsageTips();
+const thinkingTip = ref<UsageTip | null>(null);
+let thinkingTipSlot = -1;
+watch(activityElapsed, (s) => {
+  if (!props.isBusy || contextCompactionVal.value || !props.focused || s < TIP_DELAY_S) {
+    thinkingTip.value = null;
+    thinkingTipSlot = -1;
+    return;
+  }
+  const slot = Math.floor((s - TIP_DELAY_S) / TIP_ROTATE_S);
+  if (slot === thinkingTipSlot) return;
+  thinkingTipSlot = slot;
+  const tip = usageTips.nextThinkingTip(thinkingTip.value?.id ?? null);
+  if (tip) usageTips.markShown(tip.id);
+  thinkingTip.value = tip;
+});
+
 // 滚动 / 加载历史 / 页级回收全部收拢到 useChatScroll（行模型）：上滚到顶部触发带
 // 自动取更早页；已加载页超字节预算时热区外页折叠成骨架（实测高度撑住不跳滚），
 // 滚动停驻时结算回收/取回；切入按热区页收紧驻留量（挂载量由窗口决定，无分帧 ramp）。
@@ -598,6 +623,9 @@ function onOpenBgDock(taskId: string) {
     <div v-else-if="props.isBusy" class="chat-thinking">
       <AppLogo :size="15" animated />
       <span class="chat-thinking-text">正在思考</span>
+      <Transition name="thinking-tip" mode="out-in">
+        <UsageTipText v-if="thinkingTip" :key="thinkingTip.id" class="chat-thinking-tip" :text="thinkingTip.text" />
+      </Transition>
       <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
     </div>
 
@@ -860,6 +888,29 @@ function onOpenBgDock(taskId: string) {
     -webkit-background-clip: initial;
     background-clip: initial;
     -webkit-text-fill-color: initial;
+  }
+}
+
+/* 思考行的小提示：夹在「正在思考」与中断钮之间，窄了就省略号，不挤中断钮 */
+.chat-thinking-tip {
+  margin-left: 8px;
+  overflow: hidden;
+}
+
+.thinking-tip-enter-active,
+.thinking-tip-leave-active {
+  transition: opacity .4s var(--aide-ease);
+}
+
+.thinking-tip-enter-from,
+.thinking-tip-leave-to {
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking-tip-enter-active,
+  .thinking-tip-leave-active {
+    transition: none;
   }
 }
 

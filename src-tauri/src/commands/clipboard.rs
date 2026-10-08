@@ -236,35 +236,37 @@ fn write_clipboard_files_impl(paths: &[String], op: ClipboardOp) -> Result<(), S
 
 #[cfg(target_os = "macos")]
 fn read_clipboard_files_impl() -> ClipboardFilesRead {
-    // macOS-only — NOT compiled on Windows / Linux. Must be built on macOS to
-    // verify against the installed objc2 versions; adjust the API calls per
-    // `cargo doc` and the compiler. Reads `public.file-url` (NSURL) entries
-    // from the general pasteboard. macOS 剪贴板没有标准 cut 标记，一律按 copy
-    // 处理（写入方向同见 write_clipboard_files_impl 的说明）。
-    use objc2::rc::Retained;
-    use objc2_app_kit::NSPasteboard;
-    use objc2_foundation::{NSArray, NSDictionary, NSURL};
+    // macOS-only — NOT compiled on Windows / Linux。逐个剪贴板条目取 `public.file-url`
+    // 字符串（`file:///…`），再经 NSURL 还原成 POSIX 路径（NSURL 负责百分号解码）。
+    // 不用 readObjectsForClasses（要拼 Class 数组 + 向下转型，objc2 各版本差异大）。
+    // macOS 剪贴板没有标准 cut 标记，一律按 copy 处理（写入方向同见
+    // write_clipboard_files_impl 的说明）。
+    // 依赖只认 objc2-app-kit / objc2-foundation（0.2.x 同代），objc2 本体由它们传递引入——
+    // Cargo.toml 不要再单独声明 objc2（曾写成 0.2 与它们依赖的 0.5 不一致，编译不过）。
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeFileURL};
+    use objc2_foundation::NSURL;
 
-    let pb = unsafe { NSPasteboard::generalPasteboard() };
-    let classes = unsafe { NSArray::from_slice(&[&*NSURL::class() as *const _ as *const _]) };
-    let opts = unsafe {
-        NSDictionary::<objc2_foundation::NSString, objc2::rc::Retained<objc2_foundation::NSString>>::new()
-    };
-    let objects: Option<Retained<NSArray>> =
-        unsafe { pb.readObjectsForClasses_options(&classes, Some(&opts)) };
-
-    let paths = objects
-        .into_iter()
-        .flatten()
-        .filter_map(|obj| {
-            let url: Retained<NSURL> = obj.downcast::<NSURL>().ok()?;
-            if unsafe { url.isFileURL() } {
-                Some(unsafe { url.path().to_string() })
-            } else {
-                None
+    let paths = unsafe {
+        let pb = NSPasteboard::generalPasteboard();
+        let mut out: Vec<String> = Vec::new();
+        if let Some(items) = pb.pasteboardItems() {
+            for item in items.iter() {
+                let Some(raw) = item.stringForType(NSPasteboardTypeFileURL) else {
+                    continue;
+                };
+                let Some(url) = NSURL::URLWithString(&raw) else {
+                    continue;
+                };
+                if !url.isFileURL() {
+                    continue;
+                }
+                if let Some(p) = url.path() {
+                    out.push(p.to_string());
+                }
             }
-        })
-        .collect();
+        }
+        out
+    };
     ClipboardFilesRead {
         paths,
         op: ClipboardOp::Copy,
@@ -485,55 +487,4 @@ fn encode_rgba_png(width: u32, height: u32, rgba: &[u8]) -> Result<Vec<u8>, Stri
         writer.write_image_data(rgba).map_err(|e| e.to_string())?;
     }
     Ok(buf)
-}
-
-/// Stage a file dropped from the OS into the webview onto a temp path and
-/// return that path. Used by the chat input's drop handler only when WebView2
-/// does NOT expose `File.path` on the dropped `File` (Tauri's OLE drop target
-/// is disabled so `DragDropEvent` never fires; the bytes arrive via
-/// `dataTransfer.files`). The returned path is fed into the same paste
-/// pipeline (`resolvePastePayload`) so a dropped file becomes an `@path`
-/// reference / image attachment, exactly like a pasted file.
-#[command]
-pub fn stage_dropped_file(name: String, base64: String) -> Result<String, String> {
-    let _trace = crate::diagnostics::trace_command("stage_dropped_file");
-    use base64::Engine as _;
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(base64.as_bytes())
-        .map_err(|e| format!("invalid base64: {e}"))?;
-
-    let dir = std::env::temp_dir().join("aide-dropped");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("create temp dir: {e}"))?;
-
-    // 防御：只取最终文件名，丢弃任何路径分隔符。
-    let clean = name.rsplit(['/', '\\']).next().unwrap_or(&name);
-    let target = unique_drop_path(&dir, clean);
-
-    std::fs::write(&target, &bytes).map_err(|e| format!("write temp file: {e}"))?;
-    Ok(target.to_string_lossy().to_string())
-}
-
-/// Resolve `dir/name` to a non-existing path, appending ` (n)` before the
-/// extension on collision so repeated drops of the same file don't overwrite.
-fn unique_drop_path(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
-    let direct = dir.join(name);
-    if !direct.exists() {
-        return direct;
-    }
-    let (stem, ext) = match name.rfind('.') {
-        Some(i) if i > 0 => (&name[..i], &name[i + 1..]),
-        _ => (name, ""),
-    };
-    for i in 1..100_000u32 {
-        let trial = if ext.is_empty() {
-            format!("{stem} ({i})")
-        } else {
-            format!("{stem} ({i}).{ext}")
-        };
-        let p = dir.join(&trial);
-        if !p.exists() {
-            return p;
-        }
-    }
-    direct
 }

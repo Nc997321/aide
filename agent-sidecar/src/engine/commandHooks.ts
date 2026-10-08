@@ -97,7 +97,7 @@ interface SpecFields {
 }
 
 /** settings.json 条目是自由 JSON（X1 边界例外）：逐字段收窄，任何形状违规
- *  整体拒绝（fail-closed，与 sessionMetadata.parseMcpHeaders 同纪律）。 */
+ *  整体拒绝（fail-closed）。 */
 function parseSpecFields(entry: unknown): SpecFields | null {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
   const e = entry as Record<string, unknown>;
@@ -215,22 +215,23 @@ export function findWindowsBash(
   exists: (p: string) => boolean = existsSync,
 ): string | null {
   if (platform !== "win32") return null;
-  const system32 = env.SystemRoot ? path.join(env.SystemRoot, "System32").toLowerCase() : null;
+  // 显式 path.win32：platform 可注入，宿主为 Linux/macOS 时 node:path 是 posix 语义
+  const system32 = env.SystemRoot ? path.win32.join(env.SystemRoot, "System32").toLowerCase() : null;
   const candidates: string[] = [];
   for (const dir of (env.Path ?? env.PATH ?? "").split(";")) {
     const trimmed = dir.trim();
     if (!trimmed) continue;
-    const candidate = path.join(trimmed, "bash.exe");
+    const candidate = path.win32.join(trimmed, "bash.exe");
     if (system32 && candidate.toLowerCase().startsWith(system32)) continue; // WSL bash，跳过
     candidates.push(candidate);
   }
   const drive = env.SystemDrive ?? "C:";
   candidates.push(
-    path.join(drive, "Program Files", "Git", "bin", "bash.exe"),
-    path.join(drive, "Program Files", "Git", "usr", "bin", "bash.exe"),
+    path.win32.join(drive, "Program Files", "Git", "bin", "bash.exe"),
+    path.win32.join(drive, "Program Files", "Git", "usr", "bin", "bash.exe"),
   );
   if (env.LOCALAPPDATA) {
-    candidates.push(path.join(env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe"));
+    candidates.push(path.win32.join(env.LOCALAPPDATA, "Programs", "Git", "bin", "bash.exe"));
   }
   for (const c of candidates) {
     try {

@@ -140,8 +140,12 @@ impl BrowserEngine for Webview2Engine {
         // 注册失败 / 导航失败都**如实失败**（返回 Err 让门面回收注册表占位），不静默降级成
         // 「视图开好了但没录上」——那正是这套工具最恨的假成功。
         if let Some(script) = arm {
-            native::add_init_script(&webview, &script)?;
-            navigate_via_eval(&webview, &target)?;
+            // 子 webview 已经挂在窗口上：这里再失败，必须把它**关掉**再报错——否则调用方回收了注册表
+            // 占位，原生视图却还浮在窗口里（没人认得它、没人能关它的幽灵视图）。
+            if let Err(e) = native::add_init_script(&webview, &script).and_then(|_| navigate_via_eval(&webview, &target)) {
+                let _ = webview.close();
+                return Err(e);
+            }
         }
 
         self.lock()?.insert(id, webview);
@@ -239,12 +243,27 @@ impl BrowserEngine for Webview2Engine {
     }
 }
 
-/// 用一句脚本导航（`window.location.href = "…"`）。
+/// 该 URL 是否必须走原生导航（`Webview::navigate`）而不能用脚本跳转。
+///
+/// Chromium 不允许非 `file:` 来源的页面（`about:blank` 占位页、任何 http(s) 页）用
+/// `location.href` 跳到 `file://`——报 `Not allowed to load local resource`、页面纹丝不动
+/// （2026-10-04 用 Edge 152 + CDP 实测：脚本跳转被拦，原生 `Page.navigate` 正常加载）。
+/// scheme 白名单仍在 `url_guard`，这里只决定「走哪条路」。
+fn needs_native_navigation(url: &Url) -> bool {
+    url.scheme() == "file"
+}
+
+/// 导航：`file:` 走原生导航；其余用一句脚本（`window.location.href = "…"`）。
 ///
 /// `serde_json` 给出带引号、已转义的 JS 字符串字面量，杜绝注入/引号截断。
 /// 创建（arm 路径）与 `navigate` 共用它：两条路必须**逐字一致**，否则「开了就录」那条路会
 /// 悄悄偏离正常导航的行为。
 fn navigate_via_eval(wv: &Webview<Wry>, url: &Url) -> Result<(), EngineError> {
+    if needs_native_navigation(url) {
+        return wv
+            .navigate(url.clone())
+            .map_err(|e| EngineError::NavigationFailed(e.to_string()));
+    }
     let literal = serde_json::to_string(url.as_str())
         .map_err(|e| EngineError::NavigationFailed(e.to_string()))?;
     wv.eval(format!("window.location.href = {literal};"))
@@ -257,4 +276,18 @@ fn navigate_via_eval(wv: &Webview<Wry>, url: &Url) -> Result<(), EngineError> {
 /// （引擎方法一律返回 `Result`，失败如实上报）。
 fn blank_url() -> Result<Url, EngineError> {
     Url::parse("about:blank").map_err(|e| EngineError::CreateFailed(format!("about:blank: {e}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_file_scheme_needs_native_navigation() {
+        let native = |s: &str| needs_native_navigation(&Url::parse(s).unwrap());
+        assert!(native("file:///C:/x/a.html"));
+        assert!(native("file://server/share/a.html"));
+        assert!(!native("https://example.com/"));
+        assert!(!native("http://localhost:5173/"));
+    }
 }

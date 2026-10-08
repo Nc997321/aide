@@ -2,19 +2,23 @@ import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../../engine/subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
 import { makeMemoryEventsHook } from "./memoryEvents";
+import { makeKbMemoryGuardHook } from "../knowledge/memoryGuard";
+import type { KbScopeStore } from "../knowledge/scope";
+import { makeLspGlanceHook } from "../lspGlance";
+import { isLspWarm, queryLsp } from "../lspClient";
+import type { ChatEvent } from "../../engine/types.js";
 import type { ModelSwitchGuard } from "../../engine/modelSwitchGuard";
-import type { SessionMetadata } from "../../engine/sessionMetadata";
 
 export interface HookBuildContext {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
               makeStopEffortHook(): HookCallback;
-              makeModelSwitchGuard(): ModelSwitchGuard | null;
-              /** 会话级元数据（headless 网关注入，引擎不解释内容）。函数形式
-               *  读活值——每条 send 刷新后 hook 下次调用即可见。
-               *  ⚠️ 只在进程内暴露：不得写进子进程 env / 日志（值可能含凭据，N5）。 */
-              metadata(): SessionMetadata };
+              makeModelSwitchGuard(): ModelSwitchGuard | null };
+  /** aide-lsp 通道（闸门已算好，见 lspGate.ts）。缺省 = 不挂 grep 顺带作答。 */
+  lsp?: { mounted: boolean; emit: (e: ChatEvent) => void };
+  /** 本会话的圈选登记簿：本轮带圈选期间，memoryGuard 拒绝写记忆。缺省 = 不挂。 */
+  kbScopes?: KbScopeStore;
 }
 
 export interface BuiltinHookEntry {
@@ -40,9 +44,24 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },
+  { id: "kbMemoryGuard", event: "PreToolUse", matcher: "^(Write|Edit|MultiEdit|NotebookEdit)$",
+    purpose: "知识库圈选改写那一轮不写记忆（拦 Write/Edit 落在 memory 目录；本轮用户消息不带圈选即恢复）", alwaysMounted: false,
+    build: (ctx) => makeKbMemoryGuardHook({ configDir: ctx.env.CLAUDE_CONFIG_DIR ?? "", scopes: ctx.kbScopes }) },
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$",
     purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）", alwaysMounted: true,
     build: (ctx) => makeMemoryEventsHook(ctx.env, ctx.cwd) },
+  { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$",
+    purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数（语言服务器热了才附，不改工具结果）", alwaysMounted: false,
+    build: (ctx) => {
+      if (!ctx.lsp?.mounted || !ctx.cwd) return null;
+      const { emit } = ctx.lsp;
+      const cwd = ctx.cwd;
+      return makeLspGlanceHook({
+        cwd,
+        isWarm: () => isLspWarm(cwd),
+        query: (tool, args, timeoutMs) => queryLsp(tool, args, cwd, emit, { timeoutMs }),
+      });
+    } },
   { id: "stopEffort", event: "Stop", matcher: "",
     purpose: "读本轮 effort 盖到 message_stop", alwaysMounted: true,
     build: (ctx) => ctx.session.makeStopEffortHook() },

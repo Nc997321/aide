@@ -108,7 +108,21 @@ export interface ThinkingBlock {
   truncated?: TruncatedInfo;
 }
 
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | ImageBlock | SubagentBlock | ActionBlock;
+/** 用户气泡里的页面选区卡片（由 display 的 `pageref` 块映射而来）。 */
+export type PageRefBlock = { type: "pageref" } & PageRef;
+
+/** 用户气泡里的知识库选区卡片（由 display 的 `kbref` 块映射而来）。 */
+export type KbRefBlock = { type: "kbref" } & KbRef;
+
+export type ContentBlock =
+  | TextBlock
+  | ThinkingBlock
+  | ToolCallBlock
+  | ImageBlock
+  | SubagentBlock
+  | ActionBlock
+  | PageRefBlock
+  | KbRefBlock;
 
 export interface TurnUsage {
   inputTokens: number;
@@ -353,6 +367,58 @@ export interface MentionRange {
   end: number;
 }
 
+/** 浏览器里「选取」出来的一个页面元素（见 docs/superpowers/specs/2026-10-02-browser-pick-to-agent-design.md）。
+ *  既是发送负载，也是 display 的 `pageref` 块去掉 type 后的形状。
+ *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `pageref` 块**必须同形**。 */
+export interface PageRef {
+  url: string;
+  title?: string;
+  /** 稳定优先的 CSS 路径。不保证重渲染后仍有效——agent 要和 text / source 互相印证。 */
+  selector: string;
+  tag: string;
+  /** 元素可见文本（已截断）。 */
+  text: string;
+  /** outerHTML（已截断 + 脱敏）。 */
+  html: string;
+  /** 用户的意见；可空（只指出这个元素）。 */
+  comment: string;
+  /** 开发构建下框架挂在 DOM 上的源文件线索（如 Vue 的 `__file`）。尽力而为，缺省 = 没读到。 */
+  source?: string;
+  /** 视口坐标 + 尺寸。发给模型：不能看图的模型靠它判断「太靠边」。 */
+  rect?: { x: number; y: number; w: number; h: number };
+  viewport?: { w: number; h: number };
+  /** 白名单内的少量计算样式（见 utils/pageRefs 的 PAGEREF_STYLE_KEYS）。 */
+  styles?: Record<string, string>;
+}
+
+/** 知识库文档里「圈选」出来的一段（设计：docs/superpowers/specs/2026-10-02-kb-selection-edit-design.md）。
+ *  **语义是授权**：agent 只能改 [start, end) 这一段，其余内容不许动——范围由用户定，
+ *  经 display 回灌给 sidecar 登记，edit_selection 只收「替换成什么」。
+ *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `kbref` 块**必须同形**。 */
+export interface KbRef {
+  /** 客户端在一条消息内铸的短 id（"s1"…），agent 在 edit_selection 里引用。 */
+  selectionId: string;
+  documentId: string;
+  title: string;
+  /** 选中那一刻看到的文档版本。 */
+  baseVersion: number;
+  /** 正文（markdown 源文）里的 UTF-16 偏移，[start, end)。 */
+  start: number;
+  end: number;
+  /** 选中的源文，恒等于正文.slice(start, end)。 */
+  text: string;
+  /** 用户写的意见，可空。 */
+  comment: string;
+  /** 范围所在的行号（1-based 闭区间），仅供展示与提示。 */
+  lineStart: number;
+  lineEnd: number;
+  /** true = 范围就是用户选中的那段文字；false = 选区含格式/跨块，已扩大到整块。 */
+  precise: boolean;
+  /** 这篇文档关联的工作区根目录（本 Host 上的路径）：本轮可经 read_memory 参考它们的记忆。
+   *  只读，不授予那些工作区的任何文件访问。缺省 = 没有关联项目。 */
+  linked?: string[];
+}
+
 export type UserMessageBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mediaType: string }
@@ -360,7 +426,12 @@ export type UserMessageBlock =
   | { type: "action"; actionId: string; label: string; icon?: string }
   /** @引用：path 供展示标题，content 是展开进 prompt 的那部分内容；
    *  range 表示该内容只是文件的这一段（编辑器选区引用），缺省=整文件。 */
-  | { type: "mention"; path: string; content: string; range?: MentionRange; isDir?: boolean };
+  | { type: "mention"; path: string; content: string; range?: MentionRange; isDir?: boolean }
+  /** 页面选区：浏览器里点选的元素 + 用户意见。发给模型的是展开文本（utils/pageRefs），
+   *  这里只描述「有什么」。不认识该块的客户端跳过它，整条消息不消失。 */
+  | ({ type: "pageref" } & PageRef)
+  /** 知识库选区：用户圈定的一段文档源文 + 意见。语义是授权（只许改这一段）。 */
+  | ({ type: "kbref" } & KbRef);
 
 export interface PermissionRequest {
   id: string;

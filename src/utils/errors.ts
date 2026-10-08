@@ -102,8 +102,9 @@ const DEFAULT_ERROR: GitError = {
 
 /** Parse Rust error string (format "CODE: details") into a structured GitError. */
 export function parseGitError(raw: string): GitError {
-  // Try to extract "CODE: rest" prefix
-  const match = raw.match(/^([A-Z_]+):\s*(.*)/);
+  // Try to extract "CODE: rest" prefix。details 必须吃到末尾（含换行）：git 的 stderr 是多行的，
+  // 第一行常只是 "Cloning into '…'..."，真正的失败原因（`fatal: …`）在后面几行——`.` 不跨行会把它整段丢掉。
+  const match = raw.match(/^([A-Z_]+):\s*([\s\S]*)/);
   if (!match) return { ...DEFAULT_ERROR, message: raw };
 
   const code = match[1];

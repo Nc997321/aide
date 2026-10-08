@@ -1,29 +1,37 @@
 /**
- * 凭据持久化：中继 URL + device_id + token（配对成功后落盘，重连免配对）。
+ * Aide Link v1 凭据持久化（协议 §9：{device_id, Host 公钥, relay, epoch, lastSeq}）。
  *
- * 过筛自 remote-pwa/src/storage.ts（ArkTS 化）。语义与上游零偏差：
- *  - 三键同源：creds 整体 JSON / relayUrl 单独记住（未配对时也保留上次输入）
- *  - 读侧字段级校验，坏数据一律视作无凭据（回配对屏）
- * ohos 侧附加键：语音播报开关 aide-tts（对照 design/voice-broadcast/app.html
- * 的 localStorage 同名键，'1'/'0' 字符串，默认开）。
+ *  - 手机身份私钥不在这里——见 keychain.ets（Asset 安全存储 + 明文降级）
+ *  - 配对 psk 永不落盘（只在配对握手的内存里活一次）
+ *  - 读侧字段级校验，坏数据（含 v2 遗留的 token 形状）视作无凭据并清键回配对
+ * 单 Host 形状（v1 手机 UI 单连接；多 Host 留待 UI 需要时扩展）。
  * 平台差异：localStorage → @ohos.data.preferences（EntryAbility.onCreate 先 initStorage）。
+ * TTS 开关等应用偏好沿用同一 preferences 实例。
  */
 import { preferences } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { b64urlDecode } from './crypto/bytes';
 
 export interface StoredCreds {
-  relayUrl: string;
+  /** Host 的 device_id（32 位十六进制小写——中继路由键）。 */
   deviceId: string;
-  token: string;
+  /** Host X25519 静态公钥（b64url 无填充，32 字节）——手机据此认 Host。 */
+  hostPublic: string;
+  /** 中继基址（无尾部斜杠；传输层拼 /ws）。与 directUrl 恰有一个非空。 */
+  relayUrl: string | null;
+  /** 直连 WebSocket 地址（测试 Host / 局域网）。 */
+  directUrl: string | null;
+  /** Host 显示名（hello_ok 里来的；UI 展示用）。 */
+  hostName: string | null;
+  /** 上次订阅所处的 Host 代（epoch）；null = 从未收到过 subscribed。 */
+  epoch: string | null;
+  /** 收到的最大 event.seq（断线续传位置）。 */
+  lastSeq: number;
 }
 
 const STORE_NAME = 'aide_remote';
 const CREDS_KEY = 'aide-remote-creds';
-const RELAY_URL_KEY = 'aide-remote-relay-url';
 const TTS_KEY = 'aide-tts';
-
-/** 中继地址缺省值：未保存过时的预填基址（RemoteTransport.wsUrl 自动拼 /ws 路径）。 */
-export const DEFAULT_RELAY_URL: string = 'ws://home.aideai.store:8000';
 
 let store: preferences.Preferences | null = null;
 
@@ -37,6 +45,36 @@ export function initStorage(context: common.UIAbilityContext): void {
       console.warn('[storage] preferences 初始化失败：凭据将不持久化');
     }
   }
+}
+
+const HEX32 = new RegExp('^[0-9a-f]{32}$');
+
+function isCredsValid(c: StoredCreds): boolean {
+  if (typeof c.deviceId !== 'string' || !HEX32.test(c.deviceId)) {
+    return false;
+  }
+  if (typeof c.hostPublic !== 'string') {
+    return false;
+  }
+  try {
+    if (b64urlDecode(c.hostPublic).length !== 32) {
+      return false;
+    }
+  } catch (e) {
+    return false;
+  }
+  const relayOk: boolean = typeof c.relayUrl === 'string' && c.relayUrl !== '';
+  const directOk: boolean = typeof c.directUrl === 'string' && c.directUrl !== '';
+  if (relayOk === directOk) {
+    return false; // relay 与 direct 恰有一个
+  }
+  if (c.epoch !== null && typeof c.epoch !== 'string') {
+    return false;
+  }
+  if (typeof c.lastSeq !== 'number' || c.lastSeq < 0 || Math.floor(c.lastSeq) !== c.lastSeq) {
+    return false;
+  }
+  return true;
 }
 
 export function loadCreds(): StoredCreds | null {
@@ -54,16 +92,14 @@ export function loadCreds(): StoredCreds | null {
   }
   try {
     const parsed = JSON.parse(raw) as StoredCreds;
-    if (
-      typeof parsed.relayUrl === 'string' &&
-      typeof parsed.deviceId === 'string' &&
-      typeof parsed.token === 'string'
-    ) {
+    if (isCredsValid(parsed)) {
       return parsed;
     }
+    clearCreds(); // 坏形状（含 v2 token 遗留）：清键回配对
     return null;
   } catch (e) {
-    return null; // 坏数据视作无凭据
+    clearCreds();
+    return null;
   }
 }
 
@@ -95,31 +131,43 @@ export function clearCreds(): void {
   }
 }
 
-/** 中继 URL 单独记住（未配对时也保留上次输入）。 */
-export function saveRelayUrl(url: string): void {
+/** 通用键值读写（keychain 明文降级路径用；勿存大对象）。 */
+export function putPrefRaw(key: string, value: string): void {
   if (store === null) {
     return;
   }
   try {
-    store.putSync(RELAY_URL_KEY, url);
+    store.putSync(key, value);
     store.flush().catch((e: Error) => {
-      console.warn(`[storage] relayUrl flush 失败：${e.message ?? ''}`);
+      console.warn(`[storage] flush 失败（${key}）：${e.message ?? ''}`);
     });
   } catch (e) {
-    console.warn('[storage] saveRelayUrl 失败');
+    console.warn(`[storage] putPrefRaw 失败（${key}）`);
   }
 }
 
-/** 中继 URL 读取（未保存/为空回退缺省值，连接页预填用）。 */
-export function loadRelayUrl(): string {
+export function getPrefRaw(key: string, def: string): string {
   if (store === null) {
-    return DEFAULT_RELAY_URL;
+    return def;
   }
   try {
-    const saved: string = store.getSync(RELAY_URL_KEY, '') as string;
-    return saved !== '' ? saved : DEFAULT_RELAY_URL;
+    return store.getSync(key, def) as string;
   } catch (e) {
-    return DEFAULT_RELAY_URL;
+    return def;
+  }
+}
+
+export function deletePrefRaw(key: string): void {
+  if (store === null) {
+    return;
+  }
+  try {
+    store.deleteSync(key);
+    store.flush().catch((e: Error) => {
+      console.warn(`[storage] flush 失败（${key}）：${e.message ?? ''}`);
+    });
+  } catch (e) {
+    console.warn(`[storage] deletePrefRaw 失败（${key}）`);
   }
 }
 

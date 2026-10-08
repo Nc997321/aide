@@ -25,8 +25,12 @@ import type {
   UserMessageBlock,
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
+import {
+  emitKbSelectionEvent,
+  isEditSelectionTool,
+  parseEditSelectionResult,
+} from "../useKbSelectionEvents";
 import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
-import { useCodeGraphProgress } from "../useCodeGraphProgress";
 import { useSessionNames } from "../useSessionNames";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
@@ -192,6 +196,13 @@ function blocksFromDisplay(
             // 与回看路径 transcriptMapping 必须同时带，否则重开历史就变回文件卡。
             ...(b.isDir ? { isDir: true } : {}),
           };
+        // 页面选区卡片。字段原样搬运（display 由发送方清洗过一次，这里不重复校验）；
+        // 缺 selector/tag 视为畸形块，跳过——整条消息不因一个坏块消失。
+        case "pageref":
+          return b.selector && b.tag ? { ...b } : null;
+        // 知识库选区卡片：缺关键字段的畸形块跳过（整条消息不因一个坏块消失）。
+        case "kbref":
+          return b.selectionId && b.documentId ? { ...b } : null;
         default:
           return null;
       }
@@ -200,7 +211,39 @@ function blocksFromDisplay(
   return mapped.length ? mapped : text ? [{ type: "text", text }] : [];
 }
 
+/**
+ * Agent 运行时整体没了（Rust 侧合成，无 session_id）：本机 runtime 进程退出，或远程 Host 的
+ * 连接断开（`reason: "host_disconnected"`，runtime 随 serve 一起收掉）。没有任何
+ * `session_dead` 会再来，所以在这里对**每个正忙的会话**走与 `session_dead` 同一套收尾——
+ * 否则流式气泡与忙碌态会永远挂着。闲置会话不动：它们没有进行中的轮次，下一条消息会重新拉起运行时。
+ */
+function handleRuntimeDead(e: Record<string, unknown>): void {
+  const { setSessionState } = useSessionState();
+  const reason = e["reason"] as string | undefined;
+  const detail = e["detail"] as string | undefined;
+  const label =
+    reason === "host_disconnected" ? "与 Host 的连接已断开，会话进程已终止" : "Agent 运行时已退出";
+  for (const [sid, store] of Object.entries(stores)) {
+    if (disposedSids.has(sid) || !store.isBusy) continue;
+    resetRuntimeState(store);
+    store.messages.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      blocks: [{ type: "text", text: detail ? `${label}\n${detail}` : label }],
+      timestamp: Date.now(),
+    });
+    setSessionState(sid, "stopped");
+  }
+}
+
+/** 在途的 edit_selection 调用：toolId → selectionId（tool_result 只带 id，要靠它认回是哪个选区）。 */
+const editSelectionCalls = new Map<string, string>();
+
 export function handleChatEvent(e: Record<string, unknown>): void {
+  if (e["type"] === "runtime_dead") {
+    handleRuntimeDead(e);
+    return;
+  }
   // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
   if (e["type"] === "builtin_hooks_manifest") {
     builtinHooks.value = (e["manifest"] as BuiltinHookManifest[]) ?? [];
@@ -306,11 +349,28 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       }
       msg.blocks.push(block);
       registerToolCall(sid, toolId, block);
+      if (isEditSelectionTool(block.name)) {
+        const selectionId = (block.input as { selectionId?: unknown } | null)?.selectionId;
+        if (typeof selectionId === "string" && selectionId) {
+          editSelectionCalls.set(toolId, selectionId);
+          emitKbSelectionEvent({ kind: "working", sid, selectionId });
+        }
+      }
       break;
     }
     case "tool_result": {
       const toolId = e["id"] as string;
       const block = lookupToolCall(sid, toolId);
+      const editedSelection = editSelectionCalls.get(toolId);
+      if (editedSelection) {
+        editSelectionCalls.delete(toolId);
+        emitKbSelectionEvent({
+          kind: "result",
+          sid,
+          selectionId: editedSelection,
+          ...parseEditSelectionResult(String(e["content"] ?? ""), Boolean(e["is_error"])),
+        });
+      }
       if (block) {
         block.result = e["content"] as string;
         block.isError = e["is_error"] as boolean;
@@ -707,9 +767,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       if (store.contextCompaction?.stage !== "failed") store.contextCompaction = null;
       store.isBusy = false;
       setSessionState(sid, "waiting");
-      // 本轮 agent 的 Edit/Write 可能改了文件——防抖触发一次增量重扫，
-      // 保持 CodeGraph 索引新鲜（否则改动累积超 20% 阈值，下次构建退全量）。
-      useCodeGraphProgress().scheduleRescan();
+      emitKbSelectionEvent({ kind: "turn_end", sid });
       break;
     }
     case "jump_queued": {

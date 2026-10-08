@@ -5,8 +5,10 @@ import {
   KB_INGEST_MAX_BYTES,
   KB_NOT_CONNECTED_TEXT,
   KB_READ_MAX_CHARS,
+  KB_LONG_DOC_HINT_CHARS,
   formatDocument,
   formatDocumentList,
+  formatDocumentView,
   formatFailure,
   formatIngestResult,
   formatSavedDocument,
@@ -222,3 +224,71 @@ describe("formatDocumentList 的节点类型标注", () => {
     expect(text).toContain("[doc] 旧文档");
   });
 });
+
+describe("formatDocumentView（read_document 的按需读取）", () => {
+  const doc = (content: string): KbDocument =>
+    ({ id: "d1", spaceId: "s1", title: "手册", versionNo: 3, status: "published", content }) as KbDocument;
+  const BODY = "# 手册\n前言\n## 回滚\n步骤\n### 库\n迁移\n## 监控\n看板";
+
+  it("没有选择器 = 整篇（短文档不带提示）", () => {
+    const out = formatDocumentView(doc(BODY), {});
+    expect(out).toContain("看板");
+    expect(out).not.toContain("Note: this document is long");
+  });
+
+  it("长文档整篇读：提示在正文之前，并点名 outline / section", () => {
+    const out = formatDocument(doc(`# t\n${"x".repeat(KB_LONG_DOC_HINT_CHARS)}`));
+    expect(out.indexOf("Note: this document is long")).toBeGreaterThan(-1);
+    expect(out.indexOf("Note: this document is long")).toBeLessThan(out.indexOf("xxxx"));
+    expect(out).toContain("outline: true");
+  });
+
+  it("outline：标题 + 行区间，不含正文", () => {
+    const out = formatDocumentView(doc(BODY), { outline: true });
+    expect(out).toContain("L3-L6");
+    expect(out).toContain("## 回滚");
+    expect(out).toContain("### 库");
+    expect(out).not.toContain("看板");
+    expect(out).toContain("section");
+  });
+
+  it("outline 无标题：直说并给出按行读的出路", () => {
+    const out = formatDocumentView(doc("只有正文"), { outline: true });
+    expect(out).toContain("No headings");
+    expect(out).toContain("startLine");
+  });
+
+  it("section：只返回这一节（含子节），头部写明行区间", () => {
+    const out = formatDocumentView(doc(BODY), { section: "回滚" });
+    expect(out).toContain('section "回滚", lines 3-6 of 8');
+    expect(out).toContain("迁移");
+    expect(out).not.toContain("看板");
+  });
+
+  it("section 多处命中：列出候选；没命中：列出现有标题", () => {
+    const two = doc("## 回滚 A\nx\n## 回滚 B\ny");
+    expect(formatDocumentView(two, { section: "回滚" })).toContain("matches 2 headings");
+    const none = formatDocumentView(doc(BODY), { section: "不存在" });
+    expect(none).toContain('No heading matches "不存在"');
+    expect(none).toContain("## 监控");
+  });
+
+  it("行区间：闭区间；省略 endLine = 到文末；越界与反向给文本提示", () => {
+    expect(formatDocumentView(doc(BODY), { startLine: 3, endLine: 4 })).toContain("lines 3-4 of 8");
+    expect(formatDocumentView(doc(BODY), { startLine: 7 })).toContain("看板");
+    expect(formatDocumentView(doc(BODY), { startLine: 99 })).toContain("beyond the end");
+    expect(formatDocumentView(doc(BODY), { startLine: 5, endLine: 2 })).toContain("Empty range");
+  });
+
+  it("优先级 outline > section > 行区间", () => {
+    const out = formatDocumentView(doc(BODY), { outline: true, section: "回滚", startLine: 1 });
+    expect(out).toContain("Outline");
+  });
+
+  it("单节超长也截断并给出收窄办法", () => {
+    const out = formatDocumentView(doc(`## 大\n${"y".repeat(KB_READ_MAX_CHARS + 10)}`), { section: "大" });
+    expect(out).toContain("Truncated");
+    expect(out).toContain("startLine");
+  });
+});
+

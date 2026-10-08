@@ -15,8 +15,13 @@
  * when constructing xterm Terminal instances.
  */
 
+import { hostApi } from "@aide/sdk";
+
 let _windowsBuildNumber: number | undefined;
 let _initialized = false;
+/** 终端 PTY 是不是 ConPTY：PTY 开在本窗口连着的 Host 上（一个窗口 = 一个 Host），Windows 上的
+ *  WSL 窗口开的是 Linux PTY——xterm 不能按 ConPTY 处理。未解析出 Host 前按 GUI 所在系统。 */
+let _ptyIsConpty = isWindows();
 
 /** 仅声明我们用到的 userAgentData 子集——Navigator 上不存在该属性，需单跳断言。 */
 interface UANavigator extends Navigator {
@@ -29,6 +34,15 @@ interface UANavigator extends Navigator {
 export async function initPlatform(): Promise<void> {
   if (_initialized) return;
   _initialized = true;
+
+  void hostApi
+    .current()
+    .then((h) => {
+      _ptyIsConpty = h.os.toLowerCase() === "windows";
+    })
+    .catch(() => {
+      /* 非桌面环境：保持 GUI 所在系统的判断 */
+    });
 
   if (!isWindows()) return;
 
@@ -89,7 +103,7 @@ export function getWindowsBuildNumber(): number | undefined {
 export function windowsPtyConfig():
   | { backend: "conpty"; buildNumber?: number }
   | undefined {
-  if (!isWindows()) return undefined;
+  if (!_ptyIsConpty) return undefined;
   const cfg: { backend: "conpty"; buildNumber?: number } = {
     backend: "conpty",
   };

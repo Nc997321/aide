@@ -5,14 +5,48 @@
  * 本组件只做展示与跟尾，不持有业务状态）：
  *  - 全程默认收起（含流式中）：仅用户点头行翻转，store 永不自动展开；
  *    头行以「思考中…」标记 active 段（收起态下唯一的进行中信号）
- *  - active 段（流式中）展开态：内容增长自动贴内底（onAreaChange 为
+ *  - active 段（流式中）展开态：正文走渐显波（ThinkingWaveView，块只追加
+ *    不重建 + 按块数窗口滚动退役）；内容增长自动贴内底（onAreaChange 为
  *    布局后回调，此时滚动目标已是新高度）；用户上滚离底即停跟、回底复跟
  *    （onScrollStop 后以 isAtEnd 复估跟尾位，单一回调天然覆盖拖拽/惯性/
  *    程序滚动全部来源，且不依赖已废弃的 onScroll 方向语义）
- *  - 段收尾（sealed）：卡片自动收起，点开回看从顶部开始，不再自动滚动
+ *  - 段收尾（sealed）：卡片自动收起，点开回看从顶部开始，不再自动滚动；
+ *    内容换整段 Text 渲染（尾巴状态已随 ThinkingWaveView 卸载）
  *  - 限高一屏：内容区 maxHeight 由页面按列表视口传入，「思考」头行恒可见
  */
 import { ThinkingBlock } from './ChatBlocks';
+import { WaveStream, WaveTail } from './StreamWave';
+
+/** 尾巴块数上界（桌面同值）：可见窗口约 15 行 ≈ 650 字，800 字（400 块）留足
+ *  余量；超出即把最老的整行批量并进 settled（见 WaveStream.drain）。 */
+const TAIL_MAX_CHUNKS: number = 400;
+
+/** 流式思考的渐显波视图：思考是纯文本，没有 markdown 安全边界问题，不做
+ *  分段/降级，只按块数窗口滚动退役（WaveStream.maxChunks）。 */
+@ComponentV2
+struct ThinkingWaveView {
+  @Param text: string = '';
+  @Local wave: WaveStream = new WaveStream();
+
+  aboutToAppear(): void {
+    this.wave.maxChunks = TAIL_MAX_CHUNKS;
+    this.wave.push(this.text);
+  }
+
+  @Monitor('text')
+  onTextChange(m: IMonitor): void {
+    this.wave.push(this.text);
+  }
+
+  build() {
+    WaveTail({
+      stream: this.wave,
+      textSize: 13,
+      rowHeight: 21,
+      textColor: $r('app.color.text_secondary')
+    })
+  }
+}
 
 @ComponentV2
 export struct ThinkingCard {
@@ -46,14 +80,18 @@ export struct ThinkingCard {
       if (!this.block.collapsed && this.block.text !== '') {
         Divider().strokeWidth(1).color($r('app.color.line'))
         Scroll(this.scroller) {
-          Text(this.block.text + (this.block.active ? ' ▌' : ''))
-            .fontSize(13)
-            .lineHeight(21)
-            .fontColor($r('app.color.text_secondary'))
-            .width('100%')
-            .onAreaChange((_o: Area, _n: Area) => {
-              this.followTail();
-            })
+          if (this.block.active) {
+            ThinkingWaveView({ text: this.block.text })
+              .onAreaChange((_o: Area, _n: Area) => {
+                this.followTail();
+              })
+          } else {
+            Text(this.block.text)
+              .fontSize(13)
+              .lineHeight(21)
+              .fontColor($r('app.color.text_secondary'))
+              .width('100%')
+          }
         }
         .constraintSize({ maxHeight: this.maxHeight })
         .width('100%')

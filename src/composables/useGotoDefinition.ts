@@ -5,7 +5,7 @@ import * as resolver from "./definitionResolver";
 import type { GrepMatch, QueryResult } from "../types";
 
 /** 路径归一为「正斜杠、相对 projectRoot」形式，供跨 provider 自引用过滤比较。
- *  LSP Location→QueryResult.file 是绝对路径（uri_to_path 出来），codegraph/grep
+ *  LSP Location→QueryResult.file 是绝对路径（uri_to_path 出来），grep
  *  是相对路径，source.sourceFile 也是相对路径——三者形态不一，统一归一后再比，
  *  避免 LSP 多结果时点击点自身因「绝对 ≠ 相对」而滤不掉、混进浮层。 */
 function normFile(root: string, p: string): string {
@@ -52,7 +52,7 @@ let lastSourceColumn = 0;
 let lastSourceWordColumn = 0;
 
 export function useGotoDefinition() {
-  /** 跑 codegraph→grep 本地索引两层（不调 LSP）。供 search() 的 ok-empty/not_ready/gone 分支
+  /** 跑 grep 本地回退（不调 LSP）。供 search() 的 ok-empty/not_ready/gone 分支
    *  与 localManualSearch() 共用。每次 await 后查 seq，stale 即弃（不复位 searching——新请求拥有它）。
    *  命中或耗尽时由本函数复位 searching（仅当仍为当前 seq）。 */
   async function runLocalTiers(
@@ -61,38 +61,7 @@ export function useGotoDefinition() {
     source: { sourceFile: string; sourceLine: number; sourceExt?: string; sourceColumn?: number } | undefined,
     mySeq: number,
   ) {
-    // 1. CodeGraph 结构（tree-sitter AST，名字匹配）/ 语义（向量）层
-    try {
-      const cgResults = await api.codegraphGotoDefinition(
-        word,
-        source?.sourceFile || "",
-        source?.sourceLine || 0,
-        source?.sourceColumn ?? 0,
-        projectRoot,
-      );
-      if (mySeq !== requestSeq) return;
-      if (cgResults.length > 0) {
-        // Filter out self-reference (same file, same line)
-        let filtered = cgResults;
-        if (source?.sourceFile) {
-          filtered = cgResults.filter(
-            r => !(normFile(projectRoot, r.symbol.file) === normFile(projectRoot, source.sourceFile) && r.symbol.line === source.sourceLine),
-          );
-        }
-        results.value = filtered.map(r => ({
-          ...r,
-          source: r.confidence === "Structure" ? ("ast" as const) : ("semantic" as const),
-        }));
-        isGrepFallback.value = false;
-        searching.value = false;
-        return;
-      }
-    } catch {
-      // CodeGraph unavailable — fall through to grep
-    }
-    if (mySeq !== requestSeq) return;
-
-    // 2. grep 文本回退（word-boundary 精确匹配）
+    // grep 文本回退（word-boundary 精确匹配）
     try {
       let matches: GrepMatch[] = await api.grepSymbol(word, projectRoot, source?.sourceExt);
       if (mySeq !== requestSeq) return;
@@ -206,7 +175,7 @@ export function useGotoDefinition() {
       }
     }
 
-    // 1+2. 本地索引：codegraph → grep（ok-empty / not_ready / gone / LSP 不可用 / 缓存全自引用 路径汇入此）
+    // 本地回退：grep（ok-empty / not_ready / gone / LSP 不可用 / 缓存全自引用 路径汇入此）
     await runLocalTiers(word, projectRoot, source, mySeq);
   }
 
@@ -219,7 +188,7 @@ export function useGotoDefinition() {
     degraded.value = null;
   }
 
-  /** hint 链接「用本地索引跳转」：只重跑 codegraph+grep（不调 LSP），供 timeout 降级时用户主动取本地结果。
+  /** hint 链接「用本地索引跳转」：只重跑 grep（不调 LSP），供 timeout 降级时用户主动取本地结果。
    *  复用 search() 时缓存的 source 字段做自引用过滤。 */
   async function localManualSearch() {
     const word = searchWord.value;
@@ -240,7 +209,7 @@ export function useGotoDefinition() {
     );
   }
 
-  /** 「跳转到实现」：只走 LSP（textDocument/implementation），不 codegraph/grep 兜底——
+  /** 「跳转到实现」：只走 LSP（textDocument/implementation），不 grep 兜底——
    *  implementation 是纯语义请求，文本兜底会塞入同名符号噪声。
    *  gutter 标记点击时传 preloadedResults（已查好的缓存），直接填 results 免重查。
    *  单结果由调用方 jumpOrPick 自动跳；多结果浮层显示供选。 */
@@ -290,8 +259,7 @@ export function useGotoDefinition() {
   }
 
   /** 「查引用」：LSP 权威（textDocument/references，符号 → 全部使用点）→ grep 文本兜底。
-   *  本地兜底不走 codegraph——codegraphGotoDefinition 查到的是定义点，在引用场景会拿
-   *  定义冒充使用点；grep 的 word-boundary 全量文本出现位更贴近使用点语义（[匹配] 标签如实标注）。
+   *  本地兜底用 grep 的 word-boundary 全量文本出现位，贴近使用点语义（[匹配] 标签如实标注）。
    *  - source 提供（Alt+Click 入口）：带完整源位置走 LSP；requestSeq 防串台。
    *  - source 缺省（「未找到定义 · 搜索所有引用」hint 链接）：复用上次 search() 缓存的
    *    lastSource*（跨函数共享，含绝对路径）。

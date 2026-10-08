@@ -1,6 +1,7 @@
-import type { ChatMessage, TextBlock, ThinkingBlock, ToolCallBlock } from "../../types/chat";
+import type { ChatMessage, KbRefBlock, TextBlock, ThinkingBlock, ToolCallBlock } from "../../types/chat";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
 import { splitMentionSections } from "../../utils/fileMentions";
+import { splitKbRefSections } from "../../utils/kbRefs";
 import { annotateReadRelay } from "../../utils/lspRelay";
 
 /**
@@ -36,7 +37,7 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
 function historyBlockToContentBlocks(
   block: HistoryBlock,
   isUser: boolean,
-): (TextBlock | ThinkingBlock | ToolCallBlock)[] {
+): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock)[] {
   if (block.type === "tool_call") {
     return [{
       type: "tool_call",
@@ -54,7 +55,10 @@ function historyBlockToContentBlocks(
     return block.text ? [{ type: "thinking", text: block.text }] : [];
   }
   if (!isUser) return [{ type: "text", text: block.text }];
-  const { displayText, sections } = splitMentionSections(block.text);
+  // 知识库选区段先拆（它在文本末尾，格式与引用段互不干扰）：拆回「原文 + 选区卡片」，与直发路径
+  // （buildUserDisplay 的 kbref 块）同形。`display` 不落盘，重开历史只能靠这份文本还原。
+  const kb = splitKbRefSections(block.text);
+  const { displayText, sections } = splitMentionSections(kb.displayText);
   return [
     ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
     ...sections.map((s): ToolCallBlock => ({
@@ -73,5 +77,6 @@ function historyBlockToContentBlocks(
       // 同一条一致性要求：这条漏了就是"实时是目录卡、重开变成文件卡"。
       ...(s.isDir ? { isDir: true } : {}),
     })),
+    ...kb.refs.map((r): KbRefBlock => ({ type: "kbref", ...r })),
   ];
 }

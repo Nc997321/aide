@@ -42,7 +42,7 @@ describe("放行规则是**工具级**的（server 级会连写工具一起放�
 /**
  * 注册谱的序列化形态。SDK server 实例内含 zod v4 schema（内部 root 自引用），
  * 直接 JSON.stringify 会抛 circular structure —— 用 WeakSet replacer 去环
- * （codegraphTools.test.ts 先例）。
+ * 。
  */
 function serializedSpec(): string {
   const spec = knowledgeMcpRegistration({} as NodeJS.ProcessEnv);

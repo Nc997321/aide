@@ -28,12 +28,13 @@ import { usePaneLayoutPersistence } from "./composables/paneLayout/persistence";
 import { useSessionNames } from "./composables/useSessionNames";
 import GitPanel from "./components/GitPanel.vue";
 import SearchPanel from "./components/SearchPanel.vue";
-import CodegraphPanel from "./components/codegraph-panel/CodegraphPanel.vue";
 import CallHierarchyPanel from "./components/callhierarchy-panel/CallHierarchyPanel.vue";
 import { useCallHierarchy } from "./composables/useCallHierarchy";
 import PermissionsPanel from "./components/permissions/PermissionsPanel.vue";
 import WorkbenchTerminal from "./components/WorkbenchTerminal.vue";
 import TitleBar from "./components/titlebar/TitleBar.vue";
+import HostConnectionBanner from "./components/HostConnectionBanner.vue";
+import HostLauncherDialog from "./components/HostLauncherDialog.vue";
 import ACommandPalette from "./ui/ACommandPalette.vue";
 import { ARailBar } from "./ui";
 import type { Tab } from "./ui";
@@ -42,7 +43,8 @@ import { useConversationChanges } from "./composables/useConversationChanges";
 import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/turnChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
-import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
+import { isDailyKey, dailyWorkspaceBind, ensureDailyWorkspace } from "@aide/sdk/utils/dailyWorkspace";
+import { HOST_OPEN_FOLDER_EVENT, hostApi } from "@aide/sdk";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
 import { ref, onMounted, onUnmounted, nextTick, watch, computed, provide } from "vue";
@@ -71,6 +73,7 @@ import type { PaletteResult } from "./ui/ACommandPalette.vue";
 import OpenFolderDialog from "./components/OpenFolderDialog.vue";
 import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
+import { useUsageTips } from "./composables/useUsageTips";
 
 const leftCollapsed = ref(false);
 // 右侧栏状态的主人是 useRightPanel（模块单例）：折叠态、当前 tab、最大化、两档宽度都在那里，
@@ -253,6 +256,7 @@ const onboarding = useOnboarding();
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: (() => void) | null = null;
 let unlistenOpenSessionFromNotification: (() => void) | null = null;
+let unlistenHostOpenFolder: (() => void) | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
 const wb = useWorkbenchTerminal();
 const { run: runProject } = useRunProject();
@@ -265,6 +269,7 @@ const runConfigsDialogVisible = ref(false);
 // ── Workspace dialogs ──
 const openFolderVisible = ref(false);
 const openFolderError = ref("");
+const hostLauncherVisible = ref(false);
 const removeWsVisible = ref(false);
 const removeWsTarget = ref<WorkspaceInfo | null>(null);
 
@@ -342,7 +347,6 @@ const tabIconFiles = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 const tabIconChanges = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>';
 const tabIconGit = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>';
 const tabIconSearch = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>';
-const tabIconCodegraph = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M10.8 7.2 6.2 16.8"/><path d="M13.2 7.2 17.8 16.8"/></svg>';
 const tabIconCallhierarchy = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 2v6h-6"/><path d="M7 22v-6h6"/><path d="M17 8c0 5-3 8-10 8"/><path d="M7 16c0-5 3-8 10-8"/></svg>';
 const tabIconPermissions = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>';
 // 地球（圆 + 赤道 + 两弧）：与侧栏那几个入口同一字形语言。
@@ -353,7 +357,6 @@ const rightTabs = computed<Tab[]>(() => [
   { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined, label: "变更 (Ctrl+2)" },
   { id: "git", icon: tabIconGit, badge: unstagedFiles.value.length || undefined, label: "Git (Ctrl+3)" },
   { id: "search", icon: tabIconSearch, label: "搜索 (Ctrl+4)" },
-  { id: "codegraph", icon: tabIconCodegraph, label: "代码索引 (Ctrl+6)" },
   { id: "callhierarchy", icon: tabIconCallhierarchy, label: "调用层级 (Ctrl+7)" },
   { id: "browser", icon: tabIconBrowser, label: "浏览器 (Ctrl+8)" },
   { id: "permissions", icon: tabIconPermissions, label: "权限 (Ctrl+5)", bottom: true },
@@ -374,7 +377,6 @@ const RAIL_DIGIT_TABS: Record<string, RightTabId> = {
   Digit3: "git",
   Digit4: "search",
   Digit5: "permissions",
-  Digit6: "codegraph",
   Digit7: "callhierarchy",
   Digit8: "browser",
 };
@@ -440,26 +442,35 @@ watch(
 );
 
 function onSessionChanged(id: string) {
-  // 选中会话时关掉自动化/插件市场/记忆观测台，主区切回聊天
-  // （知识库不关：它跟会话/工作区/配对都无关，见主区挂载处的注释）。
+  // 选中会话时关掉自动化/插件市场/记忆观测台/知识库，主区切回聊天
+  // （知识库虽与会话/工作区无关，但它占主区、v-if 链优先级高于聊天，不关的话点会话毫无反应）。
   // 浏览器也不关：它是右栏 tab——2026-09-20 前这里会 closePanel()，正是"切会话就把浏览器
   // 踢掉、视图随之隐藏、agent 截图永远等不到帧"那条死路的入口。
   automation.closePanel();
   marketplace.closePanel();
   observatory.closePanel();
+  knowledgeBase.closePanel();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
 
-function onNewSession(name: string) {
-  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余
-  if (!paneLayout.hasAnyTab.value) return;
+function onNewSession(name: string, ws?: { wsKey: string; wsPath: string }) {
+  // 零会话欢迎态：欢迎页本身就是新建会话页，再开空白 tab 只是冗余。
+  // 但侧栏显式指定了工作区时要把它种进欢迎页（工程模式 + defaultWs），否则点了没反应。
+  if (!paneLayout.hasAnyTab.value) {
+    if (ws) {
+      paneLayout.setChatMode("project");
+      paneLayout.setDefaultWs(ws);
+    }
+    return;
+  }
   // 打开空白可输入面板（预览 tab）；不落盘、不进侧栏。真正创建推迟到
   // 用户发出第一条消息、SDK 用 session_init 确认真实 id 之后（onSessionCreated）。
   // 工作区归属在创建时绑定（布局全局一份，切工作区不动 tab，不快照就会落到
   // 发送时的「当前」工作区）。
-  const wsKey = activeWorkspaceKey.value;
-  const wsPath = workspacePath.value;
+  // 侧栏工作区 ⋯ 菜单显式指定了工作区就用它（不动活动工作区），否则取活动工作区。
+  const wsKey = ws?.wsKey ?? activeWorkspaceKey.value;
+  const wsPath = ws?.wsPath ?? workspacePath.value;
   paneLayout.openBlankTab(name, wsKey && wsPath ? { wsKey, wsPath } : undefined);
 }
 
@@ -484,6 +495,21 @@ async function onSidebarWsChanged(path: string) {
 // Sync workbench terminal's active workspace when switching workspaces
 watch(activeWorkspaceKey, (k) => {
   if (k) wb.setActiveWorkspace(k);
+});
+
+// Host 启动页的「最近项目」：本窗口的 Host 每打开一个项目就记一笔（桌面自己记、Host 由窗口定）。
+// 日常工作区是每台 Host 自带的草稿目录而不是「项目」，不记。
+const samePath = (a: string, b: string) => a.replace(/[\\/]+$/, "").replace(/\\/g, "/") === b.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+watch(workspacePath, async (p) => {
+  if (!p) return;
+  try {
+    await ensureDailyWorkspace();
+    const daily = dailyWorkspaceBind()?.wsPath;
+    if (daily && samePath(daily, p)) return;
+    await hostApi.recordRecent(p);
+  } catch {
+    /* 只是个便利清单：记不上不打扰用户 */
+  }
 });
 
 // ── 文件树定位：FileWindow 按钮 → 切到文件标签 → 展开并高亮 ──
@@ -715,6 +741,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     sidebarRef.value?.newSession();
+    useUsageTips().markUsed("new-session");
   }
 
   // Ctrl+Shift+B：内嵌浏览器（右栏 tab；已激活则折叠，与 rail 点击同语义）
@@ -722,6 +749,7 @@ function handleKeydown(e: KeyboardEvent) {
     e.preventDefault();
     e.stopPropagation();
     rightPanel.select("browser");
+    useUsageTips().markUsed("browser");
     return;
   }
 
@@ -906,6 +934,18 @@ onMounted(async () => {
     );
   } catch (_) { /* best effort */ }
 
+  // Host 窗口（一个窗口 = 一个 Host）带着要打开的目录启动：`?openFolder=<Host 原生路径>`；
+  // 窗口已开着时同一请求经 host-open-folder 事件送达。与「打开目录」对话框确认同一条路。
+  try {
+    unlistenHostOpenFolder = await listen<string>(HOST_OPEN_FOLDER_EVENT, (e) => {
+      if (e.payload) void onOpenFolderConfirm(e.payload);
+    });
+  } catch (_) { /* best effort */ }
+  {
+    const folder = new URLSearchParams(window.location.search).get("openFolder");
+    if (folder) void onOpenFolderConfirm(folder);
+  }
+
   // 注册「查看」动作：市场更新通知点击 → 打开主区插件市场面板
   registerActionHandler("marketplace", () => openMarketplacePanel());
 
@@ -974,6 +1014,7 @@ onUnmounted(() => {
   wb.dispose();
   unlistenOpenFile?.();
   unlistenOpenSessionFromNotification?.();
+  unlistenHostOpenFolder?.();
 });
 </script>
 
@@ -998,13 +1039,30 @@ onUnmounted(() => {
       @toggle-left="onToggleLeft"
       @toggle-right="rightCollapsed = !rightCollapsed"
       @open-folder="onOpenFolder"
+      @open-hosts="hostLauncherVisible = true"
       @open-workbench="wb.toggle()"
       @open-settings-providers="openSettingsProviders"
-    />
+    >
+      <template #search>
+        <ACommandPalette
+          ref="paletteRef"
+          :open="paletteOpen"
+          @open="paletteOpen = true"
+          @close="paletteOpen = false"
+        />
+      </template>
+    </TitleBar>
+
+    <!-- Host 窗口：连接意外断开时如实说明并给「重新连接」；本机窗口不渲染 -->
+    <HostConnectionBanner />
+    <HostLauncherDialog v-model:visible="hostLauncherVisible" />
 
     <div
       class="app-layout"
-      :class="{ 'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value }"
+      :class="{
+        'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value,
+        'right-animating': rightPanel.layoutAnimating.value,
+      }"
       :style="{ gridTemplateColumns }"
     >
       <!-- 贴边热区：未固定时鼠标贴左边缘滑出侧栏（QQ 式自动隐藏）。
@@ -1059,6 +1117,7 @@ onUnmounted(() => {
         <MarketplaceTab
           v-else-if="marketplace.panelOpen.value"
           class="h-full"
+          :workspace-root="workspacePath"
           @go-settings="openSettings"
         />
         <MemoryObservatory
@@ -1091,7 +1150,8 @@ onUnmounted(() => {
 
       <!-- Right panel：content + 常驻竖直工具栏（IDEA 式） -->
       <div class="panel-right" :class="{ collapsed: rightCollapsed }">
-        <div v-show="!rightCollapsed" class="panel-right-inner">
+        <!-- 收起动画期间内容留着（否则轨道还在收、里面已经空了）；动画一落定才真摘掉 -->
+        <div v-show="!rightCollapsed || rightPanel.layoutAnimating.value" class="panel-right-inner">
           <div class="tab-content">
             <FileTree
               v-show="rightTab === 'files'"
@@ -1114,16 +1174,12 @@ onUnmounted(() => {
               ref="searchPanelRef"
               @files-changed="onSearchFilesChanged"
             />
-            <CodegraphPanel
-              v-show="rightTab === 'codegraph'"
-              :workspace-root="workspacePath"
-            />
             <CallHierarchyPanel v-show="rightTab === 'callhierarchy'" />
             <PermissionsPanel
               v-show="rightTab === 'permissions'"
               :workspace-path="workspacePath"
             />
-            <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位。首次激活才挂（异步 chunk 不在启动时拉），
+            <!-- 内嵌浏览器：与其它工具 tab 并列的单例槽位（视图属于本窗口，Host 窗口各有各的）。首次激活才挂（异步 chunk 不在启动时拉），
                  挂上后常驻——关面板/切 tab 只 setDisplayed(false)，页面、滚动位置与前进后退历史都留着。 -->
             <BrowserPanel
               v-if="rightPanel.browserEverActive.value"
@@ -1157,12 +1213,6 @@ onUnmounted(() => {
       />
       <WorkbenchTerminal :workspace-key="activeWorkspaceKey ?? ''" :cwd="workspacePath" :height="workbenchHeight" @update:height="onWorkbenchHeightChange" />
     </div>
-
-    <ACommandPalette
-      ref="paletteRef"
-      :open="paletteOpen"
-      @close="paletteOpen = false"
-    />
   </div>
 </template>
 
@@ -1190,6 +1240,15 @@ onUnmounted(() => {
 .app-layout.is-dragging {
   user-select: none;
   cursor: col-resize;
+}
+
+/* 右栏开合 / 窄宽档切换：让 grid 轨道过渡（时长与 useRightPanel 的 LAYOUT_ANIM_MS 对齐）。
+   只在 .right-animating 期间挂——拖动分隔条时 --aide-right-w 逐帧变，挂着过渡会让拖动发黏，
+   故拖动态强制关掉；窗口缩放不改轨道计算值，不会触发。 */
+@media (prefers-reduced-motion: no-preference) {
+  .app-layout.right-animating:not(.is-dragging) {
+    transition: grid-template-columns 0.24s var(--aide-ease);
+  }
 }
 
 /* 五个轨道靠 grid-column 显式钉住，不依赖 DOM 书写顺序的自动布局——

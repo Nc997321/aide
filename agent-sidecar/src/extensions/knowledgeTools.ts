@@ -27,17 +27,19 @@ import {
 } from "./knowledge/client.js";
 import {
   KB_NOT_CONNECTED_TEXT,
-  formatDocument,
   formatDocumentList,
+  formatDocumentView,
   formatFailure,
   formatSearchHits,
   formatSpaces,
 } from "./knowledge/format.js";
+import { KbScopeStore as KbScopeStoreImpl, type KbScopeStore } from "./knowledge/scope.js";
 import {
   appendToDocument,
   createDocument,
   createFolder,
   deleteDocument,
+  editSelection,
   ingestFile,
   moveDocument,
   resolveWriteTarget,
@@ -46,7 +48,7 @@ import {
 
 // 必须是 type 别名而不是 interface：SDK 的 CallToolResult 带 `[x: string]: unknown` 索引
 // 签名，只有匿名对象类型（type 别名）才有隐式索引签名，interface 没有 → handler 返回
-// ToolResult 会报 TS2322（codegraphTools.ts 因不声明具名类型而天然避开）。
+// ToolResult 会报 TS2322。
 type ToolResult = {
   content: { type: "text"; text: string }[];
 };
@@ -121,10 +123,26 @@ function buildSearchTool(env: NodeJS.ProcessEnv) {
 function buildReadDocumentTool(env: NodeJS.ProcessEnv) {
   return tool(
     "read_document",
-    "Read one knowledge base document in full (markdown) together with its version number. Call this before updating or appending to a document so you edit what is actually there.",
-    { documentId: z.string().describe("Document id (uuid) from search or list_documents") },
+    "Read one knowledge base document (markdown) with its version number. By default returns the whole body. For long documents save context: call with outline: true to get the headings with line ranges, then read just one part with section (a heading's text) or startLine/endLine. Read the whole body before updating or appending so you edit what is actually there.",
+    {
+      documentId: z.string().describe("Document id (uuid) from search or list_documents"),
+      outline: z.boolean().optional().describe("true = return only the heading outline with line ranges (no body). Use it first on a long document."),
+      section: z.string().optional().describe("Read just the section under this heading (matched by its text, sub-sections included). Take the text from the outline."),
+      startLine: z.number().int().min(1).optional().describe("Read from this line (1-based). With endLine, reads that inclusive range; without it, to the end."),
+      endLine: z.number().int().min(1).optional().describe("Last line to read (inclusive). Only meaningful with startLine."),
+    },
     (args) =>
-      kbCall<KbDocument>(env, (c) => c.getJson<KbDocument>(docPath(args.documentId)), formatDocument),
+      kbCall<KbDocument>(
+        env,
+        (c) => c.getJson<KbDocument>(docPath(args.documentId)),
+        (doc) =>
+          formatDocumentView(doc, {
+            ...(args.outline ? { outline: true } : {}),
+            ...(args.section ? { section: args.section } : {}),
+            ...(args.startLine !== undefined ? { startLine: args.startLine } : {}),
+            ...(args.endLine !== undefined ? { endLine: args.endLine } : {}),
+          }),
+      ),
   );
 }
 
@@ -288,9 +306,50 @@ function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
   );
 }
 
-/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径。 */
-export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
-  return [
+function buildEditSelectionTool(env: NodeJS.ProcessEnv, scopes: KbScopeStore) {
+  return tool(
+    "edit_selection",
+    "Rewrite the part of a knowledge base document that the USER selected (circled) in the 知识库 panel — and nothing else. The user's message lists each selection with an id (s1, s2, …). You supply only the replacement text: it replaces the selected source text EXACTLY, so write just that piece (keep its own markdown form, e.g. a list item stays a list item), never repeat the text around it. The position is fixed by the user's selection; you cannot change it. If the user's request would need changes outside the selection, do not do them — say so instead. Read the document first with read_document if you need the surrounding context.",
+    {
+      selectionId: z.string().describe("The selection id from the user's message, e.g. \"s1\""),
+      newText: z.string().describe("The replacement for the selected text. Empty string deletes the selection."),
+      changeNote: z.string().optional().describe("One line for the version history saying what changed and why. Defaults to the user's own note."),
+    },
+    (args) => kbWrite(env, (client) => editSelection(client, scopes, args)),
+  );
+}
+
+/** 本轮被圈选范围约束时，其余一切写工具的回复：只指向唯一出路，不留「那我换个工具改」的口子。 */
+export const SCOPED_WRITE_REFUSAL =
+  "Refused: the user selected a specific part of a knowledge base document this turn, so the only write allowed is edit_selection on that selection — nothing else in the knowledge base may be changed. If the request needs more than that, tell the user and let them send a new message.";
+
+/** 圈选约束下被禁用的写工具（edit_selection 自己不在内）。 */
+const SCOPED_BLOCKED_TOOLS: ReadonlySet<string> = new Set([
+  "create_document",
+  "create_folder",
+  "move_document",
+  "append_document",
+  "update_document",
+  "ingest_file",
+  "delete_document",
+]);
+
+/** 给被禁用的写工具套一层闸：圈选生效时直接回文本拒绝，不碰服务端。 */
+function gateWhenScoped<T extends { name: string; handler: (...a: any[]) => Promise<ToolResult> }>(
+  t: T,
+  scopes: KbScopeStore,
+): T {
+  if (!SCOPED_BLOCKED_TOOLS.has(t.name)) return t;
+  return {
+    ...t,
+    handler: async (...a: any[]) => (scopes.active ? textResult(SCOPED_WRITE_REFUSAL) : t.handler(...a)),
+  };
+}
+
+/** 工具总装：本文件唯一的编排点（一张表，不加逻辑）。cwd 只服务 ingest_file 的相对路径；
+ *  scopes 是本会话的「用户圈选」登记簿（缺省 = 空表，行为与没有这个功能时一致）。 */
+export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string, scopes: KbScopeStore = new KbScopeStoreImpl()) {
+  const tools = [
     buildSearchTool(env),
     buildReadDocumentTool(env),
     buildListSpacesTool(env),
@@ -302,5 +361,7 @@ export function buildKnowledgeTools(env: NodeJS.ProcessEnv, cwd: string) {
     buildUpdateDocumentTool(env),
     buildIngestFileTool(env, cwd),
     buildDeleteDocumentTool(env),
+    buildEditSelectionTool(env, scopes),
   ];
+  return tools.map((t) => gateWhenScoped(t as never, scopes) as (typeof tools)[number]);
 }

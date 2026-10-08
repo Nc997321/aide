@@ -5,9 +5,9 @@ import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
 import LspIndicator from "./LspIndicator.vue";
 import ProviderSwitcher from "./ProviderSwitcher.vue";
-import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
+import { hostApi } from "@aide/sdk";
 import type { RunStatus } from "../../composables/useRunProcess";
 import type { RunConfig } from "../../types";
 
@@ -25,6 +25,19 @@ const props = defineProps<{
   workspaceRoot?: string;
 }>();
 
+// 一个窗口 = 一个 Host：品牌旁标出本窗口连着哪台 Host（本机也标，点它打开 Host 启动页）。
+const hostLabel = ref("");
+const isHostWindow = ref(false);
+onMounted(async () => {
+  try {
+    const h = await hostApi.current();
+    hostLabel.value = h.label;
+    isHostWindow.value = h.key !== "local";
+  } catch {
+    /* 非桌面环境 / 连接未就绪：不标 */
+  }
+});
+
 const emit = defineEmits<{
   "open-palette": [];
   "run-project": [id?: string];
@@ -36,6 +49,7 @@ const emit = defineEmits<{
   "toggle-right": [];
   "open-workbench": [];
   "open-folder": [];
+  "open-hosts": [];
   "open-settings-providers": [];
 }>();
 
@@ -142,9 +156,15 @@ function isRowRunning(cfg: RunConfig): boolean {
   <div class="titlebar" data-tauri-drag-region>
     <!-- Left: brand + project context -->
     <div class="titlebar-left" data-tauri-drag-region>
+      <!-- 品牌（logo + 名称 + 版本）已在侧栏品牌区，标题栏不再重复；这里只留 Host 身份徽标 -->
       <div class="titlebar-logo" data-tauri-drag-region>
-        <AppLogo :size="15" />
-        <span class="titlebar-logo-text">Aide</span>
+        <button
+          v-if="hostLabel"
+          class="titlebar-host"
+          :class="{ remote: isHostWindow }"
+          v-tooltip="isHostWindow ? `此窗口连着 ${hostLabel}：会话、文件、终端都在那台机器上。点击切换 / 连接其它 Host` : '此窗口连着本机。点击连接其它 Host（WSL / SSH）'"
+          @click.stop="$emit('open-hosts')"
+        >{{ hostLabel }}</button>
       </div>
 
       <SidebarToggle
@@ -307,12 +327,15 @@ function isRowRunning(cfg: RunConfig): boolean {
 
     </div>
 
-    <!-- Center: search trigger -->
-    <button class="titlebar-search-trigger" @click="$emit('open-palette')">
-      <Icon class="titlebar-search-icon" name="search" :size="13" />
-      <span class="titlebar-search-text">搜索...</span>
-      <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
-    </button>
+    <!-- Center: 搜索框。App 经 #search 插槽放入 ACommandPalette（输入框 + 下拉面板，VS Code 式）；
+         没有插槽内容时退回点击即触发 open-palette 的占位按钮 -->
+    <slot name="search">
+      <button class="titlebar-search-trigger" @click="$emit('open-palette')">
+        <Icon class="titlebar-search-icon" name="search" :size="13" />
+        <span class="titlebar-search-text">搜索...</span>
+        <kbd class="titlebar-search-kbd">Ctrl+P</kbd>
+      </button>
+    </slot>
 
     <!-- Right: window controls -->
     <div class="titlebar-right">
@@ -359,11 +382,26 @@ function isRowRunning(cfg: RunConfig): boolean {
   flex-shrink: 0;
 }
 
-.titlebar-logo-text {
-  font-size: 12px;
-  font-weight: 700;
+.titlebar-host {
+  font-size: 10px;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: var(--aide-radius-sm);
+  border: 1px solid var(--aide-border);
   color: var(--aide-text-secondary);
-  letter-spacing: 0.5px;
+  white-space: nowrap;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+.titlebar-host:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+/* 远程 Host 窗口：用强调色标出「你不在本机」 */
+.titlebar-host.remote {
+  color: var(--aide-accent);
+  border-color: var(--aide-accent);
 }
 
 .titlebar-sep {

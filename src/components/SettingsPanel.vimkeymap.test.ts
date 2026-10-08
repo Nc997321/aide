@@ -20,11 +20,7 @@ vi.mock("../composables/useSettings", () => {
       indentSize: 4, vimMode: true,
       vimKeybindings: { normal: [], insert: [], visual: [] } as VimBindings,
     },
-    codegraphEmbedder: {
-      apiKeyConfigured: false, backend: "fastembed", baseUrl: "",
-      dim: 768, model: "", format: "ollama",
-    },
-    remote: { enabled: false, relayUrl: "", deviceId: "", permissionMode: "auto" },
+    remote: { permissionMode: "auto" },
     jdkRegistries: [], openWithExtensions: {},
   });
   (globalThis as { __vimSettings?: typeof settings }).__vimSettings = settings;
@@ -33,7 +29,6 @@ vi.mock("../composables/useSettings", () => {
       settings,
       loaded: ref(true),
       update: updateMock,
-      setCodegraphEmbedder: vi.fn().mockResolvedValue(undefined),
       setJdkRegistry: vi.fn().mockResolvedValue(undefined),
       dismissJdkPrompt: vi.fn(),
     }),

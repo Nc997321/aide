@@ -1,0 +1,223 @@
+//! 本机 Host 的前门：前端 invoke → [`aide_core`] 命令表，**进程内直调**。
+//!
+//! Host 模型（docs/host-model.md）：命令只有一张表（aide-core），本机与远程 Host 查同一张。
+//! 已迁进 core 的命令不再各自写 `#[tauri::command]`，也不进 `generate_handler!`——这里按名
+//! 查表分派；表外命令原样交还 Tauri 命令表。本机零额外跳数：与 Tauri 命令同样是一次
+//! JSON 反序列化 + 一次序列化。
+
+use std::sync::Arc;
+
+use aide_core::{Core, EventSink, Reply};
+use serde_json::Value;
+use tauri::ipc::{Invoke, InvokeBody, InvokeError, InvokeResponseBody};
+use tauri::{AppHandle, Manager, Wry};
+
+/// 本机 Host（进程内 Core）的事件出口 → 只投给连着本机 Host 的窗口（Host 窗口连的是别的
+/// Host，本机的 chat-event / 文件树事件不许漏进去，见 `host_window`）。
+///
+/// 例外：`system-notification`（`Core::notify`）不进 WebView，由本前门就地弹系统通知——
+/// Host 不弹窗，弹窗是 GUI 的事。
+pub struct TauriSink(pub AppHandle);
+
+impl EventSink for TauriSink {
+    fn emit(&self, event: &str, payload: Value) {
+        if event == "system-notification" {
+            show_system_notification(&payload);
+            return;
+        }
+        crate::host_window::emit_local(&self.0, event, &payload);
+    }
+}
+
+/// 通知的「身份」：Windows 用 AUMID，macOS 用 bundle id，其余平台没有对应概念。
+/// `Notification::app_id` 只在 Windows 编译（notify-rust 里 `#[cfg(target_os = "windows")]`），
+/// 不能无条件调用——曾因此让桌面壳在 macOS 上整个编不过。
+/// macOS 的 `set_application` 全进程只能设一次（重复调用返回 Err，无妨）；
+/// 未打包运行（dev）时找不到该 bundle 也返回 Err，通知退回系统默认来源。
+pub(crate) fn apply_notification_identity(n: &mut notify_rust::Notification) {
+    #[cfg(windows)]
+    n.app_id("com.aide.app");
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application("com.aide.app");
+    let _ = &n;
+}
+
+fn show_system_notification(payload: &Value) {
+    let text = |k: &str| payload.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let mut n = notify_rust::Notification::new();
+    apply_notification_identity(&mut n);
+    n.auto_icon();
+    n.summary(&text("title"));
+    n.body(&text("body"));
+    tauri::async_runtime::spawn(async move {
+        let _ = n.show();
+    });
+}
+
+/// Core 的资源端口 → 本机：release 读 Tauri 打包资源目录，dev 读源码树 / cargo target。
+pub struct DesktopResources(pub AppHandle);
+
+fn exe(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+impl aide_core::resources::HostResources for DesktopResources {
+    /// dev：node 跑 esbuild bundle（`agent-sidecar/dist/runtime.js`，`AIDE_NODE_PATH` 可换 node）；
+    /// release：打包资源目录 `agent-runtime/` 下的独立可执行文件（旧路径 `agent-sidecar/` 兜底）。
+    fn agent_runtime(&self) -> Result<(String, std::path::PathBuf), String> {
+        #[cfg(debug_assertions)]
+        {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .unwrap()
+                .join("agent-sidecar")
+                .join("dist")
+                .join("runtime.js");
+            if !path.exists() {
+                return Err(format!(
+                    "Runtime not found at {:?}. Run: cd agent-sidecar && pnpm build",
+                    path
+                ));
+            }
+            let node = std::env::var("AIDE_NODE_PATH").unwrap_or_else(|_| "node".to_string());
+            Ok((node, dunce::simplified(&path).to_path_buf()))
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let resource_dir = self.0.path().resource_dir().map_err(|e| e.to_string())?;
+            let bin_name = exe("aide-agent");
+            let path = resource_dir.join("agent-runtime").join(&bin_name);
+            if path.exists() {
+                return Ok((dunce::simplified(&path).to_string_lossy().to_string(), Default::default()));
+            }
+            let fallback = resource_dir.join("agent-sidecar").join(&bin_name);
+            if fallback.exists() {
+                return Ok((dunce::simplified(&fallback).to_string_lossy().to_string(), Default::default()));
+            }
+            Err(format!("Runtime exe missing: {:?}", path))
+        }
+    }
+
+    /// release：随 app 分发的原生 CLI（`agent-runtime/claude[.exe]`）。dev：agent-sidecar 的
+    /// node_modules 里 SDK 平台包带的 claude（CARGO_MANIFEST_DIR 是 src-tauri/，向上一层到项目根）。
+    fn claude_exe(&self) -> Option<std::path::PathBuf> {
+        #[cfg(not(debug_assertions))]
+        {
+            let res_dir = self.0.path().resource_dir().ok()?;
+            let claude = res_dir.join("agent-runtime").join(exe("claude"));
+            claude.exists().then(|| dunce::simplified(&claude).to_path_buf())
+        }
+        #[cfg(debug_assertions)]
+        {
+            let pkg = if cfg!(target_os = "windows") {
+                "@anthropic-ai/claude-agent-sdk-win32-x64"
+            } else if cfg!(target_os = "macos") {
+                "@anthropic-ai/claude-agent-sdk-darwin-arm64"
+            } else {
+                "@anthropic-ai/claude-agent-sdk-linux-x64"
+            };
+            let candidate = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("agent-sidecar")
+                .join("node_modules")
+                .join(pkg)
+                .join(exe("claude"));
+            candidate.exists().then(|| dunce::simplified(&candidate).to_path_buf())
+        }
+    }
+
+    /// `<resource_dir>/lsp`（dev 与 release 同一口径：捆绑 server 与 lombok.jar 只在打包后存在）。
+    fn lsp_dir(&self) -> Option<std::path::PathBuf> {
+        let res_dir = self.0.path().resource_dir().ok()?;
+        Some(res_dir.join("lsp"))
+    }
+}
+
+/// Host 窗口的前门：它发来的 core 命令原样转发给它那台 Host 的 `aide-host serve`（参数是
+/// Host 原生路径，不翻译）；二进制结果（`$bytes`）还原成原始字节。GUI 命令（剪贴板、内嵌
+/// 浏览器、窗口…）不在 core 表里，照常交给本机 Tauri 命令表。
+///
+/// 返回 `Some(invoke)` = 不归这里管（本机窗口 / GUI 命令）。
+pub fn forward(invoke: Invoke<Wry>) -> Option<Invoke<Wry>> {
+    let app = invoke.message.webview().app_handle().clone();
+    let label = invoke.message.webview().label().to_string();
+    let Some(host) = app.state::<crate::host_window::HostWindows>().host_of(&label) else {
+        return Some(invoke);
+    };
+    let cmd = invoke.message.command().to_string();
+    if aide_core::lookup(&cmd).is_none() {
+        return Some(invoke);
+    }
+    let args = match invoke.message.payload() {
+        InvokeBody::Json(v) => v.clone(),
+        InvokeBody::Raw(_) => {
+            invoke.resolver.reject(format!("{cmd}：不接受原始字节参数"));
+            return None;
+        }
+    };
+    let svc = app
+        .state::<Arc<crate::remote_workspace::RemoteWorkspaces>>()
+        .inner()
+        .clone();
+    invoke.resolver.respond_async_serialized(async move {
+        let reply = async {
+            let conn = svc.connection(&host).await?;
+            conn.invoke(&cmd, args).await
+        }
+        .await
+        .map_err(|e| InvokeError::from(Value::String(e)))?;
+        match reply
+            .get(aide_host::protocol::BYTES_KEY)
+            .and_then(Value::as_str)
+        {
+            Some(b64) => {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD
+                    .decode(b64)
+                    .map(InvokeResponseBody::Raw)
+                    .map_err(|e| InvokeError::from(Value::String(e.to_string())))
+            }
+            None => serde_json::to_string(&reply)
+                .map(InvokeResponseBody::Json)
+                .map_err(|e| InvokeError::from(Value::String(e.to_string()))),
+        }
+    });
+    None
+}
+
+/// 返回 `Some(invoke)` = 不是 core 命令，交给 Tauri 命令表；`None` = 已接管并应答。
+pub fn dispatch(invoke: Invoke<Wry>) -> Option<Invoke<Wry>> {
+    let Some(run) = aide_core::lookup(invoke.message.command()) else {
+        return Some(invoke);
+    };
+    let args = match invoke.message.payload() {
+        InvokeBody::Json(v) => v.clone(),
+        InvokeBody::Raw(_) => {
+            invoke
+                .resolver
+                .reject(format!("{}：不接受原始字节参数", invoke.message.command()));
+            return None;
+        }
+    };
+    let core = invoke
+        .message
+        .webview()
+        .app_handle()
+        .state::<Arc<Core>>()
+        .inner()
+        .clone();
+    invoke.resolver.respond_async_serialized(async move {
+        match run(core, args).await {
+            Ok(Reply::Json(v)) => serde_json::to_string(&v)
+                .map(InvokeResponseBody::Json)
+                .map_err(|e| InvokeError::from(Value::String(e.to_string()))),
+            Ok(Reply::Bytes(b)) => Ok(InvokeResponseBody::Raw(b)),
+            Err(e) => Err(InvokeError::from(Value::String(e))),
+        }
+    });
+    None
+}

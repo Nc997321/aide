@@ -15,14 +15,24 @@ const HOVER_OK = "Hover info at 13:9:\n\n```rust\nlet count: u32\n```";
 const HOVER_FAIL = "No hover information available. This may occur if the cursor is not on a symbol.";
 
 // ── aide-lsp（C3 之后 agent 唯一走的通道）的结果文本 ──
-// 这三个常量照 agent-sidecar/src/extensions/lspStatusText.ts 的输出**抄**的，不是编的：
+// 这些常量照 agent-sidecar/src/extensions/lspFormat.ts 的输出**抄**的，不是编的：
 // 格式漂移时这里会先红，比徽章在真机上莫名其妙消失好查。
 const AIDE_OK =
-  "15 references for `get`:\n  C:\\repo\\src-tauri\\src\\lsp\\manager.rs:80:12\n  C:\\repo\\src-tauri\\src\\lsp\\manager.rs:112:13";
+  "2 references of `get` in 1 file (compiler-precise: no comments, strings or same-named symbols):\n" +
+  "src-tauri/src/lsp/manager.rs\n" +
+  "  80:12  [in LspManager › ensure]  let h = self.get(root, lang);\n" +
+  "  112:13  [in LspManager › kill]  self.get(r, l)";
 const AIDE_INDEXING =
-  "The language server is still building its index, so the references for `get` was not answered. An empty result now does NOT mean the reference does not exist — it means nobody looked yet. Retry in ~30s, or use Grep and say the result is unverified.";
+  "The query for `get` was not answered — the language server is still building its index. An empty result does NOT mean the symbol is unused; nobody looked yet. Use Grep for now and say the result is unverified.";
 const AIDE_CONFIRMED_EMPTY =
-  "No references found for `get` — the language server's index is ready, so this is a confirmed negative (not a missing answer).";
+  "No references of `get` — the language server's index is ready, so this is a confirmed negative (not a missing answer). Note: files outside the language project (e.g. excluded test files) are not searched.";
+const AIDE_TEXT_FALLBACK =
+  "The language server could not answer this yet (it is still indexing). Plain-text occurrences of `get` instead — UNVERIFIED: they may include comments, strings and unrelated same-named symbols, and an absence here is not proof:\n" +
+  "src-tauri/src/lsp/manager.rs\n  80:12  let h = self.get(root, lang);";
+const AIDE_DEFINITION =
+  "method LspManager.get — src-tauri/src/lsp/manager.rs:216:18\n216\tpub async fn get(&self) {\n217\t}";
+const AIDE_OUTLINE =
+  "Structure of src/App.vue (2 declarations; L<start>-<end> are line ranges):\nfunction applyTheme  L8-20\nconstant api  L30";
 
 describe("judgeReadRelay", () => {
   const lsp = { filePath: "C:\\repo\\src-tauri\\src\\commands\\chat.rs", result: HOVER_OK };
@@ -189,6 +199,28 @@ describe("两代 LSP 通道（C3 退役内置后，agent 只走 aide-lsp）", ()
   it("ready + 空（已确认的否定）也不算上下文——它没给出任何坐标可沿", () => {
     const m = msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_CONFIRMED_EMPTY));
     expect(lastLspContextInMessages([m])).toBeNull();
+  });
+
+  /// 语义层没答上时，同一发里给的是**文本兜底**——带坐标，但不是 LSP 的答案。
+  it("文本兜底（UNVERIFIED）不算上下文，哪怕它带着坐标", () => {
+    const m = msg("assistant", tool(AIDE_TOOL, AIDE_INPUT, AIDE_TEXT_FALLBACK));
+    expect(lastLspContextInMessages([m])).toBeNull();
+  });
+
+  /// 按名查定义（没有入参文件）：结果只指向一个文件 ⇒ 那就是接力目标。
+  it("按名的定义查询：结果里唯一的文件成为上下文", () => {
+    const m = msg("assistant", tool("mcp__aide-lsp__lsp_definition", { name: "get" }, AIDE_DEFINITION));
+    expect(lastLspContextInMessages([m])?.filePath).toBe("src-tauri/src/lsp/manager.rs");
+  });
+
+  /// 先看结构、再按行区间 Read——最典型的接力。
+  it("lsp_outline 之后按区间 Read 同一文件 ⇒ hit", () => {
+    const messages = [
+      msg("assistant", tool("mcp__aide-lsp__lsp_outline", { file: "src/App.vue" }, AIDE_OUTLINE)),
+      msg("assistant", tool("Read", { file_path: "C:\\repo\\src\\App.vue", offset: 8, limit: 13 })),
+    ];
+    annotateReadRelay(messages);
+    expect((messages[1]!.blocks[0] as ToolCallBlock).lspRelay).toBe("hit");
   });
 
   it("只带 name、没带 file 的调用不构成上下文（没有「那一个坐标」）", () => {

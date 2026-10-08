@@ -35,9 +35,10 @@
  * 滚动策略：List 以 initialIndex 底部起建——hydrate/重载完成后按当前消息数
  * 重建列表（if 分支切换），首帧即锚在最后一条，避免 LazyForEach 远跳估算
  * （scrollEdge 只能到「已构建内容」的底部，从顶部远跳等于没滚）；流式内容
- * 增长经 bumpTailThrottled 节流跟尾（120ms 一拍），仅在视口贴近底部时跟随
- * （对照 PWA「近底部才自动滚」，避免读历史被拽走；跟随时尾部恒已构建，
- * scrollEdge 精确贴底）。
+ * 增长经 bumpTailThrottled 节流跟尾（120ms 一拍），仅在跟尾位有效时跟随
+ * （onScrollStop 后以 isAtEnd 像素级复估：上翻离底即停跟、回底复跟——按
+ * 项数判近底在长消息内上翻时恒真，会把读历史的人拽回底部；跟随时尾部恒
+ * 已构建，scrollEdge 精确贴底）。
  * 虚拟加载：消息时间线走 LazyForEach（ChatMessagesSource 对账 store 的
  * 结构原语；只建可见项 + cachedCount 预建，长会话内存/首帧与历史长度解耦）。
  * 思考卡：ThinkingCard 独立组件（一屏限高内滚 + active 段贴内底 +
@@ -81,9 +82,6 @@ const THINK_CAP_RESERVE: number = 120;
 
 /** 思考卡内容区保底高度（视口未量得/极小时的兜底，保证仍可滚）。 */
 const THINK_CAP_MIN: number = 160;
-
-/** 近底判定：末位可见项距列表末尾不超过此项数即视为贴底，流式跟尾才生效。 */
-const NEAR_BOTTOM_TAIL: number = 3;
 
 /** toast 深底（原型 rgba(29,33,41,.9)）。 */
 const TOAST_BG: ResourceColor = '#E61D2129';
@@ -142,8 +140,12 @@ export struct ChatPage {
   @Local listEpoch: number = 0;
   private model: ChatModel = chatModel;
   private scroller: Scroller = new Scroller();
-  /** 视口末位列表下标（onScrollIndex 回写；仅滚动判断用，不驱动渲染）。 */
+  /** 视口末位列表下标（onScrollIndex 回写；仅重建贴底落位判断用，不驱动渲染）。 */
   private lastIdx: number = -1;
+  /** 跟尾位：最近一次滚动停止时是否在列表底部（isAtEnd 像素级复估，单一回调
+   *  天然覆盖拖拽/惯性/程序滚动全部来源）。流式跟尾仅在跟尾位有效时生效——
+   *  上翻离底即停跟、回底复跟，读历史不被拽走；切会话/重载重建时重新武装。 */
+  private follow: boolean = true;
   /** 底部起建待消费标记：列表从空到非空的首次填充到达时重建列表锚最后一条
    *（open 默认贴底；复位/重载清空后重新武装）。 */
   private pendingAnchor: boolean = true;
@@ -223,31 +225,14 @@ export struct ChatPage {
 
   @Monitor('store.tailAt')
   onTail(monitor: IMonitor): void {
-    // 跟尾只在视口贴底时生效（读历史不被拽走）；底部起建保证跟随时尾部恒已
+    // 跟尾只在跟尾位有效时生效（读历史不被拽走）；底部起建保证跟随时尾部恒已
     // 构建，scrollEdge 精确贴底——无 LazyForEach 远跳估算
-    if (this.isNearBottom()) {
+    if (this.follow) {
       this.scroller.scrollEdge(Edge.Bottom);
     }
   }
 
-  // ── 滚动原语（底部起建 / 近底判定）──
-
-  /** 列表总项数（含「加载更早」行、状态卡与瞬态工具行；近底判定基准）。 */
-  private totalListItems(): number {
-    let n: number = this.store.messages.length + this.store.liveActivities.length;
-    if (this.store.tailOffset > 0) {
-      n += 1;
-    }
-    if (this.store.hydrateFailed || this.store.messages.length === 0) {
-      n += 1;
-    }
-    return n;
-  }
-
-  /** 视口是否贴底：末位可见项距列表末尾 ≤ NEAR_BOTTOM_TAIL（未量得视为贴底）。 */
-  private isNearBottom(): boolean {
-    return this.lastIdx < 0 || this.lastIdx >= this.totalListItems() - NEAR_BOTTOM_TAIL;
-  }
+  // ── 滚动原语（底部起建 / 贴底落位）──
 
   /** 底部起建锚点：最后一条消息的列表项下标（含「加载更早」/失败卡头部偏移）。 */
   private tailAnchorIndex(): number {
@@ -266,6 +251,8 @@ export struct ChatPage {
    * 最后一条；置 pendingSettle 由新列表首帧布局精确贴底。 */
   private rebuildAtTail(): void {
     this.lastIdx = -1;
+    // 重建即贴底起建：跟尾位重新武装（切会话/重载后流式跟尾不受旧状态污染）
+    this.follow = true;
     this.pendingSettle = true;
     this.listEpoch++;
   }
@@ -1941,6 +1928,11 @@ export struct ChatPage {
         this.scroller.scrollEdge(Edge.Bottom);
       }
     })
+    .onScrollStop(() => {
+      // 跟尾位复估：任何来源的滚动停止后以 isAtEnd 像素级判定——离底即停跟、
+      // 回底复跟（拖拽/惯性/程序滚动单一回调全覆盖）
+      this.follow = this.scroller.isAtEnd();
+    })
     .onAreaChange((_o: Area, n: Area) => {
       const h: number = typeof n.height === 'number' ? n.height : 0;
       if (h > 0) {
@@ -1965,7 +1957,7 @@ export struct ChatPage {
         } else {
           // if 分支切换 = 销毁重建 List（见 rebuildAtTail）：重建首帧按
           // initialIndex 锚在最后一条，零滚动零动画；流式跟尾照旧走 scrollEdge
-          //（仅近底时跟随，跟随时尾部恒已构建，精确贴底）
+          //（仅跟尾位有效时跟随，跟随时尾部恒已构建，精确贴底）
           if (this.listEpoch % 2 === 0) {
             this.chatList()
           } else {

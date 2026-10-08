@@ -1,0 +1,103 @@
+name: CI
+
+# 目的：让「跨平台」红线有自动检查——主力开发在 Windows，这里在 macOS 上编译 + 跑测试。
+# 只覆盖编译与单元测试；窗口 / 托盘 / 登录 shell PATH 等运行时行为仍需真机验证。
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: frontend (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # 根 vitest 的 include 含 agent-sidecar/src/**，那些测试 import 的 SDK / zod 只在
+      # sidecar 自己的 node_modules 里——不装就是「0 test」的加载失败
+      - run: pnpm --dir agent-sidecar install --frozen-lockfile
+      # build 内含构建期守卫（sync-io / overlay-layers / lsp-parity）+ vue-tsc + vite build
+      - run: pnpm build
+      - run: pnpm test
+
+  rust:
+    name: rust crates (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      # 与 Tauri 无关的 Host 侧 crate：这是跨平台红线最该守的部分
+      - name: test host-side crates
+        run: >
+          cargo test --manifest-path src-tauri/Cargo.toml
+          -p aide-workspace -p aide-core -p aide-link -p aide-host
+
+  tauri-shell:
+    name: tauri shell compile (macOS)
+    runs-on: macos-latest
+    # 桌面壳依赖前端产物与 sidecar 资源，CI 里用占位文件后 cargo check（只验编译，不打包）。
+    # 2026-10-02 首次在 macOS 编过，转为正式检查。
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      # macOS 的 tauri.macos.conf.json 把 agent-sidecar/node_modules/.pnpm 里的 darwin-arm64
+      # claude 二进制当 bundle 资源——必须用 pnpm 装（npm 装出来没有 .pnpm 目录结构）
+      - name: install sidecar deps (pnpm layout)
+        run: pnpm --dir agent-sidecar install --frozen-lockfile
+      - name: placeholder bundle resources
+        run: |
+          mkdir -p agent-sidecar/dist src-tauri/remote-kit
+          touch agent-sidecar/dist/aide-agent src-tauri/remote-kit/placeholder
+      - run: cargo check --manifest-path src-tauri/Cargo.toml -p aide
+
+  sidecar:
+    name: agent-sidecar (macOS)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: agent-sidecar
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+      # projection.dom.test.ts 的 jsdom 只声明在根 package.json，靠向上解析到根 node_modules
+      # ——本地如此，CI 也要还原这个布局，否则该文件的 worker 起不来
+      - name: install root deps (jsdom)
+        working-directory: .
+        run: pnpm install --frozen-lockfile
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test

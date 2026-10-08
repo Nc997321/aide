@@ -19,19 +19,19 @@ export const LSP_INSTALL_GUIDES: Record<string, LspInstallGuide> = {
     shortName: "Rust",
     displayName: "Rust",
     serverBinary: "rust-analyzer",
-    note: "rustup 装好后自动在 PATH（~/.cargo/bin）。",
+    note: "插件市场「语言服务器」可一键安装；或 rustup component add rust-analyzer。",
   },
   typescript: {
     shortName: "TS",
     displayName: "TypeScript",
     serverBinary: "typescript-language-server",
-    note: "npm 全局安装 typescript-language-server + typescript。Vue 项目（.vue）还需在项目内装 @vue/typescript-plugin，否则 .vue 无诊断/跳转（.ts 照常）。",
+    note: "插件市场「语言服务器」可一键安装；或 npm 全局安装 typescript-language-server + typescript。Vue 项目（.vue）还需在项目内装 @vue/typescript-plugin，否则 .vue 无诊断/跳转（.ts 照常）。",
   },
   javascript: {
     shortName: "JS",
     displayName: "JavaScript",
     serverBinary: "typescript-language-server",
-    note: "npm 全局安装 typescript-language-server + typescript。",
+    note: "插件市场「语言服务器」可一键安装；或 npm 全局安装 typescript-language-server + typescript。",
   },
   go: {
     shortName: "Go",
@@ -49,7 +49,7 @@ export const LSP_INSTALL_GUIDES: Record<string, LspInstallGuide> = {
     shortName: "Py",
     displayName: "Python",
     serverBinary: "pyright-langserver",
-    note: "npm 包名 pyright，二进制是 pyright-langserver。",
+    note: "插件市场「语言服务器」可一键安装；或 npm 全局安装 pyright（二进制是 pyright-langserver）。",
   },
   kotlin: {
     shortName: "Kt",
@@ -61,7 +61,7 @@ export const LSP_INSTALL_GUIDES: Record<string, LspInstallGuide> = {
 
 /** 未登记语言的通用 fallback（面板缺省文案）。 */
 export const LSP_INSTALL_FALLBACK =
-  "在 PATH 中安装该语言的 LSP server，或在设置中为它配置 program 路径。安装方法见「打开安装向导」。";
+  "在插件市场「语言服务器」一键安装；没有对应语言包的，在 PATH 中安装该语言的 LSP server，或在这里为它配置 program 路径。安装方法见「打开安装向导」。";
 
 export function installGuideFor(lang: string): LspInstallGuide | undefined {
   return LSP_INSTALL_GUIDES[lang];

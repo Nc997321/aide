@@ -1,0 +1,27 @@
+[package]
+name = "aide-host"
+version = "0.8.0"
+edition = "2021"
+description = "Aide remote Host: runs a whole Aide backend (aide-core) on a WSL distro / SSH server (no GUI needed) and serves one desktop window over stdio JSON-RPC."
+
+# 不依赖任何系统 C 库：以 x86_64/aarch64-unknown-linux-musl 静态链接，一个二进制跑遍任意
+# 发行版（目标机不装任何东西）。crate 自带的 C/汇编（ring）静态编入可以；要目标机装 .so /
+# 头文件 / pkg-config 的依赖不行。新增依赖前先确认这一点。
+[dependencies]
+aide-core = { path = "../aide-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "io-std", "io-util", "process", "sync", "time", "net", "signal"] }
+libc = "0.2"
+base64 = "0.22"
+
+[[bin]]
+name = "aide-host"
+path = "src/main.rs"
+
+[dev-dependencies]
+# 真 Host 端到端：真守护进程 + 真中继（进程内）+ 手机一侧的参考客户端
+aide-link = { path = "../aide-link", features = ["transport"] }
+aide-relay = { path = "../../../relay-server" }
+tokio-tungstenite = "0.24"
+futures-util = "0.3"

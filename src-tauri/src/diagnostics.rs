@@ -276,8 +276,8 @@ pub async fn diag_freeze_supplement(
 /// 活体解剖：读计算样式、逐样式开关、观察滚轮是否复活。纯窗口调用，同步无 IO。
 #[cfg(any(debug_assertions, feature = "devtools"))]
 #[tauri::command]
-pub fn open_devtools(window: tauri::WebviewWindow) {
-    window.open_devtools();
+pub fn open_devtools(webview: tauri::Webview) {
+    webview.open_devtools();
 }
 
 #[cfg(test)]

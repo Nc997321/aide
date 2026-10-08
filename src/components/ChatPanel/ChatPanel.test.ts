@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import { nextTick, ref } from "vue";
 import type { ProviderConfig, ProviderModelMappings } from "@/types";
@@ -83,6 +83,7 @@ import ChatPanel from "./ChatPanel.vue";
 import { TURN_CHANGES_KEY } from "./turnChanges";
 import { useSessionProviders } from "../../composables/useSessionProviders";
 import { useProviders } from "../../composables/useProviders";
+import { __resetUsageTipsForTest } from "../../composables/useUsageTips";
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "",
@@ -431,5 +432,47 @@ describe("ChatPanel — 回合结算卡的接线", () => {
     expect(w.findComponent({ name: "TurnChangeCard" }).props("feed")).toEqual(feed);
     // 位置：消息流行末（v-for 之后、内容盒之内）
     expect(w.get(".chat-messages-body").element.lastElementChild?.classList.contains("tf-stub")).toBe(true);
+  });
+});
+describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    __resetUsageTipsForTest();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const tipText = (w: VueWrapper) => {
+    const el = w.find(".chat-thinking .usage-tip-body");
+    return el.exists() ? el.text() : null;
+  };
+
+  it("思考满 3 秒才出（短回复不闪），之后每 9 秒换一条", async () => {
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true }), global: { directives: { tooltip: () => {} } } });
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(tipText(w)).toBeNull();
+    await vi.advanceTimersByTimeAsync(1000);
+    const first = tipText(w);
+    expect(first).toContain("/btw"); // 新用户第一条
+    await vi.advanceTimersByTimeAsync(9000);
+    const second = tipText(w);
+    expect(second).not.toBeNull();
+    expect(second).not.toBe(first);
+  });
+
+  it("回复结束即收起", async () => {
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true }), global: { directives: { tooltip: () => {} } } });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(tipText(w)).not.toBeNull();
+    await w.setProps({ isBusy: false });
+    expect(w.find(".chat-thinking").exists()).toBe(false);
+  });
+
+  it("未聚焦的面板不轮（多分屏同时在跑不重复计出场）", async () => {
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true, focused: false }), global: { directives: { tooltip: () => {} } } });
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(tipText(w)).toBeNull();
   });
 });

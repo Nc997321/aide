@@ -2,7 +2,7 @@
 import { ref, watch, onMounted, onUnmounted, computed } from "vue";
 import type { LspServiceId } from "../utils/lspLang";
 import { EditorView, basicSetup } from "codemirror";
-import { keymap } from "@codemirror/view";
+import { keymap, tooltips } from "@codemirror/view";
 import { searchKeymap } from "@codemirror/search";
 import { Compartment } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
@@ -16,7 +16,7 @@ import type { ThemeTokens } from "../themes/tokens";
 import { createHighlightStyle } from "../utils/cmHighlight";
 import { loadLanguageExtension } from "../utils/cmLanguage";
 import { ctrlHoverHighlight } from "../extensions/cmCtrlHover";
-import { cmScrollMemory, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
+import { cmScrollMemory, cancelScrollRestore, type ScrollMemoryOptions } from "../extensions/cmScrollMemory";
 import { cmLsp } from "../extensions/cmLsp";
 import { cmDefinitionPrefetch } from "../extensions/cmDefinitionPrefetch";
 import { cmIndent } from "../extensions/cmIndent";
@@ -440,6 +440,15 @@ async function createEditor() {
       }, { dark: true }),
       // 跳转定位后的「闪一下渐隐」行高亮（FileWindow 定位行后调 flashLine 触发）
       cmFlash(),
+      // 浮层可用空间 = 编辑器自身矩形，而不是整个屏幕：FileWindow 外壳 overflow:hidden，
+      // 默认的「整屏有空间」会把 above 的 hover 摆到窗口外被裁掉（只剩标题栏）。
+      // 编辑器上方放不下时 CM 会自动翻到下方。
+      tooltips({
+        tooltipSpace: (v) => {
+          const r = v.scrollDOM.getBoundingClientRect();
+          return { top: r.top, left: r.left, bottom: r.bottom, right: r.right };
+        },
+      }),
     ],
     parent: mountEl.value,
   });
@@ -640,16 +649,13 @@ function scrollToLine(line: number, opts?: { cursor?: boolean; viewportY?: numbe
   if (!view) return;
   const docLine = view.state.doc.line(Math.min(line, view.state.doc.lines));
   const yMargin = opts?.viewportY ?? 5;
+  // cancelScrollRestore：显式跳行优先于「恢复上次滚动位置」（后者在下一帧才落地）
+  const effects = [cancelScrollRestore.of(null), EditorView.scrollIntoView(docLine.from, { y: "start", yMargin })];
   if (opts?.cursor !== false) {
-    view.dispatch({
-      selection: { anchor: docLine.from, head: docLine.from },
-      effects: EditorView.scrollIntoView(docLine.from, { y: "start", yMargin }),
-    });
+    view.dispatch({ selection: { anchor: docLine.from, head: docLine.from }, effects });
     view.focus();
   } else {
-    view.dispatch({
-      effects: EditorView.scrollIntoView(docLine.from, { y: "start", yMargin }),
-    });
+    view.dispatch({ effects });
   }
 }
 

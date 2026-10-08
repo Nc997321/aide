@@ -12,7 +12,6 @@ const sessionStub: HookBuildContext["session"] = {
   makePolicyHook: () => async () => ({}),
   makeStopEffortHook: () => async () => ({}),
   makeModelSwitchGuard: () => null,
-  metadata: () => ({}),
 };
 
 let dir = "";
@@ -27,14 +26,12 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
   return {
     cwd: dir,
     trusted: false,
-    codegraphEnabled: false,
     // 默认无 LSP 语言 = aide-lsp 不挂载（与生产默认一致：主进程不给就为空）。
     lspLanguages: [],
     processEnv: {} as NodeJS.ProcessEnv,
     emit: () => {},
     taskTools: undefined,
     automationConfig: undefined,
-    mcpHeaders: undefined,
     session: sessionStub,
     ...over,
   };
@@ -49,15 +46,13 @@ describe("prepareQueryContext", () => {
     expect(ctx.mcpServers).toEqual({}); // 无用户配置、内建未注册
   });
 
-  it("CLAUDE_CONFIG_DIR 在场透传；!trusted → codegraph/docs 全不注册", async () => {
+  it("CLAUDE_CONFIG_DIR 在场透传；!trusted → docs 全不注册", async () => {
     const ctx = await prepareQueryContext(
       deps({
         trusted: false,
-        codegraphEnabled: true,
         processEnv: { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv,
       }),
     );
-    expect(ctx.mcpServers["aide-codegraph"]).toBeUndefined();
     expect(ctx.mcpServers["aide-docs"]).toBeUndefined();
     // 浏览器工具同样受 trusted 门控（它带着用户的登录态，受限模式不该有）
     expect(ctx.mcpServers["aide-browser"]).toBeUndefined();
@@ -88,6 +83,14 @@ describe("prepareQueryContext", () => {
     const ctx = await prepareQueryContext(deps({ attachedDirs: [att] }));
     expect(ctx.instructions).toContain(`--- 附加工作区指令：${att} ---`);
     expect(ctx.instructions).toContain("B-RULES");
+  });
+
+  it("跨工作区记忆：trusted 挂 aide-memory，受限模式不挂", async () => {
+    const env = { CLAUDE_CONFIG_DIR: dir } as NodeJS.ProcessEnv;
+    const on = await prepareQueryContext(deps({ trusted: true, processEnv: env }));
+    expect(on.mcpServers["aide-memory"]).toBeDefined();
+    const off = await prepareQueryContext(deps({ trusted: false, processEnv: env }));
+    expect(off.mcpServers["aide-memory"]).toBeUndefined();
   });
 
   it("automation：mcpServers 按白名单收口——空白名单 = 连接器全不挂载（docs 也被滤掉）", async () => {

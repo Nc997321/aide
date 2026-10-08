@@ -85,7 +85,44 @@ export type UserMessageBlock =
   // 只引用了这一段（编辑器选区），缺省=整文件。isDir 表示引用的是目录（@目录 =
   // 授权 + 一级清单，见 2026-09-17 跨目录方案）。与 aide-sdk/src/types/chat.ts 同形
   // ——**两份必须同形，漂移会让 display 静默失效**（降级成纯文本，不报错）。
-  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean };
+  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean }
+  // 页面选区（浏览器里点选的元素 + 用户意见）：sidecar 不解释，原样随 user_message 回灌。
+  // 与 aide-sdk/src/types/chat.ts 的 `pageref` 块 / `PageRef` **必须同形**——漂移会让
+  // display 静默降级成纯文本，不报错。设计：docs/superpowers/specs/2026-10-02-browser-pick-to-agent-design.md
+  | {
+      type: "pageref";
+      url: string;
+      title?: string;
+      selector: string;
+      tag: string;
+      text: string;
+      html: string;
+      comment: string;
+      source?: string;
+      rect?: { x: number; y: number; w: number; h: number };
+      viewport?: { w: number; h: number };
+      styles?: Record<string, string>;
+    }
+  // 知识库选区：用户圈定的一段文档源文 + 意见。**语义是授权**——sidecar 把它登记成本轮唯一
+  // 允许 edit_selection 改动的范围（extensions/knowledge/scope.ts）。与 aide-sdk 的 `kbref` 块 /
+  // `KbRef` **必须同形**。设计：docs/superpowers/specs/2026-10-02-kb-selection-edit-design.md
+  | {
+      type: "kbref";
+      selectionId: string;
+      documentId: string;
+      title: string;
+      baseVersion: number;
+      start: number;
+      end: number;
+      text: string;
+      comment: string;
+      lineStart: number;
+      lineEnd: number;
+      precise: boolean;
+      /** 这篇文档关联的工作区根目录（本 Host 上的路径）：本轮可经 read_memory 参考它们的记忆。
+       *  只读，不授予那些工作区的任何文件访问。缺省 = 没有关联项目。 */
+      linked?: string[];
+    };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与
  *  packages/aide-sdk/src/types/chat.ts 必须同形。 */
@@ -304,16 +341,8 @@ export type ChatEvent =
       error?: string;
       synthetic?: boolean;
     }
-  // Rust reader 拦截的 agent 代码索引查询（不转发 Vue；响应走 codegraph_result 命令）。
-  | {
-      type: "codegraph_query";
-      request_id: string;
-      tool: string;
-      args: Record<string, unknown>;
-      project_root: string;
-    }
   // Rust reader 拦截的 agent LSP 查询（不转发 Vue；响应走 lsp_result 命令）。
-  // 与 codegraph 的区别：查询本体不跳 runner——LspManager 就在主进程就地执行
+  // 查询本体在主进程就地执行（LspManager 就在那里）
   // （见 src-tauri/src/runtime/lsp_agent.rs）。
   | {
       type: "lsp_query";
@@ -383,21 +412,6 @@ export interface ImageAttachment {
   mediaType: string;  // "image/png" | "image/jpeg" | "image/gif" | "image/webp"
 }
 
-/** send.images 的**线形状**：两种形式互斥（`data` 或 `path` 恰好一个在场）。
- *  归一（路径 → 内嵌）在 send 入口完成，实现与守卫见 engine/imageAttachments.ts。
- *
- *  - `{data, mediaType}` 内嵌 base64——桌面与既有网关在用。mediaType 仍**必填**、
- *    不做嗅探：对既有契约零改动（放松必填会让已写好的调用方开始依赖新默认值）。
- *  - `{path}` 引擎本地读取——headless 网关传大图用，绕开 /invoke 的 1MB body 上限。
- *    **不传 mediaType**：字节在引擎手里，按魔数嗅探才是权威值，不该由调用方猜。
- *
- *  为什么不用标签（kind/source）分派：那个手法是用来承载**字段名表达不了的意图**
- *  的（approve / answer / deny / unanswered 都是"若干字段在场"，标签才分得开）。
- *  这里 `data` 与 `path` 字面就说清了差别，再加标签是冗余。 */
-export type WireImageAttachment =
-  | { data: string; mediaType: string }
-  | { path: string };
-
 // ---- btw 侧问的线上契约（命令与事件共用） ----
 
 /** btw 跨问历史的一条问答。形状与官方 side_question 的 history 元素逐字段对齐
@@ -412,7 +426,7 @@ export type AskSideQuestionResult = { ok: true } | { ok: false; reason: string }
 // ---- permission_response 的标签联合线形状（官方推荐形态） ----
 //
 // 与扁平字段袋（approved / answers / nextMode / message / sessionRules）**互斥**：
-// 一条命令里二者只能在场一个（headless 的 zod 边界用 superRefine 强制；桌面 Rust、
+// 一条命令里二者只能在场一个（桌面 Rust、
 // 远程、ohos 恒发扁平形态，永不发本形状）。归一读法见 engine/permissionResponse.ts。
 //
 // 变体按「引擎能力」一一对应，不多不少——判据：两条变体若落到同一段引擎代码即为
@@ -440,8 +454,8 @@ export type SidecarCommand =
       cmd: "send";
       session_id: string;
       prompt: string;
-      /** 图片附件线形状（内嵌 base64 / 引擎本地路径，二选一）→ engine/imageAttachments.ts */
-      images?: WireImageAttachment[];
+      /** 图片附件（内嵌 base64），入口校验见 engine/imageAttachments.ts */
+      images?: ImageAttachment[];
       // 发起方附带的渲染描述：sidecar 不解释内容，只原样随 user_message 事件回灌。
       // 桌面端用它把 @引用/动作胶囊渲染成独立卡片；鸿蒙/PWA 不发此字段，接收端
       // 降级为纯文本气泡。
@@ -462,7 +476,7 @@ export type SidecarCommand =
       // fork_from 是 fork 源会话 ID（BTW 自己的 session_id 仅用于路由，不传给 SDK）。
       // fork_from 省略/空 = 不 fork,全新会话——btw 任务支线(git-commit)走这条路:
       // 不背主会话历史,token 最省。
-      // 自动化运行（无人值守 headless 会话，调度器发起）：与 btw 的区别是
+      // 自动化运行（无人值守会话，调度器发起）：与 btw 的区别是
       // 转录落盘（persistSession 不动）。preset 是权限预设（auto=CLI 自动裁决/
       // full=全放行）；tools 恒为 ["*"]（可见性不收口，行为层收口）；
       // mcp_allowlist 是预授权连接器 server key（policy hook 按它裁决 MCP 工具）；
@@ -494,17 +508,6 @@ export type SidecarCommand =
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;
-      // 会话元数据（headless 网关塞租户上下文）：引擎不解释内容，进程内 hooks 经
-      // HookBuildContext.session.metadata() 读取。**绝不注入 cliEnv**——子进程 env
-      // 会被 Bash 工具继承，模型可外带凭据（安全红线，见 sessionMetadata.ts）。
-      // 每条 send 刷新（缺席 = 清空）。省略 = 无元数据（桌面路径恒省略）。
-      metadata?: Record<string, unknown>;
-      // MCP HTTP/SSE 请求头注入（会话级授权身份，headless 网关下发）：
-      // serverName → headers，"*" = 所有 http/sse 型 server（同键精确名优先）。
-      // 注入头覆盖 server 配置自带同名头。mcpServers 随 query() spawn 固化——
-      // 刷新的新头在下一次 query() 重连才生效。值是凭据：不得进日志（N5）。
-      // 每条 send 刷新（缺席 = 清空）。省略 = 无注入（桌面路径恒省略）。
-      mcp_headers?: Record<string, Record<string, string>>;
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;
@@ -522,11 +525,6 @@ export type SidecarCommand =
       // 加载项目 CLAUDE.md / .aide/claude/ / .mcp.json；false = 受限模式，
       // startLoop 据此跳过项目级自动配置。省略时 sidecar 按信任处理。
       trusted?: boolean;
-      // 工作区级代码索引开关：Rust 按 cwd 查 state.json 的 codegraph_workspaces
-      // 注入（每工作区默认关）。true（或省略，向后兼容/测试）= 开，挂载 aide-codegraph
-      // MCP；false = 该工作区未开索引，不注册 codegraph MCP 工具（chat.rs /
-      // automation scheduler 四处构造点下发）。
-      codegraph_enabled?: boolean;
       /** 该工作区配得上 LSP 的语言（主进程 lsp_languages_for_path 算好下发）。
        *  空数组 = 不挂 aide-lsp 工具（见 extensions/lspTools.ts 的四档闸门）。 */
       lsp_languages?: string[];
@@ -540,9 +538,8 @@ export type SidecarCommand =
       session_id: string;
       id: string;
       // 标签形态（官方推荐，见 PermissionResponseWire）与扁平形态**二选一**：
-      // response 在场即标签形态，approved 在场即扁平形态，恰好一个在场（schema
-      // 用 superRefine 强制；两者皆无或皆有 = 400）。类型上两个字段都可选，
-      // 互斥由 boundary schema 与 engine/permissionResponse.ts 的归一共同保证。
+      // response 在场即标签形态，否则按扁平形态读。类型上两个字段都可选，
+      // 形态判定见 engine/permissionResponse.ts 的归一。
       response?: PermissionResponseWire;
       approved?: boolean;
       answers?: Record<string, string>;
@@ -576,19 +573,8 @@ export type SidecarCommand =
       question: string;
       history?: BtwHistoryRound[];
     }
-  // codegraph agent 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
-  | {
-      cmd: "codegraph_result";
-      request_id: string;
-      ok: boolean;
-      status?: string;
-      results?: unknown[];
-      candidates?: number;
-      truncated?: boolean;
-      error?: string;
-    }
   // LSP 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
-  // `status` 是八态状态词（见 lspStatusText 的 LSP_STATUS_WORDS，与 Rust 侧
+  // `status` 是八态状态词（见 lspFormat 的 LSP_STATUS_WORDS，与 Rust 侧
   // agent_status.rs 的 as_str() 逐字一致）——**模型据此判断空结果可不可信**。
   | {
       cmd: "lsp_result";
@@ -601,10 +587,12 @@ export type SidecarCommand =
       ambiguous?: boolean;
       candidates?: unknown[];
       error?: string;
+      /** 各工具的其余载荷键（symbols / matches / languages / truncated），lspClient 整包透传。 */
+      [key: string]: unknown;
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // data 刻意用 unknown 而非扁平字段：载荷随 op 而变（视图列表 / 脚本返回值 / CDP 返回值），
-  // 不像 codegraph 那样形状固定。
+
   | {
       cmd: "browser_result";
       request_id: string;

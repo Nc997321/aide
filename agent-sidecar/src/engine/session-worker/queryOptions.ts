@@ -4,9 +4,9 @@
 // 对象化沿 mapper.ts MapperDeps 先例（宽装配函数的注入形状）。
 import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { LSP_ALLOW_RULE } from "../../extensions/lspTools.js";
-import { CODEGRAPH_ALLOW_RULE } from "../../extensions/codegraphTools.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
+import { MEMORY_READ_RULES } from "../crossMemory.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption, type SdkPluginConfig } from "../../extensions/dispatchPlugins.js";
 import { retireBuiltinLspPlugins } from "../../extensions/lspRetire.js";
@@ -101,14 +101,21 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     allowedTools: [
       "Agent",
       "Task",
-      CODEGRAPH_ALLOW_RULE,
       DOCS_ALLOW_RULE,
       // LSP 工具同属只读、不弹窗。即便本工作区没挂载 aide-lsp（四档闸门没过），
-      // 这条规则也只是永不匹配——与 codegraph 的规则同样常驻。
+      // 这条规则也只是永不匹配。
       LSP_ALLOW_RULE,
       ...KNOWLEDGE_READ_RULES,
+      // 跨工作区记忆只读，同样是工具级规则。
+      ...MEMORY_READ_RULES,
       ...BROWSER_ALLOW_RULES,
     ],
+    // 会话 cwd 是 Aide 自持属性（wsPath 档案 / ChangeLog 基线 / Host 目录探测都认它）。
+    // EnterWorktree 会在会话中途改 cwd——档案对不上 = 「跑错项目」，且 UI 看不见。
+    // disallowedTools 把工具从模型上下文里整个摘掉（不依赖权限模式，auto/bypass 下也拦得住）。
+    // 只拦会话级切换；Agent 工具的 isolation:"worktree" 只动子代理 cwd，不在此列。
+    // 要放开须先把 worktree 做成一等工作区概念（新会话 + wsPath 指向它），别在这里删。
+    disallowedTools: ["EnterWorktree", "ExitWorktree"],
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
     skills: p.branch.automationConfig ? [] : "all",

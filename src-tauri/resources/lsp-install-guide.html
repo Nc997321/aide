@@ -85,7 +85,12 @@
   <h1>LSP 服务器安装向导</h1>
   <p class="sub">Aide 内置 LSP（语言服务器）功能需要各语言的 server 二进制。本页说明怎么装、装完怎么验证。</p>
   <div class="tip">
-    <strong>前提：</strong>Aide 的 LSP 不捆绑任何 server（全部 PATH 发现 + 设置覆盖）。装完对应 server 后：
+    <strong>最省事的办法：</strong>TypeScript / JavaScript、Python、Rust 在<strong>插件市场 →「语言服务器」</strong>里一键安装，
+    装到当前窗口连着的机器（本机、WSL、SSH 各装各的），装完立即生效，不用改 PATH、不用重启。
+    标题栏「语言环境」面板里显示「未安装」的那一行也有「一键安装」按钮。下面的手动步骤用于其它语言，或你想自己管理版本时。
+  </div>
+  <div class="tip">
+    <strong>手动安装：</strong>查找顺序是 设置里手动指定的路径 → 插件市场装的语言包 → PATH 发现。装完对应 server 后：
     重启 Aide → 打开项目 → 标题栏 LSP 徽章 → 开 LSP 开关 → 该语言应显示 <strong>✓ 就绪</strong>。
     没装的会显示 <strong>✗ 未安装</strong> 并弹 "LSP server not found" 提示，这是预期行为。
   </div>

@@ -6,7 +6,12 @@
 import { escapeHtml } from "@aide/sdk/utils/markdown";
 import type { KbSearchResult } from "./kbClient";
 
-const props = defineProps<{ result: KbSearchResult | null; busy: boolean }>();
+const props = defineProps<{
+  result: KbSearchResult | null;
+  busy: boolean;
+  /** 文档 id → 所在路径（"项目架构 / 部署"）。给了才在标题上方显示，结果多时靠它区分同名文档 */
+  paths?: Record<string, string>;
+}>();
 const emit = defineEmits<{ open: [documentId: string] }>();
 
 function renderSnippet(raw: string): string {
@@ -29,6 +34,7 @@ function renderSnippet(raw: string): string {
       <p class="kb-count">{{ props.result.hits.length }} 条命中</p>
       <ul class="kb-hits">
         <li v-for="h in props.result.hits" :key="h.documentId" @click="emit('open', h.documentId)">
+          <div v-if="paths?.[h.documentId]" class="kb-hit-path">{{ paths[h.documentId] }}</div>
           <div class="kb-hit-head">
             <span class="kb-hit-title">{{ h.title }}</span>
             <span class="kb-hit-ver">v{{ h.versionNo }}</span>
@@ -64,6 +70,11 @@ function renderSnippet(raw: string): string {
   font-size: 13px;
   line-height: 1.8;
   color: var(--aide-text-secondary);
+}
+.kb-hit-path {
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--aide-text-muted);
 }
 .kb-state small { font-size: 11.5px; color: var(--aide-text-muted); }
 

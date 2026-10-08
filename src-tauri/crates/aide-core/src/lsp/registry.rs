@@ -1,0 +1,452 @@
+use crate::app_settings::{AppSettings, ServerOverride};
+use crate::lsp::detector::LanguageId;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
+
+// ── ServerProfile：语言 server 启动档案（策略模式） ──
+//
+// 每个语言一个 profile（见 profiles/），收敛该语言的全部特判：捆绑、启动参数、
+// Explicit 补充、初始化选项、握手超时、是否需要 data_dir。registry 只保留通用骨架。
+/// `init_options` 的输入面。对象化而非再加一个位置参数：两个字段不同型但调用点相邻，
+/// 且以后大概率还要加（app 等）——位置参数会变成一串谁也记不住顺序的尾巴。
+pub struct InitOptionsCtx<'a> {
+    /// 该 server 所属的工作区根（绝对路径）。
+    pub workspace: &'a str,
+    /// 该工作区的排除目录集（用户配置，进各语言的排除参数）。
+    pub exclude_globs: &'a [String],
+}
+
+pub trait ServerProfile {
+    /// 捆绑资源子目录 + 二进制名（None = 该语言不捆绑，靠 which / 用户覆盖）。
+    fn bundled(&self) -> Option<(&'static str, &'static str)> {
+        None
+    }
+
+    /// 隔离数据目录名。默认 data_dir_path 放 `<workspace>/.aide/<name>`（.aide 隐藏）。
+    /// None = 不需要（默认）。jdtls 用此名但位置不同（见 data_dir_path 覆写）。
+    fn data_dir_name(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// data 目录完整路径。默认：`<workspace>/.aide/<data_dir_name>`（工作区内，.aide 隐藏）。
+    /// 语言特例可覆写——jdtls 必须在工作区【外】（Eclipse 拒绝项目包含自己的 data 目录，
+    /// 报 overlaps → 拒导项目 → 定义/补全全空，bug4 真因），Java profile 覆写此方法移到
+    /// app_data_dir 下。其他语言不覆写则走默认，不受影响。
+    fn data_dir_path(&self, workspace: &str, _config_dir: &Path) -> Option<PathBuf> {
+        let name = self.data_dir_name()?;
+        Some(PathBuf::from(workspace).join(".aide").join(name))
+    }
+
+    /// 语言特有启动参数（含标准 `--stdio`——除 jdtls 默认即 stdio 外都走 stdio）。
+    fn launch_args(&self, _data_dir: Option<&Path>) -> Vec<String> {
+        vec!["--stdio".to_string()]
+    }
+
+    /// Explicit（用户自配 program + args）时的缺省补充：缺 `--stdio` 补之。
+    /// Java 覆写：不补 --stdio，补 -data 与元数据重定向属性（见 profiles/java.rs）。
+    fn supplement_explicit(&self, args: &mut Vec<String>, _data_dir: Option<&Path>) {
+        if !args.iter().any(|a| a == "--stdio") {
+            args.push("--stdio".to_string());
+        }
+    }
+
+    /// spawn 时额外注入的启动参数（需要 app/resource_dir 等 IO 上下文的语言用）。
+    /// 默认空——纯 additive 扩展点，与 launch_args/init_options 同级，不强制其他
+    /// profile 改。Java 覆写：注入内置 lombok 的 -javaagent（见 profiles/java.rs）。
+    fn extra_args(&self, _ctx: &LaunchCtx) -> Vec<String> {
+        Vec::new()
+    }
+
+    /// initialize 的 initializationOptions（按语言注入排除集等）。
+    ///
+    /// 收 `ctx` 而非裸 `exclude_globs`：TS profile 要按**工作区**决定要不要挂 Vue 插件
+    /// （见 `vue_plugin`），而工作区是它拿不到就只能靠猜的东西。
+    fn init_options(&self, _ctx: &InitOptionsCtx) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    /// `workspace/configuration` 请求的应答 settings（顶层 `{"<section>": {...}}` 形态，
+    /// 与 init_options 内嵌的 settings 同源——见 profiles/java.rs 的 java_settings）。
+    /// 默认空对象（多数 server 不发该请求）；Java 覆写：jdtls 启动后主动拉配置，
+    /// 不应答则请求挂起 + settings 全默认值（见 manager.rs answer_server_request）。
+    fn settings(&self) -> serde_json::Value {
+        serde_json::json!({})
+    }
+
+    /// 握手判活超时（Java 例外 30s：jdtls 首次启动 OSGi + 索引 10-30s 常见）。
+    fn handshake_timeout(&self) -> Duration {
+        Duration::from_secs(5)
+    }
+
+    /// 是否消费 server→client `language/status` 通知。默认 false（绝大多数 LSP server
+    /// 握手完即可用，不发就绪进度）。Java（jdtls）覆写为 true：握手后还有 OSGi + 项目导入
+    /// + 索引期，需认 ServiceReady 才算功能就绪——见 profiles/java.rs。
+    fn handles_status(&self) -> bool {
+        false
+    }
+
+    /// 收到 `language/status` 时，判该阶段是否代表功能就绪。仅 `handles_status()==true`
+    /// 的 profile 会被 manager 调此方法（其余 profile 此方法不会被调，默认 false）。Java 覆写：
+    /// 容错匹配 ServiceReady（string）/ 旧版 int 3 / message 含 "Service ready"。
+    fn is_ready_status(&self, _status_type: &serde_json::Value, _message: &str) -> bool {
+        false
+    }
+}
+
+/// 已解析的 server 启动来源。
+#[derive(Debug, Clone)]
+pub enum ServerSource {
+    /// 随 tauri resources 捆绑：resource_dir/lsp/<subdir>/<binary>。
+    Bundled { subdir: String, binary: String },
+    /// PATH 上 `which` 发现的二进制（存完整路径——含 .bat/.cmd 扩展名，spawn 时判断包装）。
+    Which { binary: String },
+    /// 用户设置显式覆盖的 program + args。
+    Explicit { program: String, args: Vec<String> },
+    /// 插件市场装的语言包（`lsp::packs`）：program + 前置参数（npm 系是 `node <script>`）。
+    /// 语言特有参数（`--stdio` 等）仍由 profile 追加，与 Which 同一套。
+    Pack { program: String, args: Vec<String> },
+}
+
+/// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：resources 拿随包 lsp 目录、
+/// src 判来源）。默认 profile 不用；Java 用它注入内置 lombok 的 -javaagent
+/// （见 profiles/java.rs）。纯 additive，无语言概念，不强制其他 profile 改。
+pub struct LaunchCtx<'a> {
+    pub resources: &'a dyn crate::resources::HostResources,
+    pub src: &'a ServerSource,
+}
+
+/// 纯函数：按优先级选 source。无 IO，单测核心。
+/// 优先级：用户覆盖 > 语言包 > 捆绑 > PATH 发现。全为 None → None（该语言无可用 server）。
+///
+/// 语言包排在捆绑与 PATH 之前：它是用户在插件市场里**明确为这台 Host 装的**；PATH 上的
+/// 常是别的来路（WSL 的 PATH 里混着 /mnt/c 的 Windows 版，Linux Host 根本起不来）。
+pub fn pick_source(
+    override_cfg: Option<&ServerOverride>,
+    pack: Option<ServerSource>,
+    bundled: Option<ServerSource>,
+    which: Option<ServerSource>,
+) -> Option<ServerSource> {
+    if let Some(o) = override_cfg {
+        if !o.program.is_empty() {
+            return Some(ServerSource::Explicit {
+                program: o.program.clone(),
+                args: o.args.clone(),
+            });
+        }
+    }
+    pack.or(bundled).or(which)
+}
+
+/// 解析某语言的 server 启动来源。优先级：settings.lsp.servers[lang] > 语言包 > 捆绑(resource_dir) > which(binary)。
+pub fn resolve(
+    lang: LanguageId,
+    settings: &AppSettings,
+    resources: &dyn crate::resources::HostResources,
+) -> Option<ServerSource> {
+    let override_cfg = settings.lsp.servers.get(lang.id_str());
+    let pack = crate::lsp::packs::launch_for(lang, resources)
+        .map(|(program, args)| ServerSource::Pack { program, args });
+    let bundled = bundled_source(lang, resources);
+    let which = which_source(lang);
+    pick_source(override_cfg, pack, bundled, which)
+}
+
+fn bundled_source(lang: LanguageId, resources: &dyn crate::resources::HostResources) -> Option<ServerSource> {
+    let (subdir, binary) = crate::lsp::profiles::profile(lang).bundled()?;
+    let binary = if cfg!(windows) {
+        format!("{binary}.exe")
+    } else {
+        binary.to_string()
+    };
+    let path = resources.lsp_dir()?.join(subdir).join(&binary);
+    if path.exists() {
+        Some(ServerSource::Bundled {
+            subdir: subdir.to_string(),
+            binary,
+        })
+    } else {
+        None
+    }
+}
+
+/// PATH 上第一个**本机原生**的 `bin`。Linux Host 上跳过 WSL 互操作挂载的 Windows 盘
+/// （`/mnt/<盘符>/…`）：WSL 默认把 Windows 的 PATH 拼进来，npm 在 Windows 全局装的工具还
+/// 带一个无扩展名的 sh 包装——会被找到、也真能用 Linux 的 node 跑起来，但脚本与依赖全经
+/// 9p 跨系统读（慢），且随 Windows 那边的 Node 升级 / 卸载悄悄失效；面板还会把它报成
+/// 「就绪」，让人以为这台 Host 上装了（2026-10-04 实测 WSL 的 TS「就绪」即此来路）。
+/// 语言服务器、tsc、node 这几样在 Linux Host 上一律要 Linux 原生的那份。
+pub fn which_native(bin: &str) -> Option<PathBuf> {
+    which::which_all(bin).ok()?.find(|p| !is_windows_interop_path(p))
+}
+
+/// WSL 自动挂载的 Windows 盘路径（默认 automount 根 `/mnt`，盘符一个字母）。Windows 上恒 false。
+fn is_windows_interop_path(path: &Path) -> bool {
+    if cfg!(windows) {
+        return false;
+    }
+    let mut parts = path.components().skip(1); // 跳过根 `/`
+    let is_mnt = parts.next().is_some_and(|c| c.as_os_str() == "mnt");
+    let drive = parts.next().and_then(|c| c.as_os_str().to_str().map(str::to_owned));
+    is_mnt && drive.is_some_and(|d| d.len() == 1 && d.chars().all(|ch| ch.is_ascii_alphabetic()))
+}
+
+fn which_source(lang: LanguageId) -> Option<ServerSource> {
+    let bin = lang.server_binary()?;
+    // 存 which 解析出的完整路径（Windows 上含 .exe/.bat/.cmd 扩展名）——spawn 时
+    // 需要扩展名判断 .bat/.cmd 必须 cmd /C 包装（CreateProcess 不能直接跑 bat）。
+    let path = which_native(bin)?;
+    Some(ServerSource::Which {
+        binary: path.to_string_lossy().into_owned(),
+    })
+}
+
+/// 转 (program, args)。program 是要 spawn 的可执行文件路径/名。
+/// Bundled 的 program 是 dunce 剥前缀后的完整资源路径（调用方在 spawn 时剥，这里只给原路径，
+/// 因为 resource_dir 在 resolve 时已是 verbatim；spawn 前由 manager 剥——见 to_spawn_command）。
+/// 语言特有参数一律走 profile（launch_args / supplement_explicit）。
+pub fn to_command(
+    lang: LanguageId,
+    src: &ServerSource,
+    data_dir: Option<&Path>,
+) -> (String, Vec<String>) {
+    let p = crate::lsp::profiles::profile(lang);
+    match src {
+        ServerSource::Bundled { subdir, binary } => {
+            (format!("lsp/{subdir}/{binary}"), p.launch_args(data_dir))
+        }
+        ServerSource::Which { binary } => (binary.clone(), p.launch_args(data_dir)),
+        ServerSource::Pack { program, args } => {
+            let mut full = args.clone();
+            full.extend(p.launch_args(data_dir));
+            (program.clone(), full)
+        }
+        ServerSource::Explicit { program, args } => {
+            let mut full = args.clone();
+            p.supplement_explicit(&mut full, data_dir);
+            (program.clone(), full)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app_settings::{LspSettings, ServerOverride};
+    use std::collections::HashMap;
+
+    fn override_for(lang: &str, program: &str) -> AppSettings {
+        let mut servers = HashMap::new();
+        servers.insert(
+            lang.to_string(),
+            ServerOverride {
+                program: program.to_string(),
+                args: vec![],
+            },
+        );
+        AppSettings {
+            lsp: LspSettings { servers },
+            ..Default::default()
+        }
+    }
+
+    fn empty_settings() -> AppSettings {
+        AppSettings::default()
+    }
+
+    #[test]
+    fn precedence_settings_over_bundled_over_which() {
+        let settings = override_for("rust", "/my/custom/rust-analyzer");
+        let bundled = Some(ServerSource::Bundled {
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
+        });
+        let which = Some(ServerSource::Which {
+            binary: "rust-analyzer".into(),
+        });
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, bundled, which);
+        match picked {
+            Some(ServerSource::Explicit { program, .. }) => {
+                assert_eq!(program, "/my/custom/rust-analyzer");
+            }
+            other => panic!("expected Explicit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bundled_missing_falls_to_which() {
+        let settings = empty_settings();
+        let which = Some(ServerSource::Which {
+            binary: "gopls".into(),
+        });
+        let picked = pick_source(settings.lsp.servers.get("go"), None, None, which);
+        assert!(matches!(picked, Some(ServerSource::Which { .. })));
+    }
+
+    #[test]
+    fn all_missing_returns_none() {
+        let settings = empty_settings();
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, None, None);
+        assert!(picked.is_none());
+    }
+
+    #[test]
+    fn settings_args_passed_through() {
+        let mut servers = HashMap::new();
+        servers.insert(
+            "rust".to_string(),
+            ServerOverride {
+                program: "/x/rust-analyzer".into(),
+                args: vec!["--log-file".into(), "/tmp/ra.log".into()],
+            },
+        );
+        let settings = AppSettings {
+            lsp: LspSettings { servers },
+            ..Default::default()
+        };
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, None, None);
+        match picked {
+            Some(ServerSource::Explicit { program, args }) => {
+                assert_eq!(program, "/x/rust-analyzer");
+                // pick_source 只负责选源，不注入任何参数（那是 to_command 的职责）。
+                assert_eq!(args.len(), 2, "{:?}", args);
+                assert!(
+                    !args.contains(&"--stdio".to_string()),
+                    "pick_source 不应注入 --stdio"
+                );
+            }
+            other => panic!("expected Explicit, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn to_command_rust_no_stdio_other_langs_stdio() {
+        // Bundled（Rust）：无 --stdio —— rust-analyzer 默认即 LSP（stdin/stdout 读
+        // Content-Length 帧），1.96+ 显式拒绝 --stdio（unexpected flag）。
+        let bundled = ServerSource::Bundled {
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
+        };
+        let (prog, args) = to_command(LanguageId::Rust, &bundled, None);
+        assert!(
+            !args.contains(&"--stdio".to_string()),
+            "rust-analyzer 不传 --stdio, args: {:?}",
+            args
+        );
+        assert_eq!(prog, "lsp/rust/rust-analyzer");
+
+        // Which（Go）：--stdio 默认（其他 LSP server 仍走 --stdio）。
+        let which = ServerSource::Which {
+            binary: "gopls".into(),
+        };
+        let (prog, args) = to_command(LanguageId::Go, &which, None);
+        assert_eq!(prog, "gopls");
+        assert!(args.contains(&"--stdio".to_string()), "go args: {:?}", args);
+
+        // Explicit（Rust）：用户 args 原样保留，profile supplement_explicit 不补 --stdio。
+        let explicit = ServerSource::Explicit {
+            program: "/x/ra".into(),
+            args: vec!["--log-file".into(), "/tmp/ra.log".into()],
+        };
+        let (prog, args) = to_command(LanguageId::Rust, &explicit, None);
+        assert_eq!(prog, "/x/ra");
+        assert!(
+            !args.contains(&"--stdio".to_string()),
+            "rust explicit 不补 --stdio, args: {:?}",
+            args
+        );
+        assert!(
+            args.contains(&"--log-file".to_string()),
+            "rust explicit 保留用户 args, {:?}",
+            args
+        );
+
+        // 守卫：用户显式传的 --stdio 原样保留（不补也不删；兼容旧版 rust-analyzer）。
+        let explicit_with_stdio = ServerSource::Explicit {
+            program: "/x".into(),
+            args: vec!["--stdio".into()],
+        };
+        let (_, args) = to_command(LanguageId::Rust, &explicit_with_stdio, None);
+        let stdio_count = args.iter().filter(|a| a.as_str() == "--stdio").count();
+        assert_eq!(stdio_count, 1, "用户传的 --stdio 保留, args: {:?}", args);
+    }
+
+    #[test]
+    fn wsl_windows_drive_paths_are_not_native() {
+        let interop = Path::new("/mnt/c/Users/u/AppData/Local/node-v22/typescript-language-server");
+        let native = Path::new("/home/u/.local/bin/typescript-language-server");
+        let not_a_drive = Path::new("/mnt/data/bin/rust-analyzer"); // 普通挂载点，不是盘符
+        if cfg!(windows) {
+            assert!(!is_windows_interop_path(interop));
+        } else {
+            assert!(is_windows_interop_path(interop));
+            assert!(is_windows_interop_path(Path::new("/mnt/D/tools/tsc")));
+        }
+        assert!(!is_windows_interop_path(native));
+        assert!(!is_windows_interop_path(not_a_drive));
+        assert!(!is_windows_interop_path(Path::new("/usr/bin/node")));
+    }
+
+    #[test]
+    fn pack_beats_bundled_and_path_but_not_user_override() {
+        let pack = || Some(ServerSource::Pack { program: "/h/.aide/node".into(), args: vec!["/h/.aide/lsp/packs/typescript/cli.mjs".into()] });
+        let which = || Some(ServerSource::Which { binary: "/mnt/c/windows-tls".into() });
+        let bundled = || Some(ServerSource::Bundled { subdir: "typescript".into(), binary: "tls".into() });
+        assert!(matches!(pick_source(None, pack(), bundled(), which()), Some(ServerSource::Pack { .. })));
+        let settings = override_for("typescript", "/my/tls");
+        assert!(matches!(
+            pick_source(settings.lsp.servers.get("typescript"), pack(), bundled(), which()),
+            Some(ServerSource::Explicit { .. })
+        ));
+    }
+
+    #[test]
+    fn to_command_pack_keeps_prefix_args_then_profile_args() {
+        let src = ServerSource::Pack { program: "/n/node".into(), args: vec!["/p/cli.mjs".into()] };
+        let (prog, args) = to_command(LanguageId::TypeScript, &src, None);
+        assert_eq!(prog, "/n/node");
+        assert_eq!(args, vec!["/p/cli.mjs".to_string(), "--stdio".to_string()]);
+        // rust-analyzer 不收 --stdio（profile 决定），语言包来源同样遵守
+        let ra = ServerSource::Pack { program: "/p/rust-analyzer".into(), args: vec![] };
+        let (_, args) = to_command(LanguageId::Rust, &ra, None);
+        assert!(args.is_empty(), "{args:?}");
+    }
+
+    #[test]
+    fn empty_program_override_is_ignored() {
+        // program 空串的 override 视作未配置 → 落 bundled/which。
+        let mut servers = HashMap::new();
+        servers.insert(
+            "rust".to_string(),
+            ServerOverride {
+                program: "".into(),
+                args: vec![],
+            },
+        );
+        let settings = AppSettings {
+            lsp: LspSettings { servers },
+            ..Default::default()
+        };
+        let bundled = Some(ServerSource::Bundled {
+            subdir: "rust".into(),
+            binary: "rust-analyzer".into(),
+        });
+        let picked = pick_source(settings.lsp.servers.get("rust"), None, bundled, None);
+        assert!(matches!(picked, Some(ServerSource::Bundled { .. })));
+    }
+
+    #[test]
+    fn default_data_dir_path_inside_workspace_aide() {
+        // 默认 data_dir_path 放 <workspace>/.aide/<name>（工作区内）——非 jdtls 语言走此
+        // 默认，不受 Java 覆写影响。jdtls 必须在工作区外故覆写（见 profiles/java.rs）。
+        struct Dummy;
+        impl ServerProfile for Dummy {
+            fn data_dir_name(&self) -> Option<&'static str> {
+                Some("dummy-ws")
+            }
+        }
+        let p = Dummy
+            .data_dir_path("/proj", Path::new("/home/u/.aide"))
+            .expect("Some");
+        assert_eq!(p, PathBuf::from("/proj").join(".aide").join("dummy-ws"));
+    }
+}

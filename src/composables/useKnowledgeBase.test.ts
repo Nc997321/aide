@@ -301,6 +301,30 @@ describe("按资源的竞态护栏（spec §1.2）", () => {
     expect(k.activeDoc.value?.id).toBe("doc1");
   });
 
+  it("reloadDocument 原位换正文：读取期间 activeDoc 不被清空（视图不会被卸载）", async () => {
+    const k = useKnowledgeBase();
+    mocks.getDocument.mockResolvedValueOnce(document_("doc1"));
+    await k.openDocument("doc1");
+    const d = deferred<ReturnType<typeof document_>>();
+    mocks.getDocument.mockReturnValueOnce(d.promise);
+
+    const reloading = k.reloadDocument("doc1");
+    expect(k.activeDoc.value?.id).toBe("doc1"); // 读取中仍在
+    d.resolve({ ...document_("doc1"), content: "新正文" });
+    await reloading;
+    expect(k.activeDoc.value?.content).toBe("新正文");
+  });
+
+  it("reloadDocument 读失败：保留现有正文，只报错", async () => {
+    const k = useKnowledgeBase();
+    mocks.getDocument.mockResolvedValueOnce(document_("doc1"));
+    await k.openDocument("doc1");
+    mocks.getDocument.mockRejectedValueOnce(new Error("boom"));
+    await k.reloadDocument("doc1");
+    expect(k.activeDoc.value?.id).toBe("doc1");
+    expect(k.error.value).toBeTruthy();
+  });
+
   it("selectSpace 作废在途的 openDocument（上一空间的响应不许落进新视图）", async () => {
     const d = deferred<ReturnType<typeof document_>>();
     mocks.getDocument.mockReturnValueOnce(d.promise);

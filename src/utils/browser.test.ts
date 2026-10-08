@@ -18,9 +18,44 @@ describe("normalizeBrowserUrl", () => {
     expect(normalizeBrowserUrl("  example.com/a?b=1  ")).toBe("https://example.com/a?b=1");
   });
 
+  it("本机 / 局域网地址补 http（开发服务器没有 TLS）", () => {
+    expect(normalizeBrowserUrl("127.0.0.1:8000")).toBe("http://127.0.0.1:8000");
+    expect(normalizeBrowserUrl("localhost:5173/app?x=1")).toBe("http://localhost:5173/app?x=1");
+    expect(normalizeBrowserUrl("localhost")).toBe("http://localhost");
+    expect(normalizeBrowserUrl("192.168.1.10:3000")).toBe("http://192.168.1.10:3000");
+    expect(normalizeBrowserUrl("10.0.0.5")).toBe("http://10.0.0.5");
+    expect(normalizeBrowserUrl("172.20.192.1:7890")).toBe("http://172.20.192.1:7890");
+    expect(normalizeBrowserUrl("[::1]:8080")).toBe("http://[::1]:8080");
+    expect(normalizeBrowserUrl("app.localhost:3000")).toBe("http://app.localhost:3000");
+  });
+
+  it("公网域名 / 公网 IP / 带端口的域名仍补 https", () => {
+    expect(normalizeBrowserUrl("example.com:8443/x")).toBe("https://example.com:8443/x");
+    expect(normalizeBrowserUrl("8.8.8.8")).toBe("https://8.8.8.8");
+    expect(normalizeBrowserUrl("172.32.0.1")).toBe("https://172.32.0.1");
+    expect(normalizeBrowserUrl("notlocalhost.com")).toBe("https://notlocalhost.com");
+  });
+
+  it("本地绝对路径 → file:// URL（Windows 盘符 / UNC / POSIX），不被当成 scheme 或域名", () => {
+    expect(normalizeBrowserUrl("C:\\x\\a.html")).toBe("file:///C:/x/a.html");
+    expect(normalizeBrowserUrl("d:/x/a.html")).toBe("file:///d:/x/a.html");
+    expect(normalizeBrowserUrl("\\\\srv\\share\\a.html")).toBe("file://srv/share/a.html");
+    expect(normalizeBrowserUrl("/home/me/a.html")).toBe("file:///home/me/a.html");
+  });
+
+  it("本地路径里的空格 / # / ? / % 被转义，不会截断成片段或查询", () => {
+    expect(normalizeBrowserUrl("/home/me/my docs/a#1?.html")).toBe("file:///home/me/my%20docs/a%231%3F.html");
+    expect(normalizeBrowserUrl("C:\\x\\100%.html")).toBe("file:///C:/x/100%25.html");
+  });
+
+  it("host:port 不被误认成本地路径", () => {
+    expect(normalizeBrowserUrl("localhost:8000/a")).toBe("http://localhost:8000/a");
+  });
+
   it("带 scheme 的原样（scheme 白名单在 Rust url_guard，前端不复制规则）", () => {
     expect(normalizeBrowserUrl("http://localhost:5173")).toBe("http://localhost:5173");
     expect(normalizeBrowserUrl("file:///C:/x.html")).toBe("file:///C:/x.html");
+    expect(normalizeBrowserUrl("about:blank")).toBe("about:blank");
   });
 });
 

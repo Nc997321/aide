@@ -57,7 +57,9 @@ export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "policy", event: "PreToolUse", matcher: ".*", purpose: "工具权限门控（权威前置层，不可越过）" },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$", purpose: "子代理模型选择兜底（条件挂）" },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
+  { id: "kbMemoryGuard", event: "PreToolUse", matcher: "^(Write|Edit|MultiEdit|NotebookEdit)$", purpose: "知识库圈选改写那一轮不写记忆（拦 Write/Edit 落在 memory 目录；本轮用户消息不带圈选即恢复；条件挂）" },
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$", purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）" },
+  { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$", purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数（语言服务器热了才附，不改工具结果；条件挂）" },
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
   { id: "modelSwitchGuard", event: "PreModelSwitch", matcher: "—", purpose: "模型切换成本确认（缓存热+大体量才问，条件挂，支线不挂）" },
   { id: "modelSwitchCommitted", event: "PostModelSwitch", matcher: "—", purpose: "模型切换坐实上报（前端落盘依据，条件挂，支线不挂）" },
@@ -72,10 +74,11 @@ export interface BuiltinMcpServer {
   purpose: string;
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
-  { id: "aide-codegraph", transport: "in-process", purpose: "内置代码索引（find_symbol / semantic_search / call_graph），该工作区开启代码索引（右侧栏「代码索引」面板）+ 受信任时挂载" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
-  { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / create_folder / move_document / append_document / update_document / ingest_file / delete_document 每次要你确认 —— 其中 move_document 会改变目录结构、delete_document 连带子文件夹与子文档且界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
-  { id: "aide-browser", transport: "in-process", purpose: "内置内嵌浏览器读写（browser_tabs 列视图 / browser_read 读页面骨架 / browser_act 点击·填值·悬停·按键（Enter/Esc/Tab 这类真实按键） / browser_wait 等条件成立或页面加载完 / browser_eval 在页面里执行脚本取回 JSON / browser_screenshot 截图 / browser_tab 自己开·关标签页、导航、把某个 tab 推到前台 / browser_network 列最近的 XHR/fetch（方法/URL/状态/耗时/响应片段）/ browser_console 列 console 与未捕获异常），全部自动放行 —— browser_eval 能读你已登录的任意页面、能发任意请求，信任级别等同于 Bash 工具；要关掉用 AIDE_BROWSER_TOOLS=off。agent 可以拥有自己的后台 tab：不显示的视图照常渲染（不被抢前台），只有 browser_tab 的 focus 动作才会切走你正在看的页面。受信任工作区挂载；只在桌面端有效，headless 返回「本环境没有内嵌浏览器」" },
+  { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / create_folder / move_document / append_document / update_document / ingest_file / delete_document / edit_selection（只改你在文档里圈选的那一段，圈选生效期间其余写工具一律被拒）每次要你确认 —— 其中 move_document 会改变目录结构、delete_document 连带子文件夹与子文档且界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
+  { id: "aide-memory", transport: "in-process", purpose: "内置跨工作区记忆（read_memory：只读地参考其他工作区的记忆——你用 @ 附加的目录，以及知识库文档关联的项目；不带 id 看索引与条目名，带 id 读一条正文；不授予那些工作区的任何文件访问），自动放行；受信任工作区挂载" },
+  { id: "aide-lsp", transport: "in-process", purpose: "内置代码导航（语言服务器）：lsp_definition 定义 + 整个函数体 / lsp_references 每处真实引用 + 所在函数 / lsp_symbols 一次定位多个名字 / lsp_outline 文件结构 + 行区间 / lsp_implementations 接口实现，全部自动放行；语言服务器没答上时同一发里给文本兜底（标明未验证）。受信任且有可用语言服务器的工作区挂载；要关掉用 AIDE_LSP_TOOLS=off" },
+  { id: "aide-browser", transport: "in-process", purpose: "内置内嵌浏览器读写（browser_tabs 列视图 / browser_read 读页面骨架 / browser_act 点击·填值·悬停·按键（Enter/Esc/Tab 这类真实按键） / browser_wait 等条件成立或页面加载完 / browser_eval 在页面里执行脚本取回 JSON / browser_screenshot 截图 / browser_tab 自己开·关标签页、导航、把某个 tab 推到前台 / browser_network 列最近的 XHR/fetch（方法/URL/状态/耗时/响应片段）/ browser_console 列 console 与未捕获异常），全部自动放行 —— browser_eval 能读你已登录的任意页面、能发任意请求，信任级别等同于 Bash 工具；要关掉用 AIDE_BROWSER_TOOLS=off。agent 可以拥有自己的后台 tab：不显示的视图照常渲染（不被抢前台），只有 browser_tab 的 focus 动作才会切走你正在看的页面。受信任工作区挂载；只在桌面端有效" },
 ]);
 
 // ── State ──

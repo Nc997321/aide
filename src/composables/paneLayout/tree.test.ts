@@ -57,7 +57,7 @@ describe("normalize 树不变量", () => {
     expect(out).toBe(keep);
   });
 
-  it("同方向嵌套 split 并入父级并按占比换算尺寸", () => {
+  it("同方向嵌套 split 并入父级：格数变了，整排均分", () => {
     const inner: SplitNode = {
       type: "split", id: "inner", direction: "horizontal",
       children: [groupWith("b"), groupWith("c")], sizes: [0.5, 0.5],
@@ -69,7 +69,7 @@ describe("normalize 树不变量", () => {
     const out = normalize(root)!;
     expect(out.type).toBe("split");
     expect((out as SplitNode).children).toHaveLength(3);
-    expect((out as SplitNode).sizes).toEqual([0.5, 0.25, 0.25]);
+    expect((out as SplitNode).sizes).toEqual([1 / 3, 1 / 3, 1 / 3]);
     assertInvariants(out);
   });
 
@@ -153,7 +153,7 @@ describe("splitGroup", () => {
     assertInvariants(res.root);
   });
 
-  it("父 split 同方向：原地插一列并分走一半宽度，不产生嵌套", () => {
+  it("父 split 同方向：原地插一列、整排均分（手动比例作废），不产生嵌套", () => {
     const a = groupWith("a", "x");
     const b = groupWith("b");
     const root: SplitNode = {
@@ -164,8 +164,7 @@ describe("splitGroup", () => {
     expect(res.root).toBe(root);
     expect(root.children).toHaveLength(3);
     expect(root.children[1]).toBe(res.newGroup);
-    expect(root.sizes[0]).toBeCloseTo(0.3);
-    expect(root.sizes[1]).toBeCloseTo(0.3);
+    expect(root.sizes).toEqual([1 / 3, 1 / 3, 1 / 3]);
     assertInvariants(res.root);
   });
 
@@ -188,6 +187,69 @@ describe("splitGroup", () => {
     const res = splitGroup(g, g.id, "horizontal", false)!;
     expect(res.newGroup.tabs).toHaveLength(0);
     expect(g.tabs).toHaveLength(1);
+  });
+});
+
+describe("分屏均分（格数变了整排均分）", () => {
+  it("连拆两次 → 三格各 1/3（不是 1/2、1/4、1/4）", () => {
+    const a = groupWith("a", "x", "y");
+    const first = splitGroup(a, a.id, "horizontal", true)!;
+    const second = splitGroup(first.root, first.newGroup.id, "horizontal", false)!;
+    second.newGroup.tabs.push(createTab("z"));
+    const root = second.root as SplitNode;
+    expect(root.children).toHaveLength(3);
+    expect(root.sizes).toEqual([1 / 3, 1 / 3, 1 / 3]);
+  });
+
+  it("手动拖过的三格关掉一格 → 剩下两格各 1/2", () => {
+    const a = groupWith("a");
+    const b = groupWith("b");
+    const c = groupWith("c");
+    const root: SplitNode = {
+      type: "split", id: "s", direction: "horizontal",
+      children: [a, b, c], sizes: [0.6, 0.3, 0.1],
+    };
+    const out = removeTab(root, c.id, c.tabs[0].id) as SplitNode;
+    expect(out.sizes).toEqual([0.5, 0.5]);
+    assertInvariants(out);
+  });
+
+  it("格数没变（组内关一个 tab）→ 手动比例保留", () => {
+    const a = groupWith("a", "a2");
+    const b = groupWith("b");
+    const root: SplitNode = {
+      type: "split", id: "s", direction: "horizontal",
+      children: [a, b], sizes: [0.7, 0.3],
+    };
+    const out = removeTab(root, a.id, a.tabs[1].id) as SplitNode;
+    expect(out.sizes).toEqual([0.7, 0.3]);
+  });
+
+  it("异方向的另一排不受影响", () => {
+    const inner: SplitNode = {
+      type: "split", id: "inner", direction: "vertical",
+      children: [groupWith("b"), groupWith("c"), groupWith("d")], sizes: [0.2, 0.3, 0.5],
+    };
+    const root: SplitNode = {
+      type: "split", id: "outer", direction: "horizontal",
+      children: [groupWith("a"), inner], sizes: [0.7, 0.3],
+    };
+    const d = inner.children[2] as GroupNode;
+    const out = removeTab(root, d.id, d.tabs[0].id) as SplitNode;
+    expect(out.sizes).toEqual([0.7, 0.3]); // 外排格数没变
+    expect((out.children[1] as SplitNode).sizes).toEqual([0.5, 0.5]); // 内排少一格 → 均分
+  });
+
+  it("空白组不入快照 → 快照里那一排均分", () => {
+    const a = groupWith("a");
+    const b = groupWith("b");
+    const blank = createGroup([createTab(null)]);
+    const root: SplitNode = {
+      type: "split", id: "s", direction: "horizontal",
+      children: [a, b, blank], sizes: [0.6, 0.2, 0.2],
+    };
+    const snap = toSnapshot(root, a.id)!;
+    expect((snap.root as { sizes: number[] }).sizes).toEqual([0.5, 0.5]);
   });
 });
 

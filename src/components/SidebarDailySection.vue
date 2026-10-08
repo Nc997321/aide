@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed, ref } from "vue";
 import { timeAgo } from "../utils/time";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionState } from "../composables/useSessionState";
@@ -15,10 +16,13 @@ import SidebarSectionHead from "./SidebarSectionHead.vue";
  * 独立成组件而不是塞进 SidebarLeft（那里已 700+ 行）：这里有一个可测的边界，
  * 也不碰现有工作区循环（零回归面）。
  */
-defineProps<{
+const props = defineProps<{
   sessions: Session[];
   activeSessionId: string;
   collapsed: boolean;
+  /** 默认只露前 N 条（settings.recentLimit「最近访问保留条数」），其余收进「另外 N 个」；
+   *  缺省 = 不折叠。与项目树的会话折叠同一口径。 */
+  limit?: number;
 }>();
 
 const emit = defineEmits<{
@@ -32,6 +36,13 @@ const emit = defineEmits<{
 
 const { dotTone } = useSessionState();
 const sessionNames = useSessionNames();
+
+const showAll = ref(false);
+const overLimit = computed(() => props.limit != null && props.sessions.length > props.limit);
+const visibleSessions = computed(() =>
+  overLimit.value && !showAll.value ? props.sessions.slice(0, props.limit) : props.sessions,
+);
+const hiddenCount = computed(() => props.sessions.length - visibleSessions.value.length);
 </script>
 
 <template>
@@ -59,7 +70,7 @@ const sessionNames = useSessionNames();
     </div>
     <div v-else class="session-anim-group">
       <div
-        v-for="s in sessions"
+        v-for="s in visibleSessions"
         :key="s.id"
         class="session-row"
         :class="[{ on: activeSessionId === s.id }, `tone-${dotTone(s.id)}`]"
@@ -81,6 +92,12 @@ const sessionNames = useSessionNames();
             </button>
           </span>
         </div>
+      </div>
+      <div v-if="hiddenCount > 0" class="session-more" @click="showAll = true">
+        另外 {{ hiddenCount }} 个
+      </div>
+      <div v-else-if="showAll && overLimit" class="session-more" @click="showAll = false">
+        收起
       </div>
     </div>
   </div>

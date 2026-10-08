@@ -17,6 +17,7 @@
 // `setDisplayed(false)` + 新视图 `setDisplayed(true)` + 同步坐标；视图常驻注册表，切回页面状态还在。
 // 空标签（还没导航过）不建视图——首次导航才 create，免得每个新标签都空跑一次加载。
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from "vue";
+import { api } from "@aide/sdk";
 import {
   useEmbeddedBrowser,
   onBrowserNav,
@@ -44,7 +45,7 @@ import {
   type BookmarkFolder,
 } from "../../utils/browser";
 
-const { browserActive, select, pendingBrowserUrl, consumePendingBrowserUrl } = useRightPanel();
+const { browserActive, select, pendingBrowserUrl, consumePendingBrowserUrl, layoutAnimating, whenLayoutSettled } = useRightPanel();
 const browser = useEmbeddedBrowser();
 // 常驻层（App 已安装）：挂载前收到的生命周期事件与 focus 请求都在它那儿缓冲着。
 const { pendingFocusViewId, buffered, takeViewEvents, consumePendingFocus } = useBrowserViews();
@@ -93,6 +94,21 @@ let ro: ResizeObserver | null = null;
 let rafId = 0;
 let unlistenNav: (() => void) | null = null;
 
+/**
+ * 面板对**已存在视图**的后台调用（同步坐标 / 显示 / 隐藏 / 对账）失败时不打扰用户，但**必须留痕**：
+ * 这些调用一旦被后端拒绝（视图不属于本窗口 / 已不存在），原生视图就会脱离面板——悬在错的位置、盖住
+ * 别的内容、标签页对不上——而静默吞掉错误就让这类故障无从诊断。落到 Rust 日志（`FRONTEND_ERROR`），
+ * 同一条 5 秒内只记一次（resize 期间每帧一次的同步不能淹没日志）。
+ */
+const faultLoggedAt = new Map<string, number>();
+function fault(op: string, e: unknown) {
+  const line = `[browser] ${op} failed: ${typeof e === "string" ? e : String(e)}`;
+  const now = Date.now();
+  if (now - (faultLoggedAt.get(line) ?? 0) < 5000) return;
+  faultLoggedAt.set(line, now);
+  void api.logFrontendError(line).catch(() => {});
+}
+
 function errText(e: unknown): string {
   return typeof e === "string" ? e : String(e);
 }
@@ -127,7 +143,7 @@ function syncBounds() {
   if (!viewId) return;
   const b = rectOf();
   if (!b) return;
-  void browser.setBounds(viewId, b).catch(() => {});
+  void browser.setBounds(viewId, b).catch((e) => fault(`set_bounds ${viewId}`, e));
 }
 
 /** rAF 节流：resize 期间每帧至多一次 IPC，不淹没命令通道。 */
@@ -144,7 +160,7 @@ async function showActive() {
   await nextTick(); // 等 v-show 摘掉 display:none、完成布局
   const viewId = active.value?.viewId;
   if (!viewId) return;
-  await browser.setDisplayed(viewId, true).catch(() => {});
+  await browser.setDisplayed(viewId, true).catch((e) => fault(`set_displayed(true) ${viewId}`, e));
   await nextTick();
   syncBounds();
 }
@@ -152,7 +168,8 @@ async function showActive() {
 /** 隐藏某个标签的原生视图（保活：只隐不销毁，页面状态留在注册表里）。 */
 function hideTab(t: Tab | undefined) {
   if (!t?.viewId) return;
-  void browser.setDisplayed(t.viewId, false).catch(() => {});
+  const viewId = t.viewId;
+  void browser.setDisplayed(viewId, false).catch((e) => fault(`set_displayed(false) ${viewId}`, e));
 }
 
 // ── 可见性总闸：原生视图给 HTML 浮层让位 ──
@@ -562,15 +579,51 @@ watch(activeId, async (_id, oldId) => {
 });
 
 // 可见性总闸：面板开关 **与** 浮层开关都收敛到 viewAllowed——开 → 露头，关 → 让位（保活，不销毁）。
-watch(viewAllowed, (ok) => {
+//
+// **定格画面**：浮层盖在**打开着的面板**上时，原生视图让位后留下的洞只剩面板底色，页面看起来「变灰了」。
+// 所以让位**之前**先拍一张当前画面、铺在洞里（让位 = 视图被停靠到可见区外，画面还能拍；隐藏的拿不到帧，
+// 所以必须先拍后让）。拍不出来（超时 / CDP 不可用）就退回到灰洞——浮层不能为一张快照等下去。
+const SNAPSHOT_WAIT_MS = 700;
+const snapshotSrc = ref("");
+/** 每次可见性翻转 +1：快照是异步的，回来时浮层可能已经关了——过期的结果不许落地。 */
+let visibilitySeq = 0;
+
+async function takeSnapshot(viewId: string): Promise<string> {
+  const timeout = new Promise<string>((resolve) => setTimeout(() => resolve(""), SNAPSHOT_WAIT_MS));
+  const shot = browser.snapshot(viewId).catch((e) => {
+    fault(`snapshot ${viewId}`, e);
+    return "";
+  });
+  const got = await Promise.race([shot, timeout]);
+  // 只收 data:image：它会被放进 <img src>，不放行其他形态
+  return typeof got === "string" && got.startsWith("data:image/") ? got : "";
+}
+
+watch(viewAllowed, async (ok) => {
+  const seq = ++visibilitySeq;
   if (ok) {
-    void showActive();
-    // 有浮层盖着时收到的「打开这个地址」不执行（建视图要占位洞的真实尺寸），
-    // 留在这儿等浮层关掉再消费
+    // 右栏正在滑开 / 换档：洞还在长，等动画落定再露头（原生视图不跟 CSS 走，否则逐帧重排网页）
+    if (layoutAnimating.value) {
+      await whenLayoutSettled();
+      if (seq !== visibilitySeq) return; // 等的时候又被收起 / 浮层盖住了
+    }
+    // 先让原生视图回到洞里，再撤掉定格画面（反过来会闪一帧灰）
     void consumePendingOpen();
-  } else {
-    hideTab(active.value);
+    await showActive();
+    if (seq === visibilitySeq) snapshotSrc.value = "";
+    return;
   }
+  const t = active.value;
+  // 只有「面板开着、被浮层盖住」才需要定格；面板自己合上时洞本来就看不见
+  if (browserActive.value && t?.viewId) {
+    const shot = await takeSnapshot(t.viewId);
+    if (seq !== visibilitySeq) return; // 浮层已经关了：别再让位
+    snapshotSrc.value = shot;
+    await nextTick(); // 画面先上屏，再让位
+  } else {
+    snapshotSrc.value = "";
+  }
+  hideTab(t);
 });
 
 /**
@@ -580,6 +633,9 @@ watch(viewAllowed, (ok) => {
  * 那时建视图拿不到尺寸，硬开会失败成一个看不懂的错误——等开关变化时再来。
  */
 async function consumePendingOpen() {
+  if (!pendingBrowserUrl.value) return;
+  // 面板正在滑开（含懒挂载那一拍）：等洞长到位再建视图，否则按一个还在长的尺寸去建
+  if (layoutAnimating.value) await whenLayoutSettled();
   const url = pendingBrowserUrl.value;
   if (!url || !viewAllowed.value) return;
   consumePendingBrowserUrl();
@@ -607,8 +663,10 @@ onMounted(() => {
       dropGone(views);
       applyPendingFocus();
     })
-    .catch(() => {
-      /* 对账失败不该挡住面板本身：增量通道仍然有效 */
+    .catch((e) => {
+      // 对账失败不该挡住面板本身（增量通道仍然有效），但要留痕：失败意味着面板挂载前就存在的视图
+      // （窗口重载后残留的原生视图）认不回来，会悬在面板之外。
+      fault("views_list", e);
     });
 
   // 常驻层缓冲的增量（挂载前收到的都在它那儿）。
@@ -691,7 +749,7 @@ onBeforeUnmount(() => {
         ref="addressEl"
         v-model="address"
         class="bp-address"
-        placeholder="输入网址，回车打开（裸域名自动补 https://）"
+        placeholder="输入网址，回车打开（裸域名补 https://，本机/内网地址补 http://）"
         spellcheck="false"
         @keydown.enter="go"
       />
@@ -753,6 +811,8 @@ onBeforeUnmount(() => {
 
     <!-- 占位洞：原生 WebView2 子视图浮在这块的屏幕坐标之上 -->
     <div ref="surfaceEl" class="bp-surface">
+      <!-- 浮层盖上来期间的定格画面（原生视图已让位）：见脚本里「定格画面」 -->
+      <img v-if="snapshotSrc" class="bp-snapshot" :src="snapshotSrc" alt="" draggable="false" />
       <div v-if="!active?.viewId" class="bp-hint">
         <span class="bp-hint-title">新标签页</span>
         <span class="bp-hint-sub">在地址栏输入网址回车打开</span>
@@ -1117,6 +1177,16 @@ onBeforeUnmount(() => {
   position: relative;
   min-height: 0;
   background: var(--aide-surface-default);
+}
+
+.bp-snapshot {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  pointer-events: none;
+  user-select: none;
 }
 
 .bp-hint {

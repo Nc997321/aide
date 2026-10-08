@@ -4,7 +4,6 @@ import TreeNodeItem from "./TreeNodeItem.vue";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useFileViewer } from "../composables/useFileViewer";
 import { useSessionState } from "../composables/useSessionState";
-import { useCodeGraphProgress } from "../composables/useCodeGraphProgress";
 import { useModal } from "../composables/useModal";
 import { fileTreeAreaMenuItems } from "../menus/contextMenus";
 import { api, listen } from "../api";
@@ -26,24 +25,6 @@ const expandedDirs = ref<Set<string>>(new Set());
 const selectedPath = ref<string>("");
 const showHidden = ref(false);
 const onboarding = useOnboarding();
-
-// ── CodeGraph 构建进度（方案 A：底部条）──
-const CGP_SEGMENTS = 18; // 分段方块格数（signature：符号逐个点亮）
-const cg = useCodeGraphProgress();
-const cgPct = computed(() => {
-  const { done, total } = cg.progress.value;
-  if (!total) return 0;
-  return Math.min(100, Math.round((done / total) * 100));
-});
-const cgFilled = computed(() => {
-  const { done, total } = cg.progress.value;
-  if (!total) return 0;
-  return Math.min(CGP_SEGMENTS, Math.round((done / total) * CGP_SEGMENTS));
-});
-const cgStatus = computed(() => {
-  const s = cg.progress.value.current;
-  return s || "代码索引";
-});
 
 async function toggleDir(path: string) {
   if (expandedDirs.value.has(path)) {
@@ -154,16 +135,13 @@ async function loadRoot() {
     if (!root) {
       // 无显式工作区（首次使用 / 工作区被删 / 路径失效）：显示空态，绝不
       // 加载任何目录——历史上这里会回退到家目录，把整个用户目录渲染出来
-      // 并触发 CodeGraph 全量索引（405 万符号 / 3GB 的事故）。
+      // （2026-08 事故：整个用户目录被渲染、索引 405 万符号 / 3GB）。
       void api.fileTreeWatch("").catch(() => {});
       treeData.value = [];
       expandedDirs.value = new Set();
       loading.value = false;
       return;
     }
-    // 项目加载锚点：触发 CodeGraph 索引构建（若未建/切项目）。
-    // ensureIndex 内部 lastIndexedRoot 守卫 + close 上一个，同一 root 不重复。
-    cg.ensureIndex(root);
     const entries = await api.listDirectory(root, showHidden.value, showHidden.value);
     treeData.value = entries;
     expandedDirs.value = new Set([root]);
@@ -528,28 +506,6 @@ defineExpose({ loadRoot, revealFile });
       </template>
     </div>
 
-    <!-- CodeGraph 构建进度（方案 A：底部条）。CSS 变量自动跟主题。 -->
-    <Transition name="cgp-fade">
-      <div v-if="cg.building.value" class="cgp-bar">
-        <i
-          v-if="cg.progress.value.index_ready"
-          class="cgp-ready"
-          v-tooltip="'精确跳转已就绪 · 语义搜索后台补全中'"
-        >✓</i>
-        <i v-else class="cgp-dot"></i>
-        <span class="cgp-status" v-tooltip="cg.progress.value.current">{{ cgStatus }}</span>
-        <div class="cgp-segments">
-          <span
-            v-for="i in CGP_SEGMENTS"
-            :key="i"
-            class="cgp-seg"
-            :class="{ on: i <= cgFilled }"
-          />
-        </div>
-        <span class="cgp-pct">{{ cgPct }}%</span>
-      </div>
-    </Transition>
-
   </div>
 </template>
 
@@ -673,93 +629,6 @@ defineExpose({ loadRoot, revealFile });
 
 .tree-status.error {
   color: var(--aide-danger);
-}
-
-/* ── CodeGraph 构建进度条（方案 A：底部条）──
-   全部用主题 CSS 变量，Warm Dark / Catppuccin 自动切换。
-   分段方块是 signature：一格一格点亮，呼应符号逐个被索引。
-   活跃色用主题 accent（Warm Dark = 工匠黄铜），不是 success 绿——
-   与 Warm Dark 的主题色一致。 */
-.cgp-bar {
-  flex-shrink: 0;
-  border-top: 1px solid var(--aide-border);
-  background: var(--aide-bg-raised);
-  padding: 9px 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.cgp-status {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: var(--aide-text-secondary);
-  font-family: var(--aide-font-mono);
-}
-.cgp-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--aide-accent);
-  flex-shrink: 0;
-  animation: cgp-breathe 1.6s ease-in-out infinite;
-}
-.cgp-ready {
-  flex-shrink: 0;
-  font-size: 11px;
-  font-weight: 700;
-  line-height: 1;
-  color: var(--aide-accent);
-  cursor: help;
-}
-@keyframes cgp-breathe {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.4; }
-}
-.cgp-segments {
-  flex-shrink: 0;
-  width: 120px;
-  display: flex;
-  gap: 2px;
-  height: 8px;
-  align-items: center;
-}
-.cgp-seg {
-  flex: 1;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--aide-surface-default);
-  transition: background 0.25s ease;
-}
-.cgp-seg.on {
-  background: var(--aide-accent);
-}
-.cgp-pct {
-  font-family: var(--aide-font-mono);
-  font-size: 12px;
-  color: var(--aide-accent);
-  font-weight: 500;
-  min-width: 38px;
-  text-align: right;
-  flex-shrink: 0;
-}
-
-/* 进入/离开淡出 */
-.cgp-fade-enter-active,
-.cgp-fade-leave-active {
-  transition: opacity 0.35s ease;
-}
-.cgp-fade-enter-from,
-.cgp-fade-leave-to {
-  opacity: 0;
-}
-@media (prefers-reduced-motion: reduce) {
-  .cgp-dot { animation: none; }
-  .cgp-seg { transition: none; }
-  .cgp-fade-enter-active, .cgp-fade-leave-active { transition: none; }
 }
 </style>
 

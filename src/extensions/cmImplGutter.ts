@@ -20,7 +20,7 @@
  *  → FileWindow → useCallHierarchy().openHierarchy（右侧栏面板换根）。
  *
  * 仅向下箭头（父→子，LSP textDocument/implementation）。向上箭头（子→父）暂未做：无标准
- * LSP go-to-super 请求，跨文件实现类拿不到父接口；要真正可用需 CodeGraph 继承索引，见
+ * LSP go-to-super 请求，跨文件实现类拿不到父接口；要真正可用需继承索引，见
  * docs/plans/java-lsp-idea-resilient-anchor.md。
  */
 import { StateField, StateEffect, RangeSet, type Extension } from "@codemirror/state";
@@ -41,6 +41,26 @@ function isRelevantKind(kind: number): boolean {
 const CALLABLE_KINDS = new Set([6, 9, 12]);
 function isCallableKind(kind: number): boolean {
   return CALLABLE_KINDS.has(kind);
+}
+
+/** 无实现的共享空数组：`ImplMarker.eq` 以 results 引用判重绘，空结果必须是同一个引用，
+ *  否则每次重建 marker 都会让「只有 ⇄」的行白白重绘。 */
+const NO_IMPL: QueryResult[] = [];
+
+/** implementation 补查并发上限。不能一次性把可视区所有符号全发出去：server（tsserver 等）
+ *  对请求是排队处理的，20 个后台查询排在前面，用户随后点的「跳转」就要等它们全部答完。 */
+const IMPL_CONCURRENCY = 3;
+
+/** 路径比较归一：反斜杠→正斜杠、去 workspaceRoot 前缀、大小写不敏感（Windows 盘符 `C:`/`c:`）。
+ *  implementation 结果的 file 与编辑器的 filePath 形态不一（绝对 vs 相对、`\` vs `/`），
+ *  裸 `===` 会让「实现 = 自己」滤不掉——↓ 显示在没有实现的函数上，点了跳到自己，看起来「点了没反应」。 */
+export function sameFile(root: string, a: string, b: string): boolean {
+  const r = root.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  const norm = (p: string) => {
+    const x = p.replace(/\\/g, "/").toLowerCase();
+    return r && x.startsWith(r + "/") ? x.slice(r.length + 1) : x;
+  };
+  return norm(a) === norm(b);
 }
 
 // ── State 层：标记集合（StateField<RangeSet<GutterMarker>>）──
@@ -236,37 +256,50 @@ class ImplGutterTracker {
       && (isRelevantKind(s.kind) || isCallableKind(s.kind))
     );
 
-    // 3. implementation 并行查（仅 relevant kind；callable 查询零成本——⇄ 点击才发请求），
-    //    每个结果一到就渐进渲染（不串行等批次）。
-    //    首个标记 = documentSymbol + 最快那个 implementation；其余随到随显。
+    // 3. 先挂 ⇄（可调用符号的 prepareCallHierarchy 点击时才发，零请求成本）+ 缓存命中的 ↓。
+    //    不等 implementation：documentSymbol 一回来按钮就出现。
+    const keyOf = (sym: DocumentSymbolItem) => `${sym.line}:${sym.column}`;
+    const notSelf = (impls: QueryResult[], sym: DocumentSymbolItem) =>
+      impls.filter(r => !(sameFile(workspaceRoot, r.symbol.file, filePath) && r.symbol.line === sym.line));
     const markersByLine = new Map<number, ImplMarker>();
-    await Promise.all(visible.map(async (sym) => {
-      const key = `${sym.line}:${sym.column}`;
-      let impls: QueryResult[] = [];
-      if (isRelevantKind(sym.kind)) {
-        let cached = this.implCache.get(key);
-        if (!cached) {
-          try {
-            cached = await api.lspImplementation(workspaceRoot, filePath, sym.line, sym.column, sym.name);
-            if (myToken !== this.token) return;
-            this.implCache.set(key, cached);
-          } catch {
-            cached = [];
-          }
-        }
-        impls = cached;
-      }
-      if (myToken !== this.token) return;
-      // 过滤自引用（同文件同行）
-      const filtered = impls.filter(r => !(r.symbol.file === filePath && r.symbol.line === sym.line));
+    const setMarker = (sym: DocumentSymbolItem, impls: QueryResult[]) => {
       // ⇄（callable）无条件挂；↓ 仅实现非空。两者都无 → 不挂
-      if (!isCallableKind(sym.kind) && filtered.length === 0) return;
+      if (!isCallableKind(sym.kind) && impls.length === 0) return false;
       markersByLine.set(sym.line, new ImplMarker(
-        { word: sym.name, line: sym.line, column: sym.column, kind: sym.kind, results: filtered },
+        { word: sym.name, line: sym.line, column: sym.column, kind: sym.kind, results: impls.length ? impls : NO_IMPL },
         view, this.opts.onGotoImplementation, this.opts.onShowCallHierarchy,
       ));
-      this.flushMarkers(markersByLine);
-    }));
+      return true;
+    };
+    const pending: DocumentSymbolItem[] = [];
+    for (const sym of visible) {
+      const cached = isRelevantKind(sym.kind) ? this.implCache.get(keyOf(sym)) : NO_IMPL;
+      if (cached === undefined) pending.push(sym);
+      setMarker(sym, notSelf(cached ?? NO_IMPL, sym));
+    }
+    if (markersByLine.size > 0) this.flushMarkers(markersByLine);
+
+    // 4. implementation 补查：限并发（IMPL_CONCURRENCY），每个结果一到就渐进渲染。
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length) {
+        const sym = pending[next++];
+        if (myToken !== this.token) return;
+        let impls: QueryResult[] = [];
+        try {
+          impls = await api.lspImplementation(workspaceRoot, filePath, sym.line, sym.column, sym.name);
+          if (myToken !== this.token) return;
+          this.implCache.set(keyOf(sym), impls);
+        } catch {
+          impls = [];
+        }
+        const filtered = notSelf(impls, sym);
+        if (filtered.length === 0) continue; // ⇄ 已在第 3 步挂好，无需重绘
+        setMarker(sym, filtered);
+        this.flushMarkers(markersByLine);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(IMPL_CONCURRENCY, pending.length) }, worker));
   }
 
   /** 构造 RangeSet 并 dispatch。 */

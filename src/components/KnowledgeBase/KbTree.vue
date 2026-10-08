@@ -12,12 +12,16 @@
 // 行为，测试要分两条写（点击发事件 / 给了折叠集合就不渲染）。
 import { computed, ref } from "vue";
 import Icon from "@/components/Icon.vue";
+import KbNodeIcon from "./KbNodeIcon.vue";
 import { useContextMenu } from "@/composables/useContextMenu";
-import { kbCreateItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
-import { buildTree, flatten, type KbTreeNode } from "./docTree";
+import { kbCreateItems, kbLinkMenuItems, kbMoveMenuItems, kbNodeMenuItems } from "@/menus/contextMenus";
+import { useKbLinks } from "@/composables/useKbLinks";
+import { ancestorIds, buildTree, flatten, type KbTreeNode } from "./docTree";
 import type { KbDocumentSummary } from "./kbClient";
 
 const { show: showMenu } = useContextMenu();
+const kbLinks = useKbLinks();
+void kbLinks.load();
 
 const props = defineProps<{
   documents: KbDocumentSummary[];
@@ -28,6 +32,8 @@ const props = defineProps<{
   /** 文件选择器上认的扩展名（**服务端返回的那份**，父层从 kb.formats 拿）。
    *  它只管对话框里的过滤；真正的拒绝在 uploadFile 里——两处不能各写一份格式表。 */
   accept?: string[];
+  /** 侧栏形态：行高 30 / 字号 13、不出时间列。整屏目录页（默认）是书的目次，侧栏是导航。 */
+  compact?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -116,6 +122,7 @@ function openRowMenu(e: MouseEvent, row: { doc: KbDocumentSummary; isFolder: boo
       {
         onRename: (id, title) => startRename(id, title),
         onMove: (id) => openMover(id, x, y),
+        onLink: (id) => openLinker(id, x, y),
         onDelete: (id) => emit("remove", id),
       },
     ),
@@ -172,6 +179,30 @@ function openMover(id: string, x: number, y: number): void {
   );
 }
 
+/** 「关联项目…」同样是第二个菜单。文件夹的关联由其下文档继承，所以这里也看得到从上层继承来的。
+ *  每点一次切换一个，菜单随即关闭——重新打开能看到最新的勾选状态。 */
+function openLinker(id: string, x: number, y: number): void {
+  const titleOf = (nodeId: string) => props.documents.find((d) => d.id === nodeId)?.title ?? "上层文件夹";
+  const projects = kbLinks.menuProjects(id, ancestorIds(props.documents, id), titleOf);
+  showMenu(x, y, kbLinkMenuItems(projects, (key) => void kbLinks.toggle(id, key)));
+}
+
+/** 行上直接显示的关联项目标签：只列**这个节点自己**打的（继承来的在文档头部看，行上全列会满屏重复）。
+ *  最多露两个，其余折成「+N」——整行是导航，不是标签管理页；点标签就是打开关联菜单。 */
+const MAX_ROW_TAGS = 2;
+function rowTags(id: string): { shown: { key: string; label: string; missing: boolean }[]; more: number; all: string } {
+  const all = kbLinks.directKeys(id).map((k) => kbLinks.resolve(k));
+  return {
+    shown: all.slice(0, MAX_ROW_TAGS),
+    more: Math.max(0, all.length - MAX_ROW_TAGS),
+    all: all.map((p) => p.label + (p.missing ? "（已不在）" : "")).join("、"),
+  };
+}
+function onTagClick(e: MouseEvent, id: string): void {
+  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+  openLinker(id, r.left, r.bottom + 2);
+}
+
 /** 新建行的缩进：跟它要落进去的那一层对齐（目标父的深度 + 1）。 */
 const creatingDepth = computed(() => {
   const at = creating.value;
@@ -212,6 +243,58 @@ function commitCreate(): void {
   creating.value = null;
 }
 
+// ── 拖拽移动 ──
+// 拖一行到文件夹上 = 移进去；拖到树的空白处 = 移到根。不做「拖到两行之间排序」：
+// 顺序由 docTree 的排序规则决定，没有手动序号可写。
+// 走 patch(parentId)，与「⋯ → 移动到…」同一条通道、同一套服务端校验；这里只先挡掉
+// 一眼就知道不行的（拖进自己的子树、拖到原位），让光标别骗人。
+const dragId = ref<string | null>(null);
+/** 当前悬停的放置目标：文件夹 id；'' = 根（树空白处） */
+const dropTarget = ref<string | null>(null);
+
+function canDropInto(parentId: string | null): boolean {
+  const id = dragId.value;
+  if (!id) return false;
+  const me = props.documents.find((d) => d.id === id);
+  if (!me || me.parentId === parentId) return false;
+  return parentId === null || !selfSubtreeOf(id).has(parentId);
+}
+
+function onDragStart(e: DragEvent, id: string): void {
+  dragId.value = id;
+  if (e.dataTransfer) {
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", id); // Firefox / WebKit 没有数据就不触发 drag
+  }
+}
+function onDragEnd(): void {
+  dragId.value = null;
+  dropTarget.value = null;
+}
+/** 树容器（= 根）只认落在**空白处**的拖放：落在某个文档行上不是「移到根」，
+ *  那一行不是落点，事件冒泡上来也要无视，否则用户对着一个文档松手、项目却跑到了根目录。 */
+function onRowSurface(e: DragEvent): boolean {
+  return (e.target as HTMLElement | null)?.closest?.(".kb-treerow") != null;
+}
+
+function onDragOver(e: DragEvent, parentId: string | null): void {
+  if (parentId === null && onRowSurface(e)) return;
+  if (!canDropInto(parentId)) return; // 不 preventDefault = 浏览器显示「禁止」光标
+  e.preventDefault();
+  e.stopPropagation();
+  dropTarget.value = parentId ?? "";
+}
+function onDrop(e: DragEvent, parentId: string | null): void {
+  if (parentId === null && onRowSurface(e)) return;
+  e.stopPropagation();
+  const id = dragId.value;
+  const ok = canDropInto(parentId);
+  onDragEnd();
+  if (!id || !ok) return;
+  e.preventDefault();
+  emit("patch", id, { parentId });
+}
+
 /** 搜索跳转用：把某一行滚进视野。`CSS.escape` 防 id 里的特殊字符破坏选择器。 */
 function scrollToNode(id: string): void {
   root.value
@@ -230,7 +313,13 @@ const vFocus = {
 </script>
 
 <template>
-  <div ref="root" class="kb-tree">
+  <div
+    ref="root"
+    class="kb-tree"
+    :class="{ compact, 'drop-root': dropTarget === '' }"
+    @dragover="onDragOver($event, null)"
+    @drop="onDrop($event, null)"
+  >
     <!-- 隐藏的文件选择器：整个面板只有这一个（空态那个入口也走它） -->
     <input
       ref="fileEl"
@@ -245,10 +334,16 @@ const vFocus = {
       v-for="row in rows"
       :key="row.doc.id"
       class="kb-treerow"
-      :class="{ on: row.doc.id === activeId, 'is-folder': row.isFolder }"
+      :class="{ on: row.doc.id === activeId, 'is-folder': row.isFolder, 'drop-on': dropTarget === row.doc.id, dragging: dragId === row.doc.id }"
       :style="{ paddingLeft: `${8 + row.depth * 16}px` }"
       :data-kb-node="row.doc.id"
       tabindex="0"
+      :draggable="renaming !== row.doc.id"
+      @dragstart="onDragStart($event, row.doc.id)"
+      @dragend="onDragEnd"
+      @dragover="row.isFolder ? onDragOver($event, row.doc.id) : undefined"
+      @dragleave="dropTarget === row.doc.id && (dropTarget = null)"
+      @drop="row.isFolder ? onDrop($event, row.doc.id) : undefined"
       @click="onLabelClick(row)"
       @keydown.enter.prevent="row.isFolder ? emit('toggle', row.doc.id) : emit('open', row.doc.id)"
       @keydown.space.prevent="row.isFolder ? emit('toggle', row.doc.id) : emit('open', row.doc.id)"
@@ -267,7 +362,7 @@ const vFocus = {
       </button>
       <span v-else class="kb-caret-spacer" />
 
-      <span class="kb-node-glyph"><Icon :name="row.isFolder ? 'folder' : 'file'" :size="12" /></span>
+      <span class="kb-node-glyph"><KbNodeIcon :folder="row.isFolder" :mime="row.doc.mime" /></span>
 
       <input
         v-if="renaming === row.doc.id"
@@ -282,6 +377,26 @@ const vFocus = {
       />
       <span v-else data-kb-label class="kb-label">
         {{ row.doc.title }}
+      </span>
+
+      <!-- 关联项目标签：打过才出现，常驻可见（不靠悬停）；点它 = 打开关联菜单 -->
+      <span v-if="rowTags(row.doc.id).shown.length" data-kb-tags class="kb-row-tags" :title="`关联项目：${rowTags(row.doc.id).all}`">
+        <button
+          v-for="t in rowTags(row.doc.id).shown"
+          :key="t.key"
+          type="button"
+          data-kb-tag
+          class="kb-row-tag"
+          :class="{ 'kb-row-tag--missing': t.missing }"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >{{ t.label }}</button>
+        <button
+          v-if="rowTags(row.doc.id).more"
+          type="button"
+          data-kb-tag-more
+          class="kb-row-tag kb-row-tag--more"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >+{{ rowTags(row.doc.id).more }}</button>
       </span>
 
       <!-- 空文件夹标「空」：先回答「为什么这个展不开」，而不是给一个按不动的箭头 -->
@@ -304,6 +419,14 @@ const vFocus = {
           <Icon name="plus" :size="11" />
         </button>
         <button
+          data-kb-link
+          class="kb-rowbtn"
+          title="关联项目"
+          @click.stop="onTagClick($event, row.doc.id)"
+        >
+          <Icon name="tag" :size="11" />
+        </button>
+        <button
           data-kb-more
           class="kb-rowbtn"
           title="更多"
@@ -319,7 +442,7 @@ const vFocus = {
     <div v-if="creating" class="kb-treerow" :style="{ paddingLeft: `${8 + creatingDepth * 16}px` }">
       <span class="kb-caret-spacer" />
       <span class="kb-node-glyph">
-        <Icon :name="creating.kind === 'folder' ? 'folder' : 'file'" :size="12" />
+        <KbNodeIcon :folder="creating.kind === 'folder'" />
       </span>
       <input
         data-kb-new
@@ -343,6 +466,16 @@ const vFocus = {
 .kb-tree {
   position: relative;
 }
+/* 侧栏形态：同一套选中 / 层级语言，只收紧尺寸、去掉时间列 */
+.kb-tree.compact .kb-treerow { height: 30px; font-size: 13px; gap: 6px; padding-right: 4px; }
+.kb-tree.compact .kb-row-time { display: none; }
+/* 侧栏里空白处也要能当「移到根」的落点：树撑满它的滚动区 */
+.kb-tree.compact { min-height: 100%; }
+
+/* 拖拽：被拖的那行变淡；放置目标（文件夹行 / 整棵树 = 根）用 accent 轮廓标出来 */
+.kb-treerow.dragging { opacity: 0.45; }
+.kb-treerow.drop-on { background: var(--aide-accent-subtle); box-shadow: inset 0 0 0 1px var(--aide-accent); }
+.kb-tree.drop-root { box-shadow: inset 0 0 0 1px var(--aide-accent); border-radius: var(--aide-radius-sm); }
 
 /* 它是**目录页**，不是文件列表：行高 44、标题 15px、右侧一列时间。
    整屏宽度下，这样读起来像一本书的目次，而不是一个管理系统的表格。 */
@@ -389,9 +522,8 @@ const vFocus = {
 .kb-caret:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 .kb-caret-spacer { flex: 0 0 16px; }
 
-.kb-node-glyph { flex: 0 0 auto; display: inline-flex; color: var(--aide-text-secondary); opacity: 0.7; }
-.kb-treerow.is-folder .kb-node-glyph { opacity: 1; }
-.kb-treerow.on .kb-node-glyph { color: var(--aide-accent); opacity: 1; }
+/* 图标自带类型色（KbNodeIcon）；选中态靠行底与标题加亮表达，不再给图标换色 */
+.kb-node-glyph { flex: 0 0 auto; display: inline-flex; }
 
 /* ⚠️ 类型走「字形 + 字重」，不走明度差。早先让文档用更暗的灰，实际渲染出来
    像被禁用；而把文件夹提亮到 text-primary 又会跟选中态抢信号——那等于用同一条
@@ -407,6 +539,40 @@ const vFocus = {
 .kb-treerow.is-folder > .kb-label { font-weight: 500; }
 .kb-treerow.on > .kb-label { color: var(--aide-text-primary); }
 .kb-treerow:hover > .kb-label { color: var(--aide-text-primary); }
+
+/* 关联项目标签：行内的小胶囊，不抢标题——标题先收缩、标签保形（单个标签过长才省略） */
+.kb-row-tags {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.kb-row-tag {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 96px;
+  appearance: none;
+  padding: 0 7px;
+  line-height: 16px;
+  border-radius: 8px;
+  font: inherit;
+  font-size: 11px;
+  color: var(--aide-accent);
+  background: var(--aide-accent-subtle);
+  border: 1px solid color-mix(in srgb, var(--aide-accent) 28%, transparent);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.kb-row-tag--more { color: var(--aide-text-secondary); background: transparent; border-color: var(--aide-border); }
+.kb-row-tag--missing {
+  color: var(--aide-warning);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  border-color: color-mix(in srgb, var(--aide-warning) 40%, transparent);
+}
+.kb-row-tag:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
 
 .kb-empty-mark {
   flex: 0 0 auto;

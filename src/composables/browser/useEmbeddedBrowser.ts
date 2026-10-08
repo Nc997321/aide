@@ -5,6 +5,7 @@
 // 登记为门面例外，直接 invoke 不经 @aide/sdk 共享门面（避免给 RemoteTransport 加无意义空能力）。
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { getCurrentWebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 /** 逻辑像素矩形。CSS px == Tauri logical px（devicePixelRatio == scale_factor），直接传不换算。 */
 export interface BoundsDto {
@@ -54,6 +55,23 @@ export type NavEventDto = {
 } & NavStateDto;
 
 /**
+ * 窗口作用域订阅。内嵌浏览器的视图属于创建它的窗口（一个窗口 = 一个 Host），后端对
+ * `browser-*` 事件一律 `emit_to(属主窗口)`；Tauri 的默认（Any）监听会收到发给**任何**窗口的
+ * 事件，别的 Host 窗口的 tab 就会长到本窗口的面板上——与 @aide/sdk TauriTransport.listen
+ * 同一条纪律。拿不到当前窗口（测试 / 非 Tauri 环境）退回原调用形状。
+ */
+function listenHere<T>(event: string, cb: (payload: T) => void): Promise<UnlistenFn> {
+  let target: { kind: "WebviewWindow"; label: string } | undefined;
+  try {
+    target = { kind: "WebviewWindow", label: getCurrentWebviewWindow().label };
+  } catch {
+    target = undefined;
+  }
+  const handler = (ev: { payload: T }) => cb(ev.payload);
+  return target ? listen<T>(event, handler, { target }) : listen<T>(event, handler);
+}
+
+/**
  * 订阅导航事件（Rust `browser-nav` 广播）。
  *
  * 这是**多驱动者共用的真相通道**：无论页面是被用户点出来的、还是将来 agent 工具驱动的，
@@ -61,7 +79,7 @@ export type NavEventDto = {
  * 返回取消订阅函数。
  */
 export function onBrowserNav(cb: (e: NavEventDto) => void): Promise<UnlistenFn> {
-  return listen<NavEventDto>("browser-nav", (ev) => cb(ev.payload));
+  return listenHere<NavEventDto>("browser-nav", cb);
 }
 
 /**
@@ -74,7 +92,7 @@ export function onBrowserNav(cb: (e: NavEventDto) => void): Promise<UnlistenFn> 
  * 事件不丢、也不会被 live 与缓冲各应用一次）。这里只提供通道。
  */
 export function onBrowserView(cb: (e: ViewEventDto) => void): Promise<UnlistenFn> {
-  return listen<ViewEventDto>("browser-view", (ev) => cb(ev.payload));
+  return listenHere<ViewEventDto>("browser-view", cb);
 }
 
 /**
@@ -82,7 +100,7 @@ export function onBrowserView(cb: (e: ViewEventDto) => void): Promise<UnlistenFn
  * 消费方（`useBrowserViews`）负责幂等展开 + 交给面板切标签。
  */
 export function onBrowserFocus(cb: (e: { id: string }) => void): Promise<UnlistenFn> {
-  return listen<{ id: string }>("browser-focus", (ev) => cb(ev.payload));
+  return listenHere<{ id: string }>("browser-focus", cb);
 }
 
 /**
@@ -111,6 +129,13 @@ export function useEmbeddedBrowser() {
      */
     listViews(): Promise<BrowserViewDto[]> {
       return invoke<BrowserViewDto[]>("browser_views_list");
+    },
+    /**
+     * 当前画面快照（JPEG data URI）。**必须在视图还显示着时调用**（隐藏的视图不合成帧，拍不出来）。
+     * 面板用它在 HTML 浮层盖上来的那段时间填住原生视图让出的洞。
+     */
+    snapshot(id: string): Promise<string> {
+      return invoke<string>("browser_snapshot", { id });
     },
     goBack(id: string): Promise<BrowserViewDto> {
       return invoke<BrowserViewDto>("browser_go_back", { id });

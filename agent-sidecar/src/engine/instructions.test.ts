@@ -26,6 +26,7 @@ describe("loadAideInstructions", () => {
     return loadAideInstructions({ cwd, configDir: claudeDir, trusted: true, ...over });
   }
 
+
   /** 造一个附加根 `<root>/<name>`；给了 memory 就顺带在 projects 下造出索引
    *  （目录名与 memoryDirs 的 key 规则一致）。 */
   async function attachedRoot(name: string, files: { rules?: string; memory?: string } = {}) {
@@ -123,6 +124,14 @@ describe("loadAideInstructions", () => {
 
       const text = await load({ attached: [b] });
       expect(text).toContain("[一](a.md)");
+    });
+
+    it("记忆索引前带取正文的指路：工具名 + root（索引里只有相对文件名，没有这句 agent 无从下手）", async () => {
+      const b = await attachedRoot("repoB", { memory: "- [一](a.md) — 描述" });
+
+      const text = await load({ attached: [b] });
+      expect(text).toContain("mcp__aide-memory__read_memory");
+      expect(text).toContain(`root=${b}`);
     });
 
     it("既无 CLAUDE.md 也无记忆 → 整块不出现（不留空来源头）", async () => {

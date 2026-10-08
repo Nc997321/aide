@@ -1,104 +1,115 @@
 import { z } from "zod";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../engine/types.js";
-import { queryLsp, type LspTool } from "./lspClient.js";
-import { formatLspResponse } from "./lspStatusText.js";
+import { queryLsp } from "./lspClient.js";
+import { LspNav, type NavArgs } from "./lspNav.js";
 import { lspToolsMounted, type LspGate } from "./lspGate.js";
 
 /**
  * allowedTools 前缀规则：匹配该 server 全部工具，canUseTool 直接跳过（只读工具不弹窗）。
- * 与 CODEGRAPH_ALLOW_RULE / DOCS_ALLOW_RULE 同款形状。
+ * 与 DOCS_ALLOW_RULE 同款形状。
  */
 export const LSP_ALLOW_RULE = "mcp__aide-lsp";
 
 /** 暴露给模型的工具名。与 Rust 侧 `tool` 字段的映射是 `lsp_X` → `X`
- *  （见 `lsp/agent_query.rs` 的 run_jump 分派）。测试钉住。 */
+ *  （见 `lsp/agent_query.rs` 的分派）。测试钉住。 */
 export const LSP_TOOL_NAMES = [
   "lsp_symbols",
   "lsp_references",
   "lsp_definition",
   "lsp_implementations",
+  "lsp_outline",
 ] as const;
 
 /**
- * server 级说明。codegraph 的实证：光注册工具模型会无视，**instructions 才翻转行为**。
+ * server 级说明。实证：光注册工具模型会无视，**instructions 才翻转行为**。
  *
- * 这里只说三件事，且每件都指向「别把 LSP 当万能」——纯文本查找仍归 Grep，
- * 本 server 的价值在符号名有歧义时（编译器级精确，不含注释/字符串里的同名文本）。
+ * 2026-09-29 重写。旧版讲了一堆「状态怎么读、什么时候别信」——那是在教模型提防这组工具，
+ * 实际效果是它不用。现在每发都自带代码与文本兜底（见 lspNav.ts），说明书只需讲清
+ * **哪种 grep 该换成哪个调用**：模型的真实搜索形状（转录统计）就是下面那几条 grep。
  */
-export const LSP_INSTRUCTIONS = `This environment has a LANGUAGE SERVER for the current workspace, exposed as the aide-lsp MCP tools. Read the returned status before trusting a result:
-1. Semantic questions — "where is X defined", "who references X", "what implements X" — start here, not with Grep. The answer is compiler-precise: a match is a real reference, not a mention in a comment or a string, and a common name (\`get\`, \`run\`) returns its true call sites instead of every textual hit. One call replaces a grep-then-read fan-out.
-2. Grep keeps its own job: text, strings, config, logs, comments, file names — anything you would search by characters rather than by symbol.
-3. The language server starts lazily and may still be indexing (rust-analyzer takes 40-70s on a large project). Every result carries a status: only status "ready" with zero results is a CONFIRMED negative. Any other status means the question was not answered — retry, or fall back to Grep and say the result is unverified. Never report "no references" from a non-ready status. An "indexing" status that names specific languages means exactly that: those languages were not searched at all.
-4. Two known blind spots: (a) \`.vue\` usages ARE included in reference results from \`.ts\`/\`.js\` files (the TS server loads the Vue plugin) — only anchoring a query ON a \`.vue\` file is unsupported, so anchor on the \`.ts\` side; (b) files excluded from the TS project (tsconfig \`exclude\`, commonly \`*.test.ts\`) are not searched at all — cover test files with Grep.`;
+export const LSP_INSTRUCTIONS = `aide-lsp is a language server for this workspace: compiler-accurate code navigation that answers in ONE call what usually takes several grep + Read rounds. Reach for it whenever you are looking for code by a symbol name:
+- instead of \`grep -n "fn foo" -A 30\` or reading a whole file to find foo → lsp_definition {name:"foo"}: location AND the full source body.
+- instead of grepping for a name to see who calls/uses it → lsp_references {name:"foo"}: every real use, each with its line and the function it sits in — no hits from comments, strings or unrelated same-named symbols.
+- instead of \`grep -n "a\\|b\\|c"\` to locate several symbols → lsp_symbols {names:["a","b","c"]}: kind, location and declaration line of each.
+- instead of skimming a long file → lsp_outline {file}: its declarations with line ranges, so you Read only the part you need.
+- lsp_implementations: what implements an interface/trait (grep cannot see these).
+Names may be bare (\`get\`) or qualified (\`LspManager::get\`); pass \`file\` too (relative is fine) to pick the one declared in that file. Calls never hang: if the server has not finished indexing you get plain-text matches, clearly marked unverified. Only a result that says "confirmed negative" proves absence.
+Grep stays right for non-code text: string literals, log messages, config keys, comments, file names. Your Grep/grep searches for code identifiers may come back annotated by aide-lsp with the semantic answer — trust that over the raw text hits.
+Blind spot: files excluded from the language project (commonly *.test.ts via tsconfig) are not indexed — use Grep for those.`;
 
 export interface LspToolsDeps extends LspGate {
   cwd: string;
   emit: (e: ChatEvent) => void;
 }
 
-/** 工具入参：给名字（服务层自己解析坐标），或直接给坐标。两者二选一。
- *
- *  **每次调用返回新对象**：四个工具复用同一个 zod 原始 shape 会让 SDK 挂上的
- *  `root` 反向引用串成环（表现是 `JSON.stringify(spec)` 抛 circular structure，
- *  也意味着服务端注册可能拿到互相纠缠的 schema）。 */
-const nameOrPosition = () => ({
+/** 入参 shape。**每次调用返回新对象**：多个工具复用同一个 zod 原始 shape 会让 SDK 挂上的
+ *  `root` 反向引用串成环（`JSON.stringify(spec)` 抛 circular structure）。 */
+const target = () => ({
   name: z
     .string()
     .optional()
-    .describe("Symbol name, e.g. 'LspManager::get' or just 'get'. Preferred form."),
-  file: z.string().optional().describe("Absolute path — narrows the search or anchors the position."),
-  line: z.number().int().optional().describe("1-based line, only with `file` (skips name lookup)."),
-  character: z.number().int().optional().describe("1-based column, only with `file` and `line`."),
+    .describe("Symbol name, bare or qualified: 'get', 'LspManager::get', 'api.sendMessage'."),
+  file: z
+    .string()
+    .optional()
+    .describe("File path (relative to the workspace is fine). With `name`: the file that declares it (disambiguates). With `line`: anchors a position."),
+  line: z.number().int().optional().describe("1-based line in `file`. Use instead of `name` when you have a position."),
+  character: z.number().int().optional().describe("1-based column; optional — defaults to the symbol on that line."),
 });
 
 /**
  * 挂载闸门三条见 `lspGate.ts`（**别在这里重写**——退役内置 LSP 通道的判据是同一份，
  * 分叉会造出「两个都没有」或「两个都在」）。返回 null = server 不挂载 = 工具对模型不存在。
  *
- * headless 不在闸门里单独列一条：`lspLanguages` 由主进程下发，headless 不发 ⇒ 空 ⇒ 关。
  */
-export function lspMcpRegistration(
-  deps: LspToolsDeps,
-): Record<string, unknown> | null {
+export function lspMcpRegistration(deps: LspToolsDeps): Record<string, unknown> | null {
   if (!lspToolsMounted(deps)) return null;
 
-  const run = async (
-    toolName: LspTool,
-    args: Record<string, unknown>,
-  ): Promise<{ content: Array<{ type: "text"; text: string }> }> => {
-    const resp = await queryLsp(toolName, args, deps.cwd, deps.emit);
-    return textResult(formatLspResponse(toolName, resp, args));
-  };
+  const nav = new LspNav({
+    cwd: deps.cwd,
+    query: (t, args, timeoutMs) => queryLsp(t, args, deps.cwd, deps.emit, { timeoutMs }),
+  });
 
   const server = createSdkMcpServer({
     name: "aide-lsp",
-    version: "1.0.0",
+    version: "2.0.0",
     instructions: LSP_INSTRUCTIONS,
     tools: [
       tool(
         "lsp_symbols",
-        "Find where a symbol is defined, by NAME, across the whole workspace. This is the tool for \"where is X\" when you know the name — it resolves the owner of the name, so you don't grep and read a dozen files to find out which of them defines it. Names match exactly (fuzzy near-misses are filtered out), so a miss really means the name is absent. Returns file:line candidates; if several symbols share the name it lists them and you must pick one with lsp_references/lsp_definition at that position. Grep is for text, not for names.",
-        nameOrPosition(),
-        async (args) => run("symbols", args as Record<string, unknown>),
-      ),
-      tool(
-        "lsp_references",
-        "Find every real call site of a symbol via the language server — compiler-precise, so it excludes mentions in comments, strings and same-named members of other types. Use it for any \"who calls / who uses X\" question once you know where X is (or pass a position directly); plain-text lookups stay Grep's job.",
-        nameOrPosition(),
-        async (args) => run("references", args as Record<string, unknown>),
+        "Locate symbols by name — several at once. For each name: its kind (function/class/method…), the type it belongs to, file:line:column, line range, and the declaration line itself. Replaces grepping for `fn X|class X|X =` patterns. Names match exactly; if several symbols share a name they are all listed.",
+        {
+          names: z.array(z.string()).optional().describe("Symbol names to locate (up to 8), bare or qualified."),
+          name: z.string().optional().describe("A single symbol name (same as names:[name])."),
+        },
+        async (args) => textResult(await nav.symbols(args as NavArgs)),
       ),
       tool(
         "lsp_definition",
-        "Jump from a use site to where the symbol is defined, via the language server. Pass {file, line, character} when you have a position, or a `name` to resolve it first. Not for text search — that stays Grep's job.",
-        nameOrPosition(),
-        async (args) => run("definition", args as Record<string, unknown>),
+        "Go to a symbol's definition and get its FULL SOURCE — the whole function/class/type body with line numbers (up to 80 lines, then a Read offset to continue). Give a name, or a position {file, line} of a use site. One call replaces `grep -n \"fn X\" -A 30` + Read.",
+        target(),
+        async (args) => textResult(await nav.definition(args as NavArgs)),
+      ),
+      tool(
+        "lsp_references",
+        "Every real use of a symbol across the workspace, grouped by file; each hit shows line:column, the function/method it is inside, and the line of code. Compiler-precise: excludes comments, strings and same-named members of other types. Give a name (plus `file` to pick one of several same-named symbols) or a position.",
+        target(),
+        async (args) => textResult(await nav.references("references", args as NavArgs)),
       ),
       tool(
         "lsp_implementations",
-        "Find what implements an interface/trait (or what a symbol implements). This is hard for Grep — the implementing types need not mention the interface name. Use it when tracing polymorphic call sites.",
-        nameOrPosition(),
-        async (args) => run("implementations", args as Record<string, unknown>),
+        "What implements an interface/trait/abstract method (or what a type implements) — grouped by file with the enclosing type and code line. Grep cannot find these: implementors need not mention the interface name.",
+        target(),
+        async (args) => textResult(await nav.references("implementations", args as NavArgs)),
+      ),
+      tool(
+        "lsp_outline",
+        "The structure of one source file: its classes, functions, methods, types and constants as a tree, each with its line range. Use it before reading a long file, then Read only the range you need.",
+        {
+          file: z.string().describe("File path (relative to the workspace is fine)."),
+        },
+        async (args) => textResult(await nav.outline(args as NavArgs)),
       ),
     ],
   });

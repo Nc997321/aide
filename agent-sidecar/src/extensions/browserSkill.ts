@@ -6,7 +6,7 @@ import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
 /**
  * browser-inspect skill 自动落地（内建，免用户配置）。
  *
- * 动机与 `codegraphSkill` 同源：MCP 工具光注册 + instructions 只解决「工具存在时怎么选」，
+ * 动机：MCP 工具光注册 + instructions 只解决「工具存在时怎么选」，
  * **任务级工作流**要靠 skill 触发（那套机制 2026-07-26 两轮 A/B 实锤有效）。这里管的流程是
  * 「用户丢一个原型/设计稿/规格页链接过来 → 读出整套页面规格」。
  *
@@ -146,7 +146,7 @@ Both read a buffer that lives in the **current document only**: navigating or re
  *
  * 路径用 winPaths 兜底（`toForwardSlashes` + `safeDirname`）：aide-agent.exe 内嵌 bun 的
  * `path.dirname` 对 Windows 反斜杠盘符路径返回 `"C:"`，`mkdirSync` 会落到错处；
- * 中文用户目录叠加该缺陷会导致 skill 不落地（同 codegraphSkill 的注释）。
+ * 中文用户目录叠加该缺陷会导致 skill 不落地。
  */
 export function ensureBrowserSkill(env: Env): void {
   const files: { path: string; content: string }[] = [

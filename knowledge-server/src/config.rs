@@ -56,7 +56,7 @@ impl Config {
             session_ttl_hours: env_parse("KB_SESSION_TTL_HOURS", 24 * 14),
             session_hard_ttl_hours: env_parse("KB_SESSION_HARD_TTL_HOURS", 24 * 90),
             lock_ttl_seconds: env_parse("KB_LOCK_TTL_SECONDS", 300),
-            revision_merge_window_seconds: env_parse("KB_REVISION_MERGE_WINDOW_SECONDS", 300),
+            revision_merge_window_seconds: env_parse("KB_REVISION_MERGE_WINDOW_SECONDS", 900),
             cors_allowed_origins: env_list(
                 "KB_CORS_ALLOWED_ORIGINS",
                 // 默认放行三种形态：Tauri v2 打包版（tauri://localhost）、Tauri v2 dev

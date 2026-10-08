@@ -1,78 +1,115 @@
 /**
  * 连接应用层：RemoteTransport 的创建/复用 + 连接状态的全局可观察模型。
  *
- * 过筛自 remote-pwa/src/App.vue 的连接编排段（ArkTS 化）。语义与上游零偏差：
+ * 职责（协议 §3.2/§9）：
  *  - 传输实例只建一次（监听挂在实例上，重建会让 listener 挂死连接）；
- *    换 URL/凭据走同一实例的 connect() 重连
- *  - needsPairing 的错误分型：配对流程中（pairing）→ badcode；token 流程 → revoked
- *  - pair 成功 → saveCreds；启动时有凭据 → 自动续连
+ *    换凭据走同一实例的 connect() / pairWithOffer()
+ *  - 身份密钥交给 keychain（Asset 优先 + 明文降级）：首台配对时现生成一把，跨 Host 复用
+ *  - pairWithOffer：确保身份 → 配对（psk 只活内存）→ 成功落盘
+ *    {device_id, Host 公钥, relay, hostName}
+ *  - autoConnect：有凭据 → 只读加载身份（绝不生成——否则等于换手机）→ resume 续连；
+ *    身份缺失 = 凭据无法兑现，清掉回配对
+ *  - needsPairing 归因：默认 revoked（续连被拒）/ badhandshake（配对中断），
+ *    pairWithOffer 的 catch 用 PairFailError.code 覆盖
+ *  - 续传位置（epoch/lastSeq）：subscribed 后与离开 authed 时持久化
  * 平台差异：状态从 Vue ref/reactive → @ObservedV2 + @Trace（V2 组件直接观察单例）。
- * 会话数据编排（onAuthed 拉供应商/工作区/会话）属路线第 4 步，接入 api 门面时对照补齐。
  */
 import { common } from '@kit.AbilityKit';
-import { RemoteTransport, ConnState, ConnectCreds, ConnectByCode, ConnectByToken, PairOk } from '../sdk/remote';
+import { RemoteTransport, ConnState, PairDone, PairFailCode, PairFailError, SinceInfo } from '../sdk/remote';
 import { setTransport } from '../sdk/transport';
 import { makeOpenUrl } from '../sdk/ws-ohos';
-import { StoredCreds, loadCreds, saveCreds, clearCreds, saveRelayUrl, loadRelayUrl, DEFAULT_RELAY_URL } from '../sdk/storage';
+import { StoredCreds, loadCreds, saveCreds, clearCreds } from '../sdk/storage';
+import { IdentityKey, loadIdentityKey, ensureIdentityKey } from '../sdk/keychain';
+import type { PairOffer } from '../sdk/pair-uri';
+import { b64urlEncode } from '../sdk/crypto/bytes';
 
-/** needsPairing 的归因：badcode = 本次配对码被拒；revoked = 已存 token 被吊销。 */
-export type PairError = 'badcode' | 'revoked' | undefined;
+/** needsPairing 的归因（协议 §10 类型化错误码；undefined = 非错误态）。 */
+export type PairError = 'expired' | 'badhandshake' | 'revoked' | 'unsupported' | undefined;
 
 @ObservedV2
 export class ConnModel {
   @Trace state: ConnState = 'idle';
   @Trace pairError: PairError = undefined;
   @Trace hasCreds: boolean = false;
-  /** 上次输入的中继地址（未配对时也保留，连接页预填；未存过用缺省值）。 */
-  @Trace savedRelayUrl: string = DEFAULT_RELAY_URL;
-  /** 桌面侧执行错误（invoke_err 无对应挂起请求时上报）；UI 可选展示。 */
+  /** Host 显示名（二维码 n / hello_ok），已配对脚注展示。 */
+  @Trace hostName: string | null = null;
+  /** 配对进行中（UI 进度提示；瞬断重试期间保持 true 直到结论）。 */
+  @Trace pairing: boolean = false;
+  /** Host 侧执行错误（error 帧无对应挂起时上报）；UI 可选展示。 */
   @Trace lastError: string = '';
 
   private client: RemoteTransport | null = null;
-  /** 配对流程进行中（needsPairing 时区分 badcode/revoked 的标志）。 */
-  private pairing: boolean = false;
   private context: common.UIAbilityContext | undefined = undefined;
 
   /** EntryAbility.onCreate 里先于 autoConnect 调用。 */
   init(context: common.UIAbilityContext): void {
     this.context = context;
-    this.savedRelayUrl = loadRelayUrl();
     const stored: StoredCreds | null = loadCreds();
     if (stored !== null) {
       this.hasCreds = true;
+      this.hostName = stored.hostName;
     }
   }
 
   // ── 连接 ──
 
-  /** 启动自动续连：有凭据直接 token 连接（免配对）。 */
+  /** 启动自动续连：有凭据 → 只读加载身份 → resume（免扫码）。异步（Asset 查询），
+   *  EntryAbility 不等待——状态经 onStateChange 回调链推进。 */
   autoConnect(): void {
     const stored: StoredCreds | null = loadCreds();
     if (stored === null) {
       return;
     }
     this.hasCreds = true;
-    const t: RemoteTransport = this.ensureClient(stored.relayUrl);
-    const creds: ConnectByToken = { deviceId: stored.deviceId, token: stored.token };
-    t.connect(creds, stored.relayUrl);
+    this.hostName = stored.hostName;
+    loadIdentityKey().then((k: IdentityKey | null) => {
+      if (k === null) {
+        // 身份私钥丢失（Asset 与明文降级都无）：凭据无法兑现——清掉回配对
+        console.warn('[conn] 身份密钥缺失，凭据作废');
+        clearCreds();
+        this.hasCreds = false;
+        this.hostName = null;
+        this.state = 'needsPairing';
+        this.pairError = 'revoked';
+        return;
+      }
+      const t: RemoteTransport = this.ensureClient();
+      t.connect(stored, k);
+    }).catch((e: Error) => {
+      console.warn(`[conn] autoConnect 失败：${e.message ?? ''}`);
+    });
   }
 
-  /** 配对：连接中继 → 发 pair → 成功存凭据（authed 由 handleState 接管切页）。 */
-  async pairWithCode(relayUrl: string, code: string): Promise<void> {
+  /** 扫码配对：确保身份 → 配对（psk 只活内存）→ 成功存凭据（authed 由 handleState 切页）。 */
+  async pairWithOffer(offer: PairOffer): Promise<void> {
     this.pairing = true;
     this.pairError = undefined;
-    saveRelayUrl(relayUrl);
-    this.savedRelayUrl = relayUrl;
-    const t: RemoteTransport = this.ensureClient(relayUrl);
-    const creds: ConnectByCode = { code: code };
-    t.connect(creds, relayUrl);
     try {
-      const ok: PairOk = await t.pair(code);
-      const stored: StoredCreds = { relayUrl: relayUrl, deviceId: ok.device_id, token: ok.token };
+      const myKey: IdentityKey = await ensureIdentityKey();
+      const t: RemoteTransport = this.ensureClient();
+      const done: PairDone = await t.pairWithOffer(offer, myKey);
+      const stored: StoredCreds = {
+        deviceId: offer.deviceId,
+        hostPublic: b64urlEncode(offer.hostPublic),
+        relayUrl: offer.relay,
+        directUrl: offer.direct,
+        hostName: done.hostName,
+        epoch: null,
+        lastSeq: 0
+      };
       saveCreds(stored);
       this.hasCreds = true;
     } catch (e) {
-      // auth_error → handleState 已置 needsPairing + badcode；连接断开 → offline 自动重试
+      // 定性失败：传输层已置 needsPairing（handleState 清凭据 + 默认归因），
+      // 这里用类型化 code 覆盖（expired/badhandshake/revoked/unsupported）
+      if (e instanceof PairFailError) {
+        const code: PairFailCode = e.code;
+        // aborted = 用户主动断开（disconnectAll 已清错误态）：不算配对失败
+        this.pairError = code === 'aborted' ? undefined : code;
+      } else {
+        console.warn(`[conn] 配对意外失败：${e}`);
+        this.pairError = 'badhandshake';
+      }
     } finally {
       this.pairing = false;
     }
@@ -87,25 +124,29 @@ export class ConnModel {
     this.hasCreds = false;
     this.pairError = undefined;
     this.lastError = '';
+    this.hostName = null;
   }
 
-  /** 供页面/后续会话层取传输实例（invoke/listen 走 sdk/transport 门面即可，一般无需直取）。 */
+  /** 供页面/会话层取传输实例（invoke/listen 走 sdk/transport 门面即可，一般无需直取）。 */
   get transport(): RemoteTransport | null {
     return this.client;
   }
 
   // ── 内部 ──
 
-  private ensureClient(relayUrl: string): RemoteTransport {
+  private ensureClient(): RemoteTransport {
     if (this.client === null) {
       const openUrl = this.context !== undefined ? makeOpenUrl(this.context) : undefined;
-      const t = new RemoteTransport(relayUrl, undefined, openUrl);
-      setTransport(t); // 此后所有 api.* 调用走远程 RPC
+      const t = new RemoteTransport(undefined, openUrl);
+      setTransport(t); // 此后所有 api.* 调用走 Link 远程 RPC
       t.onStateChange((s: ConnState) => {
         this.handleState(s);
       });
       t.onError((m: string) => {
         this.lastError = m;
+      });
+      t.onSubscribed(() => {
+        this.persistResume();
       });
       this.client = t;
     }
@@ -114,12 +155,43 @@ export class ConnModel {
 
   private handleState(s: ConnState): void {
     this.state = s;
+    if (s === 'authed') {
+      // hello_ok 的 Host 名落地（配对期间先用二维码里的 n 兜底）
+      const t = this.client;
+      if (t !== null && t.hostName !== null) {
+        this.hostName = t.hostName;
+      }
+    }
     if (s === 'needsPairing') {
-      // 配对失败（badcode）与 token 被吊销（revoked）都回连接屏
+      // 定性失败：凭据作废（重新扫码即配新 Host）
       clearCreds();
       this.hasCreds = false;
-      this.pairError = this.pairing ? 'badcode' : 'revoked';
+      this.hostName = null;
+      if (this.pairError === undefined) {
+        // 默认归因：续连被拒 = revoked；配对中断 = badhandshake
+        // （随后被 pairWithOffer catch 的类型化 code 覆盖）
+        this.pairError = this.pairing ? 'badhandshake' : 'revoked';
+      }
     }
+  }
+
+  /** 续传位置持久化（协议 §9：epoch/lastSeq）。 */
+  private persistResume(): void {
+    const t = this.client;
+    if (t === null) {
+      return;
+    }
+    const since: SinceInfo | null = t.getResumeInfo();
+    const stored: StoredCreds | null = loadCreds();
+    if (since === null || stored === null) {
+      return;
+    }
+    if (stored.epoch === since.epoch && stored.lastSeq === since.seq) {
+      return;
+    }
+    stored.epoch = since.epoch;
+    stored.lastSeq = since.seq;
+    saveCreds(stored);
   }
 }
 

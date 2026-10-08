@@ -2,9 +2,9 @@ import { ref } from "vue";
 import { api } from "../api";
 
 // 工作区信任态（Trusted Workspace）— 模块级单例，跨组件共享：
-// 侧栏徽标（SidebarLeft）与 CodeGraph 门控（useCodeGraphProgress）共用一份。
+// 侧栏徽标（SidebarLeft）等共用一份。
 //
-// 路径作身份：前端始终拿得到路径（侧栏 ws.name、CodeGraph root），Rust 内部
+// 路径作身份：前端始终拿得到路径（侧栏 ws.name），Rust 内部
 // trust_key_from_path 归一（path_to_key 后点号→横杠）。这里 untrustedPaths 存
 // 原始路径，仅用于徽标的响应式渲染与去重；真实信任查询走 api.isWorkspaceTrusted
 // （Rust 权威）。查询失败一律按不信任处理（安全侧）。

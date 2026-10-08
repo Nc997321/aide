@@ -81,12 +81,14 @@ export const GLYPHS: Record<string, string> = {
   file: '<path d="M4 2.5h5l3 3v8h-8z"/><path d="M9 2.5v3h3"/>',
   /** 收藏夹目录：文件夹（带页签的直角轮廓，与 file / link 同族） */
   folder: '<path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/>',
+  sidebar: '<rect x="2.5" y="3" width="11" height="10" rx="1.6"/><path d="M6.5 3v10"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
   more: '<circle cx="4" cy="8" r="0.9" class="f"/><circle cx="8" cy="8" r="0.9" class="f"/><circle cx="12" cy="8" r="0.9" class="f"/>',
   // 折叠箭头。默认朝右（折叠态），展开时用 CSS 转 90° 指向下——
   // 一个字形两种状态，省掉两个几乎一样的路径
   caret: '<path d="M6.5 4L10.5 8L6.5 12"/>',
   /** 链接：跳转到定义（精确结构匹配） */
+  tag: '<path d="M2.5 8.2V3.5h4.7l6.3 6.3-4.7 4.7z"/><circle cx="5.3" cy="6.3" r="0.9" class="f"/>',
   link: '<rect x="2.5" y="5" width="7" height="4.5" rx="2.25"/><rect x="6.5" y="6.5" width="7" height="4.5" rx="2.25"/>',
   /** 搜索：放大镜（语义匹配） */
   search: '<circle cx="6.5" cy="6.5" r="3.8"/><path d="M9.2 9.2L13 13"/>',

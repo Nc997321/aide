@@ -4,7 +4,7 @@
 //! 「校验 → 引擎 → 注册表 → 广播」编排的地方——**新增一个消费方 = 加一个适配器，不动内核**
 //! （设计原则见 docs/superpowers/plans/2026-09-10-embedded-browser.md §11）。
 //!
-//! **门面不认识「用途」**（同 CLAUDE.md headless 的机制/策略边界：引擎提供机制，宿主决定策略）：
+//! **门面不认识「用途」**（同 CLAUDE.md 的机制/策略边界：引擎提供机制，宿主决定策略）：
 //! 它不知道调用方是面板、agent 工具，还是将来某个「把页面存进知识库」的按钮，所以这里不出现
 //! 「保存」「引用」这类词——那些是消费方的组合，不是内核能力。
 //!
@@ -12,11 +12,15 @@
 //! （UI 或 agent 自己知道刚做了什么），不额外广播——页面加载信号随后会把同一份状态推给所有人，
 //! 两个驱动者（用户/agent）因此看到同一个页面。
 //!
+//! **门面按窗口作用域**（`BrowserFacade::new(app, 窗口标签)`）：视图属于创建它的窗口——一个
+//! 窗口 = 一个 Host，各自的浏览器面板互不可见。读写别窗口的 id 一律是「视图不存在」，广播一律
+//! `emit_to(属主窗口)`（全局 `emit` 会让别的窗口的面板长出不属于它的 tab）。
+//!
 //! 线程：方法可能被 async 命令从 tokio worker 调用；锁内不做引擎 IO（state.rs 红线）。
 
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, EventTarget, Manager};
 use url::Url;
 
 use crate::browser::adapter::PlatformEngine;
@@ -30,9 +34,6 @@ use crate::browser::port::types::{
     Bounds, BrowserOrigin, BrowserView, BrowserViewId, NavState, PageLoadSignal, SizeError,
 };
 use crate::browser::state::{BrowserRegistry, BrowserState};
-
-/// 主窗口 label（lib.rs setup 里创建的 "main"）。命令层因此零窗口知识。
-const MAIN_WINDOW: &str = "main";
 
 /// 导航事件广播名。前端 `useEmbeddedBrowser.onBrowserNav` 订阅同名事件。
 pub const NAV_EVENT: &str = "browser-nav";
@@ -55,8 +56,8 @@ pub enum FacadeError {
     ViewIdRejected(String),
     /// 视图不存在（已关闭/从未创建）。文案带调用方传来的原始 id（可读性优先）。
     ViewNotFound(String),
-    /// main 窗口不存在（启动早期竞态）。
-    NoMainWindow,
+    /// 属主窗口不存在（启动早期竞态 / 窗口已关）。
+    NoWindow(String),
     /// 注册表锁中毒：状态不可信。
     RegistryPoisoned,
     /// 引擎侧失败。
@@ -70,7 +71,7 @@ impl std::fmt::Display for FacadeError {
             FacadeError::BoundsRejected(detail) => write!(f, "invalid bounds: {detail}"),
             FacadeError::ViewIdRejected(detail) => write!(f, "invalid view id: {detail}"),
             FacadeError::ViewNotFound(id) => write!(f, "browser view not found: {id}"),
-            FacadeError::NoMainWindow => write!(f, "main window not found"),
+            FacadeError::NoWindow(label) => write!(f, "window not found: {label}"),
             FacadeError::RegistryPoisoned => write!(f, "browser registry lock poisoned"),
             FacadeError::Engine(detail) => write!(f, "{detail}"),
         }
@@ -85,17 +86,20 @@ impl From<EngineError> for FacadeError {
     }
 }
 
-/// 浏览器门面。持 `AppHandle` 只为两件事：取托管状态、广播事件。
+/// 浏览器门面。持 `AppHandle` 只为两件事：取托管状态、向属主窗口广播事件。
 pub struct BrowserFacade {
     app: AppHandle,
+    /// 作用域窗口标签：建的视图归它，读写 / 列表 / 广播都只认它名下的。
+    window: String,
     engine: Arc<PlatformEngine>,
     registry: Arc<Mutex<BrowserRegistry>>,
 }
 
 impl BrowserFacade {
-    /// 从 Tauri 托管状态装配（engine / registry 都在 `lib.rs` setup 里 manage）。
-    pub fn new(app: &AppHandle) -> Self {
+    /// 从 Tauri 托管状态装配（engine / registry 都在 `lib.rs` setup 里 manage），作用域是 `window`。
+    pub fn new(app: &AppHandle, window: &str) -> Self {
         Self {
+            window: window.to_string(),
             engine: app.state::<Arc<PlatformEngine>>().inner().clone(),
             registry: app.state::<BrowserState>().0.clone(),
             app: app.clone(),
@@ -120,14 +124,14 @@ impl BrowserFacade {
             view.set_displayed(displayed);
             view.set_label(dto.label.clone());
             view.set_origin(dto.origin.map(BrowserOrigin::from).unwrap_or_default());
-            reg.insert(view);
+            reg.insert(view, &self.window);
             id
         };
 
         let window = self
             .app
-            .get_window(MAIN_WINDOW)
-            .ok_or(FacadeError::NoMainWindow)?;
+            .get_window(&self.window)
+            .ok_or_else(|| FacadeError::NoWindow(self.window.clone()))?;
         let cfg = CreateCfg {
             initial_url: url.clone(),
             bounds,
@@ -140,14 +144,16 @@ impl BrowserFacade {
         };
         if let Err(e) = self.engine.create(&window, id.clone(), cfg) {
             // 建视图失败 → 回收注册表占位，不留幽灵条目。
+            tracing::warn!(view = id.as_str(), window = %self.window, "browser: create failed: {e}");
             let _ = self.lock()?.remove(&id);
             return Err(e.into());
         }
+        tracing::info!(view = id.as_str(), window = %self.window, "browser: view created");
 
         let (snapshot, event) = {
             let mut reg = self.lock()?;
             let view = reg
-                .get_mut(&id)
+                .get_mut_in(&id, &self.window)
                 .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
             // 首个导航入历史。**仅当还停在 Idle**：若加载信号已经先推进了状态（`create` 期间主线程
             // 就在收事件），这里不重复记账——否则历史会多一条、甚至把 Ready 拖回 Loading。
@@ -160,7 +166,7 @@ impl BrowserFacade {
             )
         };
         // 广播在锁外：面板靠它长出标签页（agent 开的 tab 尤其需要）。
-        broadcast_view(&self.app, event);
+        broadcast_view(&self.app, &self.window, event);
         Ok(snapshot)
     }
 
@@ -173,7 +179,7 @@ impl BrowserFacade {
         let is_reload = {
             let reg = self.lock()?;
             let view = reg
-                .get(&id)
+                .get_in(&id, &self.window)
                 .ok_or_else(|| FacadeError::ViewNotFound(id_raw.to_string()))?;
             view.current_url() == Some(&url)
         };
@@ -186,7 +192,7 @@ impl BrowserFacade {
 
         let mut reg = self.lock()?;
         let view = reg
-            .get_mut(&id)
+            .get_mut_in(&id, &self.window)
             .ok_or_else(|| FacadeError::ViewNotFound(id_raw.to_string()))?;
         if is_reload {
             view.reload_current();
@@ -211,7 +217,7 @@ impl BrowserFacade {
         let id = self.parse_id(id_raw)?;
         let bounds = Bounds::try_from(bounds).map_err(FacadeError::BoundsRejected)?;
         self.engine.set_bounds(&id, bounds)?;
-        if let Some(view) = self.lock()?.get_mut(&id) {
+        if let Some(view) = self.lock()?.get_mut_in(&id, &self.window) {
             view.set_bounds(bounds);
         }
         Ok(())
@@ -223,7 +229,7 @@ impl BrowserFacade {
     pub fn set_displayed(&self, id_raw: &str, displayed: bool) -> Result<(), FacadeError> {
         let id = self.parse_id(id_raw)?;
         self.engine.set_displayed(&id, displayed)?;
-        if let Some(view) = self.lock()?.get_mut(&id) {
+        if let Some(view) = self.lock()?.get_mut_in(&id, &self.window) {
             view.set_displayed(displayed);
         }
         Ok(())
@@ -233,13 +239,14 @@ impl BrowserFacade {
     /// 显示权在面板（空标签没有视图，还有宽度档、浮层让位这些纯 UI 状态，领域不该被卷进来）。
     pub fn request_focus(&self, id_raw: &str) -> Result<(), FacadeError> {
         let id = self.parse_id(id_raw)?;
-        if self.lock()?.get(&id).is_none() {
+        if self.lock()?.get_in(&id, &self.window).is_none() {
             return Err(FacadeError::ViewNotFound(id_raw.to_string()));
         }
         let app = self.app.clone();
+        let window = self.window.clone();
         let payload = serde_json::json!({ "id": id.as_str() });
         let _ = tauri::async_runtime::spawn_blocking(move || {
-            let _ = app.emit(FOCUS_EVENT, payload);
+            let _ = app.emit_to(EventTarget::webview_window(&window), FOCUS_EVENT, payload);
         });
         Ok(())
     }
@@ -252,12 +259,12 @@ impl BrowserFacade {
         let id = self.parse_id(id_raw)?;
         let event = self
             .lock()?
-            .get(&id)
+            .get_in(&id, &self.window)
             .map(|v| ViewEventDto::of(v, ViewEventKind::Closed));
         self.engine.close(&id)?;
         self.lock()?.remove(&id);
         if let Some(event) = event {
-            broadcast_view(&self.app, event);
+            broadcast_view(&self.app, &self.window, event);
         }
         Ok(())
     }
@@ -268,7 +275,7 @@ impl BrowserFacade {
     pub fn list_views(&self) -> Result<Vec<BrowserViewDto>, FacadeError> {
         let reg = self.lock()?;
         Ok(reg
-            .views_in_order()
+            .views_in_order_of(&self.window)
             .into_iter()
             .map(BrowserViewDto::from)
             .collect())
@@ -285,6 +292,24 @@ impl BrowserFacade {
     pub fn eval(&self, id_raw: &str, script: &str) -> Result<serde_json::Value, FacadeError> {
         let id = self.parse_id(id_raw)?;
         Ok(self.engine.eval(&id, script)?)
+    }
+
+    /// 给视图拍一张当前画面（JPEG data URI）。用途：HTML 浮层盖在面板上、原生视图要让位时，面板用这张
+    /// 「定格画面」填住空出来的洞——否则洞里露出面板底色，页面看起来变灰了。
+    ///
+    /// ⚠️ **只能在视图还显示着的时候拍**：`Page.captureScreenshot` 依赖合成帧，隐藏的视图一帧都不合成，
+    /// 回包永远不来（见 `native.rs` 的超时说明）。调用方先拍、后让位。线程契约同 [`eval`](Self::eval)。
+    pub fn snapshot(&self, id_raw: &str) -> Result<String, FacadeError> {
+        let shot = self.call_cdp(
+            id_raw,
+            "Page.captureScreenshot",
+            &serde_json::json!({ "format": "jpeg", "quality": 70 }),
+        )?;
+        let data = shot
+            .get("data")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| FacadeError::from(EngineError::CdpFailed("Page.captureScreenshot returned no image data".into())))?;
+        Ok(format!("data:image/jpeg;base64,{data}"))
     }
 
     /// 裸 CDP 调用——agent **操作**页面的通道（真实输入事件 `Input.dispatchMouseEvent`、
@@ -341,8 +366,25 @@ impl BrowserFacade {
         Ok(snapshot)
     }
 
+    /// 解析并**认属主**：id 合法但不在本窗口名下 = 视图不存在（先于任何引擎 IO，
+    /// 否则别的窗口的 id 能直通引擎去 eval / 关闭）。
     fn parse_id(&self, raw: &str) -> Result<BrowserViewId, FacadeError> {
-        BrowserViewId::try_new(raw).map_err(|e| FacadeError::ViewIdRejected(e.to_string()))
+        let id = BrowserViewId::try_new(raw)
+            .map_err(|e| FacadeError::ViewIdRejected(e.to_string()))?;
+        let reg = self.lock()?;
+        if reg.get_in(&id, &self.window).is_none() {
+            // 留痕：「不存在」与「不属于调用窗口」从界面上看一模一样（原生视图悬着、面板却摸不到它），
+            // 日志里必须分得清。
+            tracing::warn!(
+                view = raw,
+                caller = %self.window,
+                owner = ?reg.owner_of(&id),
+                "browser: view is not visible to the calling window"
+            );
+            return Err(FacadeError::ViewNotFound(raw.to_string()));
+        }
+        drop(reg);
+        Ok(id)
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, BrowserRegistry>, FacadeError> {
@@ -360,7 +402,7 @@ impl BrowserFacade {
 ///   （`run_on_main_thread` + 阻塞 `recv()`），在主线程调就是**主线程等自己 = 自锁**（已核实）。
 ///
 /// 广播载荷是「发出那一刻重新读的快照」而不是事件本体：所以即便两个广播乱序，后跑的重读一次
-/// 新状态，UI 不会被旧载荷拉回去。
+/// 新状态，UI 不会被旧载荷拉回去。投给**属主窗口**（信号只带视图 id，属主从注册表反查）。
 fn apply_page_load(app: &AppHandle, id: &BrowserViewId, url: &Url, signal: PageLoadSignal) {
     let state = app.state::<BrowserState>();
     let changed = match state.0.lock() {
@@ -378,33 +420,63 @@ fn apply_page_load(app: &AppHandle, id: &BrowserViewId, url: &Url, signal: PageL
     let app = app.clone();
     let id = id.clone();
     let _ = tauri::async_runtime::spawn_blocking(move || {
-        if let Ok(event) = nav_event(&app, &id) {
-            let _ = app.emit(NAV_EVENT, event);
+        if let Ok((window, event)) = nav_event(&app, &id) {
+            let _ = app.emit_to(EventTarget::webview_window(&window), NAV_EVENT, event);
         }
     });
 }
 
-/// 广播视图生命周期。线程纪律同 [`apply_page_load`]：`AppHandle::emit` 的投递终点是
-/// `Webview::eval`（`run_on_main_thread` + 阻塞 `recv`），在主线程调就是主线程等自己。
-fn broadcast_view(app: &AppHandle, event: ViewEventDto) {
+/// 广播视图生命周期（只投给属主窗口）。线程纪律同 [`apply_page_load`]：`AppHandle::emit` 的
+/// 投递终点是 `Webview::eval`（`run_on_main_thread` + 阻塞 `recv`），在主线程调就是主线程等自己。
+fn broadcast_view(app: &AppHandle, window: &str, event: ViewEventDto) {
     let app = app.clone();
+    let window = window.to_string();
     let _ = tauri::async_runtime::spawn_blocking(move || {
-        let _ = app.emit(VIEW_EVENT, event);
+        let _ = app.emit_to(EventTarget::webview_window(&window), VIEW_EVENT, event);
     });
 }
 
-/// 读一眼当下的导航状态（广播载荷）。
-fn nav_event(app: &AppHandle, id: &BrowserViewId) -> Result<NavEventDto, FacadeError> {
+/// 窗口销毁：回收它名下的全部视图（引擎子 webview + 注册表）。不广播——窗口已经没了。
+///
+/// 引擎 `close` 内部 `run_on_main_thread` + 阻塞 `recv`，而窗口事件回调跑在主线程上，故整体交给
+/// blocking 线程。子 webview 多半已随窗口一起销毁、`close` 会报错：忽略，注册表照常清。
+pub fn release_window(app: &AppHandle, window: &str) {
+    let app = app.clone();
+    let window = window.to_string();
+    let _ = tauri::async_runtime::spawn_blocking(move || {
+        let facade = BrowserFacade::new(&app, &window);
+        let ids = match facade.lock() {
+            Ok(reg) => reg.ids_of_window(&window),
+            Err(_) => return,
+        };
+        for id in ids {
+            let _ = facade.engine.close(&id);
+            if let Ok(mut reg) = facade.lock() {
+                reg.remove(&id);
+            }
+        }
+    });
+}
+
+/// 读一眼当下的导航状态（广播载荷）及其属主窗口。
+fn nav_event(app: &AppHandle, id: &BrowserViewId) -> Result<(String, NavEventDto), FacadeError> {
     // 先落成变量再取字段：`app.state()` 返回的 `State` 是临时值，链式取 `.0` 会被借用检查拒绝。
     let state = app.state::<BrowserState>();
     let reg = state.0.lock().map_err(|_| FacadeError::RegistryPoisoned)?;
     let view = reg
         .get(id)
         .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?;
-    Ok(NavEventDto {
-        id: id.as_str().to_string(),
-        nav: NavStateDto::from(view.nav()),
-        can_go_back: view.can_go_back(),
-        can_go_forward: view.can_go_forward(),
-    })
+    let window = reg
+        .owner_of(id)
+        .ok_or_else(|| FacadeError::ViewNotFound(id.as_str().to_string()))?
+        .to_string();
+    Ok((
+        window,
+        NavEventDto {
+            id: id.as_str().to_string(),
+            nav: NavStateDto::from(view.nav()),
+            can_go_back: view.can_go_back(),
+            can_go_forward: view.can_go_forward(),
+        },
+    ))
 }
