@@ -188,32 +188,69 @@ function renderTables(raw: unknown, level = 2): string[] {
   return out;
 }
 
+/** 字段行的「身份」部分（不含值）：连续若干个身份相同的字段会被合并成一行，见 `renderFields`。 */
+function fieldIdentity(field: Record<string, unknown>): string {
+  return [
+    `[${str(field["tag"])}${field["type"] ? `:${str(field["type"])}` : ""}]`,
+    field["label"] ? `label="${str(field["label"])}"` : "(no label found)",
+    field["name"] ? `name="${str(field["name"])}"` : "",
+    field["disabled"] === true ? "DISABLED" : "",
+    field["required"] === true ? "required" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function fieldLine(field: Record<string, unknown>): string {
+  const options = asArray(field["options"]);
+  const opts = options.length
+    ? ` options=${options
+        .map((o) => {
+          const r = asRecord(o);
+          return r ? `${str(r["text"])}${r["selected"] === true ? "*" : ""}` : "";
+        })
+        .filter(Boolean)
+        .join(" | ")}`
+    : "";
+  return `- ${fieldIdentity(field)} value="${str(field["value"])}"${opts}`;
+}
+
+/** 合并阈值：连续这么多个同身份字段才折叠（两三个照常列，折叠反而难读）。 */
+const FIELD_RUN_MIN = 4;
+
+/**
+ * 一串同身份字段 → 一行：`- 181 × [input:checkbox] (no label found) — values: unchecked ×178, checked ×3`。
+ *
+ * 为什么：表格每行一个选择框，175 行的页面就是 181 行一模一样的 `(no label found)`——信息量是
+ * 一个计数，却占掉上下文的一大块（2026-10-07 agent 实测反馈）。**值分布照报**：「勾了几个」
+ * 往往正是要问的事；想知道勾的是哪几行，表格本身与 browser_eval 都答得了。
+ */
+function fieldRunLine(run: Record<string, unknown>[]): string {
+  const counts = new Map<string, number>();
+  for (const f of run) {
+    const v = str(f["value"]);
+    counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
+  const top = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const shown = top.slice(0, 5).map(([v, n]) => `${v === "" ? "(empty)" : `"${v}"`} ×${n}`);
+  const more = top.length > 5 ? `, … ${top.length - 5} more distinct` : "";
+  return `- ${run.length} × ${fieldIdentity(run[0]!)} — values: ${shown.join(", ")}${more}`;
+}
+
 function renderFields(raw: unknown, level = 2): string[] {
-  const fields = asArray(raw);
+  const fields = asArray(raw)
+    .map(asRecord)
+    .filter((f): f is Record<string, unknown> => f !== null);
   if (!fields.length) return [];
   const out = ["", `${"#".repeat(level)} Form fields (${fields.length})`];
-  for (const f of fields) {
-    const field = asRecord(f);
-    if (!field) continue;
-    const bits = [
-      `[${str(field["tag"])}${field["type"] ? `:${str(field["type"])}` : ""}]`,
-      field["label"] ? `label="${str(field["label"])}"` : "(no label found)",
-      field["name"] ? `name="${str(field["name"])}"` : "",
-      `value="${str(field["value"])}"`,
-      field["disabled"] === true ? "DISABLED" : "",
-      field["required"] === true ? "required" : "",
-    ].filter(Boolean);
-    const options = asArray(field["options"]);
-    const opts = options.length
-      ? ` options=${options
-          .map((o) => {
-            const r = asRecord(o);
-            return r ? `${str(r["text"])}${r["selected"] === true ? "*" : ""}` : "";
-          })
-          .filter(Boolean)
-          .join(" | ")}`
-      : "";
-    out.push(`- ${bits.join(" ")}${opts}`);
+  for (let i = 0; i < fields.length; ) {
+    // 带选项的 <select> 不折：选项本身就是要看的内容
+    const id = fieldIdentity(fields[i]!);
+    let j = i + 1;
+    while (j < fields.length && fieldIdentity(fields[j]!) === id && !asArray(fields[j]!["options"]).length) j++;
+    if (j - i >= FIELD_RUN_MIN && !asArray(fields[i]!["options"]).length) out.push(fieldRunLine(fields.slice(i, j)));
+    else for (let k = i; k < j; k++) out.push(fieldLine(fields[k]!));
+    i = j;
   }
   return out;
 }
@@ -284,10 +321,24 @@ function textFilterNote(value: Record<string, unknown>): string | null {
  * 旁注跟着正文走（没正文就不出）——它是在为**下面那段文本**作注解，悬空的旁注等于凭空暗示
  * "这里有隐藏内容"（见 `textFilterNote`）。
  */
-function renderTextBlock(value: Record<string, unknown>, heading: string): string[] {
+function renderTextBlock(value: Record<string, unknown>, heading: string, opts: ReadRenderOptions = {}): string[] {
   const text = str(value["text"]);
   if (!text) return [];
   const note = textFilterNote(value);
+  // 结构面不空时正文**默认收起**：表格/字段/按钮已经在上面了，innerText 是同一份内容再说一遍
+  // （2026-10-07 agent 实测：175 行的表格页，Raw text 把表格又印了一遍）。结构全空的页面
+  // （设计工具导出的 div 画布）内容只在正文里，照旧全给。
+  if (!opts.fullText && !hasNoStructure(value) && text.length > TEXT_CLIP_WITH_STRUCTURE) {
+    return [
+      ...(note ? [note] : []),
+      "",
+      heading,
+      text.slice(0, TEXT_CLIP_WITH_STRUCTURE) + "…",
+      "",
+      `NOTE: text clipped to ${TEXT_CLIP_WITH_STRUCTURE} of ${text.length} chars — the structure above already ` +
+        "carries the tables/fields/buttons. Pass full_text for the rest.",
+    ];
+  }
   return [...(note ? [note] : []), "", heading, text];
 }
 
@@ -367,7 +418,16 @@ function renderFrames(raw: unknown, frameOutcome?: FrameReadOutcome): string[] {
   return out;
 }
 
-export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): string {
+/** 有结构的文档里正文默认给多少字符（见 `renderTextBlock`）。 */
+export const TEXT_CLIP_WITH_STRUCTURE = 2000;
+
+/** `formatRead` 的渲染选项。 */
+export interface ReadRenderOptions {
+  /** `true` = 正文全给（`full_text` 参数；`since_last` 的比较底稿也用全文）。 */
+  fullText?: boolean;
+}
+
+export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome, opts: ReadRenderOptions = {}): string {
   // 签名是 `EvalView`，但这里**不假设**它真是（`formatRead(bad)` 有专门的守卫测试）。
   const v = asRecord(view) ?? {};
   const viewId = str(v["viewId"]) || "?";
@@ -434,10 +494,10 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome): str
     // 帧这边当初漏了——2026-09-16 agent 实测踩到。
     // （同一份脚本跑的，过滤成没成也在帧的信封里——主文档有的旁注，帧这半边同样要有；
     //   跨域原型的内容全在帧里，漏了它就是静默降级。`renderTextBlock` 两件事一起做。）
-    out.push(...renderTextBlock(fr.value, "#### Text"));
+    out.push(...renderTextBlock(fr.value, "#### Text", opts));
   });
 
-  out.push(...renderTextBlock(value, "## Raw text"));
+  out.push(...renderTextBlock(value, "## Raw text", opts));
 
   // 旁注放最后：它是**关于上面这一整份结果**的免责说明，不是页面内容的一部分。
   const notes = evalNotes(v["probe"]);

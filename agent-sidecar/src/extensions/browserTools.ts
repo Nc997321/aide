@@ -37,6 +37,7 @@ import {
 import { buildResolveScript } from "./browser/actions.js";
 import type { ActTarget } from "./browser/actions.js";
 import { readRecorder } from "./browser/recorder.js";
+import { readBaselines as baselines, renderSinceLast } from "./browser/readDiff.js";
 import { renderNetwork } from "./browser/network.js";
 import { renderConsole } from "./browser/console.js";
 import {
@@ -132,11 +133,29 @@ export function buildBrowserReadTool(
       "runtime allows it (so you do not have to navigate away to read an embedded prototype). Anything it could not " +
       "read is reported as such, with the reason. Hidden (display:none) tables/fields/clickables are skipped by default " +
       "and counted in a note — pass include_hidden to list them too (prototype pages that stack whole screens that way). " +
-      "Raw text lists rendered text only; include_hidden applies to it too. " +
+      "Raw text lists rendered text only; include_hidden applies to it too. When the page has tables/fields/buttons the " +
+      "raw text is clipped (the structure already carries it) — pass full_text for all of it. Runs of identical " +
+      "unlabeled fields (a checkbox per table row) are folded into one line with a value count. " +
+      "After you change the page, pass since_last to get only the lines that changed since your previous read. " +
       "It does NOT run arbitrary script — use browser_eval for that.",
-    { view_id: viewIdArg, include_hidden: includeHiddenArg },
+    {
+      view_id: viewIdArg,
+      include_hidden: includeHiddenArg,
+      full_text: z
+        .boolean()
+        .optional()
+        .describe("Return the whole raw text even when the page has structure. Default false."),
+      since_last: z
+        .boolean()
+        .optional()
+        .describe(
+          "Return only what changed since this view was last read with browser_read (- before / + now). " +
+            "Use it to verify the effect of an action. Falls back to a full read when there is nothing to compare.",
+        ),
+    },
     async (args) => {
-          const projection = { includeHidden: args.include_hidden === true };
+      const includeHidden = args.include_hidden === true;
+      const projection = { includeHidden };
       try {
         const r = await runEval(buildProjectionScript(projection), { viewId: args.view_id }, emit);
         // runEval 的失败文本已是面向模型的（异常/不可序列化/桥失败各自不同），不加工。
@@ -144,9 +163,16 @@ export function buildBrowserReadTool(
         // 骨架里若含**读不到的** iframe，再走一趟 CDP 做帧级读取（见 frames.ts）。
         // 不是失败——跨域 iframe 是浏览器的硬边界，CDP 是绕过去的那条路。
         const frameOutcome = await readFramesFromResult(args.view_id, r.value, projection, emit);
-        return textResult(
-          formatRead({ value: r.value, viewId: r.viewId, probe: r.probe }, frameOutcome),
-        );
+        const view = { value: r.value, viewId: r.viewId, probe: r.probe };
+        const full = formatRead(view, frameOutcome, { fullText: args.full_text === true });
+        // 底稿一律记**全文版**：差异要覆盖正文里被默认收起的那部分。
+        // 视图 id 用 Rust 解析回来的那个——省略 view_id 与显式给出要落到同一份底稿上。
+        const key = r.viewId ?? args.view_id;
+        if (!key) return textResult(full);
+        const baseline = formatRead(view, frameOutcome, { fullText: true });
+        const prev = baselines.get(key, includeHidden);
+        baselines.set(key, includeHidden, baseline);
+        return textResult(args.since_last === true ? renderSinceLast(prev, baseline, full) : full);
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
         return textResult(`Browser tool failed unexpectedly: ${detail}`);

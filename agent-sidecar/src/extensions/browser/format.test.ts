@@ -3,6 +3,7 @@ import {
   formatBridgeFailure,
   formatEval,
   formatRead,
+  TEXT_CLIP_WITH_STRUCTURE,
   formatTabs,
   type EvalView,
 } from "./format.js";
@@ -332,5 +333,43 @@ describe("可见性旁注（已删）", () => {
     });
     expect(s).toContain("cannot await it");
     expect(s).toContain("window");
+  });
+});
+
+/** 2026-10-07 agent 实测反馈：175 行的表格页回了 181 个复选框 + 一遍重复的 Raw text。 */
+describe("formatRead：输出体积", () => {
+  const envelope = (value: unknown) => ({ value, viewId: "browser-1", probe: { pending: false } });
+  const box = (value: string) => ({ tag: "input", type: "checkbox", label: "", name: null, value });
+
+  it("连续同身份的字段折成一行，并报值分布", () => {
+    const fields = [...Array(178).fill(box("unchecked")), ...Array(3).fill(box("checked"))];
+    const s = formatRead(envelope({ ok: true, fields }));
+    expect(s).toContain("## Form fields (181)");
+    expect(s).toContain('- 181 × [input:checkbox] (no label found) — values: "unchecked" ×178, "checked" ×3');
+    expect(s.match(/\[input:checkbox\]/g)).toHaveLength(1);
+  });
+
+  it("不足阈值、或身份不同的字段照常逐行列", () => {
+    const s = formatRead(
+      envelope({ ok: true, fields: [box("checked"), box("unchecked"), { tag: "input", type: "text", label: "名称", value: "a" }] }),
+    );
+    expect(s.match(/\[input:checkbox\]/g)).toHaveLength(2);
+    expect(s).toContain('label="名称"');
+  });
+
+  it("有结构时正文默认收起并说明；full_text 给全文", () => {
+    const text = "x".repeat(TEXT_CLIP_WITH_STRUCTURE + 500);
+    const value = { ok: true, tables: [{ headers: ["a"], rows: [["1"]] }], text, textFiltered: true };
+    const clipped = formatRead(envelope(value));
+    expect(clipped).toContain(`text clipped to ${TEXT_CLIP_WITH_STRUCTURE} of ${text.length} chars`);
+    expect(clipped).not.toContain(text);
+    expect(formatRead(envelope(value), undefined, { fullText: true })).toContain(text);
+  });
+
+  it("没有结构的页面（div 画布）正文照旧全给", () => {
+    const text = "y".repeat(TEXT_CLIP_WITH_STRUCTURE + 500);
+    const s = formatRead(envelope({ ok: true, text, textFiltered: true }));
+    expect(s).toContain(text);
+    expect(s).not.toContain("text clipped");
   });
 });
