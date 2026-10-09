@@ -13,8 +13,8 @@
  * App 运行期内有效，重启回落默认）。日常对 list_workspaces 隐身，本模型
  * 单独持有身份（daily：key + path）；路径是内部概念，selectedPath/卡片/
  * 弹层一律不展示，spawn 的 workspaceRoot 走 selectedRoot 的日常特例。
- * 旧桌面无此 RPC：每运行至多探测一次，失败静默降级——无日常行、默认范围
- * 不变，一切与升级前一致。
+ * 旧桌面无此 RPC：随每次 refresh 并行探测，失败静默降级——无日常行、默认
+ * 范围不变，一切与升级前一致；下次 refresh（含重连自愈）再试。
  * 弹层元信息：每次打开并行拉取各工作区会话列表，三态计数 = 全局事件推导的
  * id 集合（SessionsModel）∩ 该工作区会话列表——计数是快照，整体替换驱动 @Trace。
  */
@@ -58,10 +58,25 @@ export class WorkspaceModel {
   /** 弹层计数快照（打开弹层时拉取；整体替换驱动 @Trace）。 */
   @Trace metas: WsMeta[] = [];
   @Trace loadingMetas: boolean = false;
-  /** 日常身份探测标记（每运行至多一次；失败不重试——旧桌面降级语义）。 */
-  private dailyTried: boolean = false;
+  /** 重连监听标记（监听挂传输实例只挂一次；镜像 SessionsModel.ensureListener）。 */
+  private listening: boolean = false;
   /** 用户已显式选过范围（App 运行期内默认日常让位；重启回落）。 */
   private userPicked: boolean = false;
+
+  /** 页面挂载时调用：幂等挂重连监听——断线期间错过的日常/列表变更在重连后自愈。 */
+  ensureListener(): void {
+    if (this.listening) {
+      return;
+    }
+    const t = connModel.transport;
+    if (t === null) {
+      return; // authed 后 transport 必在；防御未连接时提前挂载
+    }
+    this.listening = true;
+    t.onReconnected(() => {
+      this.refresh();
+    });
+  }
 
   /** 拉取工作区列表 + 活动工作区 + 日常身份（authed 前置；防重入；三路并行互不牵连）。 */
   async refresh(): Promise<void> {
@@ -97,14 +112,11 @@ export class WorkspaceModel {
   }
 
   /**
-   * 探测日常默认工作区身份：每运行至多一次（先置 tried 防并发重入），旧桌面
-   * 无此 RPC / 未设置 / 字段残缺 → 静默降级为无日常，一切与升级前一致。
+   * 探测日常默认工作区身份：随每次 refresh 重试（瞬断烧掉一次探测后本运行期
+   * 不再缺席）；旧桌面无此 RPC / 未设置 / 字段残缺 → 静默降级为无日常，一切
+   * 与升级前一致（已解析出的身份保持不动，不闪行）。
    */
   private async fetchDaily(): Promise<void> {
-    if (this.dailyTried) {
-      return;
-    }
-    this.dailyTried = true;
     try {
       const d: DailyWorkspace = await api.dailyWorkspace();
       if (d.key !== '' && d.path !== '') {

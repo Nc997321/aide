@@ -7,7 +7,11 @@
 | 本目录 | 上游 | 性质 |
 |---|---|---|
 | `transport.ets` | `packages/aide-sdk/src/transport.ts` | 过筛（去 Tauri 默认实现） |
-| `remote.ets` | `packages/aide-sdk/src/remote.ts` | 过筛（ArkTS 化，协议语义零改动） |
+| `remote.ets` | `packages/aide-sdk/src/remote.ts` | 过筛 → **编排层**（重连/配对/状态机只做编排，连接细节全部下沉 `link/`，协议语义零改动） |
+| `link/types.ets` | `packages/aide-sdk/src/remote.ts` | 拆分（`WsLike` 契约 + 连接事件/配置类型） |
+| `link/frames.ets` | `packages/aide-sdk/src/remote.ts` | 拆分（wire 装配器：字符串帧拼接/取帧，三端字节序契约的本地端） |
+| `link/backoff.ets` | `packages/aide-sdk/src/remote.ts` | 拆分（退避策略：1s→30s + 0-500ms 抖动，纯函数） |
+| `link/attempt.ets` | `packages/aide-sdk/src/remote.ts` | 拆分（`ConnAttempt`：单次连接生命周期——握手/keepalive/watchdog/废弃判定，回调四槽 + 定时器零泄漏） |
 | `storage.ets` | `remote-pwa/src/storage.ts` | 过筛（localStorage → preferences，键名/校验语义零改动） |
 | `api.ets` | `packages/aide-sdk/src/api.ts` | 过筛子集（对象字面量门面 → class + 单例；命令名/参数形状零偏差） |
 | `types.ets` | `packages/aide-sdk/src/types.ts` | 过筛子集（按页面域收录 DTO） |
@@ -32,4 +36,5 @@
 
 ## 验证状态
 
-`transport` / `remote` / `ws-ohos` / `storage` / `api` / `types` 已通过 hvigor 编译（ArkTS 零告警，API 12 兼容）。
+- `transport` / `remote` / `link/*` / `ws-ohos` / `storage` / `api` / `types` 已通过 hvigor 编译（ArkTS 零告警，API 12 兼容）。
+- `link/` 纯模块（backoff / frames / attempt）有 ohosTest 单测安全网：`entry/src/ohosTest/ets/test/`（hypium，FakeWs 模拟 WsLike，10ms 级时钟压缩）。真机命令：`hdc shell aa test -b com.aide.ohos -m entry_test -s unittest OpenHarmonyTestRunner`。
