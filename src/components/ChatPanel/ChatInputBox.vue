@@ -22,7 +22,8 @@ import { useMentionInserter } from "@/composables/useMentionInserter";
 import { useKbSelections } from "@/composables/useKbSelections";
 import { useMentionSuggest, applyPick, type MentionSuggestion } from "@/composables/useMentionSuggest";
 import { useWorkspaces } from "@/composables/useWorkspaces";
-import { getFileIcon, pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
+import { pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
+import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import { useQuickActions } from "@/composables/useQuickActions";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
@@ -632,7 +633,6 @@ const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
 });
 
 const mentionName = pathBasename;
-const mentionIcon = getFileIcon;
 const folderIconPath = FOLDER_ICON_PATH;
 
 // ── `@` 补全下拉（与 `/` 菜单并列的第二套补全）──────────────────────────────
@@ -1358,14 +1358,7 @@ const { actions: quickActions } = useQuickActions();
           >
             <path :d="folderIconPath" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
-          <svg
-            v-else
-            class="mention-chip-icon"
-            :style="{ color: mentionIcon(mentionName(m.path)).color }"
-            width="13" height="13" viewBox="0 0 24 24" fill="none"
-          >
-            <path :d="mentionIcon(mentionName(m.path)).path" fill="currentColor" opacity="0.85"/>
-          </svg>
+          <FileTypeIcon v-else class="mention-chip-icon" :name="mentionName(m.path)" :size="13" />
           <!-- 区间引用（编辑器选区）在文件名后带 :起-止，一眼区分整文件引用 -->
           <span class="mention-chip-name">
             {{ mentionName(m.path) }}<span v-if="m.range" class="mention-chip-range">:{{ m.range.start }}-{{ m.range.end }}</span>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getFileIcon } from "../utils/fileIcons";
+import FileTypeIcon from "./FileTypeIcon.vue";
 import type { ChangeTreeNode } from "../utils/changeTree";
 import type { ChangeFile } from "../types";
 
@@ -74,13 +74,7 @@ const rowPadding = () => `${props.depth * 14 + 8}px`;
         @click="props.openDiff(node.file)"
       >
         <span class="cft-status" :class="`status-${node.file.status || 'M'}`">{{ node.file.status || 'M' }}</span>
-        <svg
-          class="cft-file-icon"
-          :style="{ color: getFileIcon(node.file.path).color }"
-          width="14" height="14" viewBox="0 0 24 24" fill="none"
-        >
-          <path :d="getFileIcon(node.file.path).path" fill="currentColor" opacity="0.85"/>
-        </svg>
+        <FileTypeIcon class="cft-file-icon" :name="node.file.path" :size="14" />
         <span class="cft-name">{{ node.name }}</span>
         <span v-if="node.file.additions > 0 || node.file.deletions > 0" class="cft-stats">
           <span v-if="node.file.additions > 0" class="cft-add">+{{ node.file.additions }}</span>

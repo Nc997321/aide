@@ -5,7 +5,7 @@ import { fileMenuItems, directoryMenuItems } from "../menus/contextMenus";
 import { useFileClipboard } from "../composables/useFileClipboard";
 import { useModal } from "../composables/useModal";
 import { useGit } from "../composables/useGit";
-import { getFileIcon } from "../utils/fileIcons";
+import FileTypeIcon from "./FileTypeIcon.vue";
 import { TREE_INDENT_PX, treeRowPaddingLeft, hoverRevealPaddingLeft } from "../utils/fileTree";
 
 interface FileEntry {
@@ -284,14 +284,7 @@ const nodePadding = computed(() =>
           stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"
         />
       </svg>
-      <svg
-        v-else
-        class="node-icon node-icon--file"
-        :style="{ color: getFileIcon(node.name).color }"
-        width="15" height="15" viewBox="0 0 24 24" fill="none"
-      >
-        <path :d="getFileIcon(node.name).path" fill="currentColor" opacity="0.85"/>
-      </svg>
+      <FileTypeIcon v-else class="node-icon node-icon--file" :name="node.name" :size="15" />
 
       <!-- Name -->
       <span ref="nameEl" class="node-name">{{ node.name }}</span>

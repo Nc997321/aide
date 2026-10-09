@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { getFileIcon } from "../utils/fileIcons";
+import FileTypeIcon from "./FileTypeIcon.vue";
 import type { ChangeFile, TouchedFile } from "../types";
 
 /**
@@ -38,13 +38,7 @@ function splitPath(p: string): { dir: string; name: string } {
         @click="props.openDiff(row)"
       >
         <span class="cfl-status" :class="`status-${row.status || 'M'}`">{{ row.status || 'M' }}</span>
-        <svg
-          class="cfl-icon"
-          :style="{ color: getFileIcon(row.path).color }"
-          width="14" height="14" viewBox="0 0 24 24" fill="none"
-        >
-          <path :d="getFileIcon(row.path).path" fill="currentColor" opacity="0.85"/>
-        </svg>
+        <FileTypeIcon class="cfl-icon" :name="row.path" :size="14" />
         <span class="cfl-name">
           <span v-if="splitPath(row.path).dir" class="cfl-dir">{{ splitPath(row.path).dir }}</span>{{ splitPath(row.path).name }}
         </span>
