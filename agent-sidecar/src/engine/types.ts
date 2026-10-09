@@ -468,7 +468,7 @@ export type SidecarCommand =
       additional_dirs?: string[];
       // 本次被 Rust 判掉、没进 additional_dirs 的条目——纯回声（前端显示"未注册，已忽略"）。
       attach_rejected?: string[];
-      // 供应商连接身份真的漂移了才带 true——下一次 query() 时 forkSession。
+      // 供应商连接身份真的漂移了才带 true——worker 原地 resume 重建 query（不 fork，会话 id 不变）。
       provider_switched?: boolean;
       // 忙碌时的"插队"标记：不在当前轮立刻打断，等安全边界再 interrupt。
       jump_queue?: boolean;

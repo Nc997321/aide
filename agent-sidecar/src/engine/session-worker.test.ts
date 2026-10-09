@@ -13,7 +13,7 @@ import type { PermissionPolicySnapshot } from "./policy/types.js";
  * 关键不变量：
  * - 构造时 fork 源为空（普通会话不 resume）
  * - routingKey 等于构造参数（SessionManager 据此 re-key）
- * - 只有 btw / provider_switched 才设 fork 源（在 handleCommand 里）
+ * - 只有 btw 才设 fork 源（在 handleCommand 里）；provider_switched 原地 resume、不 fork
  * - BTW 从 fork_from 读 fork 源，不从 session_id 读
  */
 
@@ -1214,6 +1214,92 @@ describe("SessionWorker — 思考值漂移 → 原地重启", () => {
     expect((worker as any).spawnedThinking).toBe(true); // 漂移仍在账上，下一轮还认得出
     expect(events.slice(mark).some((e) => e.type === "message_stop")).toBe(false);
 
+    worker.stop();
+  });
+});
+
+/**
+ * 供应商切换 → 原地 resume（2026-10-09 回归）。
+ *
+ * 旧做法 forkSession：SDK 给出新 id 的 session_init，已定名的交互会话被前端当成
+ * 自动化会话摘走 store/状态——「发了消息看不到、tab 变关闭但还在思考」。
+ * 不变量：会话 id 不变（resume 同 id、不 fork）；活 query 要真的重建（新 env 落地），
+ * 不能把消息塞回旧供应商的 query。
+ */
+describe("SessionWorker — 供应商切换 → 原地 resume、不 fork", () => {
+  function makeHarness() {
+    const calls: any[] = [];
+    const queryFn = ((args: any) => {
+      calls.push(args);
+      const opts = args?.options ?? args;
+      return (async function* () {
+        yield { type: "system", subtype: "init", session_id: "real-sid" } as any;
+        if (calls.length === 1) {
+          yield { type: "result", subtype: "success", is_error: false, total_cost_usd: 0 } as any;
+        }
+        await new Promise((_, reject) => {
+          opts.abortController.signal.addEventListener("abort", () => {
+            const e = new Error("aborted by worker");
+            e.name = "AbortError";
+            reject(e);
+          });
+        });
+      })();
+    }) as any;
+    const events: any[] = [];
+    const worker = new SessionWorker("real-sid", (e) => events.push(e), { queryFn, cwd: "/proj" });
+    return { worker, events, calls };
+  }
+
+  it("query 活着：拆掉原地重建——新 env、resume 同一 id、不 fork", async () => {
+    const { worker, events, calls } = makeHarness();
+    worker.handleCommand({
+      cmd: "send", session_id: "real-sid", prompt: "甲", cwd: "/proj",
+      env: { ANTHROPIC_BASE_URL: "https://old.example" },
+    } as any);
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+    const mark = events.length;
+
+    worker.handleCommand({
+      cmd: "send", session_id: "real-sid", prompt: "乙", cwd: "/proj",
+      env: { ANTHROPIC_BASE_URL: "https://new.example" },
+      provider_switched: true,
+    } as any);
+    await vi.waitFor(() => expect(calls.length).toBe(2));
+
+    const second = calls[1].options;
+    expect(second.resume).toBe("real-sid");
+    expect(second.forkSession).toBeFalsy();
+    expect(second.env.ANTHROPIC_BASE_URL).toBe("https://new.example");
+    expect(events.slice(mark).filter((e) => e.type === "message_stop" || e.type === "error")).toEqual([]);
+    expect(events.slice(mark).filter((e) => e.type === "user_message").map((e) => e.text)).toEqual(["乙"]);
+    const iter = (calls[1].prompt as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+    expect(JSON.stringify((await iter.next()).value)).toContain("乙");
+
+    // 漂移已兑现：下一条同供应商消息照常走现 query，不再重建
+    (worker as any).turnActive = false;
+    worker.handleCommand({
+      cmd: "send", session_id: "real-sid", prompt: "丙", cwd: "/proj",
+      env: { ANTHROPIC_BASE_URL: "https://new.example" },
+    } as any);
+    await flushPromises();
+    expect(calls.length).toBe(2);
+    worker.stop();
+  });
+
+  it("进程已退（新 worker）：按 resume_session_id 原地 resume，不 fork、不发迁移通知", async () => {
+    const { worker, events, calls } = makeHarness();
+    worker.handleCommand({
+      cmd: "send", session_id: "real-sid", prompt: "乙", cwd: "/proj", env: {},
+      resume_session_id: "real-sid",
+      provider_switched: true,
+    } as any);
+    await vi.waitFor(() => expect(calls.length).toBe(1));
+    expect(calls[0].options.resume).toBe("real-sid");
+    expect(calls[0].options.forkSession).toBeFalsy();
+    await flushPromises();
+    expect(events.some((e) => e.type === "notification")).toBe(false);
     worker.stop();
   });
 });

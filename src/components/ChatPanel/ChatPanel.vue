@@ -173,7 +173,7 @@ const displayedPermission = computed<PermissionRequest | null>(
 
 /** 构造发送前确认的合成请求：供应商漂移与「仅模型漂移」两种文案。
  *
- * 供应商漂移 = 要 respawn（进程重拉、历史迁移），必须说清是**永久**改动；
+ * 供应商漂移 = 要 respawn（进程原地 resume 重拉、提示缓存失效），必须说清是**永久**改动；
  * 仅模型漂移 = 供应商没换，只换模型，文案侧重模型本身。两者都复用
  * PermissionDialog 的 AskUserQuestion 视觉语言渲染，input 全前端字段，不进 sidecar。 */
 function buildSendConfirmRequest(decision: ConfirmDecision): PermissionRequest {
@@ -202,7 +202,7 @@ function buildSendConfirmRequest(decision: ConfirmDecision): PermissionRequest {
       chip: decision.providerDrift ? "切换确认" : "模型变更",
       question: `将以 ${newProviderName}/${decision.effectiveModel} 发送（原 ${oldProviderName}/${oldModel}）`,
       info: decision.providerDrift
-        ? `确认后这条会话的供应商会改为 ${newProviderName} 并写入会话记录，以后打开都是它。运行中的会话还会重新拉起进程、提示缓存失效；对话历史迁移到新会话继续。`
+        ? `确认后这条会话的供应商会改为 ${newProviderName} 并写入会话记录，以后打开都是它。运行中的会话会重新拉起进程、提示缓存失效，对话在本会话原地继续。`
         : `供应商仍是 ${newProviderName}，仅模型由 ${oldModel} 改为 ${decision.effectiveModel}。确认后模型选择会写入会话记录。`,
       confirmLabel: `继续发送 · ${decision.effectiveModel}`,
     },

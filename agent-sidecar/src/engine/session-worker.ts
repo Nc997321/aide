@@ -98,7 +98,7 @@ export class SessionWorker {
    *  更新、在装配 MCP 时递给知识库扩展。 */
   private readonly kbScopes = new KbScopeStore();
   /** fork/resume 源：SDK 会话 ID。空串=全新会话不 resume。
-   *  仅 btw / provider_switched / 重开会话时设置（在 handleCommand 或 session_init 里）。
+   *  仅 btw / 自动化蒸馏轮 / 重开会话时设置（在 handleCommand 或 session_init 里）。
    *  注意：这不是路由键——路由键是 routingKey，由 SessionManager 管理。 */
   resumeSource = "";
   /** 当前在 SessionManager.workers Map 里的 key。构造时=tempId，
@@ -154,8 +154,11 @@ export class SessionWorker {
   private readonly permModes = new PermissionModeController((e) => this.emit(e));
   /** 订阅额度/速率上报（15s 节流，见 queryTelemetry.ts）。 */
   private readonly rateLimitReporter = new RateLimitReporter();
-  private pendingFork = false;
   private shouldForkNextConnect = false;
+  /** 供应商连接身份漂移（send.provider_switched）待兑现：env 只在建 query 时落地，
+   *  所以要**原地 resume 重建** query（与思考值漂移同一条路）。回合进行中不拆，
+   *  留在账上等下一个空闲 send；建 query 时清账。 */
+  private providerDriftPending = false;
   private turnActive = false;
   private stopped = false;
   /** 本会话是否已触发过语言服务器预热（只触发一次，见 startLoop）。 */
@@ -387,8 +390,8 @@ export class SessionWorker {
     this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
   }
 
-  /** 思考值在会话中变了（快速 ⇒ 关思考）：拆掉当前 query，让本条消息由**重建后的**
-   *  query 承接。
+  /** spawn 期参数在会话中变了（快速 ⇒ 关思考 / 换供应商）：拆掉当前 query，让本条
+   *  消息由**重建后的** query 承接。
    *
    *  链路：abort → for await 抛 AbortError → catch 的 AbortError 分支（retireIterators
    *  作废旧迭代器 → while 再迭代一轮）→ 用新 thinking 值重建。重建是**原地 resume**：
@@ -397,7 +400,7 @@ export class SessionWorker {
    *
    *  **不发任何回合终态事件**：query 是被我们主动拆的，不是回合结束。谎报
    *  message_stop/interrupted 会翻 isBusy，还会给上一条消息盖一个假档位徽章。 */
-  private restartQueryForThinking(): void {
+  private restartQueryInPlace(): void {
     this.restartPending = true;
     this.abortController?.abort();
   }
@@ -669,13 +672,14 @@ export class SessionWorker {
     // 抛错由 enqueueSend 报成非致命 error 帧：该条 send 整体拒发，不静默丢消息。
     const images = normalizeInlineImages(cmd.images);
 
-    // session_id 在命令里是路由键（SessionManager 用它找 worker）。
-    // this.resumeSource 的含义是 fork 源——只在 btw / provider_switched 时
-    // 才从命令里读取；普通 send 不设（否则 SDK 会尝试 resume 不存在的会话）。
-    if (cmd.provider_switched) {
-      this.shouldForkNextConnect = true;
-      if (cmd.session_id) this.resumeSource = cmd.session_id;
-    }
+    // 供应商切换 = 原地换连接，**不 fork**：会话 id 不变，三端不 re-key。
+    // 旧做法 forkSession 会让 SDK 发一个新 id 的 session_init——已定名的交互会话
+    // 换 id 前端没有对应路径（被当成自动化会话摘走 store/状态），表现为「发了消息
+    // 看不到、tab 状态变关闭但还在思考」（2026-10-09 实锤）；且确认框承诺的是
+    // 「这条会话改用新供应商」，供应商身份落盘在原 id 上，fork 自相矛盾。
+    // query 未起（进程已退）→ 下面 !currentQuery 分支按 resume_session_id 原地 resume，
+    // 新 env 随 spawn 落地；query 活着 → 记账，空闲时原地重建（见下方漂移分支）。
+    if (cmd.provider_switched) this.providerDriftPending = true;
 
     // 自动化运行（调度器发起的无人值守会话）：存配置，白名单裁决在
     // makePolicyHook / makeCanUseToolCallback 里读它。转录落盘（不动
@@ -737,12 +741,16 @@ export class SessionWorker {
       return;
     }
 
-    // 思考值漂移（用户拍板：快速 ⇒ 关思考，下一轮生效）：本条消息归重建后的 query。
-    // 只在回合空闲时拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在账上，
-    // 下一个空闲的 send 再兑现。
-    if (this.currentQuery && !this.turnActive && this.thinkingEnabled !== this.spawnedThinking) {
+    // spawn 期参数漂移（思考值：快速 ⇒ 关思考；供应商连接身份）：本条消息归重建后的
+    // query。只在回合空闲时拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在
+    // 账上，下一个空闲的 send 再兑现。
+    if (
+      this.currentQuery &&
+      !this.turnActive &&
+      (this.thinkingEnabled !== this.spawnedThinking || this.providerDriftPending)
+    ) {
       this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery");
-      this.restartQueryForThinking();
+      this.restartQueryInPlace();
       return;
     }
 
@@ -796,12 +804,6 @@ export class SessionWorker {
             automationSessionDir: this.automationConfig?.sessionDir,
             thinkingDisabled,
           });
-
-          // pendingFork 只服务「供应商切换」通知——自动化蒸馏轮也 fork（隔离
-          // 运行会话 id），但那是内部机制，不该冒出「已切换供应商」提示。
-          if (this.resumeSource && this.shouldForkNextConnect && !this.automationConfig) {
-            this.pendingFork = true;
-          }
 
           // query 前置准备：内建 MCP 注册 / Aide 指令 / hooks 与 mcpServers 终装
           //（装配细节与历史注释随迁 session-worker/queryContext.ts）。session 适配器
@@ -880,6 +882,7 @@ export class SessionWorker {
           loopQuery = q;
           // 记账：本条 query 落地的 thinking 值——下一条 send 据此判漂移（见字段注释）。
           this.spawnedThinking = this.thinkingEnabled;
+          this.providerDriftPending = false; // 新 env 已随本次 spawn 落地
           this.shouldForkNextConnect = false;
           // 输出样式：必须在首轮 prompt 被 CLI 取走之前落地（晚一步 = 第一条消息
           // 不变样，故不能挪到 session_init 之后）。只在建 query 时应用这一次——
@@ -934,7 +937,6 @@ export class SessionWorker {
           break;
         } catch (e: unknown) {
           this.currentQuery = null;
-          this.pendingFork = false;
           this.turnActive = false;
           this.toolLifecycle.reset();
           if (this.rollbackPending) {
@@ -943,8 +945,8 @@ export class SessionWorker {
             this.rollbackPending = false;
             this.performImageRollback();
           } else if (this.restartPending) {
-            // 思考值漂移的主动拆：不是错误、更不是回合结束——清账后继续 while，
-            // 下一轮用新 thinking 值重建（原地 resume）。
+            // spawn 期参数漂移的主动拆：不是错误、更不是回合结束——清账后继续 while，
+            // 下一轮用新 thinking 值 / 新供应商 env 重建（原地 resume）。
             //
             // 判据必须是**标志位**，不能靠 e.name === "AbortError"：实测真 SDK 的
             // abort 抛出来的 message 是 "Operation aborted"，名字不是 AbortError
@@ -1004,17 +1006,8 @@ export class SessionWorker {
     };
   }
 
-  /** system/init：供应商切换 fork 通知 + resumeSource 过户 + 模型名册采纳
-   *  （原循环 system/init 分支，批 3 纯移动）。 */
+  /** system/init：resumeSource 过户 + 模型名册采纳（原循环 system/init 分支，批 3 纯移动）。 */
   private handleSessionInit(newSid: string | undefined, q: Awaited<ReturnType<typeof query>>): void {
-    if (this.pendingFork && newSid && newSid !== this.resumeSource) {
-      this.emit({
-        type: "notification",
-        message: "已切换供应商，对话历史已迁移到新会话。",
-        notification_type: "provider_switch",
-      });
-      this.pendingFork = false;
-    }
     this.resumeSource = newSid ?? this.resumeSource;
     void this.emitModelsAvailable(q);
   }
