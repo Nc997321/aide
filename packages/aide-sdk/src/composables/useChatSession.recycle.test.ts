@@ -328,7 +328,7 @@ describe("useChatSession/recycle 页级回收", () => {
 
   // ── 纯函数：定位与补偿 ──
 
-  it("findViewportPageIndex：按累积高度定位视口顶所在页，live 段返回 -1", () => {
+  it("findViewportPageIndex：按累积高度定位视口顶所在页，live 段归到上方最近页", () => {
     const store = setupSession("s1", [makePage({ count: 1 }), makePage({ count: 1 })], 2);
     const rows = buildRows("s1", store.messages);
     // rows = [page0, page1, live, live]；注入高度：page0=100, page1=200, live 各 50
@@ -343,8 +343,35 @@ describe("useChatSession/recycle 页级回收", () => {
     expect(findViewportPageIndex(99, rows, cum)).toBe(0);
     expect(findViewportPageIndex(100, rows, cum)).toBe(1);
     expect(findViewportPageIndex(299, rows, cum)).toBe(1);
-    expect(findViewportPageIndex(300, rows, cum)).toBe(-1); // live 段
-    expect(findViewportPageIndex(399, rows, cum)).toBe(-1);
+    // live 段：热区 = 紧贴其上的末页（返回 -1 会让释放回落到陈旧热区，把末页
+    // 释放/取回来回振荡——见 findViewportPageIndex 注释）
+    expect(findViewportPageIndex(300, rows, cum)).toBe(1);
+    expect(findViewportPageIndex(399, rows, cum)).toBe(1);
+    expect(findViewportPageIndex(10_000, rows, cum)).toBe(1); // 滚过所有行
+  });
+
+  it("视口在 live 段 + 陈旧热区：紧贴视口的末页不被释放（防释放/取回振荡）", () => {
+    // 5 页各 1MB（超 2MB 预算），之前在第 0 页阅读留下陈旧热区；现在视口在 live 段
+    const pages = Array.from({ length: 5 }, () => makePage({ count: 1, bytes: 1024 * 1024 }));
+    const store = setupSession("s1", pages, 2);
+    setViewportHot("s1", 0);
+    const rows = buildRows("s1", store.messages);
+    const heights = new Map(rows.map((r) => [r.id, 100] as [string, number]));
+    const cum = buildCumulative(rows, heights);
+    const hot = findViewportPageIndex(cum[5] + 50, rows, cum); // 视口顶在首条 live 行内
+    releaseFarthestPages("s1", { budget: 2 * 1024 * 1024, hotPageIndex: hot >= 0 ? hot : undefined });
+    const ledger = pageLedgers.get("s1")!;
+    expect(ledger[4].loaded).toBe(true); // 末页紧贴视口上方：留着
+    expect(ledger[3].loaded).toBe(true);
+    expect(ledger.slice(0, 3).every((p) => !p.loaded)).toBe(true);
+  });
+
+  it("findViewportPageIndex：无台账（全 live）返回 -1", () => {
+    const store = setupSession("s1", [], 2);
+    const rows = buildRows("s1", store.messages);
+    const cum = buildCumulative(rows, new Map());
+    expect(findViewportPageIndex(0, rows, cum)).toBe(-1);
+    expect(findViewportPageIndex(500, rows, cum)).toBe(-1);
   });
 
   it("findRestorableSkeleton：prefetch 边距内最近骨架，边距外不取", () => {

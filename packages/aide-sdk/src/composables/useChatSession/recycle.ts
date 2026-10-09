@@ -310,7 +310,14 @@ export function buildCumulative(rows: readonly Row[], heights: ReadonlyMap<strin
   return cum;
 }
 
-/** 视口顶所在行的页索引（二分行累积表）；落在 live 段/liveskel/无页时返回 -1。 */
+/** 视口热区页索引（二分行累积表）：视口顶所在页；落在 live 段/liveskel 时取**它上方
+ *  最近的页**（live 段恒在所有页之后，即末页）；无页返回 -1。
+ *
+ *  ⚠️ 不能对 live 段返回 -1（2026-10-09 现场：阅读最新一轮时页/live 交界处整屏闪白、
+ *  滚轮被带走）。-1 → 调用方不报热区 → releaseFarthestPages 回落到**陈旧**的
+ *  viewportHot（上次在页区阅读时的页）→ 紧贴视口上方的末页被释放成骨架 → 同一次
+ *  结算的 prefetch 立刻把它取回 → 取回收尾再排结算 → 再释放……每 ~200ms 一轮的
+ *  释放/取回振荡，视口压在交界处时看到的就是整屏虚线骨架与正文交替闪。 */
 export function findViewportPageIndex(scrollTop: number, rows: readonly Row[], cum: readonly number[]): number {
   let lo = 0;
   let hi = rows.length - 1;
@@ -324,8 +331,11 @@ export function findViewportPageIndex(scrollTop: number, rows: readonly Row[], c
       hi = mid - 1;
     }
   }
-  const row = rows[rowIdx];
-  return row && (row.kind === "page" || row.kind === "skeleton") ? row.pageIndex : -1;
+  for (let i = Math.min(rowIdx, rows.length - 1); i >= 0; i--) {
+    const row = rows[i];
+    if (row.kind === "page" || row.kind === "skeleton") return row.pageIndex;
+  }
+  return -1;
 }
 
 /** liveskel 是否进入预取边距带（视口 ±margin×屏高）——进入即应展开

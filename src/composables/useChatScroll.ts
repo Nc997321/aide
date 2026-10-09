@@ -406,6 +406,18 @@ export function useChatScroll(
     return heights;
   }
 
+  /** 视口顶在「行坐标系」里的位置（buildCumulative 的 0 点 = 首行顶）。滚动区的
+   *  上内边距与顶部「更早消息」门按钮在首行之上、却不在行高表里——直接拿 scrollTop
+   *  比 cum 会系统性偏下几十 px，页/live 交界处就把仍压着末页的视口判成「在 live 段」。
+   *  无几何（jsdom/未布局）回退 scrollTop。 */
+  function rowsViewportTop(el: HTMLDivElement): number {
+    const first = contentEl.value?.querySelector<HTMLElement>(":scope > [data-row-id], :scope > .chat-row-live");
+    if (!first) return el.scrollTop;
+    const elRect = el.getBoundingClientRect();
+    if (elRect.height <= 0) return el.scrollTop;
+    return elRect.top - first.getBoundingClientRect().top;
+  }
+
   /** 切走时测内容锚点：视口顶所在的带 data-row-id 行 + 行内偏移（px）。
    *  在 watch(sessionId)（pre-flush）里调用，children/scrollTop 都是离开会话的
    *  现场值。返回 null = 视口顶落在无 id 行（live 段 / 顶部 gate 区）或无 DOM
@@ -581,7 +593,8 @@ export function useChatScroll(
     if (!el || !sid || landing.value || loadingOlder.value || restoring.value || expandingLive.value || isRecycleMutating(sid)) return;
     const heights = measureRowHeights();
     const cum = buildCumulative(rows.value, heights);
-    const pageIdx = findViewportPageIndex(el.scrollTop, rows.value, cum);
+    const vpTop = rowsViewportTop(el);
+    const pageIdx = findViewportPageIndex(vpTop, rows.value, cum);
     if (pageIdx >= 0) setViewportHot(sid, pageIdx);
     if (loadedPagesBytes(sid) > RECYCLE_BYTES_BUDGET) {
       releaseFarthestPages(
@@ -596,10 +609,10 @@ export function useChatScroll(
       );
     }
     // prefetch：liveskel 优先（进入 live 段的必经门），其次页骨架——两者都带视口补偿
-    if (liveSkeletonInBand(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN)) {
+    if (liveSkeletonInBand(vpTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN)) {
       void expandLiveAnchored();
     } else {
-      const skelIdx = findRestorableSkeleton(el.scrollTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN);
+      const skelIdx = findRestorableSkeleton(vpTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN);
       if (skelIdx >= 0) void restoreAnchored(skelIdx);
     }
   }
@@ -625,7 +638,7 @@ export function useChatScroll(
     const oldRows = buildRows(oldId, msgs, liveWindows.get(oldId) ?? null);
     const el = scrollEl.value;
     const cum = buildCumulative(oldRows, heights);
-    const pageIdx = el ? findViewportPageIndex(el.scrollTop, oldRows, cum) : -1;
+    const pageIdx = el ? findViewportPageIndex(rowsViewportTop(el), oldRows, cum) : -1;
     const released = releaseFarthestPages(
       oldId,
       { budget: 0, hotPageIndex: pageIdx >= 0 ? pageIdx : undefined },
