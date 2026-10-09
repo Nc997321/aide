@@ -137,16 +137,42 @@ class OhosWs implements WsLike {
     }
   }
 
+  /** 串行发送：上一帧的 send 回调回来才把下一帧交给 netstack。
+   *
+   *  ⚠️ netstack 的 send 是异步执行的，连发时**线上顺序不保证等于调用顺序**
+   *  （2026-10-09 真机：authed 后 1ms 内连发订阅 + 几个调用，Host 解密失败回
+   *  sc_err{bad_handshake}——续连表现为「存活 171ms 瞬断」，配对表现为
+   *  badhandshake）。Noise 传输密文按序号逐帧解，乱一帧整条通道作废，所以顺序
+   *  必须由本层保证。回调失败也继续发下一帧：连接若真坏了，终局由 close 事件收。 */
+  private sendQueue: string[] = [];
+  private sending: boolean = false;
+
   send(data: string): void {
+    this.sendQueue.push(data);
+    if (!this.sending) {
+      this.pumpSend();
+    }
+  }
+
+  private pumpSend(): void {
+    const next: string | undefined = this.sendQueue.shift();
+    if (next === undefined || this.readyState >= 2) {
+      this.sending = false;
+      this.sendQueue = [];
+      return;
+    }
+    this.sending = true;
     try {
-      this.ws.send(data, (err: Error) => {
+      this.ws.send(next, (err: Error) => {
         if (err) {
           console.warn(`[ws-ohos] send 失败：${err.message ?? ''}`);
         }
+        this.pumpSend();
       });
     } catch (e) {
       // 同步异常防护：同 close()——异常态 socket 上 send 可能同步抛错
       console.warn(`[ws-ohos] send 异常：${(e as Error).message ?? ''}`);
+      this.pumpSend();
     }
   }
 
