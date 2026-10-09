@@ -51,6 +51,7 @@ import {
   type MapperDeps,
 } from "./mapper.js";
 import { handleQueryMessage, type TurnContext } from "./session-worker/turnMessages.js";
+import { BtwTurnLedger } from "./session-worker/btwTurnLedger.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKAssistantMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CanUseTool, HookCallback, HookInput, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
@@ -97,6 +98,9 @@ export class SessionWorker {
   /** 用户在知识库文档里圈选的范围（edit_selection 的授权来源）。引擎不解释它，只在用户消息到达时
    *  更新、在装配 MCP 时递给知识库扩展。 */
   private readonly kbScopes = new KbScopeStore();
+  /** btw 侧问的「快照之后」补遗：官方通道的上下文停在上一回合收尾，本轮进展靠它补
+   *  （见 session-worker/btwTurnLedger.ts）。 */
+  private readonly btwLedger = new BtwTurnLedger();
   /** fork/resume 源：SDK 会话 ID。空串=全新会话不 resume。
    *  仅 btw / 自动化蒸馏轮 / 重开会话时设置（在 handleCommand 或 session_init 里）。
    *  注意：这不是路由键——路由键是 routingKey，由 SessionManager 管理。 */
@@ -385,6 +389,7 @@ export class SessionWorker {
     };
     // 圈选登记（知识库扩展语义，worker 只是转手）：每条用户消息整表替换，见 knowledge/scope.ts。
     this.kbScopes.replaceFromDisplay(display);
+    this.btwLedger.recordUser(text);
     if (target === "nextQuery") this.nextQueryInjections.push(msg);
     else this.queue.push(msg);
     this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
@@ -914,6 +919,9 @@ export class SessionWorker {
           };
           let errorTerminated = false;
           for await (const msg of q) {
+            // 先于分派记账：result 在这里清账，之后 handleQueryMessage 里接入的插队消息
+            // 才落进新一轮的账。
+            this.btwLedger.recordSdkMessage(msg);
             const verdict = handleQueryMessage(msg, q, turn);
             if (verdict === "continue") continue;
             if (verdict === "terminate") {
@@ -1190,7 +1198,11 @@ export class SessionWorker {
 
     try {
       // 空历史不传 opts——对齐官方：调用方不传就没有跨问连续性。
-      const r = await q.askSideQuestion(question, history.length ? { history } : undefined);
+      // 补遗拼进发给模型的问题；广播回去的 question 仍是原文（三端按它认领答复）。
+      const r = await q.askSideQuestion(
+        this.btwLedger.augment(question),
+        history.length ? { history } : undefined,
+      );
       if (!r?.response) {
         const reason = "模型没有给出答复";
         emitAnswer({ error: reason });
