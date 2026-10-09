@@ -40,6 +40,9 @@ function nonEmpty<T>(items: readonly T[] | undefined): readonly T[] | undefined 
  * 这里表态（queryTelemetry.test.ts 的 fixture 覆盖 SDK 全部顶层字段，会强制这件事）：
  * - `color` / `gridRows`  CLI 品牌色与 CLI 内部布局数组；色由前端主题 token 定，
  *                         分段条布局由前端自算
+ * - `categories[].kind`   SDK 0.3.292 起的分类标签（buffer/used/free/deferred）。前端
+ *                         「延迟」视觉只认 isDeferred，buffer/free 两类目前不区分渲染；
+ *                         要做「压缩缓冲 / 剩余空间」分色时再透传，别按 name 字符串猜
  * - `model`               已有 model_committed / models_available 通路
  * - `slashCommands`       聚合标量（命令条数 + 总占用），不是"某条命令占了多少"
  * - `skills`              技能面占用（标量 + skillFrontmatter[]）。本期只做工具面，

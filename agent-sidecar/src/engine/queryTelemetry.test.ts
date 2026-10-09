@@ -18,7 +18,7 @@ function collect() {
  */
 function fullUsage(): SDKControlGetContextUsageResponse {
   return {
-    categories: [{ name: "MCP tools", tokens: 19_700, isDeferred: false, color: "#7B61FF" }],
+    categories: [{ name: "MCP tools", tokens: 19_700, isDeferred: false, color: "#7B61FF", kind: "used" }],
     totalTokens: 125_500,
     maxTokens: 160_000,
     rawMaxTokens: 200_000,
