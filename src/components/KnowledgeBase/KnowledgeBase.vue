@@ -19,6 +19,7 @@ import { MIN_SERVER_VERSION, UPGRADE_COMMAND } from "./serverVersion";
 import KbSearchView from "./KbSearchView.vue";
 import KbMembers from "./KbMembers.vue";
 import KbSpaceList from "./KbSpaceList.vue";
+import KbSpaceForm from "./KbSpaceForm.vue";
 import KbTree from "./KbTree.vue";
 import { ancestorIds, subtreeSize } from "./docTree";
 
@@ -37,9 +38,31 @@ const k = useKnowledgeBase();
  *  是浏览器原生样式，与整个应用的主题无关，且会阻塞渲染进程。 */
 const modal = useModal();
 const activeDocId = ref<string | null>(null);
-/** 两段的「+」都在父层模板里（分组标题旁），只能这样够到组件的 startCreate */
-const spaceRef = ref<InstanceType<typeof KbSpaceList> | null>(null);
 const treeRef = ref<InstanceType<typeof KbTree> | null>(null);
+
+/**
+ * 新建空间：走应用统一的对话框（ModalDialog 的 custom 模式，表单是 KbSpaceForm）。
+ * 入口在顶部「新建」菜单末尾——空间段只有一个空间时整段隐藏，入口不能挂在那里。
+ */
+async function startCreateSpace(): Promise<void> {
+  const payload = await modal.custom<{
+    key: string;
+    name: string;
+    visibility: "private" | "internal" | "public";
+  }>({ title: "新建空间", component: KbSpaceForm, width: "sm" });
+  if (!payload) return; // 取消
+  await k.createSpace({ key: payload.key, name: payload.name, visibility: payload.visibility });
+}
+
+/** 顶部「新建」：有选中空间 → 建在它的根上（菜单末尾带「新建空间…」）；
+ *  一个空间都没有 → 能做的只有建空间，直接开表单。 */
+function openRootCreate(e: MouseEvent): void {
+  if (!k.activeSpaceId.value || !treeRef.value) {
+    void startCreateSpace();
+    return;
+  }
+  treeRef.value.openCreateMenu(e, null, () => void startCreateSpace());
+}
 
 // 视图分流只有一条轴：登录与否。未登录直接是 KbLogin 表单（模式由服务端
 // initialized 决定：空库 → 创建管理员，否则 → 口令登录/邀请链接），
@@ -419,8 +442,7 @@ onMounted(() => {
       <button
         v-if="k.user.value && !reading"
         class="kb-newbtn"
-        :disabled="!k.activeSpaceId.value"
-        @click="treeRef?.openCreateMenu($event, null)"
+        @click="openRootCreate($event)"
       >
         <Icon name="plus" :size="12" :stroke-width="1.6" />
         <span>新建</span>
@@ -509,16 +531,10 @@ onMounted(() => {
                组织靠文件夹。 -->
           <KbSpaceList
             v-if="k.spaces.value.length > 1"
-            ref="spaceRef"
             :spaces="k.spaces.value"
             :active-id="k.activeSpaceId.value"
             :busy="k.loading.value"
             @select="(id) => void k.selectSpace(id)"
-            @create="
-              (key, name, vis) => {
-                void k.createSpace({ key, name, visibility: vis });
-              }
-            "
             @rename="(id, name) => void k.renameSpace(id, name)"
           />
 

@@ -134,9 +134,9 @@ function openRowMenu(e: MouseEvent, row: { doc: KbDocumentSummary; isFolder: boo
  * 与文件夹行上的 `+`（建在该文件夹里）。
  *
  * 父层（KnowledgeBase.vue）通过 expose 调它时得把点击事件传进来——菜单要贴着
- * 那个按钮开。
+ * 那个按钮开。根位置的入口再递 `onNewSpace`，菜单末尾多一项「新建空间…」。
  */
-function openCreateMenu(e: MouseEvent, parentId: string | null): void {
+function openCreateMenu(e: MouseEvent, parentId: string | null, onNewSpace?: () => void): void {
   const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
   showMenu(
     r.right,
@@ -145,6 +145,7 @@ function openCreateMenu(e: MouseEvent, parentId: string | null): void {
       onNewFolder: () => startCreate(parentId, "folder"),
       onNewDoc: () => startCreate(parentId, "doc"),
       onUpload: () => pickFile(parentId),
+      onNewSpace,
     }),
   );
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { sessionSectionMenuItems, automationSectionMenuItems, workspaceMenuItems } from "./contextMenus";
+import { sessionSectionMenuItems, automationSectionMenuItems, workspaceMenuItems, kbCreateItems } from "./contextMenus";
 
 /** 侧栏分区导航行 ⋯ 菜单：纯构造函数（零分支），验证项内容与 action 透传。 */
 describe("sidebar section menus", () => {
@@ -42,5 +42,23 @@ describe("workspaceMenuItems", () => {
       workspaceMenuItems({ ...ws, missing: true }, undefined, undefined, undefined, vi.fn())
         .some((i) => i.label === "新增会话"),
     ).toBe(false);
+  });
+});
+
+describe("kbCreateItems", () => {
+  const base = { onNewFolder: vi.fn(), onNewDoc: vi.fn(), onUpload: vi.fn() };
+
+  it("文件夹里的 +：只有往这个位置放东西的三项，没有新建空间", () => {
+    const labels = kbCreateItems(base).map((i) => i.label);
+    expect(labels).toEqual(["新建文件夹", "新建文档", "上传文件…"]);
+  });
+
+  it("根位置给 onNewSpace：末尾分隔线后多一项「新建空间…」，点它触发回调", () => {
+    const onNewSpace = vi.fn();
+    const items = kbCreateItems({ ...base, onNewSpace });
+    expect(items.at(-2)?.separator).toBe(true);
+    expect(items.at(-1)?.label).toBe("新建空间…");
+    items.at(-1)?.action?.();
+    expect(onNewSpace).toHaveBeenCalledTimes(1);
   });
 });

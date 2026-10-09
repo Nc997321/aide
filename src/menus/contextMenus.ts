@@ -341,6 +341,8 @@ export function kbCreateItems(h: {
   onNewFolder: () => void;
   onNewDoc: () => void;
   onUpload: () => void;
+  /** 只有根位置（面板顶部的「新建」）才给：空间是最外层，文件夹里建不出空间。 */
+  onNewSpace?: () => void;
 }): MenuItem[] {
   return [
     { label: "新建文件夹", action: h.onNewFolder },
@@ -348,6 +350,8 @@ export function kbCreateItems(h: {
     // 上传和「新建」是同一类动作（都是往这个位置放东西），所以同一个入口。
     // 认哪些格式由服务端定（见 useKnowledgeBase.uploadFile），这里不做判断。
     { label: "上传文件…", action: h.onUpload },
+    // 空间不是「这个位置」里的东西，用分隔线和上面三项隔开
+    ...(h.onNewSpace ? [sep(), { label: "新建空间…", action: h.onNewSpace }] : []),
   ];
 }
 

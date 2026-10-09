@@ -1,8 +1,9 @@
 <script setup lang="ts">
 // 空间列表：侧栏里「空间」那一段。
 //
-// 之前「创建空间」埋在成员管理页里，与「空间」这个一级概念不匹配——建空间的人
-// 得先想到去成员页，而成员页是管理员才看得到的入口。现在创建与重命名都在这里。
+// 本组件只管选中与重命名。**新建空间不在这里**：空间段在只有一个空间时整段隐藏，
+// 入口挂在这里就等于「只有一个空间的人永远建不出第二个」（2026-10-09 回归）——
+// 入口在面板顶部「新建」菜单末尾，见 KnowledgeBase.vue 的 startCreateSpace。
 //
 // 行语法与 ./KbTree 一致（名字占满、副信息在右、⋯ 悬停浮出）。**没有复用同一个
 // 组件**：空间没有层级、没有 kind，多出 key/可见性/角色三个字段，操作集也不同
@@ -10,13 +11,10 @@
 import { ref } from "vue";
 import Icon from "@/components/Icon.vue";
 import { useContextMenu } from "@/composables/useContextMenu";
-import { useModal } from "@/composables/useModal";
 import { kbSpaceMenuItems } from "@/menus/contextMenus";
-import KbSpaceForm from "./KbSpaceForm.vue";
 import type { KbSpace } from "./kbClient";
 
 const { show: showMenu } = useContextMenu();
-const modal = useModal();
 
 const props = defineProps<{
   spaces: KbSpace[];
@@ -26,7 +24,6 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   select: [id: string];
-  create: [key: string, name: string, visibility: "private" | "internal" | "public"];
   rename: [id: string, name: string];
 }>();
 
@@ -58,28 +55,6 @@ function commitRename(): void {
   renaming.value = null;
 }
 
-/**
- * 新建空间走应用统一的对话框（`ModalDialog` 的 custom 模式）。
- *
- * 不用侧栏里的浮层：三个字段在 220px 里塞不下，而且浮层会被 `overflow: auto`
- * 的段落裁掉——实际表现就是只露出下半截。
- */
-async function startCreate(): Promise<void> {
-  const payload = await modal.custom<{
-    key: string;
-    name: string;
-    visibility: "private" | "internal" | "public";
-  }>({
-    title: "新建空间",
-    component: KbSpaceForm,
-    width: "sm",
-  });
-  if (!payload) return; // 取消
-  emit("create", payload.key, payload.name, payload.visibility);
-}
-
-/** 父层用 expose 调用（分组标题旁的 + 在父层模板里）。 */
-defineExpose({ startCreate });
 
 // 输入框挂载即聚焦
 const vFocus = {

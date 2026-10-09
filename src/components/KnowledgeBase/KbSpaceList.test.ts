@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import KbSpaceList from "./KbSpaceList.vue";
 // 相对导入而非 `@/`：测试文件被 tsconfig exclude，编辑器会为它们建推断项目，
@@ -9,11 +9,6 @@ import type { KbSpace } from "./kbClient";
 
 // 内存备忘：带全局监听的组件测试必须 enableAutoUnmount，否则残留监听器吞后续事件
 enableAutoUnmount(afterEach);
-
-// 新建空间走应用统一的对话框。这里只验**接线**（确实交给 modal.custom、载荷取回后
-// emit create），表单本身的校验另有 KbSpaceForm.test.ts 覆盖。
-const customFn = vi.hoisted(() => vi.fn());
-vi.mock("../../composables/useModal", () => ({ useModal: () => ({ custom: customFn }) }));
 
 const SPACES: KbSpace[] = [
   { id: "s1", key: "eng", name: "工程手册", description: null, visibility: "internal", role: "owner" },
@@ -30,9 +25,6 @@ function mountList() {
 // ⋯ 菜单走 ContextMenu 单例（Teleport 到 body + fixed），不是组件 DOM 的一部分
 const { items: menuItems, hide: hideMenu } = useContextMenu();
 
-beforeEach(() => {
-  customFn.mockReset();
-});
 afterEach(() => hideMenu());
 
 /** 点开某行的 ⋯，再执行菜单里那一项——走的都是真事件处理。 */
@@ -79,34 +71,5 @@ describe("KbSpaceList", () => {
     await w.find("[data-space-rename]").trigger("keydown.esc");
     expect(w.emitted("rename")).toBeFalsy();
     expect(w.find("[data-space-rename]").exists()).toBe(false);
-  });
-});
-
-describe("KbSpaceList 的新建接线", () => {
-  it("＋ 交给应用统一的对话框（不是侧栏里的浮层）", async () => {
-    customFn.mockResolvedValue(null); // 用户取消
-    const w = mountList();
-    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
-
-    expect(customFn).toHaveBeenCalledTimes(1);
-    const req = customFn.mock.calls[0]![0] as { title: string; width: string; component: unknown };
-    expect(req.title).toBe("新建空间");
-    expect(req.width).toBe("sm");
-    expect(req.component).toBeTruthy();
-    expect(w.emitted("create")).toBeFalsy();
-  });
-
-  it("对话框返回载荷后发 create", async () => {
-    customFn.mockResolvedValue({ key: "eng2", name: "工程手册二", visibility: "internal" });
-    const w = mountList();
-    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
-    expect(w.emitted("create")?.[0]).toEqual(["eng2", "工程手册二", "internal"]);
-  });
-
-  it("对话框取消（null）不发 create", async () => {
-    customFn.mockResolvedValue(null);
-    const w = mountList();
-    await (w.vm as unknown as { startCreate: () => Promise<void> }).startCreate();
-    expect(w.emitted("create")).toBeFalsy();
   });
 });
