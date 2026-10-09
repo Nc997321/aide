@@ -82,7 +82,8 @@ async function copyCompose(): Promise<void> {
 
       <h2>部署须知</h2>
       <ul>
-        <li>镜像从 registry 拉，compose 跟的是<strong>移动标签</strong>，所以升级就一条命令（不随版本变）：<code>docker compose pull knowledge &amp;&amp; docker compose up -d knowledge</code>。要钉住某一版 / 回滚，在 <code>.env</code> 里写 <code>KB_IMAGE=…:0.5.0</code></li>
+        <li><strong>升级</strong>：有新版本时，知识库面板顶部会提示，并给出一条带版本号的命令，在部署目录里粘贴运行即可。命令会把目标版本写进 <code>.env</code> 的 <code>KB_IMAGE</code>（旧部署那里可能钉着旧版本号），只重启知识库服务，不动数据库和数据</li>
+        <li>要钉住某一版 / 回滚，在 <code>.env</code> 里写 <code>KB_IMAGE=…:0.5.0</code>。内网离线部署查不到新版本时不会提示，可用 <code>KB_RELEASE_REPO=</code> 关掉这项检查</li>
         <li>仓库为私有时先登录：<code>docker login registry.example.com</code></li>
         <li>默认数据库口令是 <code>aide</code>，上生产建议改：同目录建 <code>.env</code>，写 <code>DB_PASSWORD=你的口令</code> 后重启</li>
         <li>8788 端口要对客户端可达；跨域来源默认只放行 aide 桌面端，浏览器直连需改 <code>KB_CORS_ALLOWED_ORIGINS</code></li>

@@ -29,6 +29,7 @@ pub mod ip_filter;
 pub mod preview;
 pub mod search;
 pub mod spaces;
+pub mod update;
 
 /// `/api/ingest` 的请求体上限。**必须严格大于客户端 ingest 闸**（`agent-sidecar` 的
 /// `KB_INGEST_MAX_BYTES` = 32 MiB）：客户端量的是**文件大小**，这里限的是**整个 multipart
@@ -58,6 +59,8 @@ pub struct AppState {
     pub tokenizer: Arc<dyn Tokenizer>,
     /// 二进制存储（端口）。今天是文件系统，换对象存储只改 `main.rs` 一行。
     pub blobs: Arc<dyn BlobStore>,
+    /// 「最新发布的是哪一版」（发布渠道端口 + 缓存），给「有新版本」提示用。
+    pub releases: Arc<crate::domain::release::LatestRelease>,
     /// 预览取件票据（内存态，进程重启即失效——这是设计，不是缺陷）。
     pub previews: Arc<crate::domain::preview_token::PreviewTokens>,
 }
@@ -115,6 +118,8 @@ pub fn build_router(state: AppState) -> AppResult<Router> {
 
     let router = Router::new()
         .route("/api/health", get(health))
+        // 「有新版本」提示（见 update.rs）。只告知，不执行升级
+        .route("/api/update/status", get(update::status))
         // 认证。**没有 register**——刻意不做自助注册，理由见 `auth.rs` 模块头：
         // 私有化部署下开放注册等于把内网文档开给全公司，账号一律由管理员邀请。
         .route("/api/auth/status", get(auth::status))

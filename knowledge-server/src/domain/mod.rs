@@ -8,6 +8,7 @@ pub mod ingest;
 pub mod locking;
 pub mod permission;
 pub mod preview_token;
+pub mod release;
 pub mod search;
 pub mod search_text;
 pub mod session;

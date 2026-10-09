@@ -92,11 +92,34 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 
 ### 客户侧升级与回滚
 
-**就一条命令，不随版本变**（跟的是移动标签 `:stable`）：
+**有新版本时，知识库面板顶部会提示**（0.6.0 起）：服务端定时查发布渠道（下面的
+「新版本提示」），面板给出一条**带目标版本号**的命令，管理员在部署目录里粘贴运行即可：
 
 ```bash
-docker compose pull knowledge && docker compose up -d knowledge
+touch .env && { grep -v '^KB_IMAGE=' .env || true; } > .env.kbnew \
+  && printf '\nKB_IMAGE=%s\n' '<仓库>:<新版本>' >> .env.kbnew \
+  && cat .env.kbnew > .env && rm .env.kbnew \
+  && docker compose pull knowledge && docker compose up -d knowledge
 ```
+
+⚠️ **为什么不再是 `docker compose pull knowledge && docker compose up -d knowledge`**：
+- 2026-09-30 之前交付的 `docker-compose.yml`，镜像默认值**本身钉着版本号**（`${KB_IMAGE:-…:0.4.0}`）
+- 更早的说明让用户在 `.env` 里写 `KB_IMAGE=…:旧版本`
+
+这两种部署跑那条老命令只会把旧版本重拉一遍。新命令把目标镜像**写进 `.env`**（`.env` 的值优先于
+compose 文件里的默认值），所以对新旧部署都生效；写进文件而不是只在命令行临时指定，是为了防止
+下次有人随手 `docker compose up -d` 时按旧值把服务**降回去**（迁移不可逆）。其余 `.env` 配置原样保留。
+
+只有 compose 跟 `:stable`、`.env` 里没写 `KB_IMAGE` 的新部署，老命令仍然有效。
+
+#### 新版本提示（`GET /api/update/status`）
+
+服务端读发布渠道（镜像仓库）的标签列表，取最大的版本号，与自己的版本比较。只读一次元数据、
+不下载镜像，结果缓存 30 分钟（面板上「检查更新」跳过缓存）。**只告知，不执行升级。**
+
+- 发布渠道默认是官方仓库，`KB_RELEASE_REPO` 可改（自建镜像仓库时填它的地址，命令也会跟着用它）
+- **内网离线部署**：查不到就安静地不提示；嫌每次超时浪费可设 `KB_RELEASE_REPO=` 关掉
+- 私有仓库（匿名取不到令牌）同样查不到，不影响其他功能
 
 确认起来了：
 
@@ -105,7 +128,7 @@ docker compose logs --tail=50 knowledge
 curl -s http://127.0.0.1:8788/api/health     # version 字段就是当前那版
 ```
 
-客户端面板也会替你说话：服务端太旧时，面板顶部直接给出上面那条命令（可复制）。
+客户端面板也会替你说话：有新版本或服务端太旧时，面板顶部给出上面那条命令（可复制）。
 
 - **升级只用 `up -d`，永远别加 `-v`**：`docker compose down -v` 会把 `pgdata`（数据库）与
   `kbdata`（附件）两个卷一起删掉 = 删库。手动 `docker rm -f` 容器同样没必要——`up -d`

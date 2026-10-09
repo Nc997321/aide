@@ -50,5 +50,5 @@ echo "  ${IMG}"
 echo "  ${STABLE}"
 echo
 echo "交付件（docker-compose.yml / .env.example）跟的是 :stable，**不需要随版本改**。"
-echo "用户侧那条固定命令："
-echo "  docker compose pull knowledge && docker compose up -d knowledge"
+echo "已部署的用户会在知识库面板上看到「有新版本 ${VERSION}」，并拿到一条带版本号的升级命令"
+echo "（服务端查发布渠道的标签列表，缓存 30 分钟）。"

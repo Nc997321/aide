@@ -3,7 +3,7 @@
 //! 分层：`api` → `domain` → `port` ← `adapter`
 //! 依赖方向永远朝内，`adapter` 是唯一允许出现第三方解析/分词库的目录。
 //!
-//! 全进程只有一处把具体实现接到端口上，就是下面 `main` 里的三行 `Arc::new`。
+//! 全进程只有一处把具体实现接到端口上，就是下面 `main` 里那几行 `Arc::new`。
 //! 换解析库、换分词算法、换附件存储，改那里即可，`domain/` 与 `api/` 一行不动。
 
 mod adapter;
@@ -23,11 +23,12 @@ use sqlx::PgPool;
 
 use crate::adapter::blob_store::FilesystemBlobStore;
 use crate::adapter::parser::ParserRegistry;
+use crate::adapter::registry::RegistryChannel;
 use crate::adapter::tokenizer::JiebaTokenizer;
 use crate::api::{AppState, build_router};
 use crate::config::Config;
 use crate::domain::locking;
-use crate::port::{BlobStore, ParserChain, Tokenizer};
+use crate::port::{BlobStore, ParserChain, ReleaseChannel, Tokenizer};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -52,10 +53,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ⚠️ 唯一的实现注入点。
     // 想换解析后端（例如把 docx-to-md 换成 office_oxide）、换分词实现，
-    // 或把附件存储换成对象存储，只改这三行以及 adapter 下对应的实现文件。
+    // 或把附件存储换成对象存储，只改这几行以及 adapter 下对应的实现文件。
     let parsers: Arc<dyn ParserChain> = Arc::new(ParserRegistry::with_defaults());
     let tokenizer: Arc<dyn Tokenizer> = Arc::new(JiebaTokenizer::new());
     let blobs: Arc<dyn BlobStore> = Arc::new(FilesystemBlobStore::new(&config.storage_dir));
+    let releases: Arc<dyn ReleaseChannel> = match &config.release_repo {
+        Some(repo) => Arc::new(RegistryChannel::new(repo)),
+        None => Arc::new(crate::port::release_channel::Disabled),
+    };
 
     let state = AppState {
         db: pool,
@@ -63,6 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         parsers,
         tokenizer,
         blobs,
+        releases: Arc::new(crate::domain::release::LatestRelease::new(releases)),
         // 进程内存态：重启即全部失效，这是预览票据的设计语义（见 domain/preview_token.rs）
         previews: Arc::new(crate::domain::preview_token::PreviewTokens::new()),
     };

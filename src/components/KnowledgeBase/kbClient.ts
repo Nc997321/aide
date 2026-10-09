@@ -156,6 +156,18 @@ export interface KbHealth {
   tokenizer: string;
 }
 
+/** GET /api/update/status：「有新版本」提示的数据来源（服务端 api/update.rs 的镜像）。
+ *  0.6.0 之前的服务端没有这个接口（404）。 */
+export interface KbUpdateStatus {
+  /** 服务端当前版本（本地构建是 `dev`） */
+  current: string;
+  /** 发布渠道上的最新版本；查不到为 null，原因在 error */
+  latest: string | null;
+  /** 镜像仓库地址（拼升级命令用）；没配发布渠道为 null */
+  repo: string | null;
+  error: string | null;
+}
+
 /** 编辑锁的当前持有人（LockHolder 的镜像）。 */
 export interface KbLockHolder {
   userId: string;
@@ -294,6 +306,11 @@ function postWithProgress(
 export const kb = {
   health(): Promise<KbHealth> {
     return request<KbHealth>("GET", "/api/health");
+  },
+
+  /** 「有新版本」提示的数据。refresh = 跳过服务端缓存（用户点了「检查更新」）。 */
+  updateStatus(refresh = false): Promise<KbUpdateStatus> {
+    return request<KbUpdateStatus>("GET", `/api/update/status${refresh ? "?refresh=1" : ""}`);
   },
 
   // 认证（邀请制，没有自助注册入口）

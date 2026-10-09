@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   formats: vi.fn(),
   ingest: vi.fn(),
   createDocument: vi.fn(),
+  updateStatus: vi.fn(),
   confirm: vi.fn(),
 }));
 
@@ -30,6 +31,7 @@ vi.mock("./kbClient", () => ({
     formats: mocks.formats,
     ingest: mocks.ingest,
     createDocument: mocks.createDocument,
+    updateStatus: mocks.updateStatus,
     previewToken: vi.fn(),
     updateDocument: vi.fn(),
     acquireLock: vi.fn(),
@@ -44,6 +46,8 @@ vi.mock("./kbClient", () => ({
   getBaseUrl: () => "http://kb.invalid",
   KbError: class KbError extends Error {},
 }));
+
+import { DEFAULT_RELEASE_REPO, upgradeCommand } from "./serverVersion";
 
 // 圈选层的卡片对话会话在这里不是被测对象，且会接全局聊天事件监听（jsdom 里没有 Tauri）。
 vi.mock("@/composables/useKbCardSession", async () => {
@@ -117,6 +121,8 @@ beforeEach(() => {
     content: id === "d2" ? "<p>x</p>" : "# 数据说明",
   }));
   mocks.formats.mockResolvedValue({ extensions: ["md", "html", "htm", "txt"] });
+  // 默认：已是最新——横幅不出现
+  mocks.updateStatus.mockResolvedValue({ current: "0.5.0", latest: "0.5.0", repo: "r.example/ns/kb", error: null });
   mocks.confirm.mockReset();
 });
 
@@ -189,22 +195,21 @@ describe("上传", () => {
   });
 });
 
-describe("服务端太旧", () => {
-  it("说清版本、给出那条固定命令，并可以复制", async () => {
+describe("更新横幅", () => {
+  it("老服务端（没有版本）：说清版本，给出写入 .env 的升级命令并可复制", async () => {
     mocks.health.mockResolvedValue({ status: "ok", service: "aide-knowledge", parsers: [], tokenizer: "jieba-rs" });
+    mocks.updateStatus.mockRejectedValue(new Error("404"));
     const writeText = vi.fn(async () => {});
     Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
 
     const w = mountPanel();
     await settle();
 
-    const strip = w.find(".kb-upgrade");
-    expect(strip.exists()).toBe(true);
+    const strip = w.find("[data-kb-update]");
     expect(strip.text()).toContain("旧版本");
-    // 命令是**一辈子的那一条**：里面不出现具体版本号
-    const cmd = w.find(".kb-upgrade-cmd").text();
-    expect(cmd).toBe("docker compose pull knowledge && docker compose up -d knowledge");
-    expect(cmd).not.toMatch(/\d+\.\d+\.\d+/);
+    const cmd = w.find(".kb-update-cmd").text();
+    expect(cmd).toBe(upgradeCommand(DEFAULT_RELEASE_REPO, "stable"));
+    expect(strip.text()).not.toContain("以后再说"); // 低于最低要求：必须升
 
     await w.findAll("button").find((b) => b.text().includes("复制命令"))?.trigger("click");
     await flushPromises();
@@ -212,10 +217,23 @@ describe("服务端太旧", () => {
     expect(w.text()).toContain("已复制");
   });
 
-  it("版本够新时不出现", async () => {
+  it("有新版：提示版本，命令升到的就是那一版；「以后再说」后收起", async () => {
+    mocks.updateStatus.mockResolvedValue({ current: "0.5.0", latest: "0.6.0", repo: "r.example/ns/kb", error: null });
     const w = mountPanel();
     await settle();
-    expect(w.find(".kb-upgrade").exists()).toBe(false);
+
+    const strip = w.find("[data-kb-update]");
+    expect(strip.text()).toContain("0.6.0");
+    expect(w.find(".kb-update-cmd").text()).toBe(upgradeCommand("r.example/ns/kb", "0.6.0"));
+    await strip.findAll("button").find((b) => b.text() === "以后再说")?.trigger("click");
+    await settle();
+    expect(w.find("[data-kb-update]").exists()).toBe(false);
+  });
+
+  it("已是最新时不出现", async () => {
+    const w = mountPanel();
+    await settle();
+    expect(w.find("[data-kb-update]").exists()).toBe(false);
   });
 });
 

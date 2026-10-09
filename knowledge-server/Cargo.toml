@@ -17,6 +17,10 @@ dotenvy = "0.15.7"
 jieba-rs = "0.10.3"
 pdf-extract = "0.12.0"
 rand = "0.10.2"
+# 只在 adapter/registry.rs 里用：查镜像仓库上最新发布的版本号（「有新版本」提示）。
+# TLS 走 rustls + ring（sqlx 已在用 ring）；不用 reqwest 默认的 aws-lc（要编 C 代码）。
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.10"

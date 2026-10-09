@@ -9,6 +9,7 @@
 
 pub mod blob_store;
 pub mod document_parser;
+pub mod release_channel;
 pub mod tokenizer;
 
 pub use blob_store::{BlobError, BlobStore};
@@ -16,4 +17,5 @@ pub use document_parser::{
     placeholder, DocumentParser, ParsedAsset, ParsedDocument, ParseError, ParseOutcome, ParserChain,
     PLACEHOLDER_CLOSE, PLACEHOLDER_OPEN,
 };
+pub use release_channel::ReleaseChannel;
 pub use tokenizer::Tokenizer;

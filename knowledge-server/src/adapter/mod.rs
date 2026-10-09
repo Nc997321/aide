@@ -8,4 +8,5 @@
 
 pub mod blob_store;
 pub mod parser;
+pub mod registry;
 pub mod tokenizer;

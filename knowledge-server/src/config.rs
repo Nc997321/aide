@@ -5,6 +5,10 @@
 
 use std::path::PathBuf;
 
+/// 官方发布仓库（release.sh 推到这里，交付的 docker-compose.yml 也从这里拉）。
+pub const DEFAULT_RELEASE_REPO: &str =
+    "registry.example.com/aide/aide-knowledge";
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub db_url: String,
@@ -41,6 +45,9 @@ pub struct Config {
     /// 0.1.0，镜像已经在 0.4.0）。本地 `up -d --build` 不传参数 → `dev` →
     /// 客户端见到 `dev` 不提示升级（开发构建本来就不该被催）。
     pub version: String,
+    /// 发布渠道（镜像仓库 `host/namespace/name`）：查「有没有新版本」用。
+    /// 默认是官方发布仓库；内网离线部署或自建镜像仓库时改它，**置空 = 不查、不提示**。
+    pub release_repo: Option<String>,
 }
 
 impl Config {
@@ -68,6 +75,9 @@ impl Config {
             ),
             allowed_cidrs: env_list("KB_ALLOWED_CIDR", ""),
             version: env("KB_VERSION", "dev"),
+            release_repo: Some(env("KB_RELEASE_REPO", DEFAULT_RELEASE_REPO))
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
         }
     }
 }

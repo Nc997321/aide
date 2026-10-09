@@ -11,12 +11,36 @@
  */
 export const MIN_SERVER_VERSION = "0.5.0";
 
+/** 官方发布仓库（与服务端 config.rs 的 DEFAULT_RELEASE_REPO 同值）。服务端没告诉我们
+ *  仓库地址时（老服务端没有 /api/update/status）用它。 */
+export const DEFAULT_RELEASE_REPO =
+  "registry.example.com/aide/aide-knowledge";
+
 /**
- * 用户侧的升级命令。**一辈子不变**——交付的 compose 跟的是移动标签 `:stable`，
- * 所以这条命令不随版本号改，提示里可以直接让人复制粘贴跑。
- * 要钉住某一版/回滚时，用户才需要动 `.env` 里的 `KB_IMAGE`（见部署指南）。
+ * 用户侧的升级命令：**把目标镜像写进 `.env` 再拉起**，在部署目录（放 docker-compose.yml
+ * 的地方）里跑。
+ *
+ * 为什么不能只是 `docker compose pull knowledge && docker compose up -d knowledge`：
+ *   - 2026-09-30 之前交付的 compose，镜像默认值**本身钉着版本号**（`${KB_IMAGE:-…:0.4.0}`）
+ *   - 更早的部署说明让用户在 `.env` 里写 `KB_IMAGE=…:旧版本`
+ * 这两种部署跑那条「固定命令」只会把旧版本重拉一遍。写进 `.env` 能同时压住两者
+ *（compose 里 `.env` 的值优先于文件里的默认值）。
+ *
+ * 为什么写进 `.env` 而不是只在命令行里临时指定：那样下一次有人随手 `docker compose up -d`
+ * 就会按旧值把服务**降回去**，而数据库迁移不可逆。
+ *
+ * `tag` 给具体版本号（服务端查到了最新版）；查不到时给 `stable`（移动标签，始终指向最新）。
  */
-export const UPGRADE_COMMAND = "docker compose pull knowledge && docker compose up -d knowledge";
+export function upgradeCommand(repo: string, tag: string): string {
+  // 不用 `sed -i`：GNU 与 BSD（macOS 上的 Docker Desktop）语法不同。写回用 `cat >`
+  // 而不是 `mv`：保留 .env 原来的权限（里面有数据库口令）。
+  return (
+    "touch .env && { grep -v '^KB_IMAGE=' .env || true; } > .env.kbnew" +
+    ` && printf '\\nKB_IMAGE=%s\\n' '${repo}:${tag}' >> .env.kbnew` +
+    " && cat .env.kbnew > .env && rm .env.kbnew" +
+    " && docker compose pull knowledge && docker compose up -d knowledge"
+  );
+}
 
 /**
  * 服务端报的版本够不够用。
