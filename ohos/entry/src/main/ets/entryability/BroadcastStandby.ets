@@ -3,11 +3,11 @@ import { common, wantAgent, WantAgent } from '@kit.AbilityKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import { audio } from '@kit.AudioKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
-import { loadTtsEnabled } from '../sdk/storage';
 
 /** 播报待命：熄屏/切后台期间「AUDIO_PLAYBACK 长时任务 + 静音垫底音」双人舞。
  *
- * 需求：息屏后桌面回复/权限播报照常出声 → 进程不能冻结 → 需要长时任务。
+ * 需求：息屏后中继链路 keepalive 不断供（中继 60s 掐腿够不着）+ 桌面回复/
+ * 权限播报照常出声 → 进程不能冻结 → 需要长时任务。
  * 为什么是 AUDIO_PLAYBACK：TtsModel 的 textToSpeech 后台播报（isBackStage）
  * 属官方分类「用户可感知的其他播放任务」，申请 AUDIO_PLAYBACK 即可、无需
  * AVSession（MUSIC/AUDIOBOOK 等媒体流才强制会话服务）。曾否决的
@@ -32,8 +32,8 @@ import { loadTtsEnabled } from '../sdk/storage';
  *
  * 降级链：垫底音创建失败（模拟器/无音频 HAL）→ 纯任务待命（仅 60s 容忍）；
  * 任务申请失败 → 完全不起垫（回落「冻结 + onForeground 秒连」形态）。
- * 仅当语音播报开关开（loadTtsEnabled，默认开）才启用：开关关 = 无播报业务，
- * 不该挂后台任务通知打扰。 */
+ * 无条件启用（不看语音播报开关）：待命同时承担链路保活——保活是本任务的
+ * 恒定业务，与播报开关无关；用户从任务列表划掉 = 进程终结，天然退出。 */
 export class BroadcastStandby {
   /** 任务+垫底音整体持有标记（幂等启停）。 */
   private running: boolean = false;
@@ -50,7 +50,7 @@ export class BroadcastStandby {
 
   /** 进后台申请（EntryAbility.onBackground 调用）。 */
   start(context: common.UIAbilityContext): void {
-    if (this.running || !loadTtsEnabled()) {
+    if (this.running) {
       return;
     }
     this.running = true;

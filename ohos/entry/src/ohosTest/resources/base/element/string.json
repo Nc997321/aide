@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_test_desc",
+      "value": "aide ohosTest 模块"
+    },
+    {
+      "name": "TestAbility_desc",
+      "value": "aide 单测宿主 Ability"
+    },
+    {
+      "name": "TestAbility_label",
+      "value": "aideTest"
+    }
+  ]
+}

@@ -20,7 +20,7 @@
  */
 import { webSocket } from '@kit.NetworkKit';
 import { common } from '@kit.AbilityKit';
-import type { WsLike, WsOpenEvent, WsMessageEvent, WsCloseEvent, WsErrorEvent, OpenUrlFn } from './remote';
+import type { WsLike, WsOpenEvent, WsMessageEvent, WsCloseEvent, WsErrorEvent, OpenUrlFn } from './link/types';
 import { dohConnectUrl, noteIpConnectResult, DohOutcome } from './doh';
 
 /** 默认 wsFactory：供 RemoteTransport 构造缺省使用。 */
@@ -63,6 +63,8 @@ class OhosWs implements WsLike {
       }
     });
     this.ws.on('close', (err: Error, value: webSocket.CloseResult) => {
+      // 断因观测：1006/0=异常关闭（TCP 级死亡，网络路径问题）；1000/1001=对端优雅关闭
+      console.info(`[ws-ohos] close code=${value.code} reason=${value.reason}`);
       this.readyState = 3;
       if (!this.opened && this.viaIp !== null) {
         noteIpConnectResult(this.viaIp, false); // 握手夭折：字面量不可达，同样计入熔断
@@ -72,6 +74,7 @@ class OhosWs implements WsLike {
       }
     });
     this.ws.on('error', (err: Error) => {
+      console.warn(`[ws-ohos] error：${err.message ?? ''}`);
       if (this.onerror) {
         this.onerror({ message: err.message ?? '' });
       }

@@ -252,6 +252,8 @@ export struct ChatDrawer {
   aboutToAppear(): void {
     // 挂载即武装三态监听（抽屉未开也要推导——徽标数据全程有效）并补首拉
     this.sm.ensureListener();
+    // 工作区模型的重连监听同点挂载：断线期间错过的日常/列表在重连后自愈
+    this.ws.ensureListener();
     if (!this.sm.loaded) {
       void this.sm.refresh();
     }
