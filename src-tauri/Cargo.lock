@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aide"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aide-core",
  "aide-host",
@@ -118,7 +118,7 @@ dependencies = [
 
 [[package]]
 name = "aide-core"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aide-link",
  "aide-workspace",
@@ -147,7 +147,7 @@ dependencies = [
 
 [[package]]
 name = "aide-host"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aide-core",
  "aide-link",
@@ -163,7 +163,7 @@ dependencies = [
 
 [[package]]
 name = "aide-link"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "aide-link",
  "aide-relay",
@@ -195,7 +195,7 @@ dependencies = [
 
 [[package]]
 name = "aide-workspace"
-version = "1.0.0"
+version = "1.1.0"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
