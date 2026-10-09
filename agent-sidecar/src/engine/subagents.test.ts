@@ -100,6 +100,33 @@ describe("SubagentTracker.getAgentName", () => {
     expect(t.getAgentName("ghost")).toBeUndefined();
   });
 
+  // 真实形态：canUseTool 的 agentID 是子代理自身 id（a0a3…），names 的 key 是
+  // tool_use_id（toolu_…）——两套 id 不通，必须经 linkAgentId 的映射才查得到。
+  it("按子代理自身 id（agentID）查名字：经 linkAgentId 映射到派发它的 tool_use_id", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("toolu_01", { subagent_type: "code-reviewer", description: "审查 PR" });
+    expect(t.getAgentName("a0a30b8ac5122bc5a")).toBeUndefined();
+    t.linkAgentId("a0a30b8ac5122bc5a", "toolu_01");
+    expect(t.getAgentName("a0a30b8ac5122bc5a")).toBe("code-reviewer");
+  });
+
+  it("async launch-ack 的 agentId 同样登记映射", () => {
+    const t = new SubagentTracker();
+    t.handleToolUse("toolu_01", { subagent_type: "Explore", description: "a" });
+    t.registerAsync("toolu_01", "a0a30b8ac5122bc5a", "/tmp/x.output");
+    expect(t.getAgentName("a0a30b8ac5122bc5a")).toBe("Explore");
+  });
+
+  it("不认识/已结束的 tool_use_id 不登记映射；调用结束后映射一并清掉", () => {
+    const t = new SubagentTracker();
+    t.linkAgentId("a-ghost", "toolu_ghost");
+    expect(t.getAgentName("a-ghost")).toBeUndefined();
+    t.handleToolUse("toolu_01", { subagent_type: "code-reviewer", description: "审查 PR" });
+    t.linkAgentId("a1x", "toolu_01");
+    t.handleToolResult("toolu_01");
+    expect(t.getAgentName("a1x")).toBeUndefined();
+  });
+
   it("forgets the name once the subagent call resolves (handleToolResult)", () => {
     const t = new SubagentTracker();
     t.handleToolUse("u1", { subagent_type: "code-reviewer", description: "审查 PR" });

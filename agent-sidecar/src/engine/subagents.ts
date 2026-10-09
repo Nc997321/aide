@@ -9,6 +9,11 @@ export class SubagentTracker {
   /** id（这次 Agent/Task tool_use 的 id）→ agentName——权限弹窗要标注"这是哪个子代理
    *  在问"时，靠 canUseTool 回调收到的 agentID 反查这里，拿到人看得懂的名字。 */
   private names = new Map<string, string>();
+  /** 子代理自身 id（`a0a3…` 形态，= 其任务事件的 task_id）→ 派发它的 tool_use_id。
+   *  canUseTool 的 agentID 是前者、names 的 key 是后者（`toolu_…`），两套 id 不通——
+   *  没有这张表时弹窗永远查不到名字、只显示兜底「子代理」。来源：子代理消息自带的
+   *  `agent_id`（SDK ≥0.3.292）与 async launch-ack 里的 agentId。 */
+  private toolUseIdByAgentId = new Map<string, string>();
   /** async 子代理的 .output 回放元数据：id → { agentId, outputFile }。
    *  launch-ack 时注册，task-notification 完成时清理。 */
   private asyncMeta = new Map<string, { agentId: string; outputFile: string }>();
@@ -56,6 +61,9 @@ export class SubagentTracker {
   handleToolResult(id: string): boolean {
     this.modelReported.delete(id);
     this.names.delete(id);
+    for (const [agentId, toolUseId] of this.toolUseIdByAgentId) {
+      if (toolUseId === id) this.toolUseIdByAgentId.delete(agentId);
+    }
     this.depthByToolUseId.delete(id); // 顶层 entry 清理；嵌套 entry 随实例 GC
     return this.active.delete(id);
   }
@@ -64,7 +72,14 @@ export class SubagentTracker {
    *  SDK 附带的标识）借此翻成人看得懂的 agentName。查不到（id 不认识/子代理已结束）
    *  时返回 undefined，调用方自己兜底成通用文案，不假设这个 id 一定认识。 */
   getAgentName(id: string): string | undefined {
-    return this.names.get(id);
+    const toolUseId = this.toolUseIdByAgentId.get(id);
+    return this.names.get(id) ?? (toolUseId === undefined ? undefined : this.names.get(toolUseId));
+  }
+
+  /** 登记「子代理 id → 派发它的 tool_use_id」，供 getAgentName 按 agentID 反查。
+   *  只认仍在跟踪的调用（与 isActive 同一防御口径）。 */
+  linkAgentId(agentId: string, toolUseId: string): void {
+    if (this.active.has(toolUseId)) this.toolUseIdByAgentId.set(agentId, toolUseId);
   }
 
   /** 某个 parent_tool_use_id 当前是否对应一个仍在运行的子代理调用——子代理内部
@@ -86,6 +101,7 @@ export class SubagentTracker {
   /** async launch-ack 时调用：记下 .output 路径，id 保持 active（不关）。 */
   registerAsync(id: string, agentId: string, outputFile: string): void {
     this.asyncMeta.set(id, { agentId, outputFile });
+    this.linkAgentId(agentId, id);
   }
 
   getAsyncOutputFile(id: string): string | undefined {
@@ -123,6 +139,7 @@ export class SubagentTracker {
     this.asyncMeta.clear();
     this.modelReported.clear();
     this.names.clear();
+    this.toolUseIdByAgentId.clear();
     this.depthByToolUseId.clear();
     return ids;
   }

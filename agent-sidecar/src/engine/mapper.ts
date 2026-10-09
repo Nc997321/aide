@@ -372,6 +372,8 @@ function emitSubagentProgress(
 ) {
   const parentId = msg.parent_tool_use_id as string;
   if (!deps.subagents.isActive(parentId)) return; // 防御性：理论上不会出现不认识的 id
+  // 子代理消息自带 agent_id（SDK ≥0.3.292）——登记后权限弹窗才能按 agentID 查到名字。
+  if (typeof msg.agent_id === "string" && msg.agent_id) deps.subagents.linkAgentId(msg.agent_id, parentId);
   const partialMode = deps.partialMode ?? false;
   const showThinking = deps.showThinking ?? true;
 

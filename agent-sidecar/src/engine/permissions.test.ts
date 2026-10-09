@@ -134,13 +134,16 @@ describe("PermissionManager — fromSubagent（标注这次请求来自哪个子
     expect((events[0] as any).fromSubagent).toBeUndefined();
   });
 
+  // 真实 id 形态：agentID 是子代理自身 id，与派发它的 tool_use_id 不同（旧测试两边
+  // 都写 "a1"，掩盖了线上永远查不到名字的 bug）——映射由子代理消息的 agent_id 登记。
   it("agentID 命中 SubagentTracker 时，fromSubagent 带上真实 agentName", async () => {
     const events: ChatEvent[] = [];
     const subagents = new SubagentTracker();
-    subagents.handleToolUse("a1", { subagent_type: "code-reviewer", description: "审查 PR" });
+    subagents.handleToolUse("toolu_01", { subagent_type: "code-reviewer", description: "审查 PR" });
+    subagents.linkAgentId("a0a30b8ac5122bc5a", "toolu_01");
     const mgr = new PermissionManager();
-    mgr.makeCallback((e) => events.push(e), subagents)("Bash", { command: "ls" }, { agentID: "a1" });
-    expect((events[0] as any).fromSubagent).toEqual({ id: "a1", agentName: "code-reviewer" });
+    mgr.makeCallback((e) => events.push(e), subagents)("Bash", { command: "ls" }, { agentID: "a0a30b8ac5122bc5a" });
+    expect((events[0] as any).fromSubagent).toEqual({ id: "a0a30b8ac5122bc5a", agentName: "code-reviewer" });
   });
 
   it("agentID 查不到名字时兜底成通用「子代理」，而不是丢弃这个信息", async () => {

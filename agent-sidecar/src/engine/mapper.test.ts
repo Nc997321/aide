@@ -306,6 +306,19 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
     expect(events).toEqual([{ type: "subagent_text_delta", id: "a1", delta: "子代理文本" }]);
   });
 
+  it("子代理消息的 agent_id 登记进 tracker——权限弹窗按 agentID 才查得到名字", () => {
+    const subagents = new SubagentTracker();
+    const deps = { tasks: new TaskTracker(), subagents, tools: new ToolLifecycleTracker() };
+    mapSdkMessage(assistantToolUse("toolu_01", "Agent", { subagent_type: "code-reviewer", description: "审查" }), () => {}, deps);
+    mapSdkMessage({
+      type: "assistant",
+      parent_tool_use_id: "toolu_01",
+      agent_id: "a0a30b8ac5122bc5a",
+      message: { model: "x", content: [{ type: "text", text: "看看" }] },
+    }, () => {}, deps);
+    expect(subagents.getAgentName("a0a30b8ac5122bc5a")).toBe("code-reviewer");
+  });
+
   it("partial=on: 子代理 stream_event 丢弃（走整块，不连带逐字流式）", () => {
     const subagents = new SubagentTracker();
     const tools = new ToolLifecycleTracker();
