@@ -2,6 +2,7 @@ import * as readline from "readline";
 import { SessionManager } from "./engine/session-manager.js";
 import { ensureWindowsBashEnv } from "./engine/winBashEnv.js";
 import { ensureBrowserSkill } from "./extensions/browserSkill.js";
+import { ensureAppSkill } from "./extensions/appSkill.js";
 import { removeLegacyCodegraphSkill } from "./extensions/legacySkills.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
 import { installExitReaper, sweepStaleRegistryEntries } from "./engine/subprocessReaper.js";
@@ -28,6 +29,7 @@ async function mainDesktop(): Promise<void> {
   // browser-inspect skill 落地：任务级触发「用户丢原型/规格页链接 → 读页面骨架 → 逐页抽规格」，
   // 并约定站点适配住 references/（数据），不进代码。内建于 runtime，免用户配置。
   ensureBrowserSkill(process.env);
+  ensureAppSkill(process.env);
 
   // 过滤 SDK 的 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告。
   // 该警告是 SDK 提醒 canUseTool 不会对 allowedTools 里的裸名（"Agent","Task"）

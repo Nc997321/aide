@@ -10,7 +10,7 @@ import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
-import { loadUserMcpServers, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
+import { loadUserMcpServers, loadAppMcp, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
 import { loadLspHint } from "../lspHint.js";
@@ -49,6 +49,8 @@ export interface PreparedQueryContext {
   /** mcpServers 终装：内建(docs/knowledge/browser/lsp) + 用户配置 → automation 白名单过滤
    *  → 会话级头注入。any 面沿 assembleMcpServers 既有返回形状（同上）。 */
   mcpServers: Record<string, any>;
+  /** 侧栏应用后端里免确认的工具（工具级规则，进 allowedTools）。只含真的挂上了的 server 的。 */
+  appAllowRules: string[];
 }
 
 export async function prepareQueryContext(deps: QueryContextDeps): Promise<PreparedQueryContext> {
@@ -107,7 +109,9 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   });
   // 用户扩展（settings.json 的 mcpServers/hooks）：mcpServers 与内建项按
   // name 共存；hooks 内建在前、用户追加（内建 policy 恒为 PreToolUse[0]，不可越过）。
-  const userMcp = loadUserMcpServers();
+  // 侧栏应用的后端排在用户配置之后：名字（app-<id>）不会与用户自己起的撞上，撞了以应用为准。
+  const appMcp = loadAppMcp(deps.cwd);
+  const userMcp = { ...loadUserMcpServers(), ...appMcp.servers };
   // command 型条目在这里编译成 HookCallback（F4：SDK hooks 通道只认函数）；
   // cwd 注入 hook 子进程工作目录。
   const userHooks = loadUserHooks({ cwd: deps.cwd });
@@ -134,5 +138,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     hooks: assembleHooks(builtinHooks, userHooks),
     hookManifest: builtinHookManifest,
     mcpServers,
+    // automation 白名单把某个应用的 server 滤掉了，它的放行规则也跟着去掉
+    appAllowRules: appMcp.allowRules.filter((rule) => Object.keys(mcpServers).some((name) => rule.startsWith(`mcp__${name}__`))),
   };
 }

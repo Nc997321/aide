@@ -364,3 +364,32 @@ describe("ChatInputBox · 使用小提示（时机提示）", () => {
     expect(w.find(".mention-tip").exists()).toBe(false);
   });
 });
+
+describe("ChatInputBox · 侧栏应用往输入框填字（aide.composer.fill）", () => {
+  it("选中会话的输入框认领：接在已有内容后面另起一行，不覆盖、不发送", async () => {
+    const { useComposerInserter } = await import("@/composables/useComposerInserter");
+    const wrapper = mountBox();
+    const textarea = wrapper.find("textarea");
+    await textarea.setValue("我正在写的话  ");
+
+    useComposerInserter().insertText("帮我分析这个响应");
+    await nextTick();
+
+    expect((textarea.element as HTMLTextAreaElement).value).toBe("我正在写的话\n帮我分析这个响应");
+    expect(wrapper.emitted("send")).toBeUndefined();
+    // 待办被取走：不会被下一个输入框再认领一次
+    expect(useComposerInserter().pending.value).toBeNull();
+  });
+
+  it("没选中的输入框不认领", async () => {
+    const { useComposerInserter } = await import("@/composables/useComposerInserter");
+    const wrapper = mountBox({ focused: false });
+
+    useComposerInserter().insertText("不该进来");
+    await nextTick();
+
+    expect((wrapper.find("textarea").element as HTMLTextAreaElement).value).toBe("");
+    expect(useComposerInserter().pending.value?.text).toBe("不该进来");
+    useComposerInserter().consumeText();
+  });
+});

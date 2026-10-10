@@ -33,6 +33,7 @@ pub struct Command {
 /// 各能力模块的分表。新模块迁入 = 这里加一项。
 static TABLES: &[&[Command]] = &[
     crate::app_settings::COMMANDS,
+    crate::apps::COMMANDS,
     crate::commands::customizations::agents::COMMANDS,
     crate::commands::customizations::hooks::COMMANDS,
     crate::commands::customizations::instructions::COMMANDS,

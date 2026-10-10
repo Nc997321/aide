@@ -29,7 +29,7 @@ function parts(over: {
       abortController: new AbortController(),
       permissionMode: "auto" as PermissionMode,
       canUseTool: (async () => ({ behavior: "allow" })) as QuerySpawnParts["runtime"]["canUseTool"],
-      ctx: { instructions: "INST", hooks: { PreToolUse: [] }, hookManifest: [], mcpServers: { biz: { type: "http" } } },
+      ctx: { instructions: "INST", hooks: { PreToolUse: [] }, hookManifest: [], mcpServers: { biz: { type: "http" } }, appAllowRules: ["mcp__app-db__list_history"] },
       cliEnv: { PATH: "/bin" },
     },
     workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, lspLanguages: [], ...over.workspace },
@@ -50,6 +50,8 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.mcpServers).toEqual({ biz: { type: "http" } });
     expect(o.env).toEqual({ PATH: "/bin" });
     expect(o.allowedTools).toContain(DOCS_ALLOW_RULE);
+    // 侧栏应用后端的只读工具：工具级规则原样进 allowedTools（其余工具走权限确认）
+    expect(o.allowedTools).toContain("mcp__app-db__list_history");
     expect(o.skills).toBe("all");
     expect(o.settingSources).toEqual([]);
     expect(o.allowDangerouslySkipPermissions).toBe(true);

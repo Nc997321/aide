@@ -60,6 +60,17 @@ export function dailyWorkspaceBind(): { wsKey: string; wsPath: string } | null {
 }
 
 /**
+ * 工作区根路径给人看的名字：日常目录叫「日常」（它的文件夹名 `workspace` 是实现细节），
+ * 其余取末段。日常目录被切成活动工作区时，标题栏 / 文件树切换器都经这里取名。
+ * 未装载时退化为末段。
+ */
+export function workspaceDisplayName(path: string): string {
+  if (!path) return "";
+  if (dailyPath && path === dailyPath) return "日常";
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
+}
+
+/**
  * 从工作区列表里剔除日常条目 —— **唯一过滤点**（侧栏分区与 WorkspacePicker 都
  * 经此列表），渲染期不要再滤一次。不原地改入参。
  */

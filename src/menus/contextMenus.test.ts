@@ -3,6 +3,14 @@ import { sessionSectionMenuItems, automationSectionMenuItems, workspaceMenuItems
 
 /** 侧栏分区导航行 ⋯ 菜单：纯构造函数（零分支），验证项内容与 action 透传。 */
 describe("sidebar section menus", () => {
+  it("sessionSectionMenuItems：只有传了回调（日常分区）才多一项查看日常文件", () => {
+    const onSwitch = vi.fn();
+    const items = sessionSectionMenuItems(() => {}, onSwitch);
+    expect(items.map((i) => i.label)).toEqual(["新建会话", "在文件树中查看日常文件"]);
+    items[1].action?.();
+    expect(onSwitch).toHaveBeenCalledOnce();
+  });
+
   it("sessionSectionMenuItems：新建会话带 Ctrl+N 提示，action 透传回调", () => {
     const onNew = vi.fn();
     const [item] = sessionSectionMenuItems(onNew);

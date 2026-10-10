@@ -1,0 +1,8 @@
+{
+  "id": "counter",
+  "name": "计数器",
+  "version": "0.1.0",
+  "icon": "ui/icon.svg",
+  "panel": { "entry": "ui/index.html", "placement": "right" },
+  "permissions": ["storage"]
+}

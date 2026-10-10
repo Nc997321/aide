@@ -29,5 +29,7 @@ pub(crate) async fn shutdown_children(app: &AppHandle) {
     if let Some(core) = app.try_state::<std::sync::Arc<aide_core::Core>>() {
         core.runtime.kill_runtime().await;
         core.lsp.kill_all().await;
+        // 3) 侧栏应用的后端（给界面用的那一份；会话里的那份随 Agent Runtime 一起走）
+        core.apps.stop_all();
     }
 }

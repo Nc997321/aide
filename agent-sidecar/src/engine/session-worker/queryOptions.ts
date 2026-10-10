@@ -109,6 +109,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       // 跨工作区记忆只读，同样是工具级规则。
       ...MEMORY_READ_RULES,
       ...BROWSER_ALLOW_RULES,
+      // 侧栏应用后端里的只读工具（安装版、自己标了 readOnlyHint 的）；其余工具走权限确认。
+      ...p.runtime.ctx.appAllowRules,
     ],
     // 会话 cwd 是 Aide 自持属性（wsPath 档案 / ChangeLog 基线 / Host 目录探测都认它）。
     // EnterWorktree 会在会话中途改 cwd——档案对不上 = 「跑错项目」，且 UI 看不见。

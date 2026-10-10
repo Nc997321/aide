@@ -1,0 +1,105 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>接口调试</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 13px/1.5 system-ui, sans-serif; background: var(--aide-bg-base); color: var(--aide-text-primary); }
+  .row { display: flex; gap: 8px; }
+  select, input, textarea, button { font: inherit; color: inherit; background: var(--aide-bg-raised); border: 1px solid var(--aide-border); border-radius: 6px; padding: 6px 8px; }
+  input { flex: 1; min-width: 0; }
+  textarea { width: 100%; min-height: 70px; margin-top: 8px; font-family: ui-monospace, monospace; resize: vertical; }
+  button { cursor: pointer; }
+  button.primary { background: var(--aide-accent); border-color: var(--aide-accent); color: var(--aide-text-on-accent); }
+  h3 { margin: 16px 0 6px; font-size: 12px; color: var(--aide-text-secondary); font-weight: 600; }
+  pre { margin: 0; padding: 10px; max-height: 320px; overflow: auto; background: var(--aide-bg-raised); border: 1px solid var(--aide-border); border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+  .status.ok { color: var(--aide-success); } .status.bad { color: var(--aide-danger); }
+  .hist { display: flex; gap: 10px; padding: 4px 6px; border-radius: 4px; cursor: pointer; }
+  .hist:hover { background: var(--aide-bg-raised); }
+  .hist .url { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .muted { color: var(--aide-text-secondary); }
+</style>
+
+<div class="row">
+  <select id="method"><option>GET</option><option>POST</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select>
+  <input id="url" placeholder="https://api.example.com/users" spellcheck="false">
+  <button id="send" class="primary">发送</button>
+</div>
+<textarea id="headers" placeholder='请求头（JSON，可空），如 {"Authorization": "Bearer …"}' spellcheck="false"></textarea>
+<textarea id="body" placeholder="请求体（可空）" spellcheck="false"></textarea>
+
+<h3>响应 <span id="status" class="status"></span> <button id="ask" hidden>交给 agent 分析</button></h3>
+<pre id="response" class="muted">还没有发送请求。也可以直接对 agent 说「用接口调试测一下 …」，结果会出现在下面的历史里。</pre>
+
+<h3>历史</h3>
+<div id="history" class="muted">…</div>
+
+<script src="/aide-app.js"></script>
+<script>
+  const $ = (id) => document.getElementById(id);
+  // 后端工具的结果是 MCP 形状：{ content: [{ type: "text", text }], isError? }
+  const unwrap = (result) => {
+    const text = result?.content?.[0]?.text ?? "";
+    if (result?.isError) throw new Error(text);
+    return JSON.parse(text);
+  };
+
+  async function send() {
+    $("send").disabled = true;
+    $("status").textContent = "";
+    $("response").textContent = "请求中…";
+    try {
+      const headers = $("headers").value.trim() ? JSON.parse($("headers").value) : {};
+      const res = unwrap(await aide.tools.call("send_request", {
+        method: $("method").value, url: $("url").value.trim(), headers, body: $("body").value || undefined,
+      }));
+      $("status").textContent = `${res.status} ${res.statusText} · ${res.ms} ms`;
+      $("status").className = "status " + (res.status < 400 ? "ok" : "bad");
+      let body = res.body;
+      try { body = JSON.stringify(JSON.parse(res.body), null, 2); } catch {}
+      $("response").textContent = body || "（空响应体）";
+      $("response").className = "";
+      // 把这次请求填进用户的输入框（只填不发，发不发由用户决定）
+      $("ask").hidden = false;
+      $("ask").onclick = () => aide.composer.fill(
+        `帮我分析这个接口的响应：\n${res.method} ${res.url} → ${res.status} ${res.statusText}\n\n${String(body).slice(0, 4000)}`,
+      );
+    } catch (e) {
+      $("status").textContent = "失败";
+      $("status").className = "status bad";
+      $("response").textContent = e.message;
+    } finally {
+      $("send").disabled = false;
+      loadHistory();
+    }
+  }
+
+  async function loadHistory() {
+    try {
+      const list = unwrap(await aide.tools.call("list_history"));
+      const box = $("history");
+      box.replaceChildren();
+      box.className = list.length ? "" : "muted";
+      if (!list.length) box.textContent = "还没有记录。";
+      for (const item of list) {
+        const row = document.createElement("div");
+        row.className = "hist";
+        for (const [cls, text] of [["", item.method], ["url", item.url], [item.status < 400 ? "status ok" : "status bad", item.status], ["muted", item.ms + " ms"]]) {
+          const span = document.createElement("span");
+          span.className = cls;
+          span.textContent = text; // 只进文本节点：地址是别人给的
+          row.appendChild(span);
+        }
+        row.onclick = () => { $("method").value = item.method; $("url").value = item.url; };
+        box.appendChild(row);
+      }
+    } catch (e) {
+      $("history").textContent = "读取历史失败：" + e.message;
+    }
+  }
+
+  $("send").onclick = send;
+  $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") send(); });
+  // agent 在会话里用了这个应用的工具 → 刷新历史（界面和 agent 共用同一组工具）
+  aide.session.onEvent((e) => { if (e.type === "tool.end") loadHistory(); });
+  loadHistory();
+</script>

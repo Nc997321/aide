@@ -271,6 +271,13 @@ pub fn run() {
             // 托盘菜单「退出 Aide」的出口。刻意不在 Link 的暴露目录里——手机
             // 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
+            // 侧栏应用：本窗口里某个应用的资源根地址（GUI 能力，资源本身向窗口所连的 Host 取）。
+            commands::app_assets::app_frame_base,
+            // 侧栏应用 P0 隔离实验（仅 AIDE_APP_PROBE=1 生效）。金丝雀不进 Link 暴露目录。
+            commands::app_probe::app_probe_start,
+            commands::app_probe::app_probe_canary,
+            commands::app_probe::app_probe_hits,
+            commands::app_probe::app_probe_report,
             // Customization commands
             // Provider commands
             // Marketplace commands

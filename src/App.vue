@@ -13,6 +13,7 @@ const KnowledgeBase = defineAsyncComponent(() => import("./components/KnowledgeB
 const OnboardingWizard = defineAsyncComponent(() => import("./components/onboarding/OnboardingWizard.vue"));
 const RunConfigsDialog = defineAsyncComponent(() => import("./components/RunConfigsDialog.vue"));
 const BrowserPanel = defineAsyncComponent(() => import("./components/Browser/BrowserPanel.vue"));
+const AppPanel = defineAsyncComponent(() => import("./components/apps/AppPanel.vue"));
 import PaneLayout from "./components/PaneLayout.vue";
 import AutomationMain from "./components/automation/AutomationMain.vue";
 import MarketplaceTab from "./components/marketplace/MarketplaceTab.vue";
@@ -21,6 +22,7 @@ import { useMarketplace } from "./composables/useMarketplace";
 import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
 import { useRightPanel, rightPanelWidthSource, type RightTabId } from "./composables/useRightPanel";
+import { useApps, appTabId, appIdOfTab, type AppIcon } from "./composables/useApps";
 import { useBrowserViews } from "./composables/browser/useBrowserViews";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
@@ -43,7 +45,7 @@ import { useConversationChanges } from "./composables/useConversationChanges";
 import { TURN_CHANGES_KEY, type TurnChangesFeed } from "./components/ChatPanel/turnChanges";
 import { useWorkbenchTerminal } from "./composables/useWorkbenchTerminal";
 import { api } from "./api";
-import { isDailyKey, dailyWorkspaceBind, ensureDailyWorkspace } from "@aide/sdk/utils/dailyWorkspace";
+import { isDailyKey, dailyWorkspaceBind, ensureDailyWorkspace, workspaceDisplayName } from "@aide/sdk/utils/dailyWorkspace";
 import { HOST_OPEN_FOLDER_EVENT, hostApi } from "@aide/sdk";
 import { marketplaceApi } from "./api/marketplace";
 import { useNotifications } from "./composables/useNotifications";
@@ -134,6 +136,28 @@ const rightResize = useResizable({
 /** 最大化 = 右栏吃满主区：中心轨道归 0、右栏拿 1fr。聊天区已被 v-show 换下（保活不卸载），
  *  所以这里不动任何 DOM 结构——原生视图的「洞」只是换了个更大的 rect。 */
 const browserMaximized = rightPanel.maximized;
+
+// 侧栏应用：右栏 rail 的动态 tab + 左侧导航组里占主区的那一类（见 composables/useApps）。
+const sidebarApps = useApps();
+sidebarApps.start();
+/** 右栏应用面板首次激活才挂、之后保活（同浏览器的 browserEverActive）：切走不丢应用里的状态。 */
+const rightAppsEverActive = ref<string[]>([]);
+watch(
+  [rightTab, rightCollapsed],
+  ([tab, collapsed]) => {
+    const id = appIdOfTab(tab);
+    if (id && !collapsed && !rightAppsEverActive.value.includes(id)) rightAppsEverActive.value.push(id);
+  },
+  { immediate: true },
+);
+const rightAppPanels = computed(() =>
+  sidebarApps.rightApps.value.filter((a) => rightAppsEverActive.value.includes(a.id)),
+);
+// 正看着的应用没了（卸载 / 工作区换了）→ 退回文件 tab，别留一块空白。
+watch(sidebarApps.rightApps, (list) => {
+  const id = appIdOfTab(rightTab.value);
+  if (id && !list.some((a) => a.id === id)) rightTab.value = "files";
+});
 
 const gridTemplateColumns = computed(() => {
   const left = !leftPinned.value
@@ -352,6 +376,19 @@ const tabIconPermissions = '<svg viewBox="0 0 24 24" fill="none" stroke="current
 // 地球（圆 + 赤道 + 两弧）：与侧栏那几个入口同一字形语言。
 const tabIconBrowser = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18"/><path d="M12 3a9 9 0 0 1 0 18"/><path d="M12 3a9 9 0 0 0 0 18"/></svg>';
 
+// 拼图块：侧栏应用的统一字形。
+const tabIconApp = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 4a2 2 0 1 1 4 0v2h4a1 1 0 0 1 1 1v4h-2a2 2 0 1 0 0 4h2v4a1 1 0 0 1-1 1h-4v-2a2 2 0 1 0-4 0v2H6a1 1 0 0 1-1-1v-4H3a2 2 0 1 1 0-4h2V7a1 1 0 0 1 1-1h4z"/></svg>';
+
+/** 应用图标的 rail 标记。地址是我们自己 `createObjectURL` 出来的 blob 地址，不含应用可控的字符。 */
+function appIconHtml(icon: AppIcon | undefined): string {
+  if (!icon || !icon.url.startsWith("blob:")) return tabIconApp;
+  const url = encodeURI(icon.url);
+  const box = "display:block;width:1em;height:1em;flex-shrink:0"; // rail 的图标格是 1em 见方
+  return icon.kind === "mask"
+    ? `<span style="${box};background:currentColor;-webkit-mask:url(${url}) center/contain no-repeat;mask:url(${url}) center/contain no-repeat"></span>`
+    : `<img src="${url}" alt="" style="${box};object-fit:contain" />`;
+}
+
 const rightTabs = computed<Tab[]>(() => [
   { id: "files", icon: tabIconFiles, label: "文件 (Ctrl+1)" },
   { id: "changes", icon: tabIconChanges, badge: changeCount.value || undefined, label: "变更 (Ctrl+2)" },
@@ -359,6 +396,13 @@ const rightTabs = computed<Tab[]>(() => [
   { id: "search", icon: tabIconSearch, label: "搜索 (Ctrl+4)" },
   { id: "callhierarchy", icon: tabIconCallhierarchy, label: "调用层级 (Ctrl+7)" },
   { id: "browser", icon: tabIconBrowser, label: "浏览器 (Ctrl+8)" },
+  // rail 这里是 v-html：应用自带的图标只以**图片地址**的形式进来（appIconHtml），内容本身绝不进 HTML。
+  ...sidebarApps.rightApps.value.map((a) => ({
+    id: appTabId(a.id),
+    icon: appIconHtml(sidebarApps.icons[a.id]),
+    badge: sidebarApps.badges[a.id] || undefined,
+    label: a.name,
+  })),
   { id: "permissions", icon: tabIconPermissions, label: "权限 (Ctrl+5)", bottom: true },
 ]);
 
@@ -413,10 +457,12 @@ function closeOtherPanels(except: string) {
   if (except !== "observatory") observatory.closePanel();
   if (except !== "automation") automation.closePanel();
   if (except !== "kb") knowledgeBase.closePanel();
+  if (except !== "app") sidebarApps.closeMain();
 }
 watch(marketplace.panelOpen, (open) => { if (open) closeOtherPanels("marketplace"); });
 watch(observatory.panelOpen, (open) => { if (open) closeOtherPanels("observatory"); });
 watch(knowledgeBase.panelOpen, (open) => { if (open) closeOtherPanels("kb"); });
+watch(sidebarApps.mainPanelOpen, (open) => { if (open) closeOtherPanels("app"); });
 watch(() => automation.state.view, (v) => { if (v !== null) closeOtherPanels("automation"); });
 
 // 切进日常对话就收起右栏（用户 2026-09-20 定：日常 = 面板收起来）。
@@ -435,9 +481,9 @@ watch(browserMaximized, (on) => {
   if (on) closeOtherPanels("browser");
 });
 watch(
-  [marketplace.panelOpen, observatory.panelOpen, knowledgeBase.panelOpen, () => automation.state.view],
-  ([mk, ob, kb, auto]) => {
-    if (mk || ob || kb || auto !== null) rightPanel.setMaximized(false);
+  [marketplace.panelOpen, observatory.panelOpen, knowledgeBase.panelOpen, () => automation.state.view, sidebarApps.mainPanelOpen],
+  ([mk, ob, kb, auto, app]) => {
+    if (mk || ob || kb || app || auto !== null) rightPanel.setMaximized(false);
   },
 );
 
@@ -450,6 +496,7 @@ function onSessionChanged(id: string) {
   marketplace.closePanel();
   observatory.closePanel();
   knowledgeBase.closePanel();
+  sidebarApps.closeMain();
   // 打开语义（预览覆盖/全局唯一聚焦）由布局层统一裁决
   paneLayout.openSession(id);
 }
@@ -476,7 +523,7 @@ function onNewSession(name: string, ws?: { wsKey: string; wsPath: string }) {
 
 async function onSidebarWsChanged(path: string) {
   workspacePath.value = path;
-  projectName.value = path.split(/[\\/]/).filter(Boolean).pop() || path;
+  projectName.value = workspaceDisplayName(path);
   // 混合 tab 布局：切换活动工作区不动聊天区的 tab（布局是全局一份）
   await fileTreeRef.value?.loadRoot();
   // git 面板数据是工作区级的（分支/提交/状态/标签/对比），右栏 git 徽标也读
@@ -500,6 +547,9 @@ watch(activeWorkspaceKey, (k) => {
 // Host 启动页的「最近项目」：本窗口的 Host 每打开一个项目就记一笔（桌面自己记、Host 由窗口定）。
 // 日常工作区是每台 Host 自带的草稿目录而不是「项目」，不记。
 const samePath = (a: string, b: string) => a.replace(/[\\/]+$/, "").replace(/\\/g, "/") === b.replace(/[\\/]+$/, "").replace(/\\/g, "/");
+// 开发态应用住在活动工作区的 .aide/apps 里：工作区一换，应用清单跟着换。
+watch(workspacePath, () => void sidebarApps.refresh());
+
 watch(workspacePath, async (p) => {
   if (!p) return;
   try {
@@ -744,6 +794,14 @@ function handleKeydown(e: KeyboardEvent) {
     useUsageTips().markUsed("new-session");
   }
 
+  // Ctrl+Alt+Shift+I：侧栏应用的隔离实验（仅桌面以 AIDE_APP_PROBE=1 启动时有反应，见 dev/appIsolationProbe）
+  if (e.ctrlKey && e.altKey && e.shiftKey && e.code === "KeyI") {
+    e.preventDefault();
+    e.stopPropagation();
+    void import("./dev/appIsolationProbe").then((m) => m.runAppIsolationProbe());
+    return;
+  }
+
   // Ctrl+Shift+B：内嵌浏览器（右栏 tab；已激活则折叠，与 rail 点击同语义）
   if (e.ctrlKey && e.shiftKey && (e.code === "KeyB" || e.key === "B")) {
     e.preventDefault();
@@ -837,7 +895,9 @@ onMounted(async () => {
     const info = await api.getProjectInfo();
     if (info?.root) {
       workspacePath.value = info.root;
-      projectName.value = info.name;
+      // 活动工作区可能就是日常目录（上次切过去的）：名字要叫「日常」而不是文件夹名
+      await ensureDailyWorkspace();
+      projectName.value = workspaceDisplayName(info.root);
       await loadRunConfigs(info.root, info.root);
       // 同 onSidebarWsChanged：迁移（list_run_configs 内）→ 读工作区 JDK → 提示
       await loadWorkspaceJdk(info.root);
@@ -1131,10 +1191,17 @@ onUnmounted(() => {
         <!-- 知识库不接 workspaceKey：它连的是独立进程 knowledge-server，
              与当前打开的工作区、会话、配对状态都无关——没配对也能用。 -->
         <KnowledgeBase v-else-if="knowledgeBase.panelOpen.value" class="h-full" @close="knowledgeBase.closePanel()" />
+        <!-- 占主区的侧栏应用（placement: main）。:key 按应用换：切到另一个应用是另一块面板。 -->
+        <AppPanel
+          v-else-if="sidebarApps.mainOpenApp.value"
+          :key="sidebarApps.mainOpenApp.value.id"
+          :app="sidebarApps.mainOpenApp.value"
+          class="h-full"
+        />
         <!-- 内嵌浏览器已不在主区：它是右栏的一个 tab（见 .panel-right-inner）。
              这里只剩"最大化 = 右栏吃满主区"时把聊天换下。 -->
         <PaneLayout
-          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value && !browserMaximized"
+          v-show="automation.state.view === null && !marketplace.panelOpen.value && !observatory.panelOpen.value && !knowledgeBase.panelOpen.value && !sidebarApps.mainPanelOpen.value && !browserMaximized"
           :workspace-path="workspacePath"
           class="h-full"
         />
@@ -1184,6 +1251,13 @@ onUnmounted(() => {
             <BrowserPanel
               v-if="rightPanel.browserEverActive.value"
               v-show="rightTab === 'browser'"
+            />
+            <!-- 侧栏应用（placement: right）：首次激活才挂，之后 v-show 保活 -->
+            <AppPanel
+              v-for="a in rightAppPanels"
+              v-show="rightTab === appTabId(a.id)"
+              :key="a.id"
+              :app="a"
             />
           </div>
         </div>

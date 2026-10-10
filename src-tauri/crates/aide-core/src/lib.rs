@@ -10,6 +10,7 @@
 //! [`Core`] 的字段由前门注入。新命令 = [`registry`] 表里加一行，两处前门同时获得。
 
 pub mod app_settings;
+pub mod apps;
 pub mod bus;
 pub mod automation;
 pub mod link;
@@ -73,6 +74,8 @@ pub struct Core {
     pub resources: Arc<dyn HostResources>,
     /// Host 自己的手机网关（Aide Link）：配对 / 启停 / 中继注册。`host::start` 时接上。
     pub link: Arc<link::LinkService>,
+    /// 侧栏应用的后端进程（给界面用的那一份；会话里的由 SDK 自己拉起）。
+    pub apps: Arc<apps::servers::ServerPool>,
     /// Host 的事件总线：全部事件在这里编号、留底、按订阅投给前门 / 网关（见 `bus.rs`）。
     pub bus: Arc<bus::Bus>,
     events: Arc<dyn EventSink>,
@@ -98,6 +101,7 @@ impl Core {
             watch: FileWatchService::default(),
             pty: pty::ShellManager::new(),
             link: Arc::new(link::LinkService::new()),
+            apps: Arc::new(apps::servers::ServerPool::default()),
             bus,
             events,
         })

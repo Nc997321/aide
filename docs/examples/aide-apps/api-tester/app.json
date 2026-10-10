@@ -1,0 +1,9 @@
+{
+  "id": "api-tester",
+  "name": "接口调试",
+  "version": "0.1.0",
+  "icon": "ui/icon.svg",
+  "panel": { "entry": "ui/index.html", "placement": "main" },
+  "permissions": ["session:read", "composer"],
+  "server": { "entry": "server/main.mjs" }
+}

@@ -12,6 +12,7 @@ import { computed } from "vue";
 import { useMarketplace } from "../composables/useMarketplace";
 import { useMemoryObservatory } from "../composables/useMemoryObservatory";
 import { useKnowledgeBase } from "../composables/useKnowledgeBase";
+import { useApps } from "../composables/useApps";
 import { useContextMenu } from "../composables/useContextMenu";
 import { marketplaceSectionMenuItems } from "../menus/contextMenus";
 
@@ -27,6 +28,8 @@ const { panelOpen: observatoryOpen, togglePanel: toggleObservatory } = useMemory
 // 知识库：与上面两个同范式（模块级面板开关），但**不依赖 aide 的会话状态**——
 // 它连的是独立进程 knowledge-server，没配对也能用（只要那个服务活着）。
 const { panelOpen: kbOpen, togglePanel: toggleKb } = useKnowledgeBase();
+// 侧栏应用里占主区的那一类（placement: main）：每个应用一行，开关归 useApps（一次只开一个）。
+const { mainApps, mainOpenId, toggleMain, icons: appIcons } = useApps();
 const { show } = useContextMenu();
 
 /** 已安装插件数（0 时不占位，与旧侧栏入口同规则） */
@@ -115,6 +118,27 @@ function onDockMenu(e: MouseEvent) {
       </svg>
       <span class="nav-label">知识库</span>
     </div>
+
+    <!-- 应用名是应用自己写的：只进文本节点。自带的图标只当图片用（mask / img），内容不进 HTML；没有就用内置字形。 -->
+    <div
+      v-for="app in mainApps"
+      :key="app.id"
+      class="nav-row"
+      :class="{ on: mainOpenId === app.id }"
+      v-tooltip="app.name"
+      @click="toggleMain(app.id)"
+    >
+      <span
+        v-if="appIcons[app.id]?.kind === 'mask'"
+        class="nav-icon nav-icon--mask"
+        :style="{ '--app-icon': `url(${appIcons[app.id].url})` }"
+      />
+      <img v-else-if="appIcons[app.id]" class="nav-icon nav-icon--image" :src="appIcons[app.id].url" alt="" />
+      <svg v-else class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10 4a2 2 0 1 1 4 0v2h4a1 1 0 0 1 1 1v4h-2a2 2 0 1 0 0 4h2v4a1 1 0 0 1-1 1h-4v-2a2 2 0 1 0-4 0v2H6a1 1 0 0 1-1-1v-4H3a2 2 0 1 1 0-4h2V7a1 1 0 0 1 1-1h4z" />
+      </svg>
+      <span class="nav-label">{{ app.name }}</span>
+    </div>
   </div>
 </template>
 
@@ -161,6 +185,16 @@ function onDockMenu(e: MouseEvent) {
   flex-shrink: 0;
   color: var(--aide-text-muted);
   transition: color var(--aide-ease-t);
+}
+
+.nav-icon--mask {
+  background: currentColor;
+  mask: var(--app-icon) center / contain no-repeat;
+  -webkit-mask: var(--app-icon) center / contain no-repeat;
+}
+
+.nav-icon--image {
+  object-fit: contain;
 }
 
 .nav-row:hover .nav-icon,

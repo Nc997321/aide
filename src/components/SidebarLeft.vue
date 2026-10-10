@@ -5,6 +5,7 @@ import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
 import { useUpdate } from "../composables/useUpdate";
 import { useRecent } from "../composables/useRecent";
+import { useRightPanel } from "../composables/useRightPanel";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { sessionMenuItems, sessionSectionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
@@ -343,8 +344,26 @@ async function activateWorkspace(ws: WorkspaceInfo): Promise<boolean> {
 /** 供文件树 path-bar 切换器调用：按 key 激活工作区（已是活动则忽略）。 */
 async function switchToWorkspaceByKey(wsKey: string) {
   if (wsKey === activeWorkspace.value) return;
-  const ws = workspaces.value.find((w) => w.key === wsKey);
+  // 日常目录不在 workspaces 里（SDK 已过滤），但它可以被切成活动工作区：文件树/搜索/终端
+  // 指过去，恒受信任所以不弹信任提示（用户 2026-10-10 定，改掉了「日常永不激活」）。
+  const daily = dailyWorkspaceBind();
+  const ws =
+    daily && wsKey === daily.wsKey
+      ? { key: daily.wsKey, name: daily.wsPath, missing: false }
+      : workspaces.value.find((w) => w.key === wsKey);
   if (ws) await activateWorkspace(ws);
+}
+
+/** 「日常」分区 ⋯：新建之外多一项「切到日常目录」。 */
+function onDailySectionMenu(e: MouseEvent) {
+  // 菜单项叫「查看日常文件」：切过去之后把文件树亮出来（日常会话默认是收起右栏的）
+  const switchTo = dailyKey.value
+    ? () => {
+        void switchToWorkspaceByKey(dailyKey.value);
+        useRightPanel().ensureTabShown("files");
+      }
+    : undefined;
+  show(e.clientX, e.clientY, sessionSectionMenuItems(newSession, switchTo));
 }
 
 /** TitleBar「打开目录」确认后调用：登记目录为工作区 → 激活 → 广播 workspace-changed。
@@ -498,6 +517,14 @@ onMounted(async () => {
   try {
     const info = await api.getProjectInfo();
     let activeWs: WorkspaceInfo | null = null;
+    // 上次把活动工作区切到了日常目录：它不在 workspaces 里，单独认（否则共享 activeKey 为空，
+    // 首个终端被归到空 key）。恒受信任，不走 maybePromptTrust。
+    const daily = (await ensureDailyWorkspace()) ? dailyWorkspaceBind() : null;
+    if (daily && info.root === daily.wsPath) {
+      activeWorkspace.value = daily.wsKey;
+      wsActiveKey.value = daily.wsKey;
+      await setCurrentWs(daily.wsKey, daily.wsPath);
+    }
     for (const ws of workspaces.value) {
       if (ws.name === info.root) {
         activeWorkspace.value = ws.key;
@@ -605,7 +632,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
         :collapsed="dailyCollapsed"
         :limit="settings.recentLimit"
         @toggle="dailyCollapsed = !dailyCollapsed"
-        @menu="onSessionSectionMenu"
+        @menu="onDailySectionMenu"
         @select="(sid: string) => emit('session-changed', sid)"
         @contextmenu="onDailySessionContextMenu"
       />

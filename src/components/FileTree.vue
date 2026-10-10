@@ -454,11 +454,11 @@ defineExpose({ loadRoot, revealFile });
   <div class="file-tree">
     <div class="path-bar">
       <div class="ws-switcher">
-        <WorkspacePicker :path="projectInfo.root" @select="onPickWorkspace">
-          <template #trigger="{ open, toggle }">
+        <WorkspacePicker :path="projectInfo.root" include-daily @select="onPickWorkspace">
+          <template #trigger="{ open, toggle, label }">
             <button class="ws-trigger" v-tooltip="projectInfo.root" @click.stop="toggle">
               <svg class="ws-folder" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
-              <span class="ws-project-name">{{ projectInfo.name || "未打开工作区" }}</span>
+              <span class="ws-project-name">{{ projectInfo.root ? label : "未打开工作区" }}</span>
               <span v-if="projectInfo.branch" class="path-branch">{{ projectInfo.branch }}</span>
               <svg class="ws-chevron" :class="{ open }" width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2.5 3.5L5 6L7.5 3.5" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </button>

@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>计数器</title>
+<style>
+  /* --aide-* 变量由 aide-app.js 铺到根元素上，直接用就跟随 Aide 的主题 */
+  body { margin: 0; padding: 20px; font: 14px/1.6 system-ui, sans-serif; background: var(--aide-bg-base); color: var(--aide-text-primary); }
+  .count { font-size: 48px; font-weight: 600; color: var(--aide-accent); }
+  button { padding: 4px 14px; border: 1px solid var(--aide-border); border-radius: 6px; background: var(--aide-bg-raised); color: inherit; cursor: pointer; }
+  .hint { margin-top: 16px; color: var(--aide-text-secondary); font-size: 12px; }
+</style>
+<div class="count" id="count">…</div>
+<button id="plus">+1</button>
+<button id="reset">清零</button>
+<div class="hint" id="hint"></div>
+<script src="/aide-app.js"></script>
+<script>
+  // 应用跑在沙箱里：没有 localStorage，也不能自己联网。数据经 aide.storage 存到 Host 上。
+  const el = document.getElementById("count");
+  let n = 0;
+  const show = () => { el.textContent = n; aide.ui.setBadge(n); };
+  const save = () => aide.storage.set("count", n);
+
+  aide.storage.get("count").then((saved) => { n = Number(saved) || 0; show(); });
+  aide.host.info().then((info) => {
+    document.getElementById("hint").textContent = `数据存在 Host（${info.os}）上，关掉重开还在。`;
+  });
+  document.getElementById("plus").onclick = () => { n += 1; show(); save(); };
+  document.getElementById("reset").onclick = () => { n = 0; show(); save(); aide.ui.toast("已清零"); };
+</script>

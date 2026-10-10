@@ -1,0 +1,90 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>aide app isolation probe</title>
+<body>
+<script>
+// 应用隔离探针（跑在被测 iframe 里）。它扮演一个恶意应用：把能想到的通往 Tauri IPC 的路
+// 都试一遍，把每条路的结局报给外层。变体与回环地址经 window.name 传入（srcdoc 没有 URL 可带参）。
+(async () => {
+  let cfg = {};
+  try { cfg = JSON.parse(window.name || "{}"); } catch (_) {}
+  const results = [];
+  const record = (id, kind, outcome, detail) =>
+    results.push({ id, kind, outcome, detail: String(detail ?? "").slice(0, 300) });
+  const withTimeout = (p, ms) =>
+    Promise.race([p, new Promise((r) => setTimeout(() => r({ __timedOut: true }), ms))]);
+  const errText = (e) => (e && (e.name ? e.name + ": " : "") + (e.message ?? e)) || String(e);
+
+  // 1) 注入了哪些全局（WebView2 会不会把 Tauri 的初始化脚本注进子 frame）
+  const globals = [];
+  for (const [name, get] of [
+    ["__TAURI_INTERNALS__", () => window.__TAURI_INTERNALS__],
+    ["__TAURI__", () => window.__TAURI__],
+    ["ipc", () => window.ipc],
+    ["chrome.webview", () => window.chrome && window.chrome.webview],
+    ["webkit.messageHandlers.ipc", () => window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.ipc],
+  ]) {
+    try { if (get()) globals.push(name); } catch (_) {}
+  }
+  record("globals", "info", globals.length ? "present" : "absent", globals.join(", "));
+
+  // 2) 经某个 window 的 __TAURI_INTERNALS__ 调命令
+  async function tryInvoke(id, getOwner, cmd) {
+    let owner;
+    try { owner = getOwner(); } catch (e) { return record(id, "gate", "blocked", errText(e)); }
+    let internals;
+    try { internals = owner && owner.__TAURI_INTERNALS__; } catch (e) { return record(id, "gate", "blocked", errText(e)); }
+    if (!internals || typeof internals.invoke !== "function") return record(id, "gate", "absent", "no invoke on this window");
+    try {
+      // 记号让 Host 侧能认出「这次调用是哪个变体的哪条路发的」，不依赖回应能否送回本 frame。
+      const r = await withTimeout(internals.invoke(cmd, { nonce: (cfg.variant || "unknown") + ":" + id }), 4000);
+      if (r && r.__timedOut) record(id, "gate", "timeout", "no answer in 4s");
+      else record(id, "gate", "reachable", JSON.stringify(r));
+    } catch (e) {
+      record(id, "gate", "blocked", errText(e));
+    }
+  }
+  await tryInvoke("own-invoke-canary", () => window, "app_probe_canary");
+  await tryInvoke("own-invoke-plugin", () => window, "plugin:app|version");
+  await tryInvoke("parent-invoke-canary", () => window.parent, "app_probe_canary");
+
+  // 3) 绕过注入脚本直打 IPC 端点。没有 invoke key 本来就过不去，所以只作参考。
+  for (const url of ["ipc://localhost/app_probe_canary", "http://ipc.localhost/app_probe_canary"]) {
+    try {
+      const res = await withTimeout(
+        fetch(url, { method: "POST", headers: { "Tauri-Callback": "1", "Tauri-Error": "2", "Tauri-Invoke-Key": "probe" }, body: "{}" }),
+        4000,
+      );
+      if (res && res.__timedOut) record("raw-ipc " + url, "info", "timeout", "");
+      else record("raw-ipc " + url, "info", res.ok ? "reachable" : "blocked", "HTTP " + res.status);
+    } catch (e) {
+      record("raw-ipc " + url, "info", "blocked", errText(e));
+    }
+  }
+
+  // 4) 同源存储（不透明来源应当读不到）
+  try {
+    localStorage.setItem("aide-app-probe", "1");
+    localStorage.removeItem("aide-app-probe");
+    record("local-storage", "info", "reachable", "");
+  } catch (e) {
+    record("local-storage", "info", "blocked", errText(e));
+  }
+
+  // 5) 自行联网（CSP 变体下应当被拦）
+  if (cfg.ping) {
+    try {
+      const res = await withTimeout(fetch(cfg.ping, { mode: "no-cors", cache: "no-store" }), 4000);
+      record("network", "net", res && res.__timedOut ? "timeout" : "reachable", "");
+    } catch (e) {
+      record("network", "net", "blocked", errText(e));
+    }
+  }
+
+  window.parent.postMessage(
+    { aideAppProbe: true, variant: cfg.variant || "unknown", origin: String(window.origin), results },
+    "*",
+  );
+})();
+</script>
+</body>

@@ -17,7 +17,9 @@ export type RightTabId =
   | "search"
   | "callhierarchy"
   | "permissions"
-  | "browser";
+  | "browser"
+  /** 侧栏应用（placement: right）：id 由 `useApps` 的 `appTabId` 拼出，rail 上的条目是数据，不是字面量。 */
+  | `app:${string}`;
 
 /** 默认收起（只留竖直 rail），沿用旧 rightCollapsed 的初值。 */
 const collapsed = ref(true);

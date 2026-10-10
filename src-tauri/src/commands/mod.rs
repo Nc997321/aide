@@ -1,4 +1,6 @@
 pub mod app;
+pub mod app_assets;
+pub mod app_probe;
 pub mod browser;
 pub mod clipboard;
 pub mod file_assoc;

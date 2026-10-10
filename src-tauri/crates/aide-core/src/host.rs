@@ -64,6 +64,8 @@ pub fn start(core: &Arc<Core>) {
         });
     }
     core.automation.start(core);
+    // 侧栏应用：盯着应用目录（开发态应用的出现 / 热加载 / 开发日志都靠它，不靠界面轮询）
+    crate::apps::start(core);
     // 内置插件：确保已安装 / 版本更新（git 网络 IO，后台；用户卸载 / 禁用的不复活）。
     let settings = Arc::clone(&core.settings);
     tokio::task::spawn_blocking(move || {

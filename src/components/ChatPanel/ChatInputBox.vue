@@ -19,6 +19,7 @@ import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
 import { useInlineMention } from "@/composables/useInlineMention";
 import { useMentionInserter } from "@/composables/useMentionInserter";
+import { useComposerInserter } from "@/composables/useComposerInserter";
 import { useKbSelections } from "@/composables/useKbSelections";
 import { useMentionSuggest, applyPick, type MentionSuggestion } from "@/composables/useMentionSuggest";
 import { useWorkspaces } from "@/composables/useWorkspaces";
@@ -603,6 +604,20 @@ watch(
     if (!pendingMentions.value.some((x) => mentionKey(x.path, x.range) === mentionKey(m.path, m.range))) {
       pendingMentions.value.push({ path: m.path, isDir: m.isDir, range: m.range });
     }
+    nextTick(() => textareaEl.value?.focus());
+  },
+);
+
+// 侧栏应用的 `aide.composer.fill`：同一条规则——只有选中会话的输入框认领。接在已有内容后面
+// （另起一行），不覆盖用户正在写的；只填不发。
+const composerInserter = useComposerInserter();
+watch(
+  () => composerInserter.pending.value?.nonce,
+  () => {
+    if (!props.focused) return;
+    const req = composerInserter.consumeText();
+    if (!req) return;
+    inputText.value = inputText.value.trim() ? `${inputText.value.replace(/\s+$/, "")}\n${req.text}` : req.text;
     nextTick(() => textareaEl.value?.focus());
   },
 );

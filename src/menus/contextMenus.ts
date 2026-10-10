@@ -255,8 +255,12 @@ export function sessionMenuItems(
 // ── Sidebar section menu（侧栏分区导航行 ⋯ 菜单）──
 
 /** 「会话」导航行 ⋯：新建入口从分区头 ＋ 按钮收进此处（右槽位 计数⇄⋯ 交互）。 */
-export function sessionSectionMenuItems(onNewSession: () => void): MenuItem[] {
-  return [{ label: "新建会话", kbd: "Ctrl+N", action: onNewSession }];
+export function sessionSectionMenuItems(onNewSession: () => void, onSwitchToDaily?: () => void): MenuItem[] {
+  return [
+    { label: "新建会话", kbd: "Ctrl+N", action: onNewSession },
+    // 只有「日常」分区传：把文件树等面板切到日常目录
+    ...(onSwitchToDaily ? [{ label: "在文件树中查看日常文件", action: onSwitchToDaily }] : []),
+  ];
 }
 
 /** 「自动化」导航行 ⋯：同上，新建任务入口。 */

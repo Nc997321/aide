@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import type { CustomizationType, CustomizationItem } from "../../types/customization";
 import { CUSTOMIZATION_CATEGORIES, builtinHooks, builtinMcpServers } from "../../composables/useCustomizations";
+import { computed } from "vue";
 import { useModal } from "../../composables/useModal";
+import { useApps } from "../../composables/useApps";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -17,6 +19,11 @@ const emit = defineEmits<{
 }>();
 
 const category = CUSTOMIZATION_CATEGORIES.find((c) => c.type === props.type);
+
+/** 侧栏应用带进会话的 MCP server（已同意、已启用、带后端的应用，每个一个）。只读：在应用面板上管。 */
+const appMcpServers = computed(() =>
+  useApps().apps.value.filter((a) => !a.error && a.enabled && a.consented && a.hasServer),
+);
 
 const { prompt: modalPrompt } = useModal();
 
@@ -76,6 +83,24 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
             <div class="item-meta">{{ m.transport }} · {{ m.purpose }}</div>
           </div>
           <span class="src-badge src-builtin">内置</span>
+          <span class="lock-mark">🔒</span>
+        </div>
+      </div>
+
+      <!-- 侧栏应用的后端：用户同意过才会在这里（不写 settings.json，在应用面板上启停） -->
+      <div v-if="type === 'mcp_server' && appMcpServers.length > 0" class="builtin-section">
+        <div class="section-label">来自侧栏应用（只读 · 在应用面板上管理）</div>
+        <div v-for="a in appMcpServers" :key="a.id" class="list-item builtin-item">
+          <div class="item-info">
+            <div class="item-name">app-{{ a.id }}</div>
+            <div class="item-meta">
+              stdio · 应用「{{ a.name }}」的后端 ·
+              <template v-if="a.source === 'workspace'">开发中，仅当前工作区的会话可用，每次调用都确认</template>
+              <template v-else-if="a.readOnlyTools.length">{{ a.readOnlyTools.length }} 个只读工具免确认（{{ a.readOnlyTools.join("、") }}），其余逐次确认</template>
+              <template v-else>每次调用都确认</template>
+            </div>
+          </div>
+          <span class="src-badge src-builtin">应用</span>
           <span class="lock-mark">🔒</span>
         </div>
       </div>

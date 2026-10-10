@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { useWorkspaces } from "../composables/useWorkspaces";
+import { dailyWorkspaceBind, ensureDailyWorkspace, workspaceDisplayName } from "@aide/sdk/utils/dailyWorkspace";
 import type { WorkspaceInfo } from "../types";
 
 /**
@@ -25,6 +26,9 @@ import type { WorkspaceInfo } from "../types";
 const props = defineProps<{
   /** 当前归属的工作区根路径（勾选高亮依据）；空串时按钮显示「未选择」 */
   path: string;
+  /** 列表顶上多一项固定的「日常」（日常目录不在工作区列表里）。只给「切换活动工作区」的
+   *  消费方开（文件树）；hero 选归属不开——那里日常/工程由模式切换决定。 */
+  includeDaily?: boolean;
 }>();
 const emit = defineEmits<{
   select: [ws: WorkspaceInfo];
@@ -39,9 +43,19 @@ const menuRef = ref<HTMLElement | null>(null);
 const menuStyle = ref<Record<string, string>>({});
 const positioned = ref(false);
 
+/** 日常那一项；没开 includeDaily 或归属还没装载时为 null。 */
+const daily = ref<WorkspaceInfo | null>(null);
+async function loadDaily() {
+  if (!props.includeDaily || !(await ensureDailyWorkspace())) return;
+  const bind = dailyWorkspaceBind();
+  daily.value = bind ? { key: bind.wsKey, name: bind.wsPath, missing: false } : null;
+}
+onMounted(() => void loadDaily());
+
 const label = computed(() => {
   if (!props.path) return "未选择工作区";
-  return props.path.split(/[\\/]/).filter(Boolean).pop() || props.path;
+  // daily 进依赖：装载完成后「日常」的名字要跟着出来
+  return daily.value?.name === props.path ? "日常" : workspaceDisplayName(props.path);
 });
 
 function toggle() {
@@ -152,6 +166,16 @@ onUnmounted(() => {
         <div v-if="loading" class="wp-status">加载中…</div>
         <template v-else>
           <button
+            v-if="daily"
+            class="wp-option"
+            :class="{ active: daily.name === props.path }"
+            v-tooltip="daily.name"
+            @click="pick(daily)"
+          >
+            <span class="wp-option-name">日常</span>
+            <span v-if="daily.name === props.path" class="wp-option-check">✓</span>
+          </button>
+          <button
             v-for="ws in list"
             :key="ws.key"
             class="wp-option"
@@ -163,7 +187,7 @@ onUnmounted(() => {
             <span class="wp-option-name">{{ ws.name.split(/[\\/]/).filter(Boolean).pop() || ws.name }}</span>
             <span v-if="ws.name === props.path" class="wp-option-check">✓</span>
           </button>
-          <div v-if="list.length === 0" class="wp-status">无其它工作区</div>
+          <div v-if="list.length === 0 && !daily" class="wp-status">无其它工作区</div>
         </template>
       </div>
     </Teleport>

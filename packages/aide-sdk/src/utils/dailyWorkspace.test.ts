@@ -4,6 +4,7 @@ import {
   dailyWorkspaceBind,
   visibleWorkspaces,
   setDailyWorkspace,
+  workspaceDisplayName,
   __resetDailyWorkspaceForTest,
 } from "./dailyWorkspace";
 import type { WorkspaceInfo } from "../types";
@@ -25,6 +26,14 @@ describe("dailyWorkspace", () => {
     expect(isDailyKey("C--cfg-workspace")).toBe(true);
     expect(isDailyKey("C--cfg-other")).toBe(false);
     expect(isDailyKey("")).toBe(false);
+  });
+
+  it("workspaceDisplayName：日常目录叫「日常」，其余取末段；未装载时也取末段", () => {
+    expect(workspaceDisplayName("C:/cfg/workspace")).toBe("workspace");
+    setDailyWorkspace("C--cfg-workspace", "C:/cfg/workspace");
+    expect(workspaceDisplayName("C:/cfg/workspace")).toBe("日常");
+    expect(workspaceDisplayName("C:\\code\\aide")).toBe("aide");
+    expect(workspaceDisplayName("")).toBe("");
   });
 
   it("dailyWorkspaceBind 给出会话归属绑定（空白 tab / hero 落点用）", () => {
