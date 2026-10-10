@@ -25,6 +25,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@anthropic-ai/sdk": "0.116.0",
     "@types/node": "^20.19.0",
     "@vitest/coverage-v8": "^4.1.10",
     "esbuild": "^0.25.0",

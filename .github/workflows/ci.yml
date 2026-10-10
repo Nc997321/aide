@@ -98,6 +98,8 @@ jobs:
       - name: install root deps (jsdom)
         working-directory: .
         run: pnpm install --frozen-lockfile
-      - run: npm ci
+      # sidecar 的锁文件只有 pnpm-lock.yaml 一份（与另外两个 job、本地开发一致）。曾经并存一份
+      # package-lock.json 给这里 `npm ci` 用，升级 SDK 时没人更新它，v1.2.0 的 CI 就挂在这
+      - run: pnpm install --frozen-lockfile
       - run: npm run typecheck
       - run: npm test

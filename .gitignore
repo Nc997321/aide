@@ -1,8 +1,10 @@
 # Dependencies
 node_modules/
 # 根 workspace 用 pnpm；仅 ignore 根目录的 npm 残留锁（前导斜杠限定），
-# agent-sidecar 走 npm --prefix，其 package-lock.json 是合法文件、勿全局 ignore
+# 全仓库用 pnpm（agent-sidecar 也是，锁文件是它自己的 pnpm-lock.yaml）：npm 的锁文件一律不进仓库，
+# 两份锁文件并存必有一份过期（v1.2.0 的 CI 就是 `npm ci` 撞上了过期的那份）
 /package-lock.json
+/agent-sidecar/package-lock.json
 
 # Build output
 dist/
