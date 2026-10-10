@@ -354,16 +354,41 @@ impl AutomationService {
         }
     }
 
-    /// 构造发给 runtime 的 send 命令（纯函数，单测锁定协议形状）。
-    /// 模型/effort 与普通会话同形走 env 通道（worker 读作初始值 → options.model/effort）；
-    /// model 空 = 跟随提供商默认（自定义 provider 的正确兜底）。
-    fn build_send_command(
-        task: &AutomationTask,
-        run_id: &str,
-        prompt: &str,
-        policy: &PathPolicy,
-    ) -> Value {
-        let mut env = serde_json::Map::new();
+    /// 外壳的供应商读：任务自持的 `provider_id` → 连接参数 env（与普通会话 send 同一个
+    /// `build_runtime_env_vars`）。空 id = 存量任务，取**运行这一刻**的激活供应商。
+    ///
+    /// 不下发的话 worker 只能回落 sidecar 进程 env——那是 Host 启动那一刻的激活供应商，
+    /// 既不是任务选的、也不是当前的。
+    ///
+    /// 供应商已被删除 → 如实失败：`resolve_runtime_provider` 对未知 id 回落系统默认，
+    /// 拿第三方模型名去打官方端点属于「跑错供应商」，不许无声。
+    async fn provider_env(core: &Arc<Core>, provider_id: &str) -> Result<HashMap<String, String>, String> {
+        let settings = core.settings.clone();
+        let id = provider_id.to_string();
+        crate::registry::blocking(move || {
+            let provider = if id.is_empty() {
+                settings.resolve_active_runtime_provider()
+            } else {
+                settings.resolve_runtime_provider(&id)
+            }
+            .map_err(|e| format!("解析供应商失败: {e}"))?;
+            if !id.is_empty() && provider.id != id {
+                return Err("任务指定的供应商已不存在，请编辑任务重新选择模型".to_string());
+            }
+            let proxy = crate::app_settings::public_settings(&settings)?.proxy;
+            Ok(crate::runtime::env::build_runtime_env_vars(&provider, &proxy))
+        })
+        .await
+    }
+
+    /// 任务的 env：供应商连接参数打底，任务的模型/effort 覆盖其上（与普通会话同形走
+    /// env 通道，worker 读作初始值 → options.model/effort）。
+    /// model 空 = 用该供应商自己的默认模型（存量任务 / 供应商没有模型清单）。
+    fn task_env(task: &AutomationTask, provider_env: &HashMap<String, String>) -> Value {
+        let mut env: serde_json::Map<String, Value> = provider_env
+            .iter()
+            .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+            .collect();
         if !task.model.is_empty() {
             env.insert("ANTHROPIC_MODEL".into(), Value::String(task.model.clone()));
         }
@@ -373,6 +398,18 @@ impl AutomationService {
                 Value::String(task.effort.clone()),
             );
         }
+        Value::Object(env)
+    }
+
+    /// 构造发给 runtime 的 send 命令（纯函数，单测锁定协议形状）。
+    fn build_send_command(
+        task: &AutomationTask,
+        run_id: &str,
+        prompt: &str,
+        policy: &PathPolicy,
+        provider_env: &HashMap<String, String>,
+    ) -> Value {
+        let env = Self::task_env(task, provider_env);
         serde_json::json!({
             "cmd": "send",
             "session_id": run_id, // 运行与会话 1:1，run_id 即 session_id
@@ -413,13 +450,20 @@ impl AutomationService {
     /// resume 的是**运行会话**，因此 `session_dir` 必须与运行轮同源——拿全局配置根
     /// 就找不到那份转录（见 [`PathPolicy`] 文档里的事故）。两个 builder 消费同一个
     /// [`PathPolicy`] 是防这类字段漂移的结构性约束，只靠人眼比对不可靠。
-    fn build_distill_command(task: &AutomationTask, run: &RunRecord, policy: &PathPolicy) -> Value {
+    fn build_distill_command(
+        task: &AutomationTask,
+        run: &RunRecord,
+        policy: &PathPolicy,
+        provider_env: &HashMap<String, String>,
+    ) -> Value {
         let distill_sid = Self::distill_session_id(&run.run_id);
         serde_json::json!({
             "cmd": "send",
             "session_id": distill_sid,
             "prompt": Self::distill_prompt(task),
             "cwd": policy.cwd.as_str(),
+            // 与运行轮同一供应商、同一模型：蒸馏轮是新 worker，不带就回落进程 env
+            "env": Self::task_env(task, provider_env),
             "trusted": policy.trusted,
             // 同上（distill 支线同属自动化）：不发 LSP 语言。
             "lsp_languages": Vec::<String>::new(),
@@ -540,7 +584,7 @@ impl AutomationService {
                 // 按路径读转录时目录已存在，少一类竞态。
                 std::fs::create_dir_all(super::session_dir(&task_for_write))
                     .map_err(|e| format!("create session dir: {e}"))?;
-                let meta = serde_json::json!({
+                let mut meta = serde_json::json!({
                     "id": sid,
                     "name": format!("{} · {}", task_for_write.name, run_for_write.started_at[5..16].replace('T', " ")),
                     "createdAt": crate::commands::recent::now_ms(),
@@ -549,6 +593,10 @@ impl AutomationService {
                     "model": task_for_write.model,
                     "effort": task_for_write.effort,
                 });
+                // 存量任务没记过供应商：不写这个键（写空串会被读成「有身份」）
+                if !task_for_write.provider_id.is_empty() {
+                    meta["provider"] = Value::String(task_for_write.provider_id.clone());
+                }
                 let dir = crate::paths::our_sessions_dir();
                 std::fs::create_dir_all(&dir).map_err(|e| format!("create sessions dir: {e}"))?;
                 std::fs::write(
@@ -573,11 +621,21 @@ impl AutomationService {
             self.persist_task(&task_mut)?;
         }
 
-        let cmd = Self::build_send_command(&task, &run_id, &prompt, &policy);
-
         let core = self.core().ok_or("AutomationService 未启动（无所属 Host）")?;
         let runtime = &core.runtime;
-        if let Err(e) = runtime.send_to_runtime(&cmd).await {
+        // 供应商解析失败与发送失败同一条收尾路径：运行从未开始，但失败要落进运行记录
+        let sent = match Self::provider_env(&core, &task.provider_id).await {
+            Ok(provider_env) => {
+                let cmd =
+                    Self::build_send_command(&task, &run_id, &prompt, &policy, &provider_env);
+                runtime
+                    .send_to_runtime(&cmd)
+                    .await
+                    .map_err(|e| format!("发送运行命令失败: {e}"))
+            }
+            Err(e) => Err(e),
+        };
+        if let Err(e) = sent {
             // 发送失败 = 运行从未开始：清掉预写的会话元数据（按 run_id 命名的那份），
             // 再按失败收尾
             let _ = std::fs::remove_file(
@@ -588,7 +646,7 @@ impl AutomationService {
                 &run_id,
                 RunStatus::Failed,
                 RunFinalize {
-                    error: Some(format!("发送运行命令失败: {e}")),
+                    error: Some(e.clone()),
                     ..Default::default()
                 },
             );
@@ -857,7 +915,7 @@ impl AutomationService {
         let Ok(task) = self.get_task(task_id) else {
             return;
         };
-        let meta = serde_json::json!({
+        let mut meta = serde_json::json!({
             "id": sdk_sid,
             "name": format!("{} · {}", task.name, suffix),
             "createdAt": crate::commands::recent::now_ms(),
@@ -866,6 +924,9 @@ impl AutomationService {
             "model": task.model,
             "effort": task.effort,
         });
+        if !task.provider_id.is_empty() {
+            meta["provider"] = Value::String(task.provider_id.clone());
+        }
         let dir = crate::paths::our_sessions_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             tracing::warn!("[automation] 创建会话元数据目录失败: {}", e);
@@ -1059,9 +1120,10 @@ impl AutomationService {
             .workspace_path
             .clone()
             .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
-        let cmd = Self::build_distill_command(&task, &run, &Self::path_policy(&cwd));
-
         let core = self.core().ok_or("AutomationService 未启动")?;
+        let provider_env = Self::provider_env(&core, &task.provider_id).await?;
+        let cmd =
+            Self::build_distill_command(&task, &run, &Self::path_policy(&cwd), &provider_env);
         let runtime = &core.runtime;
         // 先注册路由再发（send 返回后事件才可能到达，顺序安全）
         self.by_session
@@ -1216,6 +1278,7 @@ impl AutomationService {
             prompt: input.prompt,
             workspace_path: input.workspace_path,
             session_dir: input.session_dir,
+            provider_id: input.provider_id.unwrap_or_default(),
             model: input.model,
             effort: input.effort,
             permission_preset: input.permission_preset,
@@ -1255,6 +1318,8 @@ impl AutomationService {
             prompt: input.prompt,
             workspace_path: input.workspace_path,
             session_dir: input.session_dir,
+            // 客户端没带（不认识该字段）→ 保留原值
+            provider_id: input.provider_id.unwrap_or_else(|| existing.provider_id.clone()),
             model: input.model,
             effort: input.effort,
             permission_preset: input.permission_preset,
@@ -1379,6 +1444,7 @@ mod tests {
             prompt: "做点事".into(),
             workspace_path: Some("C:/ws".into()),
             session_dir: None,
+            provider_id: String::new(),
             model: "claude-sonnet-5".into(),
             effort: "medium".into(),
             permission_preset: preset,
@@ -1421,6 +1487,7 @@ mod tests {
             "run_1",
             "提示词",
             &policy("C:/ws", true),
+            &HashMap::new(),
         );
         // run_id 即 session_id（1:1 映射契约）
         assert_eq!(cmd["session_id"], "run_1");
@@ -1447,6 +1514,7 @@ mod tests {
             "run_2",
             "p",
             &policy("C:/ws", false),
+            &HashMap::new(),
         );
         assert_eq!(cmd["permission_mode"], "bypassPermissions");
         assert_eq!(cmd["automation"]["preset"], "full");
@@ -1458,9 +1526,46 @@ mod tests {
         let mut t = task(PermissionPreset::Full);
         t.model = String::new();
         let cmd =
-            AutomationService::build_send_command(&t, "run_2", "p", &policy("C:/ws", false));
+            AutomationService::build_send_command(
+            &t,
+            "run_2",
+            "p",
+            &policy("C:/ws", false),
+            &HashMap::new(),
+        );
         assert!(cmd["env"].get("ANTHROPIC_MODEL").is_none());
         assert_eq!(cmd["automation"]["tools"][0], "*");
+    }
+
+    /// 任务自持供应商：连接参数随 send 下发（不带 = worker 回落 sidecar 进程 env，即
+    /// Host 启动那一刻的激活供应商），任务的模型/effort 盖在供应商默认之上。
+    #[test]
+    fn send_command_carries_provider_env_with_task_overrides_on_top() {
+        let provider_env: HashMap<String, String> = [
+            ("ANTHROPIC_BASE_URL", "http://localhost:11434"),
+            ("ANTHROPIC_MODEL", "provider-default"),
+            ("CLAUDE_CODE_EFFORT_LEVEL", "LOW"),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+        let t = task(PermissionPreset::Auto);
+        let pol = policy("C:/ws", true);
+        let cmd = AutomationService::build_send_command(&t, "run_1", "p", &pol, &provider_env);
+        assert_eq!(cmd["env"]["ANTHROPIC_BASE_URL"], "http://localhost:11434");
+        assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "claude-sonnet-5");
+        assert_eq!(cmd["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "medium");
+
+        // 蒸馏轮是新 worker：必须带同一份 env，否则提炼手册跑到别的供应商上
+        let distill =
+            AutomationService::build_distill_command(&t, &run_record("run_1", "sdk-sid-1"), &pol, &provider_env);
+        assert_eq!(distill["env"], cmd["env"]);
+
+        // 任务没指定模型 → 供应商自己的默认模型原样保留
+        let mut bare = task(PermissionPreset::Auto);
+        bare.model = String::new();
+        let cmd = AutomationService::build_send_command(&bare, "run_1", "p", &pol, &provider_env);
+        assert_eq!(cmd["env"]["ANTHROPIC_MODEL"], "provider-default");
     }
 
     /// 「指定目录」能力契约之一：不指定时回落**基础设施**的作用域隔离目录，
@@ -1507,7 +1612,13 @@ mod tests {
         let mut t = task(PermissionPreset::Auto);
         t.session_dir = Some("D:/custom/cfg".into());
         let cmd =
-            AutomationService::build_send_command(&t, "run_1", "p", &policy("C:/ws", true));
+            AutomationService::build_send_command(
+            &t,
+            "run_1",
+            "p",
+            &policy("C:/ws", true),
+            &HashMap::new(),
+        );
         assert_eq!(cmd["automation"]["session_dir"], "D:/custom/cfg");
         assert!(
             cmd["env"].get("CLAUDE_CONFIG_DIR").is_none(),
@@ -1526,7 +1637,7 @@ mod tests {
         let t = task(PermissionPreset::Auto);
         let run = run_record("run_1", "7576831f-d39a-4dc0-baeb-961ef8401efd");
         let pol = policy("C:/ws", true);
-        let cmd = AutomationService::build_distill_command(&t, &run, &pol);
+        let cmd = AutomationService::build_distill_command(&t, &run, &pol, &HashMap::new());
 
         // 会话 id 约定：路由键与命令 session_id 同源（<runId>-d）
         assert_eq!(cmd["session_id"], "run_1-d");
@@ -1538,7 +1649,7 @@ mod tests {
         );
         assert_eq!(cmd["automation"]["fork"], true);
         // 关键回归点：会话目录必须与运行轮逐字相同，否则 resume 找不到转录
-        let send = AutomationService::build_send_command(&t, "run_1", "p", &pol);
+        let send = AutomationService::build_send_command(&t, "run_1", "p", &pol, &HashMap::new());
         assert_eq!(cmd["automation"]["session_dir"], send["automation"]["session_dir"]);
         assert_eq!(cmd["automation"]["max_turns"], DISTILL_MAX_TURNS);
         assert!(cmd["automation"].get("max_budget_usd").is_none());
@@ -1555,8 +1666,8 @@ mod tests {
         let run = run_record("run_9", "sdk-sid-9");
         let pol = policy("D:/ws", true);
 
-        let send = AutomationService::build_send_command(&t, "run_9", "p", &pol);
-        let distill = AutomationService::build_distill_command(&t, &run, &pol);
+        let send = AutomationService::build_send_command(&t, "run_9", "p", &pol, &HashMap::new());
+        let distill = AutomationService::build_distill_command(&t, &run, &pol, &HashMap::new());
 
         for key in ["task_id", "preset", "task_dir", "session_dir", "mcp_allowlist"] {
             assert_eq!(

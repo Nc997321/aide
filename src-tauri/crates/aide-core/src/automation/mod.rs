@@ -108,6 +108,10 @@ pub struct AutomationTask {
     /// 想让任务产物落在别处（或干脆复用某个已有配置根），显式指定本字段。
     #[serde(default)]
     pub session_dir: Option<String>,
+    /// 任务自持的供应商身份：运行时按它解析连接参数下发（见 scheduler `provider_env`），
+    /// 不随全局激活供应商漂移。空 = 存量任务（没记过供应商），运行时取当时的激活供应商。
+    #[serde(default)]
+    pub provider_id: String,
     /// 显式按任务指定，不继承主会话（btw 踩过的坑）
     pub model: String,
     pub effort: String, // low|medium|high|xhigh|max
@@ -141,6 +145,10 @@ pub struct AutomationTaskInput {
     /// 见 [`AutomationTask::session_dir`]；None = 回落默认。
     #[serde(default)]
     pub session_dir: Option<String>,
+    /// 见 [`AutomationTask::provider_id`]。None = 客户端不认识这个字段（手机端旧表单）：
+    /// update 时保留任务原值，不被一次无关的保存抹成「跟随激活供应商」。
+    #[serde(default)]
+    pub provider_id: Option<String>,
     pub model: String,
     pub effort: String,
     pub permission_preset: PermissionPreset,

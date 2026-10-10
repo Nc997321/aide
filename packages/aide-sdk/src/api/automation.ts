@@ -23,6 +23,9 @@ export interface AutomationTask {
   name: string;
   prompt: string;
   workspacePath: string | null;
+  /** 任务自持的供应商；空 = 存量任务，运行时取当时的激活供应商。 */
+  providerId: string;
+  /** 空 = 用该供应商自己的默认模型。 */
   model: string;
   effort: string;
   permissionPreset: PermissionPreset;
@@ -46,6 +49,8 @@ export interface AutomationTaskInput {
   name: string;
   prompt: string;
   workspacePath: string | null;
+  /** 不传 = 不改任务已记的供应商（不认识该字段的客户端）。 */
+  providerId?: string;
   model: string;
   effort: string;
   permissionPreset: PermissionPreset;

@@ -10,7 +10,12 @@ import { mcpServerApi } from "../../api/customization";
 import ThemedSelect from "../ThemedSelect.vue";
 import DirTreePicker from "../DirTreePicker.vue";
 import Icon from "../Icon.vue";
-import { automationModelOptions } from "./modelOptions";
+import ProviderModelSelect from "./ProviderModelSelect.vue";
+import {
+  automationProviderGroups,
+  automationSelectionLabel,
+  effectiveProviderId,
+} from "./modelOptions";
 import type { AutomationTaskInput, Schedule } from "../../api/automation";
 
 const auto = useAutomation();
@@ -24,6 +29,7 @@ const form = reactive({
   name: "",
   prompt: "",
   workspacePath: "",
+  providerId: "", // 空 = 没钉过，按当前激活供应商展示与保存
   model: "",
   effort: "high",
   permissionPreset: "auto" as "auto" | "full",
@@ -51,6 +57,7 @@ if (editing.value) {
   form.name = t.name;
   form.prompt = t.prompt;
   form.workspacePath = t.workspacePath ?? "";
+  form.providerId = t.providerId ?? "";
   form.model = t.model;
   form.effort = t.effort;
   form.permissionPreset = t.permissionPreset;
@@ -128,8 +135,15 @@ function onCustomDirPick(p: string | string[]) {
   if (typeof p === "string" && p) form.workspacePath = p;
 }
 
-// 模型选项跟随当前供应商（与聊天面板同源），见 ./modelOptions.ts
-const modelOptions = computed(() => automationModelOptions(form.model));
+// 供应商 → 模型级联：默认停在当前激活供应商，见 ./modelOptions.ts
+const modelSelection = computed(() => ({ providerId: form.providerId, model: form.model }));
+const providerGroups = computed(() => automationProviderGroups(modelSelection.value));
+const modelLabel = computed(() => automationSelectionLabel(modelSelection.value));
+
+function onModelSelect(v: { providerId: string; model: string }) {
+  form.providerId = v.providerId;
+  form.model = v.model;
+}
 
 const effortOptions = EFFORT_OPTIONS.map((o) =>
   o.value === "high" ? { ...o, label: `${o.label}（默认）` } : o,
@@ -235,6 +249,8 @@ async function save(andRun: boolean) {
       name: form.name.trim(),
       prompt: form.prompt.trim(),
       workspacePath: form.workspacePath || null,
+      // 存下看到的那个供应商：任务此后不随全局激活供应商漂移
+      providerId: effectiveProviderId(form.providerId),
       model: form.model,
       effort: form.effort,
       permissionPreset: form.permissionPreset,
@@ -264,6 +280,7 @@ async function save(andRun: boolean) {
 
 <template>
   <div class="auto-editor">
+   <div class="e-scroll">
     <div class="e-head">
       <span class="back-link" @click="auto.backToDetail()"><span class="tri">◂</span> 返回</span>
       <h2>{{ editing ? `编辑 · ${editing.name}` : "新建自动化任务" }}</h2>
@@ -274,7 +291,9 @@ async function save(andRun: boolean) {
       </button>
     </div>
 
+    <!-- 宽面板：左栏提示词吃满高度，右栏配置独立滚动；窄面板退回单列（见样式里的 @container） -->
     <div class="form-wrap">
+     <div class="col-main">
       <!-- 基本 -->
       <div class="form-section">
         <div class="fs-title">基本</div>
@@ -282,6 +301,18 @@ async function save(andRun: boolean) {
           <label>名称</label>
           <input class="input" v-model="form.name" placeholder="例如：每日提交汇总" />
         </div>
+        <div class="field prompt-field">
+          <label>提示词</label>
+          <textarea class="textarea" v-model="form.prompt" placeholder="汇总过去 24 小时的 git 提交，写一段可发群的日报…" />
+        </div>
+      </div>
+     </div>
+
+     <div class="col-side">
+
+      <!-- 执行配置 -->
+      <div class="form-section">
+        <div class="fs-title">执行配置</div>
         <div class="field">
           <label>工作目录<span class="opt">可选；不绑定则以任务目录（~/.aide/automations/&lt;id&gt;/）为工作目录</span></label>
           <ThemedSelect v-model="wsSelect" :options="workspaceOptions" block />
@@ -292,19 +323,16 @@ async function save(andRun: boolean) {
             自选目录以受限模式运行（不读该目录的 CLAUDE.md / .claude 配置）；需要完整信任请先把它登记为工作区。
           </div>
         </div>
-        <div class="field">
-          <label>提示词</label>
-          <textarea class="textarea" v-model="form.prompt" placeholder="汇总过去 24 小时的 git 提交，写一段可发群的日报…" />
-        </div>
-      </div>
-
-      <!-- 执行配置 -->
-      <div class="form-section">
-        <div class="fs-title">执行配置</div>
         <div class="grid2">
           <div class="field">
             <label>模型<span class="opt">按任务指定，不继承主会话</span></label>
-            <ThemedSelect v-model="form.model" :options="modelOptions" block />
+            <ProviderModelSelect
+              :provider-id="effectiveProviderId(form.providerId)"
+              :model="form.model"
+              :groups="providerGroups"
+              :label="modelLabel"
+              @select="onModelSelect"
+            />
           </div>
           <div class="field">
             <label>思考强度 effort</label>
@@ -436,12 +464,18 @@ async function save(andRun: boolean) {
         <button class="btn" :disabled="saving" @click="save(false)">保存</button>
         <button class="btn primary" :disabled="saving" @click="save(true)">保存并立即运行一次</button>
       </div>
+     </div>
     </div>
+   </div>
   </div>
 </template>
 
 <style scoped>
 .auto-editor {
+  height: 100%;
+  container-type: inline-size;
+}
+.e-scroll {
   height: 100%;
   overflow-y: auto;
   padding: 18px 22px 32px;
@@ -777,5 +811,60 @@ async function save(andRun: boolean) {
 }
 .btn.primary:hover:not(:disabled) {
   filter: brightness(1.1);
+}
+
+/* ── 宽面板：两栏 ──
+   按面板自身宽度切（不是窗口宽度——侧栏/右栏开合都会改它）。左栏提示词撑满面板高度，
+   长提示词在框内滚；右栏配置独立滚动，整页不再滚。 */
+@container (min-width: 1040px) {
+  .e-scroll {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 18px;
+  }
+  .e-head {
+    width: 100%;
+    max-width: 1480px;
+    flex-shrink: 0;
+  }
+  .form-wrap {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    max-width: 1480px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(460px, 560px);
+    gap: 14px;
+  }
+  .col-main {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+  .col-main .form-section {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    margin-bottom: 0;
+  }
+  .prompt-field {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .prompt-field .textarea {
+    flex: 1;
+    min-height: 0;
+    resize: none;
+  }
+  .col-side {
+    min-height: 0;
+    overflow-y: auto;
+    /* 滚动条别压在卡片边框上 */
+    padding-right: 6px;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
-// 自动化编辑器的模型下拉：来源必须是**当前供应商**的模型列表（与聊天面板同源），
-// 不是一份写死的 Claude 名单。
+// 自动化编辑器的「供应商 → 模型」级联：一级是全部供应商、二级是该供应商的模型列表
+// （与聊天面板同源），不是一份写死的 Claude 名单；默认停在当前激活供应商。
 //
 // 2026-09-20 修：此前 AutomationTaskEditor.vue 里写死 STATIC_MODELS
 // （claude-sonnet-5 / claude-opus-5 / claude-fable-5 + 价格文案），配了第三方供应商
@@ -13,7 +13,11 @@ vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) })
 
 import { useProviders } from "@/composables/useProviders";
 import type { ProviderConfig, ProviderModelMappings } from "@/types";
-import { automationModelOptions } from "./modelOptions";
+import {
+  automationProviderGroups,
+  automationSelectionLabel,
+  effectiveProviderId,
+} from "./modelOptions";
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "",
@@ -55,10 +59,26 @@ function setProviders(list: ProviderConfig[], activeId: string): void {
   prov.activeProviderId.value = activeId;
 }
 
-const values = (current: string): string[] => automationModelOptions(current).map((o) => o.value);
+/** 某个供应商二级菜单里的模型值 */
+function modelsOf(pid: string, current = { providerId: "", model: "" }): string[] {
+  const g = automationProviderGroups(current).find((x) => x.id === pid);
+  return g ? g.models.map((o) => o.value) : [];
+}
 
-describe("自动化模型下拉 = 当前供应商的模型列表", () => {
+describe("自动化模型选择 = 供应商 → 模型级联", () => {
   beforeEach(() => setProviders([], "__system_default__"));
+
+  it("一级列出全部供应商（系统默认置首），不只当前激活的那个", () => {
+    setProviders(
+      [makeProvider("p_ollama", "qwen3", []), makeProvider("__system_default__", "", ["opus"])],
+      "p_ollama",
+    );
+
+    expect(automationProviderGroups({ providerId: "", model: "" }).map((g) => g.id)).toEqual([
+      "__system_default__",
+      "p_ollama",
+    ]);
+  });
 
   it("系统默认供应商：给 CLI 别名（catalog 预设），不给写死的 Claude 名单", () => {
     setProviders(
@@ -66,13 +86,14 @@ describe("自动化模型下拉 = 当前供应商的模型列表", () => {
       "__system_default__",
     );
 
-    expect(values("")).toEqual(["", "opus", "sonnet", "haiku", "fable"]);
-    expect(values("")).not.toContain("claude-sonnet-5"); // ← 曾经的写死项
-    expect(values("")).not.toContain("claude-opus-5");
-    expect(values("")).not.toContain("claude-fable-5");
+    const models = modelsOf("__system_default__");
+    expect(models).toEqual(["", "opus", "sonnet", "haiku", "fable"]);
+    expect(models).not.toContain("claude-sonnet-5"); // ← 曾经的写死项
+    expect(models).not.toContain("claude-opus-5");
+    expect(models).not.toContain("claude-fable-5");
   });
 
-  it("第三方供应商：顶层 model + 模型变量映射 + knownModels 全进列表且去重", () => {
+  it("第三方供应商：顶层 model + 模型变量映射 + knownModels 全进二级且去重", () => {
     setProviders(
       [
         makeProvider("p_kimi", "kimi", ["kimi", "k2"], {
@@ -83,38 +104,66 @@ describe("自动化模型下拉 = 当前供应商的模型列表", () => {
       "p_kimi",
     );
 
-    expect(values("")).toEqual(["", "kimi", "kimi-k2", "k2"]);
+    expect(modelsOf("p_kimi")).toEqual(["", "kimi", "kimi-k2", "k2"]);
   });
 
-  it("跟随供应商的是**活动**供应商，不是列表里的第一个", () => {
+  it("二级首项恒为「默认模型」（空值 = 不覆盖 ANTHROPIC_MODEL），带上供应商配置的默认名", () => {
     setProviders(
-      [makeProvider("__system_default__", "", ["opus"]), makeProvider("p_other", "other-model", [])],
-      "p_other",
+      [makeProvider("__system_default__", "", ["opus"]), makeProvider("p_ollama", "qwen3", [])],
+      "__system_default__",
     );
 
-    expect(values("")).toEqual(["", "other-model"]);
+    const groups = automationProviderGroups({ providerId: "", model: "" });
+    expect(groups[0].models[0]).toEqual({ value: "", label: "默认模型" });
+    expect(groups[1].models[0]).toEqual({ value: "", label: "默认模型（qwen3）" });
   });
 
-  it("首项恒为「跟随提供商默认」（空值 = 不下发 ANTHROPIC_MODEL）", () => {
-    setProviders([makeProvider("__system_default__", "", ["opus"])], "__system_default__");
+  it("没钉过供应商（新任务 / 存量任务）：默认就是当前激活供应商，显示它的名字", () => {
+    setProviders(
+      [makeProvider("__system_default__", "", ["opus"]), makeProvider("ollama", "", ["qwen3"])],
+      "ollama",
+    );
 
-    const opts = automationModelOptions("opus");
-    expect(opts[0]).toEqual({ value: "", label: "跟随提供商默认" });
+    expect(effectiveProviderId("")).toBe("ollama");
+    expect(automationSelectionLabel({ providerId: "", model: "" })).toBe("ollama");
+    expect(automationSelectionLabel({ providerId: "", model: "qwen3" })).toBe("ollama · qwen3");
   });
 
-  it("旧任务的值已不在当前供应商列表里：原样保留一项，不静默改写", () => {
-    setProviders([makeProvider("__system_default__", "", ["opus", "sonnet"])], "__system_default__");
+  it("任务钉了供应商：不随全局激活供应商漂移", () => {
+    setProviders(
+      [makeProvider("__system_default__", "", ["opus"]), makeProvider("ollama", "", ["qwen3"])],
+      "__system_default__",
+    );
 
-    expect(values("claude-sonnet-5")).toEqual(["", "opus", "sonnet", "claude-sonnet-5"]);
+    expect(effectiveProviderId("ollama")).toBe("ollama");
+    expect(automationSelectionLabel({ providerId: "ollama", model: "qwen3" })).toBe("ollama · qwen3");
+  });
+
+  it("旧任务的模型已不在它供应商的列表里：原样保留一项，且只进它自己那一组", () => {
+    setProviders(
+      [makeProvider("__system_default__", "", ["opus", "sonnet"]), makeProvider("ollama", "", ["qwen3"])],
+      "__system_default__",
+    );
+    const current = { providerId: "", model: "claude-sonnet-5" };
+
+    expect(modelsOf("__system_default__", current)).toEqual(["", "opus", "sonnet", "claude-sonnet-5"]);
+    expect(modelsOf("ollama", current)).toEqual(["", "qwen3"]);
   });
 
   it("值在列表里就不重复追加", () => {
     setProviders([makeProvider("__system_default__", "", ["opus", "sonnet"])], "__system_default__");
 
-    expect(values("sonnet")).toEqual(["", "opus", "sonnet"]);
+    expect(modelsOf("__system_default__", { providerId: "", model: "sonnet" })).toEqual(["", "opus", "sonnet"]);
   });
 
-  it("供应商还没加载（列表为空）：只剩「跟随提供商默认」，不崩不臆造", () => {
-    expect(values("")).toEqual([""]);
+  it("任务钉的供应商已被删除：如实标出，不冒充别家", () => {
+    setProviders([makeProvider("__system_default__", "", ["opus"])], "__system_default__");
+
+    expect(automationSelectionLabel({ providerId: "p_gone", model: "kimi" })).toBe("供应商已删除 · kimi");
+  });
+
+  it("供应商还没加载（列表为空）：没有可选项，不崩不臆造", () => {
+    expect(automationProviderGroups({ providerId: "", model: "" })).toEqual([]);
+    expect(automationSelectionLabel({ providerId: "", model: "" })).toBe("");
   });
 });
