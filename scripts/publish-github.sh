@@ -3,6 +3,11 @@
 #
 #   scripts/publish-github.sh              # 清洗 + 扫描 + 推送
 #   scripts/publish-github.sh --dry-run    # 清洗 + 扫描，不推送
+#   scripts/publish-github.sh --tag v1.2.0 # 同上，并把这个 tag 也推过去（可重复给）
+#
+# tag 只能经这里推：本地 tag 指向的是**未清洗**的提交，直接 `git push github <tag>` 会把整段
+# 未清洗历史公开。这里推的是清洗后对应的那个提交，一律推成轻量 tag（附注 tag 带 tagger 身份与
+# 留言，不在下面的扫描范围里）。
 #
 # 清洗规则 **不在仓库里**（规则本身含有要抹掉的字符串，入库等于公开它们）：
 #   ${AIDE_PUBLISH_RULES_DIR:-~/.config/aide-publish}/
@@ -19,12 +24,15 @@ REMOTE="${AIDE_PUBLISH_REMOTE:-git@github.com:Nc997321/aide.git}"
 BRANCH="${AIDE_PUBLISH_BRANCH:-master}"
 DRY_RUN=0
 FORCE=0
-for a in "$@"; do
-  case "$a" in
+TAGS=()
+while [ $# -gt 0 ]; do
+  case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --force) FORCE=1 ;;
-    *) echo "未知参数: $a" >&2; exit 2 ;;
+    --tag) [ $# -ge 2 ] || { echo "--tag 后面要跟 tag 名" >&2; exit 2; }; TAGS+=("$2"); shift ;;
+    *) echo "未知参数: $1" >&2; exit 2 ;;
   esac
+  shift
 done
 
 for f in rules.txt mailmap.txt forbidden.txt; do
@@ -66,12 +74,30 @@ git remote add github "$REMOTE"
 OLD="$(git ls-remote github "refs/heads/$BRANCH" | cut -f1)"
 echo "→ 远端 ${OLD:-<空>}  本次 $NEW"
 
+# 要推的 tag 先全部解析好：有一个不对就整体不推（包括分支）。
+TAG_COMMITS=()
+for t in ${TAGS[@]+"${TAGS[@]}"}; do
+  c="$(git rev-parse -q --verify "refs/tags/$t^{commit}")" || { echo "本地没有 tag $t（或它不在 $BRANCH 的历史里）" >&2; exit 1; }
+  git merge-base --is-ancestor "$c" "$NEW" || { echo "tag $t 不在 $BRANCH 的历史里" >&2; exit 1; }
+  echo "→ tag $t → $c"
+  TAG_COMMITS+=("$c")
+done
+
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "dry-run：不推送。"
   exit 0
 fi
+
+push_tags() {
+  local i
+  for i in ${TAGS[@]+"${!TAGS[@]}"}; do
+    git push github "${TAG_COMMITS[$i]}:refs/tags/${TAGS[$i]}"
+  done
+}
+
 if [ "$OLD" = "$NEW" ]; then
   echo "已是最新。"
+  push_tags
   exit 0
 fi
 
@@ -88,3 +114,4 @@ else
     exit 1
   fi
 fi
+push_tags
