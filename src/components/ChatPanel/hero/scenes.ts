@@ -48,7 +48,7 @@ export const SCENES: readonly Scene[] = [
     id: "workbench",
     label: "个人工作台",
     icon: "▦",
-    placeholder: "想要一个什么样的工作台？说说你每天要看、要记的东西",
+    placeholder: "想在 Aide 侧栏里放一个什么样的工作台？说说你每天要看、要记的东西",
     brief:
       "这次对话是给我做一个个人工作台：一个常驻在 Aide 侧栏里的面板，把我每天要看、要记的东西放在一处，数据要能保存。" +
       "按 aide-app 技能的做法实现成 Aide 侧栏应用。信息不够就先问我一两个关键问题再动手；做完告诉我去哪里启用它。",
