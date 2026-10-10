@@ -120,6 +120,9 @@ pub fn start(p: Pump) {
             }
         };
 
+        // 先交还句柄、再上报：前端收到 runtime_dead 后用户重发的那条必须看到「没在跑」，
+        // 才会重新拉起，而不是写进这条已经没人读的管道。
+        core.runtime.release_exited(&stdin_for_agent);
         let report = |core: &Core| emit_runtime_dead(core, &stderr_tail, reason);
         if reason == "heartbeat_timeout" {
             report(&core);

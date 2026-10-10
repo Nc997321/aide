@@ -203,6 +203,9 @@ impl AgentRuntimeManager {
         let stdin = child.stdin.take().ok_or("No stdin")?;
         let stdout = child.stdout.take().ok_or("No stdout")?;
         let stderr = child.stderr.take().ok_or("No stderr")?;
+        // 新一代进程：上一代留下的「已主动处置」标记（心跳超时判死时置位）不能带过来，
+        // 否则这一代再崩就没人上报 runtime_dead。
+        self.killed.store(false, Ordering::Relaxed);
 
         *self.stdin.lock().unwrap() = Some(Arc::new(TokioMutex::new(stdin)));
         *self.child.lock().unwrap() = Some(Arc::new(TokioMutex::new(child)));
@@ -254,6 +257,27 @@ impl AgentRuntimeManager {
                 tracing::warn!(error = %e, "runtime: Job Object 装配失败（降级 sidecar 兜底）")
             }
         }
+    }
+
+    /// Runtime 进程自己没了（崩溃 / 被杀 / 心跳超时）：交还它那一代的句柄，让下一条
+    /// send 走 `!is_running()` 重新拉起。事件泵退出时调用。
+    ///
+    /// 不交还的后果（2026-10-10 工作机实锤）：`is_running()` 只看 `stdin` 在不在，进程死后
+    /// 它永远是 true——后续每条消息都写进死管道（报错则状态一闪变灰，不报错则永远
+    /// 「正在思考」），且再也不会重拉，只能重启应用。
+    ///
+    /// 按代比对（`ptr_eq`）：泵退出与下一次 spawn 之间没有锁序保证，只收自己那一代，
+    /// 不误清已经换上来的新句柄。
+    pub(crate) fn release_exited(&self, stdin: &Arc<TokioMutex<ChildStdin>>) {
+        let mut current = self.stdin.lock().unwrap();
+        if !current.as_ref().is_some_and(|s| Arc::ptr_eq(s, stdin)) {
+            return;
+        }
+        *current = None;
+        *self.child.lock().unwrap() = None;
+        // 同一代的 Job Object 一并放：sidecar 死了，它名下的 claude / 语言服务器不该留成孤儿。
+        #[cfg(windows)]
+        self.job.lock().unwrap().take();
     }
 
     /// 杀死 Runtime 进程（全局 stop / app 退出）。
@@ -655,6 +679,41 @@ mod tests {
         // 空 id 不登记（防事件缺 session_id 时污染成 "" 键）
         mgr.mark_session_alive("");
         assert!(!mgr.is_session_alive(""));
+    }
+
+    /// 起一个带管道 stdin 的真子进程（测试二进制自己，`--list` 立即退出），取它的 stdin 句柄。
+    fn spawn_piped_stdin() -> Arc<TokioMutex<ChildStdin>> {
+        let mut cmd = tokio::process::Command::new(std::env::current_exe().unwrap());
+        cmd.arg("--list")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        cmd.creation_flags(0x08000000);
+        let mut child = cmd.spawn().unwrap();
+        Arc::new(TokioMutex::new(child.stdin.take().unwrap()))
+    }
+
+    #[tokio::test]
+    async fn release_exited_lets_the_next_send_respawn() {
+        // 回归：进程死后句柄不交还，is_running() 永远 true → 消息写进死管道、永不重拉。
+        let mgr = AgentRuntimeManager::new();
+        let dead = spawn_piped_stdin();
+        *mgr.stdin.lock().unwrap() = Some(Arc::clone(&dead));
+        assert!(mgr.is_running());
+        mgr.release_exited(&dead);
+        assert!(!mgr.is_running());
+    }
+
+    #[tokio::test]
+    async fn release_exited_leaves_a_newer_generation_alone() {
+        // 旧一代的泵晚退出时，新一代已经换上来了——不能把新句柄清掉。
+        let mgr = AgentRuntimeManager::new();
+        let old = spawn_piped_stdin();
+        let current = spawn_piped_stdin();
+        *mgr.stdin.lock().unwrap() = Some(Arc::clone(&current));
+        mgr.release_exited(&old);
+        assert!(mgr.is_running());
     }
 
     #[test]
