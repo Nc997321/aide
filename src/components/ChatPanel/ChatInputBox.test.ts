@@ -61,6 +61,7 @@ vi.mock("../../composables/useFileClipboard", () => ({
 }));
 
 import ChatInputBox from "./ChatInputBox.vue";
+import { SCENES } from "./hero/scenes";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { __resetUsageTipsForTest } from "@/composables/useUsageTips";
 
@@ -391,5 +392,55 @@ describe("ChatInputBox · 侧栏应用往输入框填字（aide.composer.fill）
     expect((wrapper.find("textarea").element as HTMLTextAreaElement).value).toBe("");
     expect(useComposerInserter().pending.value?.text).toBe("不该进来");
     useComposerInserter().consumeText();
+  });
+});
+
+describe("ChatInputBox · 欢迎页场景", () => {
+  const chips = (w: VueWrapper) => w.findAll(".scene-bar .scene-chip");
+
+  it("非欢迎态不显示场景条", () => {
+    expect(mountBox({ isHero: false }).find(".scene-bar").exists()).toBe(false);
+  });
+
+  it("选场景 → 场景条换成示例、输入盒里出现胶囊；点示例只填输入框不发送", async () => {
+    const w = mountBox({ isHero: true });
+    expect(chips(w).map((c) => c.text())).toEqual(SCENES.map((s) => `${s.icon}${s.label}`));
+
+    await chips(w)[0].trigger("click");
+    expect(w.find(".scene-capsule").text()).toContain(SCENES[0].label);
+    expect(chips(w)).toHaveLength(SCENES[0].examples.length);
+
+    await chips(w)[0].trigger("click");
+    await nextTick();
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe(SCENES[0].examples[0].prompt);
+    expect(w.emitted("send-request")).toBeUndefined();
+  });
+
+  it("发送：场景指引只进发给模型的文本，用户正文不变，另带场景标签", async () => {
+    const w = mountBox({ isHero: true });
+    await chips(w)[0].trigger("click");
+    await typeAt(w, "把周报整理成 Word");
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    const [prompt, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
+    expect(prompt).toBe("把周报整理成 Word");
+    expect(opts.scene).toEqual({ id: SCENES[0].id, label: SCENES[0].label, icon: SCENES[0].icon });
+    expect(opts.mentions.sendText).toBe(`${SCENES[0].brief}\n\n---\n\n把周报整理成 Word`);
+  });
+
+  it("点胶囊上的 × 取消场景：回到场景条，发送不再带指引", async () => {
+    const w = mountBox({ isHero: true });
+    await chips(w)[0].trigger("click");
+    await w.find(".scene-capsule .mention-chip-remove").trigger("click");
+    expect(w.find(".scene-capsule").exists()).toBe(false);
+    expect(chips(w)).toHaveLength(SCENES.length);
+
+    await typeAt(w, "你好");
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const [, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
+    expect(opts.scene).toBeUndefined();
+    expect(opts.mentions.sendText).toBe("你好");
   });
 });

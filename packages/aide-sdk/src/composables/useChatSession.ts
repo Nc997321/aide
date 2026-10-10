@@ -88,6 +88,9 @@ export interface SendOptions {
    *  ActionBlock），而发给 sidecar 的 prompt 仍是 opts 对应的斜杠命令——显示
    *  与命令解耦。 */
   action?: { id: string; label: string; icon?: string };
+  /** 欢迎页选中的场景：用户气泡在正文前多一枚场景标签（display 的 action 块，actionId 带
+   *  `SCENE_ACTION_PREFIX`）。发给模型的场景指引由调用方拼进 `mentions.sendText`，这里只管显示。 */
+  scene?: { id: string; label: string; icon?: string };
   /** 新会话（空白面板首发）的工作区归属——空白 tab 创建时绑定快照或发送时的
    *  当前工作区，由 PaneGroup 注入；仅生成临时 sid 时消费（种进注册表），
    *  已有会话忽略（归属本来就在注册表里）。 */
@@ -117,6 +120,7 @@ interface QueuedSend {
    *  为 initialEffort）。与 initialModel 同一条 env 通道（CLAUDE_CODE_EFFORT_LEVEL）。 */
   effort?: string;
   action?: { id: string; label: string; icon?: string };
+  scene?: { id: string; label: string; icon?: string };
   /** 本会话已知的附加目录全量（见 SendOptions.additionalDirs）。排队消息必须带上：
    *  插队/promote 走的是同一条 send 链路，不带就等于授权只对直发那条生效。 */
   additionalDirs?: string[];
@@ -140,6 +144,10 @@ function ensureGlobalListener(): Promise<() => void> {
   }
   return listenerPromise;
 }
+
+/** display 里场景标签的 actionId 前缀——气泡渲染据此把它画成正文前的标签，
+ *  而不是独占一行的动作胶囊（/compact 那种）。 */
+export const SCENE_ACTION_PREFIX = "scene:";
 
 /** 本地状态就绪：暂存待发模型 / 清压缩提示 / isBusy / 提问标题 / 会话状态 /
  *  软超时。返回 "queued"（发送前已忙碌，气泡走排队暂存）或 "direct"（直发）。 */
@@ -193,6 +201,18 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
         },
       ]
     : [
+        // 场景标签复用 action 块（形状相同，不新增块形态——两份 UserMessageBlock 不用动）；
+        // 不认识这个 actionId 的客户端照普通动作胶囊画，消息不会消失。
+        ...(item.scene
+          ? [
+              {
+                type: "action" as const,
+                actionId: SCENE_ACTION_PREFIX + item.scene.id,
+                label: item.scene.label,
+                ...(item.scene.icon ? { icon: item.scene.icon } : {}),
+              },
+            ]
+          : []),
         ...(item.images ?? []).map((img) => ({
           type: "image" as const,
           data: img.data,
@@ -387,6 +407,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       permissionMode: opts.permissionMode,
       effort: opts.initialEffort,
       action: opts.action,
+      scene: opts.scene,
       additionalDirs: opts.additionalDirs,
     };
 

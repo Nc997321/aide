@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
+import { SCENE_ACTION_PREFIX } from "@/composables/useChatSession";
 import { renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
 import StreamingText from "./StreamingText.vue";
@@ -179,6 +180,13 @@ function handleTextClick(e: MouseEvent) {
             </div>
           </details>
         </div>
+        <!-- 场景标签（欢迎页选的场景）：跟在气泡正文前的一枚小标签 -->
+        <span
+          v-else-if="seg.block.type === 'action' && seg.block.actionId.startsWith(SCENE_ACTION_PREFIX)"
+          class="msg-scene-tag"
+        >
+          <span v-if="seg.block.icon" class="msg-scene-tag-icon">{{ seg.block.icon }}</span>{{ seg.block.label }}
+        </span>
         <!-- 原 action 药丸(压缩/清空上下文) -->
         <span
           v-else-if="seg.block.type === 'action'"
@@ -272,6 +280,24 @@ function handleTextClick(e: MouseEvent) {
   line-height: 1.6;
   user-select: text;
   -webkit-user-select: text;
+}
+
+/* 场景标签：落在用户气泡的实心底上，用气泡文字色的半透明底，不另起一套强调色 */
+.msg-scene-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: fit-content;
+  margin-bottom: 6px;
+  padding: 1px 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, currentColor 16%, transparent);
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: nowrap;
+}
+.msg-scene-tag-icon {
+  font-size: 11px;
 }
 
 .msg-action-chip-icon {

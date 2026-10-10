@@ -37,6 +37,8 @@ import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
 import { defaultEffortFor } from "./effortDefault";
 import { inputPlaceholder } from "./inputPlaceholder";
 import type { ChatMode } from "./modes";
+import SceneBar from "./hero/SceneBar.vue";
+import { composeScenePrompt, type Scene, type SceneExample } from "./hero/scenes";
 import { memoryObservatoryApi } from "@aide/sdk/api";
 import UsageTipText from "./UsageTipText.vue";
 import type { UsageTip } from "./usageTips";
@@ -437,8 +439,25 @@ function formatResetTime(resetsAt: number | null): string | null {
 // ── btw 输入模式 ──
 const btwMode = ref(false);
 
+// ── 欢迎页场景（见 hero/scenes.ts）──
+// 只在欢迎态生效：场景定的是「这次对话做什么」，随首条消息发出后就在上下文里了，
+// 之后的消息不再重复带。
+const pickedScene = ref<Scene | null>(null);
+const activeScene = computed(() => (props.isHero && !btwMode.value ? pickedScene.value : null));
+
+function fillSceneExample(ex: SceneExample) {
+  inputText.value = ex.prompt;
+  nextTick(() => {
+    const el = textareaEl.value;
+    if (!el) return;
+    el.focus();
+    el.setSelectionRange(el.value.length, el.value.length);
+  });
+}
+
 /** placeholder 按优先级线性化（原为三层嵌套三元；加模式分叉会变四层）。 */
 const placeholder = computed(() =>
+  activeScene.value?.placeholder ??
   inputPlaceholder({
     btw: btwMode.value,
     busy: props.isBusy,
@@ -572,6 +591,7 @@ watch(inputText, (val) => {
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
+  pickedScene.value = null;
 });
 
 function selectSkill(skill: SlashCommandOption | undefined) {
@@ -1157,6 +1177,7 @@ async function performSend() {
   const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
   const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  const scene = activeScene.value;
   sentKbIds = kbrefs.map((r) => r.selectionId);
   if (kbrefs.length) usageTips.markUsed("kb-selection");
   const sendOpts: SendOptions = {
@@ -1168,7 +1189,11 @@ async function performSend() {
     // effort 选择器当前值：每条消息都带（存活会话同值幂等），新会话 spawn 时
     // 是初始档位——没有选择器默认值以外的"隐式 effort"。
     initialEffort: selectedEffort.value || undefined,
-    mentions: mentionResolution,
+    // 场景指引只进发给模型的文本（sendText），不进用户气泡的正文；气泡里是 scene 标签。
+    mentions: scene
+      ? { ...mentionResolution, sendText: composeScenePrompt(scene, mentionResolution.sendText) }
+      : mentionResolution,
+    scene: scene ? { id: scene.id, label: scene.label, icon: scene.icon } : undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     additionalDirs: allAttached.length ? allAttached : undefined,
   };
@@ -1231,6 +1256,7 @@ watch(() => props.sendConfirmedNonce, () => {
   inputText.value = "";
   pendingImages.value = [];
   pendingMentions.value = [];
+  pickedScene.value = null;
 });
 
 // hero 头展示的模型名（ChatPanel 的 hero 标题行用）：选中模型变化时上报。
@@ -1336,6 +1362,13 @@ const { actions: quickActions } = useQuickActions();
         <span class="btw-bg-chip-pulse"></span>
       </button>
     </Transition>
+    <!-- 欢迎页场景条：选场景 → 换成该场景的示例提示词 -->
+    <SceneBar
+      v-if="isHero && !btwMode"
+      :active="activeScene"
+      @select="pickedScene = $event"
+      @example="fillSceneExample"
+    />
     <div
       class="chat-input-box"
       :class="{ 'btw-mode': btwMode, 'session-running': isBusy }"
@@ -1349,6 +1382,14 @@ const { actions: quickActions } = useQuickActions();
           <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
         </div>
       </Transition>
+      <!-- 选中的场景：× = 取消，回到场景条 -->
+      <div v-if="activeScene" class="mention-strip">
+        <div class="mention-chip scene-capsule">
+          <span class="scene-capsule-icon">{{ activeScene.icon }}</span>
+          <span class="mention-chip-name">{{ activeScene.label }}</span>
+          <button class="mention-chip-remove" v-tooltip="'取消场景'" @click="pickedScene = null">×</button>
+        </div>
+      </div>
       <!-- 知识库圈选芯片：在文档里圈出来、还没发送的几处。× = 不要这一处（文档里的角标同步消失） -->
       <div v-if="kbChips.length" class="mention-strip">
         <div v-for="(r, i) in kbChips" :key="r.ref.selectionId" class="mention-chip kb-chip" v-tooltip="r.ref.text">
@@ -1989,6 +2030,22 @@ const { actions: quickActions } = useQuickActions();
   flex-wrap: wrap;
   gap: 6px;
   padding: 10px 12px 0;
+}
+
+.mention-chip.scene-capsule {
+  border-color: transparent;
+  border-radius: 999px;
+  padding-left: 10px;
+  background: var(--aide-accent-gradient);
+  color: var(--aide-text-on-accent);
+  font-weight: 600;
+}
+.scene-capsule .mention-chip-remove {
+  color: inherit;
+}
+.scene-capsule-icon {
+  font-size: 12px;
+  line-height: 1;
 }
 
 .mention-chip {
