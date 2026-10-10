@@ -21,7 +21,7 @@ import { describePermission } from "./appPermissions";
 
 const props = defineProps<{ app: AppInfo }>();
 
-const { badges, refresh } = useApps();
+const { badges, refresh, moveTo } = useApps();
 const frame = ref<HTMLIFrameElement | null>(null);
 const base = ref<string | null>(null);
 const failure = ref<string | null>(null);
@@ -125,6 +125,13 @@ async function act(run: () => Promise<void>) {
 }
 const consent = () => act(() => appsApi.consent(props.app.id, props.app.grant));
 const setEnabled = (enabled: boolean) => act(() => appsApi.setEnabled(props.app.id, enabled));
+/** 位置是用户说了算的：清单只给初值。按钮常驻在面板顶上——不摆出来，没人知道应用还能待在另一侧。 */
+const relocation = computed(() =>
+  props.app.placement === "right"
+    ? { label: "移到主区", to: "main" as const, tip: "入口挪到左侧栏，点开占满主区——适合要空间的工具" }
+    : { label: "移到右栏", to: "right" as const, tip: "入口挪到右侧工具栏，和对话并排——适合小工具" },
+);
+const relocate = () => act(() => moveTo(props.app.id, relocation.value.to));
 /** 安装成功要有回音：面板会换成安装版（带后端的还要再同意一次），用户得知道刚才发生了什么。 */
 const install = () =>
   act(async () => {
@@ -176,6 +183,9 @@ function uninstall() {
       <span class="app-name">{{ app.name }}</span>
       <span v-if="app.source === 'workspace'" class="app-tag" v-tooltip="'来自当前工作区的 .aide/apps，文件一改就重载'">开发中</span>
       <span class="app-spacer" />
+      <button v-if="!app.error" class="app-btn" :disabled="busy" v-tooltip="relocation.tip" @click="relocate">
+        {{ relocation.label }}
+      </button>
       <button
         v-if="app.enabled && !app.error"
         class="app-btn"

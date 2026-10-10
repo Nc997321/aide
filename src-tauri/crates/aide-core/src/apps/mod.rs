@@ -28,6 +28,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("app_call", app_call),
     command!("app_consent", app_consent),
     command!("app_set_enabled", app_set_enabled),
+    command!("app_set_placement", app_set_placement),
     command!("app_install", app_install),
     command!("app_uninstall", app_uninstall),
 ];
@@ -285,6 +286,20 @@ async fn app_set_enabled(core: Arc<Core>, a: AppSetEnabledArgs) -> Result<(), St
         Ok(())
     })
     .await?;
+    core.emit(APPS_CHANGED, json!({ "appId": id }));
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppSetPlacementArgs {
+    app_id: String,
+    placement: manifest::Placement,
+}
+
+async fn app_set_placement(core: Arc<Core>, a: AppSetPlacementArgs) -> Result<(), String> {
+    let (c, id) = (core.clone(), a.app_id.clone());
+    blocking(move || store::set_placement(&roots(&c), &a.app_id, a.placement)).await?;
     core.emit(APPS_CHANGED, json!({ "appId": id }));
     Ok(())
 }

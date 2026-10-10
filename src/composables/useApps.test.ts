@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppInfo } from "@aide/sdk/types/apps";
 
 const list = vi.fn<() => Promise<AppInfo[]>>();
+const setPlacement = vi.fn<(id: string, placement: AppInfo["placement"]) => Promise<void>>();
 vi.mock("@aide/sdk/api/apps", () => ({
   APPS_CHANGED_EVENT: "apps-changed",
-  appsApi: { list: () => list() },
+  appsApi: { list: () => list(), setPlacement: (id: string, p: AppInfo["placement"]) => setPlacement(id, p) },
 }));
 vi.mock("@aide/sdk", () => ({ listen: vi.fn(async () => () => {}) }));
 
 import { appIdOfTab, appTabId, useApps } from "./useApps";
+import { __resetRightPanelForTest, useRightPanel } from "./useRightPanel";
 
 const app = (id: string, over: Partial<AppInfo> = {}): AppInfo => ({
   id,
@@ -65,6 +67,25 @@ describe("useApps", () => {
     list.mockResolvedValue([]);
     await apps.refresh();
     expect(apps.mainPanelOpen.value).toBe(false);
+  });
+
+  it("挪位置后在新位置打开：挪到主区占主区，挪回右栏展开到它的 tab", async () => {
+    __resetRightPanelForTest();
+    list.mockResolvedValue([app("snake")]);
+    const apps = useApps();
+    await apps.refresh();
+
+    setPlacement.mockImplementation(async (_id, placement) => {
+      list.mockResolvedValue([app("snake", { placement })]);
+    });
+    await apps.moveTo("snake", "main");
+    expect(setPlacement).toHaveBeenCalledWith("snake", "main");
+    expect(apps.mainOpenApp.value?.id).toBe("snake");
+
+    await apps.moveTo("snake", "right");
+    expect(apps.mainPanelOpen.value).toBe(false);
+    expect(useRightPanel().tab.value).toBe("app:snake");
+    expect(useRightPanel().collapsed.value).toBe(false);
   });
 
   it("Host 没有这条命令（旧版）→ 静默，清单保持原样", async () => {

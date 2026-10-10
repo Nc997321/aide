@@ -103,6 +103,10 @@ struct State {
     grants: BTreeMap<String, String>,
     #[serde(default)]
     disabled: Vec<String>,
+    /// 应用 id → 用户在面板上挪到的位置。挪过就听用户的，没挪过听清单的。
+    /// 按 id 记（不是同意键）：开发态与安装版是同一个应用的两份，谁盖着谁入口都不该换边。
+    #[serde(default)]
+    placements: BTreeMap<String, Placement>,
 }
 
 /// 同意记录的键。开发态带上目录：换个工作区放一个同名应用，不能沿用上一个的同意。
@@ -233,11 +237,11 @@ fn describe(app_dir: &Path, source: Source, state: &State) -> AppInfo {
             let grant = m.grant();
             AppInfo {
                 consented: state.grants.get(&key) == Some(&grant),
+                placement: state.placements.get(&m.id).copied().unwrap_or(m.panel.placement),
                 id: m.id,
                 name: m.name.trim().to_string(),
                 version: m.version,
                 icon: m.icon,
-                placement: m.panel.placement,
                 entry: m.panel.entry,
                 permissions: m.permissions,
                 has_server: m.server.is_some(),
@@ -468,6 +472,10 @@ pub fn uninstall(roots: &Roots, id: &str) -> Result<Source, String> {
         state.grants.remove(&key);
         state.disabled.retain(|k| k != &key);
     }
+    // 哪一份都不剩了才忘掉位置：放弃开发态的改动、退回安装版时，入口得留在原地
+    if !roots.app_dirs().iter().any(|(_, root)| root.join(id).is_dir()) {
+        state.placements.remove(id);
+    }
     save_state(roots, &state)?;
     Ok(source)
 }
@@ -491,6 +499,15 @@ pub fn set_enabled(roots: &Roots, id: &str, enabled: bool) -> Result<(), String>
     if !enabled {
         state.disabled.push(app.key);
     }
+    save_state(roots, &state)
+}
+
+/// 用户在面板上把应用挪到另一个位置。只记在状态里，不改清单：清单是应用作者（agent）的文件，
+/// 位置是用户的偏好——改清单会让开发态与安装版「不一样了」，凭空冒出一条「更新安装」。
+pub fn set_placement(roots: &Roots, id: &str, placement: Placement) -> Result<(), String> {
+    let app = locate(roots, id)?;
+    let mut state = load_state(roots);
+    state.placements.insert(app.manifest.id, placement);
     save_state(roots, &state)
 }
 
@@ -767,6 +784,28 @@ pub(crate) mod tests {
 
         set_enabled(&roots, "snake", true).unwrap();
         assert!(asset(&roots, "snake", "ui/index.html").is_ok());
+    }
+
+    #[test]
+    fn the_user_can_move_an_app_and_the_move_survives_installing() {
+        let roots = temp_roots("placement");
+        let ws = roots.workspace_apps.clone().unwrap();
+        write_app(&ws, "snake", &[]);
+        assert_eq!(one(&roots, "snake").placement, Placement::Right);
+
+        set_placement(&roots, "snake", Placement::Main).unwrap();
+        assert_eq!(one(&roots, "snake").placement, Placement::Main);
+
+        // 挪位置不动应用文件：装完两份仍然一样，安装版接管，并且还在用户挪到的地方
+        install(&roots, "snake").unwrap();
+        let installed = one(&roots, "snake");
+        assert_eq!(installed.source, Source::User);
+        assert_eq!(installed.placement, Placement::Main);
+
+        // 卸干净了才忘：重新做一个同名应用，回到清单说的位置
+        uninstall(&roots, "snake").unwrap();
+        write_app(&ws, "snake", &[]);
+        assert_eq!(one(&roots, "snake").placement, Placement::Right);
     }
 
     #[test]

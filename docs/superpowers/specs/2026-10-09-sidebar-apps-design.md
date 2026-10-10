@@ -53,6 +53,8 @@
 
 `placement` 取 `right`（默认，右栏 rail 的一个 tab，窄，适合小工具和小游戏）或 `main`（左侧栏导航组里的一行，点开占主区，适合接口调试、数据库这类要空间的工具）。
 
+**清单里的 `placement` 只是初值，位置最终归用户**（2026-10-10 补）：面板顶栏常驻「移到主区 / 移到右栏」，点了就挪过去并在新位置打开。原因：位置只写在清单里时，用户根本不知道应用还能待在另一侧，只会以为它只能在右栏。用户的选择经 `app_set_placement` 记在 Host 的 `app-data/state.json`（与同意、启停同一份；按应用 id 记，开发态与安装版共用），不改清单——清单是应用作者的文件，改它会让开发态与安装版「不一样了」。挪过之后以用户的为准，卸干净才忘。
+
 应用自己的数据（KV、密钥）不放在应用目录里，由 Host 另存（§3），卸载重装不丢、agent 改应用文件时碰不到。
 
 ## 3. 桥：应用能调什么
@@ -114,7 +116,7 @@
 - `RightTabId` 变为「内置 id ∪ `app:<id>`」；`useRightPanel` 的三态裁决不变。`rightTabs` 在内置项后追加已启用的应用。
 - 左侧入口与右栏**不是同一套机制**：左侧栏的导航组（`SidebarNavGroup.vue`：插件 / 记忆观测台 / 知识库 / 浏览器）每行开关的是一块**主区面板**，各有模块级 `panelOpen`。`placement: "main"` 的应用在导航组末尾追加一行，开关由新的 `useApps` 统一持有（一次只开一个应用面板），与现有主区面板的互斥沿用它们现在的规则。两种位置共用同一个 `AppPanel`。
 - 新增 `AppPanel.vue`：首次激活才挂、之后 `v-show` 保活（同 `browserEverActive`），负责 iframe、桥、主题注入、加载失败与崩溃的兜底界面（含「重新加载」「禁用」）。
-- 能力走 `@aide/sdk` 的 api 门面（`api/apps.ts`），Host 命令在 `aide-core/src/commands/apps.rs`：`app_list` / `app_asset`（bytes）/ `app_call` / `app_install` / `app_uninstall` / `app_set_enabled` / `app_consent`。
+- 能力走 `@aide/sdk` 的 api 门面（`api/apps.ts`），Host 命令在 `aide-core/src/commands/apps.rs`：`app_list` / `app_asset`（bytes）/ `app_call` / `app_install` / `app_uninstall` / `app_set_enabled` / `app_set_placement` / `app_consent`。
 - 应用增删改经 Host 事件总线发 `apps-changed`，面板据此重载——不做本地乐观更新。
 
 ## 7. 让 agent 会做应用

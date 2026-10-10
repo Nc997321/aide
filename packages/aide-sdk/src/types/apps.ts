@@ -5,7 +5,8 @@ export interface AppInfo {
   version: string;
   /** 应用目录内的图标路径（未经同意也可取）。 */
   icon: string | null;
-  /** right = 右栏 rail 的一个 tab；main = 左侧栏导航组里的一行，点开占主区。 */
+  /** right = 右栏 rail 的一个 tab；main = 左侧栏导航组里的一行，点开占主区。
+   *  清单给初值，用户在面板上挪过就是用户挪到的那个。 */
   placement: "right" | "main";
   /** 界面入口（应用目录内的相对路径）。 */
   entry: string;

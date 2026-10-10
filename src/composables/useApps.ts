@@ -3,6 +3,8 @@ import { listen } from "@aide/sdk";
 import { APPS_CHANGED_EVENT, appsApi } from "@aide/sdk/api/apps";
 import type { AppInfo } from "@aide/sdk/types/apps";
 
+import { useRightPanel } from "./useRightPanel";
+
 /**
  * 侧栏应用的状态（右栏 rail、左侧栏导航组、应用面板共用一份）。
  *
@@ -130,6 +132,16 @@ export const APP_TAB_PREFIX = "app:";
 export const appTabId = (id: string) => `${APP_TAB_PREFIX}${id}` as const;
 export const appIdOfTab = (tab: string) => (tab.startsWith(APP_TAB_PREFIX) ? tab.slice(APP_TAB_PREFIX.length) : null);
 
+/** 把应用挪到另一个位置，并在新位置把它打开：否则用户一点，面板从眼前消失，得自己去另一侧找。
+ *  位置只认 Host 的回答——等 `refresh()` 拿到新清单再露出来。 */
+async function moveTo(id: string, placement: AppInfo["placement"]): Promise<void> {
+  await appsApi.setPlacement(id, placement);
+  await refresh();
+  const now = apps.value.find((a) => a.id === id)?.placement;
+  if (now === "main") mainOpenId.value = id;
+  else if (now === "right") useRightPanel().ensureTabShown(appTabId(id));
+}
+
 export function useApps() {
   return {
     apps,
@@ -144,5 +156,6 @@ export function useApps() {
     refresh,
     toggleMain,
     closeMain,
+    moveTo,
   };
 }

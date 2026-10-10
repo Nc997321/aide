@@ -22,6 +22,10 @@ export const appsApi = {
   setEnabled(appId: string, enabled: boolean): Promise<void> {
     return getTransport().invoke("app_set_enabled", { appId, enabled });
   },
+  /** 用户把应用挪到另一个位置（右栏 / 主区）。记在 Host 上，盖过清单里写的。 */
+  setPlacement(appId: string, placement: AppInfo["placement"]): Promise<void> {
+    return getTransport().invoke("app_set_placement", { appId, placement });
+  },
   /** 应用目录里的一个文件（字节）。未经同意只取得到清单里写的图标。 */
   asset(appId: string, path: string): Promise<ArrayBuffer> {
     return getTransport().invoke("app_asset", { appId, path });
