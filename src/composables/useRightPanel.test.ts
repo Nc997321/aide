@@ -293,18 +293,22 @@ describe("开合动画状态（原生浏览器视图据此推迟露头）", () =
 
       p.select("git"); // 展开
       expect(p.layoutAnimating.value).toBe(true);
+      expect(p.layoutMotion.value).toBe("open");
       let settled = false;
       void p.whenLayoutSettled().then(() => { settled = true; });
       await vi.advanceTimersByTimeAsync(LAYOUT_ANIM_MS + 50);
       expect(p.layoutAnimating.value).toBe(false);
+      expect(p.layoutMotion.value).toBeNull();
       expect(settled).toBe(true);
 
       p.select("browser"); // 窄档 → 宽档
       expect(p.layoutAnimating.value).toBe(true);
+      expect(p.layoutMotion.value).toBe("resize");
       await vi.advanceTimersByTimeAsync(LAYOUT_ANIM_MS + 50);
 
-      p.select("browser"); // 收起
+      p.select("browser"); // 收起（同时退出宽档——开合优先，按收起演）
       expect(p.layoutAnimating.value).toBe(true);
+      expect(p.layoutMotion.value).toBe("close");
     } finally {
       vi.useRealTimers();
     }

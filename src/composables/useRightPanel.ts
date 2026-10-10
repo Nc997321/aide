@@ -129,17 +129,23 @@ const widthProfile = computed<"narrow" | "browser">(() =>
 
 // ── 开合 / 换档动画 ──
 //
-// 右栏宽度是 grid 轨道（App.vue 的 gridTemplateColumns），动画就是让轨道过渡。这里只认「现在正在
-// 动吗」：App 据此给 .app-layout 挂过渡 class；**原生浏览器视图**据此推迟露头——它浮在所有 HTML 之上、
-// 不跟 CSS 走，洞还在长的时候露头会逐帧重排网页、还会盖住正在滑出的面板边缘。
+// 右栏宽度是 grid 轨道（App.vue 的 gridTemplateColumns）。这里只认「现在正在动吗 / 怎么动」：
+// App 据此给 .app-layout 挂动画 class；**原生浏览器视图**据此推迟露头——它浮在所有 HTML 之上、
+// 不跟 CSS 走，面板还在滑的时候露头会盖住正在滑出的面板边缘。
+//
+// 开合**不过渡轨道**（2026-10-10）：轨道逐帧变宽 = 聊天区与右栏内容逐帧重排（消息按百分比
+// 宽度折行、一串 ResizeObserver 跟着跑），长对话里掉帧。改成轨道一步到位（只重排一次），
+// 面板用 clip-path 揭开 / 盖回（只重绘不重排）。换档（窄 ↔ 浏览器宽档）仍过渡轨道。
 
-/** 与 App.vue 里 .app-layout 的 transition 时长对齐（改一处记得改另一处）。 */
+/** 与 App.vue 里右栏开合 animation / 换档 transition 的时长对齐（改一处记得改另一处）。 */
 export const LAYOUT_ANIM_MS = 240;
 
 /** 轨道宽度变化的档位（不含最大化：最大化时轨道是 1fr，与 px 之间不插值，不会动）。 */
 const trackProfile = computed<"narrow" | "browser">(() => (browserActive.value ? "browser" : "narrow"));
 
 const layoutAnimating = ref(false);
+/** 这次在动什么：展开 / 收起（clip-path 动画）还是换档（轨道过渡）。没在动 = null。 */
+const layoutMotion = ref<"open" | "close" | "resize" | null>(null);
 let layoutTimer: ReturnType<typeof setTimeout> | null = null;
 let settleWaiters: Array<() => void> = [];
 
@@ -147,6 +153,7 @@ function endLayoutAnimation() {
   if (layoutTimer) clearTimeout(layoutTimer);
   layoutTimer = null;
   layoutAnimating.value = false;
+  layoutMotion.value = null;
   const waiters = settleWaiters;
   settleWaiters = [];
   for (const w of waiters) w();
@@ -155,8 +162,9 @@ function endLayoutAnimation() {
 // flush: "sync" —— 必须先于任何依赖开合状态的 watcher 置位（BrowserPanel 的露头闸要读它）。
 watch(
   [collapsed, trackProfile],
-  () => {
+  ([nowCollapsed], [wasCollapsed]) => {
     if (typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
+    layoutMotion.value = nowCollapsed === wasCollapsed ? "resize" : nowCollapsed ? "close" : "open";
     layoutAnimating.value = true;
     if (layoutTimer) clearTimeout(layoutTimer);
     layoutTimer = setTimeout(endLayoutAnimation, LAYOUT_ANIM_MS + 40);
@@ -217,6 +225,7 @@ export function useRightPanel() {
     widthProfile,
     setWidth,
     layoutAnimating,
+    layoutMotion,
     whenLayoutSettled,
   };
 }

@@ -1121,7 +1121,9 @@ onUnmounted(() => {
       class="app-layout"
       :class="{
         'is-dragging': leftResize.isDragging.value || rightResize.isDragging.value,
-        'right-animating': rightPanel.layoutAnimating.value,
+        'right-animating': rightPanel.layoutMotion.value === 'resize',
+        'right-opening': rightPanel.layoutMotion.value === 'open',
+        'right-closing': rightPanel.layoutMotion.value === 'close',
       }"
       :style="{ gridTemplateColumns }"
     >
@@ -1316,13 +1318,48 @@ onUnmounted(() => {
   cursor: col-resize;
 }
 
-/* 右栏开合 / 窄宽档切换：让 grid 轨道过渡（时长与 useRightPanel 的 LAYOUT_ANIM_MS 对齐）。
-   只在 .right-animating 期间挂——拖动分隔条时 --aide-right-w 逐帧变，挂着过渡会让拖动发黏，
-   故拖动态强制关掉；窗口缩放不改轨道计算值，不会触发。 */
+/* 右栏动画（时长与 useRightPanel 的 LAYOUT_ANIM_MS 对齐；动的是什么由它的 layoutMotion 定）。
+
+   开合：**轨道一步到位，不过渡**——过渡轨道 = 聊天区（消息按百分比宽度折行）与右栏内容
+   逐帧重排，长对话里掉帧。这里只动 clip-path（重绘，不重排）：
+   - 展开：轨道已是终值，面板从 rail 那一条起向左揭开；
+   - 收起：轨道已收成 rail，内容层脱离文档流、按原宽贴在 rail 左侧盖在聊天区上，再向右盖回。
+     （内容层靠 v-show 的 layoutAnimating 那一半留到动画落定。）
+
+   换档（窄 ↔ 浏览器宽档）仍过渡轨道，只在 .right-animating 期间挂——拖动分隔条时
+   --aide-right-w 逐帧变，挂着过渡会让拖动发黏，故拖动态强制关掉。 */
 @media (prefers-reduced-motion: no-preference) {
   .app-layout.right-animating:not(.is-dragging) {
     transition: grid-template-columns 0.24s var(--aide-ease);
   }
+
+  .app-layout.right-opening .panel-right {
+    animation: right-reveal 0.24s var(--aide-ease) both;
+  }
+
+  .app-layout.right-closing .panel-right {
+    overflow: visible;
+  }
+  .app-layout.right-closing .panel-right-inner {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: var(--aide-rail-w, 40px);
+    width: calc(var(--aide-right-w, 300px) - var(--aide-rail-w, 40px));
+    flex: none;
+    background-color: var(--aide-bg-deep);
+    border-left: 1px solid var(--aide-border);
+    animation: right-conceal 0.24s var(--aide-ease) both;
+  }
+}
+
+@keyframes right-reveal {
+  from { clip-path: inset(0 0 0 calc(100% - var(--aide-rail-w, 40px))); }
+  to { clip-path: inset(0); }
+}
+@keyframes right-conceal {
+  from { clip-path: inset(0); }
+  to { clip-path: inset(0 0 0 100%); }
 }
 
 /* 五个轨道靠 grid-column 显式钉住，不依赖 DOM 书写顺序的自动布局——
