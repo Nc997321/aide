@@ -5,9 +5,9 @@
   "main": "dist/runtime.js",
   "scripts": {
     "build": "esbuild src/index.ts --bundle --platform=node --format=esm --target=node18 --outfile=dist/runtime.js --banner:js=\"import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);\"",
-    "build:exe": "bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=1.1.0.0 --windows-description=Aide-Agent-Runtime",
+    "build:exe": "bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=1.2.0.0 --windows-description=Aide-Agent-Runtime",
     "build:mac": "bun build --compile dist/runtime.js --outfile dist/aide-agent",
-    "build:bin": "node -e \"const{execSync:e}=require('child_process');e(process.platform==='win32'?'bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=1.1.0.0 --windows-description=Aide-Agent-Runtime':'bun build --compile dist/runtime.js --outfile dist/aide-agent',{stdio:'inherit'})\"",
+    "build:bin": "node -e \"const{execSync:e}=require('child_process');e(process.platform==='win32'?'bun build --compile dist/runtime.js --outfile dist/aide-agent.exe --windows-icon=../src-tauri/icons/icon.ico --windows-title=Aide-Agent --windows-publisher=Aide --windows-version=1.2.0.0 --windows-description=Aide-Agent-Runtime':'bun build --compile dist/runtime.js --outfile dist/aide-agent',{stdio:'inherit'})\"",
     "dev": "npx tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",

@@ -1,6 +1,6 @@
 [package]
 name = "aide-workspace"
-version = "1.1.0"
+version = "1.2.0"
 edition = "2021"
 description = "Workspace operations (fs / search / git) shared by the desktop app and aide-host (remote workspaces). No Tauri dependency: the same code runs locally and on a remote target."
 
