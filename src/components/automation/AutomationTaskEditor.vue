@@ -11,6 +11,7 @@ import ThemedSelect from "../ThemedSelect.vue";
 import DirTreePicker from "../DirTreePicker.vue";
 import Icon from "../Icon.vue";
 import ProviderModelSelect from "./ProviderModelSelect.vue";
+import { automationConnectorOptions } from "./connectorOptions";
 import {
   automationProviderGroups,
   automationSelectionLabel,
@@ -166,15 +167,19 @@ const missedPolicyOptions = [
 ];
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
 
-// 连接器：内置一个 + 用户配置的 MCP server（名字即 server key）
-const connectorOptions = ref<string[]>(["aide-docs"]);
+// 连接器：内置 MCP + 用户配置的 MCP server（名字即 server key），见 ./connectorOptions.ts
+const userMcpServers = ref<string[]>([]);
+const connectorOptions = computed(() => automationConnectorOptions(userMcpServers.value));
+/** 勾上了哪些「免确认就能做不可逆 / 等同本人身份操作」的连接器 */
+const cautionConnectors = computed(() =>
+  connectorOptions.value.filter((c) => c.caution && form.connectors.includes(c.name)),
+);
 onMounted(async () => {
   try {
     const items = await mcpServerApi.list();
-    const names = items
+    userMcpServers.value = items
       .map((it) => (it as { name?: string }).name)
       .filter((n): n is string => !!n);
-    connectorOptions.value = [...new Set([...connectorOptions.value, ...names])];
   } catch {
     /* 用户 MCP 清单拉取失败就只显示内置连接器 */
   }
@@ -364,11 +369,15 @@ async function save(andRun: boolean) {
           <div class="chip-row">
             <span
               v-for="c in connectorOptions"
-              :key="c"
+              :key="c.name"
               class="chip pick"
-              :class="{ on: form.connectors.includes(c) }"
-              @click="toggleConnector(c)"
-            >mcp:{{ c }}</span>
+              :class="{ on: form.connectors.includes(c.name) }"
+              v-tooltip="c.note"
+              @click="toggleConnector(c.name)"
+            >mcp:{{ c.name }}</span>
+          </div>
+          <div v-for="c in cautionConnectors" :key="c.name" class="hint hint-caution">
+            mcp:{{ c.name }} —— {{ c.note }}。
           </div>
           <div class="hint">未勾选的连接器在任务中根本不可见（MCP server 不挂载），勾选的白名单由策略钩子强制执行。</div>
         </div>
@@ -602,6 +611,9 @@ async function save(andRun: boolean) {
   color: var(--aide-text-muted);
   margin-top: 5px;
   line-height: 1.6;
+}
+.hint-caution {
+  color: var(--aide-warning);
 }
 .hint-inline {
   font-size: 11px;
