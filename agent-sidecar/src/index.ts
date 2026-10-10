@@ -87,9 +87,18 @@ async function mainDesktop(): Promise<void> {
     process.env.HTTP_PROXY ||
     process.env.https_proxy ||
     process.env.http_proxy;
-  if (proxyUrl) {
-    const { ProxyAgent, setGlobalDispatcher } = await import("undici");
-    setGlobalDispatcher(new ProxyAgent(proxyUrl));
+  // 只在 Node 下装 undici 的全局 dispatcher：Bun（打包后的 aide-agent）的 fetch 不是
+  // undici、自己就认 HTTPS_PROXY，装了也不生效；而 undici 8 加载期要用 Node ≥22.19 的
+  // worker_threads.markAsUncloneable，Bun 没有 → import 即抛，整个 Runtime 退出
+  // （2026-10-10 工作机实锤：配了代理的机器一发消息就「Agent 运行时已退出」）。
+  // 代理只是出网路径的一环，装不上也不该带走 Runtime——失败留痕后继续。
+  if (proxyUrl && !process.versions.bun) {
+    try {
+      const { ProxyAgent, setGlobalDispatcher } = await import("undici");
+      setGlobalDispatcher(new ProxyAgent(proxyUrl));
+    } catch (e) {
+      console.error(`[runtime] 代理 dispatcher 装配失败，按直连继续：${(e as Error)?.message ?? e}`);
+    }
   }
 
   // ---- stdin 命令路由器 ----
