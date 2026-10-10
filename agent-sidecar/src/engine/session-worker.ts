@@ -552,7 +552,10 @@ export class SessionWorker {
 
     const pending = this.handleSend(cmd);
     if (!cmd.images?.length) {
-      void pending;
+      // 不进串行队列（无图片 probe，不需要排队），但拒绝照样要上报：此前这里是
+      // `void pending`，handleSend 同步段一抛就成了无人接的 rejection——没有
+      // user_message、没有 error 帧，前端永远停在「正在思考」。
+      void pending.catch(reportSendError);
       return;
     }
 

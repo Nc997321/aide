@@ -1749,6 +1749,10 @@ describe("useChatSession 会话自动命名", () => {
     expect(chat.isBusy.value).toBe(false);
     const { state } = useSessionState();
     expect(state["uuid-a"]).toBe("stopped");
+    // 原因必须出现在对话里：这条消息没到 sidecar，没有任何事件会替它说
+    const last = chat.messages.value.at(-1);
+    expect(last?.role).toBe("assistant");
+    expect(JSON.stringify(last?.blocks)).toContain("sidecar spawn boom");
     warnSpy.mockRestore();
   });
 

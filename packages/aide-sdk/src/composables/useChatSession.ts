@@ -273,6 +273,16 @@ function sendQueued(
     const s = getStore(rsid);
     s.isBusy = false;
     s.pendingJumps.length = 0;
+    // 命令被 Host 拒了（工作目录不在 / 供应商解析失败 / runtime 拉不起来…）：这条消息
+    // 没到 sidecar，不会有 user_message 也不会有 error 事件——不在这里说，用户看到的
+    // 就是「发了没反应、状态一闪变灰」（2026-10-10 工作机实锤，原因只在 devtools 里）。
+    const reason = typeof e === "string" ? e : ((e as Error)?.message ?? String(e));
+    s.messages.push({
+      id: crypto.randomUUID(),
+      role: "assistant",
+      blocks: [{ type: "text", text: `Error: 消息未发出——${reason}` }],
+      timestamp: Date.now(),
+    });
     const { setSessionState } = useSessionState();
     setSessionState(rsid, "stopped");
   });
