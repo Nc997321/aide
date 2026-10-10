@@ -67,12 +67,10 @@ const isActionChip = computed(
 const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
- *  assistant 消息连续的查询类 tool_call 聚成 tool_group 段——但该段只用于定稿二阶段
- *  的合并判定，**渲染时一律逐条平铺**（与 ProcessGroup 段内一致，见 ProcessGroup
- *  文件头"层级"注释）："连续工具调用"的归属靠 .msg-turn 的 gap 表达，不再套一层
- *  「N 次工具调用」组内折叠壳（该折叠壳组件已全库移除）。
- *  定稿（streaming=false）后再走二阶段：≥2 个过程段（思考/工具组/子代理）的连续段
- *  合成一个过程胶囊——回复文本与变更卡留在原位不动，只收拢"模型干活"的痕迹。 */
+ *  assistant 消息走 segmentBlocks：合计 ≥2 个连续过程项（思考/查询工具调用/子代理）
+ *  收成一个过程胶囊，回复文本与变更卡留在原位不动。流式期同样收拢，只有"还活着"
+ *  的块（未出结果的工具调用等）留在胶囊外——一串 Bash/Grep/Glob 不再逐行刷屏。
+ *  留在外面的 tool_group 段逐条平铺，不套组内折叠壳（见 ProcessGroup 文件头）。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
     ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
@@ -118,9 +116,8 @@ function handleTextClick(e: MouseEvent) {
   >
     <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
       <template v-for="seg in segments" :key="seg.index">
-        <!-- 工具组段：组内逐条平铺，不套折叠壳（见组件头部注释）。流式期同样平铺——
-             pending 那条自带执行中圆点与「等待结果…」，"正在执行"无需组摘要代播；
-             「已完成 N」这类计数平铺后可直接数出，同 ProcessGroup 摘要不列工具总数。 -->
+        <!-- 工具组段：没进胶囊的（单条 / 流式期还没出结果的）逐条平铺，不套折叠壳。
+             pending 那条自带执行中圆点与「等待结果…」，"正在执行"无需摘要代播。 -->
         <template v-if="seg.kind === 'tool_group'">
           <ToolCallBlock
             v-for="b in seg.blocks"

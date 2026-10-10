@@ -17,13 +17,16 @@ describe("segmentBlocks", () => {
     expect(segmentBlocks([])).toEqual([]);
   });
 
-  it("连续 tool_call 聚成一组，index 是段首块在原数组的下标", () => {
+  it("连续 tool_call 聚成一组并收进过程胶囊，index 是段首块在原数组的下标", () => {
     const blocks: ContentBlock[] = [text("a"), tool("Read"), tool("Glob"), text("b")];
     const segs = segmentBlocks(blocks);
     expect(segs).toHaveLength(3);
     expect(segs[0]).toMatchObject({ kind: "block", index: 0 });
-    expect(segs[1]).toMatchObject({ kind: "tool_group", index: 1 });
-    expect((segs[1] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Glob"]);
+    expect(segs[1]).toMatchObject({ kind: "process", index: 1 });
+    const inner = (segs[1] as { segments: Segment[] }).segments;
+    expect(inner).toHaveLength(1);
+    expect(inner[0]).toMatchObject({ kind: "tool_group", index: 1 });
+    expect((inner[0] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Glob"]);
     expect(segs[2]).toMatchObject({ kind: "block", index: 3 });
   });
 
@@ -38,8 +41,11 @@ describe("segmentBlocks", () => {
       type: "subagent", id: "s1", agentName: "Explore", description: "", entries: [], isPending: false,
     };
     const segs = segmentBlocks([tool("Read"), text("x"), tool("Grep"), subagent, tool("Glob"), tool("Glob")]);
-    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group", "block", "tool_group"]);
-    expect((segs[4] as { blocks: ToolCallBlock[] }).blocks).toHaveLength(2);
+    // text 切断连续段；Grep / 子代理 / 两条 Glob 同属一个连续段 → 一个胶囊，内部仍是三段
+    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "block", "process"]);
+    const inner = (segs[2] as { segments: Segment[] }).segments;
+    expect(inner.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
+    expect((inner[2] as { blocks: ToolCallBlock[] }).blocks).toHaveLength(2);
   });
 
   it("变更类工具（Edit/Write/NotebookEdit）不进折叠组，作为独立块透传并切开两侧查询组", () => {
@@ -47,9 +53,10 @@ describe("segmentBlocks", () => {
       tool("Read"), tool("Grep"), tool("Edit"), tool("Write"), tool("NotebookEdit"), tool("Glob"),
     ]);
     expect(segs.map((s) => s.kind)).toEqual([
-      "tool_group", "block", "block", "block", "tool_group",
+      "process", "block", "block", "block", "tool_group",
     ]);
-    expect((segs[0] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Grep"]);
+    const head = (segs[0] as { segments: Segment[] }).segments[0];
+    expect((head as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Grep"]);
     expect((segs[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
     expect((segs[2] as { block: ToolCallBlock }).block.name).toBe("Write");
     expect((segs[3] as { block: ToolCallBlock }).block.name).toBe("NotebookEdit");
@@ -73,8 +80,8 @@ describe("groupStats", () => {
   });
 });
 
-describe("segmentBlocks 过程合并（finalized）", () => {
-  it("finalized 时 ≥2 个可折叠块的连续段合成一个 process 段，index 取段首原下标", () => {
+describe("segmentBlocks 过程合并", () => {
+  it("≥2 个可折叠块的连续段合成一个 process 段，index 取段首原下标", () => {
     const segs = segmentBlocks(
       [text("a"), tool("Read"), thinking("t1"), tool("Grep"), text("b")],
       { finalized: true },
@@ -124,12 +131,57 @@ describe("segmentBlocks 过程合并（finalized）", () => {
     expect(single.map((s) => s.kind)).toEqual(["block", "block", "block"]);
   });
 
-  it("finalized 缺省/false（流式中）不合并，行为与现状一致", () => {
-    const blocks = [tool("Read"), thinking("t"), tool("Grep")];
-    expect(segmentBlocks(blocks).map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
-    expect(segmentBlocks(blocks, { finalized: false }).map((s) => s.kind)).toEqual([
-      "tool_group", "block", "tool_group",
+  it("单个工具组按条数计：一串连续工具调用自己就收拢，不必有思考块凑数", () => {
+    const segs = segmentBlocks(
+      [text("a"), tool("Bash"), tool("Grep"), tool("Glob"), text("b")],
+      { finalized: true },
+    );
+    expect(segs.map((s) => s.kind)).toEqual(["block", "process", "block"]);
+  });
+});
+
+describe("segmentBlocks 流式期（finalized 缺省/false）", () => {
+  it("已落定的过程项照样收拢，缺省与 false 等价", () => {
+    const blocks = [tool("Read"), thinking("t"), tool("Grep"), text("回复中")];
+    expect(segmentBlocks(blocks).map((s) => s.kind)).toEqual(["process", "block"]);
+    expect(segmentBlocks(blocks, { finalized: false }).map((s) => s.kind)).toEqual(["process", "block"]);
+  });
+
+  it("未出结果的工具调用留在胶囊外，index 是它自己的原下标", () => {
+    const segs = segmentBlocks([tool("Bash"), tool("Grep"), tool("Glob", { isPending: true })]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+    expect(segs[1]).toMatchObject({ index: 2 });
+    expect((segs[1] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Glob"]);
+    // 同一批块定稿后：活块并入，整段一个胶囊，key（index）不变
+    const done = segmentBlocks([tool("Bash"), tool("Grep"), tool("Glob")], { finalized: true });
+    expect(done.map((s) => s.kind)).toEqual(["process"]);
+    expect(done[0].index).toBe(segs[0].index);
+  });
+
+  it("并行调用乱序返回：从第一条未出结果的调用处切开，其后一律留在外面", () => {
+    const segs = segmentBlocks([
+      tool("Read"), tool("Read"), tool("Bash", { isPending: true }), tool("Grep"),
     ]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+    expect((segs[1] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Bash", "Grep"]);
+  });
+
+  it("只落定一条时不成胶囊：单条工具调用保持原卡片", () => {
+    const segs = segmentBlocks([tool("Read"), tool("Grep", { isPending: true })]);
+    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "tool_group"]);
+    expect(segs.map((s) => s.index)).toEqual([0, 1]);
+  });
+
+  it("正在吐字的尾部思考块、仍在跑的子代理留在胶囊外", () => {
+    const tail = segmentBlocks([tool("Read"), tool("Grep"), thinking("想到一半")]);
+    expect(tail.map((s) => s.kind)).toEqual(["process", "block"]);
+    // 同一个思考块不在尾部（后面已有新块）= 已落定，可进胶囊
+    const settled = segmentBlocks([tool("Read"), thinking("想完了"), tool("Grep", { isPending: true })]);
+    expect(settled.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+
+    const running: ContentBlock = { ...subagent("s1"), isPending: true } as ContentBlock;
+    const segs = segmentBlocks([tool("Read"), tool("Grep"), running, text("…")]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block", "block"]);
   });
 });
 

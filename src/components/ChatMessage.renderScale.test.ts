@@ -2,9 +2,10 @@
 /**
  * 渲染规模回归守卫：**过程胶囊必须真的在收拢**，以及单个块组件的节点数不许膨胀。
  *
- * 由来（2026-09-14 实测）：ChatMessage 的 segments 在定稿后才走二阶段合并成过程胶囊
- * （`segmentBlocks(blocks, { finalized: !message.streaming })`），流式期是平铺。
- * 实测一条 170 块的长回合：**平铺 1355 节点 vs 收拢 82 节点 = 16.5×**。
+ * 由来（2026-09-14 实测）：当时 ChatMessage 的 segments 在定稿后才走二阶段合并成
+ * 过程胶囊，流式期是平铺。实测一条 170 块的长回合：**平铺 1355 节点 vs 收拢 82 节点
+ * = 16.5×**。2026-10-10 起流式期也收拢已落定的过程项（只有还没出结果的留在外面），
+ * 所以平铺基线改用「全部未出结果」的同形回合来造。
  *
  * 这个 16.5× 不是任何一次冻结的主因（250 块 ≈ 2000 节点，量级太小），但它是
  * **一个真实的退化面**：一旦二阶段合并失效（finalized 门控写错、mergeProcessRuns
@@ -103,14 +104,23 @@ describe("ChatMessage 渲染规模守卫", () => {
   // 这里给的是与它实际成本相称的预算，不是把失败掩盖掉。
   it("长回合的过程胶囊真的在收拢：平铺 ≥ 收拢的 10 倍", { timeout: 30_000 }, () => {
     const blocks = longTurnBlocks();
-    const flat = measure(makeMessage(blocks, true)); // 流式期 = 平铺
+    // 平铺基线：工具全部未出结果 → 流式期一条都进不了胶囊
+    const pending = blocks.map((b) => (b.type === "tool_call" ? { ...b, isPending: true } : b));
+    const flat = measure(makeMessage(pending, true));
     const folded = measure(makeMessage(blocks, false)); // 定稿后 = 过程胶囊（默认折叠）
+    const streamingFolded = measure(makeMessage(blocks, true)); // 流式期，工具都已出结果
 
     // 数字进断言消息——失败时一眼看到量级，不用去翻日志（vitest 会吞 console）。
     expect(
       flat,
       `平铺 ${flat} 节点 / 收拢 ${folded} 节点（${(flat / folded).toFixed(1)}×）——二阶段合并疑似失效`,
     ).toBeGreaterThan(folded * 10);
+    // 流式期同样在收拢：跑完的工具调用不再逐条留在对话流里。倍数钉得比定稿松——
+    // 流式期正文走分段渐显，本身节点就多（实测 146 vs 定稿 82）
+    expect(
+      flat,
+      `平铺 ${flat} 节点 / 流式期收拢 ${streamingFolded} 节点——流式期合并疑似失效`,
+    ).toBeGreaterThan(streamingFolded * 5);
   });
 
   // 它比上面那条更重（300 个组件实例：工具卡/思考/正文各 100），同样会被挤出 vitest 的 5s
@@ -124,7 +134,15 @@ describe("ChatMessage 渲染规模守卫", () => {
       ["正文", text],
     ];
     for (const [label, make] of kinds) {
-      const blocks = Array.from({ length: 100 }, (_, i) => make(i));
+      // 工具卡标成未出结果、思考之间隔一个不可折叠块——否则 100 块会被收成一个
+      // 胶囊，量到的就不是单块组件的成本了
+      const blocks = Array.from({ length: 100 }, (_, i) => make(i)).flatMap((b) =>
+        b.type === "tool_call"
+          ? [{ ...b, isPending: true }]
+          : b.type === "thinking"
+            ? [b, { type: "text", text: "。" } as ContentBlock]
+            : [b],
+      );
       const n = measure(makeMessage(blocks, true));
       // 2026-09-14 基线：工具卡 ~8 / 思考 ~6.7 / 正文 ~3.7 节点每块。
       // 钉 20 是防"某个块组件悄悄变成重组件"（多包几层壳、加了装饰节点之类）。
