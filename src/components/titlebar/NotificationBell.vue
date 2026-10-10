@@ -53,6 +53,14 @@ const badge = computed(() => {
   return c > 9 ? "9+" : String(c);
 });
 
+/** 角标颜色 = 未读里最严重的那一级：只有真出错才红，更新提示这类 info 不该拉警报。 */
+const badgeSeverity = computed(() => {
+  const unread = notifications.value.filter((n) => !n.read);
+  if (unread.some((n) => n.severity === "error")) return "error";
+  if (unread.some((n) => n.severity === "warning")) return "warning";
+  return "info";
+});
+
 const SEV_BAR: Record<string, string> = {
   error: "sev-bar sev-error",
   warning: "sev-bar sev-warning",
@@ -110,7 +118,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
         <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/>
         <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
       </svg>
-      <span v-if="badge" class="bell-badge">{{ badge }}</span>
+      <span v-if="badge" class="bell-badge" :class="`sev-${badgeSeverity}`">{{ badge }}</span>
     </button>
 
     <Transition name="notif-drop">
@@ -164,7 +172,7 @@ function bodyParts(body: string | undefined): Array<{ t: "text" | "code"; v: str
 .bell-badge {
   position: absolute; top: 3px; right: 3px;
   min-width: 14px; height: 14px; padding: 0 4px;
-  background: var(--aide-danger); color: var(--aide-text-on-accent);
+  color: var(--aide-text-on-accent);
   font-size: 9px; font-weight: 700; line-height: 14px; text-align: center;
   border-radius: 7px; border: 1.5px solid var(--aide-bg-deep);
 }

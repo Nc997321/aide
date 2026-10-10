@@ -91,3 +91,34 @@ describe("NotificationBell 点击展开", () => {
     w.unmount();
   });
 });
+
+describe("NotificationBell 角标颜色 = 未读里最严重的一级", () => {
+  beforeEach(() => {
+    __resetForTest();
+  });
+
+  function badgeClasses(): string[] {
+    const w = mount(NotificationBell, { attachTo: document.body });
+    const classes = w.find(".bell-badge").classes();
+    w.unmount();
+    return classes;
+  }
+
+  it("只有 info（如「插件有更新」）：蓝色，不拉红色警报", () => {
+    push({ severity: "info", source: "test", title: "更新", timestamp: 1 });
+    expect(badgeClasses()).toContain("sev-info");
+    expect(badgeClasses()).not.toContain("sev-error");
+  });
+
+  it("info + warning：黄色", () => {
+    push({ severity: "info", source: "test", title: "A", timestamp: 1 });
+    push({ severity: "warning", source: "test", title: "B", timestamp: 2 });
+    expect(badgeClasses()).toContain("sev-warning");
+  });
+
+  it("有 error 才红", () => {
+    push({ severity: "warning", source: "test", title: "A", timestamp: 1 });
+    push({ severity: "error", source: "test", title: "B", timestamp: 2 });
+    expect(badgeClasses()).toContain("sev-error");
+  });
+});
