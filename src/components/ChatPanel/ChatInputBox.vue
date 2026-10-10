@@ -5,7 +5,7 @@ import ChatSendButton from "../ChatSendButton.vue";
 import ContextUsageRing from "./ContextUsageRing.vue";
 import ContextUsagePanel from "./ContextUsagePanel.vue";
 import AToast from "@/ui/AToast.vue";
-import type { SkillMeta, ProviderConfig } from "@/types";
+import type { ProviderConfig } from "@/types";
 import type {
   ContextUsage, ModelOption, PermissionModeOption, RateLimitInfo, ModelSwitchResult,
 } from "@/types/chat";
@@ -26,6 +26,7 @@ import { useWorkspaces } from "@/composables/useWorkspaces";
 import { pathBasename, FOLDER_ICON_PATH } from "@/utils/fileIcons";
 import FileTypeIcon from "@/components/FileTypeIcon.vue";
 import { useQuickActions } from "@/composables/useQuickActions";
+import { useSlashCommands, filterSlashCommands, type SlashCommandOption } from "@/composables/useSlashCommands";
 import type { QuickAction } from "@/composables/useQuickActions";
 import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
@@ -60,6 +61,8 @@ const props = defineProps<{
   permissionModes: PermissionModeOption[];
   currentPermissionMode?: string;
   contextUsage?: ContextUsage | null;
+  /** 本会话收到的 SDK 斜杠命令清单；null = 会话还没开始 */
+  slashCommands?: string[] | null;
   /** 账号级订阅额度/速率；null 时不显示 */
   rateLimit?: RateLimitInfo | null;
   /** 忙碌时排队、正在 sidecar 里等安全边界的消息（顺序即发出顺序）；jump_promoted 后清空 */
@@ -501,7 +504,12 @@ function reopenBtw() { btw.reopen(); }
 
 // ── 输入状态 ──
 const inputText = ref("");
-const skillList = ref<SkillMeta[]>([]);
+// "/" 下拉的全部候选（命令注册表 + 本地技能 + 本会话的 SDK 清单）；skillList 留给
+// 发送路径内联 SKILL.md。
+const { options: slashOptions, localSkills: skillList } = useSlashCommands(
+  () => props.workspacePath,
+  () => props.slashCommands ?? null,
+);
 const slashDropdownVisible = ref(false);
 const slashFilter = ref("");
 const slashSelectedIndex = ref(0);
@@ -518,28 +526,19 @@ watch(
   },
 );
 
-const filteredSkills = computed(() => {
-  if (!slashDropdownVisible.value) return [];
-  const q = slashFilter.value.toLowerCase();
-  return skillList.value
-    .filter((s) => s.name.toLowerCase().includes(q))
-    .slice(0, 8);
-});
+const filteredSkills = computed(() =>
+  slashDropdownVisible.value ? filterSlashCommands(slashOptions.value, slashFilter.value) : [],
+);
 const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
 const textareaEl = ref<HTMLTextAreaElement>();
 
-// skills 随工作区变化重扫（onMounted 时 workspacePath 往往还是空串）
-watch(
-  () => props.workspacePath,
-  async (ws) => {
-    try {
-      skillList.value = await api.scanPluginSkills(ws ?? "");
-    } catch {
-      skillList.value = [];
-    }
-  },
-  { immediate: true },
-);
+// 键盘上下移动时把选中行带进可视区（清单长过下拉框高度）
+const slashDropdownEl = ref<HTMLElement>();
+watch(slashSelectedIndex, async () => {
+  await nextTick();
+  // jsdom 没有 scrollIntoView
+  slashDropdownEl.value?.querySelector(".skill-item--active")?.scrollIntoView?.({ block: "nearest" });
+});
 
 watch(inputText, (val) => {
   const match = val.match(/^\/(\S*)$/); // / 开头且无空格
@@ -575,7 +574,7 @@ watch(() => props.sessionId, () => {
   pendingMentions.value = [];
 });
 
-function selectSkill(skill: SkillMeta | undefined) {
+function selectSkill(skill: SlashCommandOption | undefined) {
   if (!skill) return;
   usageTips.markUsed("slash");
   inputText.value = "/" + skill.name + " ";
@@ -1248,15 +1247,15 @@ const { actions: quickActions } = useQuickActions();
 <template>
   <div ref="rootEl" class="chat-input-area" :class="{ 'chat-input-area--hero': isHero }">
     <!-- Slash command dropdown -->
-    <div v-if="filteredSkills.length" class="skill-dropdown">
+    <div v-if="filteredSkills.length" ref="slashDropdownEl" class="skill-dropdown">
       <div
         v-for="(skill, i) in filteredSkills"
-        :key="skill.provider + ':' + skill.name"
+        :key="skill.name"
         :class="['skill-item', i === slashSelectedIndex ? 'skill-item--active' : '']"
         @mousedown.prevent="selectSkill(skill)"
       >
         <span class="skill-item-name">/{{ skill.name }}</span>
-        <span class="skill-item-source">{{ skill.source }}</span>
+        <span v-if="skill.source" class="skill-item-source">{{ skill.source }}</span>
         <span class="skill-item-desc">{{ skill.description }}</span>
       </div>
     </div>

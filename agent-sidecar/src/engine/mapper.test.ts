@@ -1224,6 +1224,18 @@ describe("mapSdkMessage system/init → slash_commands_available", () => {
     ]);
   });
 
+  it("terminal_slash_commands 列出的命令（绑终端的 exit / statusline…）从清单里剔掉", () => {
+    const events: ChatEvent[] = [];
+    mapSdkMessage(
+      { ...systemInit("s1", ["compact", "exit", "context"]), terminal_slash_commands: ["exit"] },
+  (e) => events.push(e),
+  { tasks: new TaskTracker(), subagents: new SubagentTracker(), tools: new ToolLifecycleTracker() });
+    expect(events).toEqual([
+      { type: "session_init", session_id: "s1" },
+      { type: "slash_commands_available", commands: ["compact", "context"] },
+    ]);
+  });
+
   it("slash_commands 字段缺失时（旧版 CLI），只发 session_init", () => {
     const events: ChatEvent[] = [];
     mapSdkMessage(systemInit("s1"),

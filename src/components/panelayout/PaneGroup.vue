@@ -46,6 +46,7 @@ const {
   currentEffort,
   effortSwitchError,
   contextUsage,
+  slashCommands,
   contextCompaction,
   rateLimit,
   tasks,
@@ -226,6 +227,7 @@ async function onPickMode(mode: ChatMode) {
       :current-effort="currentEffort"
       :effort-switch-error="effortSwitchError"
       :context-usage="contextUsage"
+      :slash-commands="slashCommands"
       :context-compaction="contextCompaction"
       :rate-limit="rateLimit"
       :tasks="tasks"

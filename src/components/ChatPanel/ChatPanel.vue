@@ -62,6 +62,8 @@ const props = defineProps<{
   /** effort 切换失败回执（sidecar 驳回，选择器已被回滚拉回旧值）——据此弹失败提示 */
   effortSwitchError?: { message: string; seq: number } | null;
   contextUsage?: ContextUsage | null;
+  /** 本会话收到的 SDK 斜杠命令清单；null = 会话还没开始 */
+  slashCommands?: string[] | null;
   /** 当前会话的短生命周期压缩状态；不属于消息历史。 */
   contextCompaction?: ContextCompactionState | null;
   /** 账号级订阅额度/速率；null 时不显示 */
@@ -682,6 +684,7 @@ function onOpenBgDock(taskId: string) {
       :permission-modes="displayPermissionModes"
       :current-permission-mode="props.currentPermissionMode"
       :context-usage="props.contextUsage"
+      :slash-commands="props.slashCommands"
       :rate-limit="props.rateLimit"
       :pending-jumps="props.pendingJumps"
       :rollback-text="props.rollbackText"

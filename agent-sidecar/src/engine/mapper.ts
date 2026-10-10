@@ -429,7 +429,15 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
     emit({ type: "session_init", session_id: msg.session_id });
     // undefined（旧版 CLI/无此概念）不发；[] 是 SDK 明确给的空清单，正常发。
     if (Array.isArray(msg.slash_commands)) {
-      emit({ type: "slash_commands_available", commands: msg.slash_commands });
+      // terminal_slash_commands = 交互体验绑在本地终端上的那部分（exit、statusline…），
+      // 我们的客户端都不是终端，列出来也用不了——清单里直接剔掉。
+      const terminalOnly = new Set<string>(
+        Array.isArray(msg.terminal_slash_commands) ? msg.terminal_slash_commands : [],
+      );
+      emit({
+        type: "slash_commands_available",
+        commands: msg.slash_commands.filter((c: string) => !terminalOnly.has(c)),
+      });
     }
     return;
   }
