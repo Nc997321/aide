@@ -1,6 +1,6 @@
 [package]
 name = "aide-host"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 description = "Aide remote Host: runs a whole Aide backend (aide-core) on a WSL distro / SSH server (no GUI needed) and serves one desktop window over stdio JSON-RPC."
 

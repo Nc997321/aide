@@ -1,6 +1,6 @@
 [package]
 name = "aide-link"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 description = "Aide Link: the protocol between a Host and its remote clients (phone). Frames, exposure catalog, pairing/auth and the per-connection session state machine — transport-agnostic, no Tauri, no aide-core dependency."
 

@@ -1,6 +1,6 @@
 [package]
 name = "aide"
-version = "1.2.0"
+version = "1.2.1"
 edition = "2021"
 
 # Cargo workspace：`cargo build`（tauri dev/build 走的路径）默认只构建主包。
