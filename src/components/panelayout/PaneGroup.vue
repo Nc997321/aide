@@ -16,6 +16,7 @@ import {
 import type { ChatMode } from "../ChatPanel/modes";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
+import { pickProjectWorkspace } from "./projectWorkspace";
 import type { GroupNode } from "../../composables/paneLayout/tree";
 import type { WorkspaceInfo } from "../../types";
 
@@ -77,13 +78,18 @@ const workspacePath = inject<Ref<string>>(WORKSPACE_PATH_KEY, ref(""));
 // 混合 tab：面板内的路径展示/文件引用以会话自己的工作区为基准，
 // 没有归属记录（空白新会话）才回落当前活动工作区。
 const { workspaceOf } = useSessionWorkspaces();
-const { activeKey: activeWsKey } = useWorkspaces();
+const { activeKey: activeWsKey, workspaces } = useWorkspaces();
 
 /** 当前活动工作区的归属快照（空白 tab 创建/兜底发送用）；信息不全时不绑。 */
 function wsSnapshot(): { wsKey: string; wsPath: string } | undefined {
   const wsPath = workspacePath.value;
   const wsKey = activeWsKey.value;
   return wsKey && wsPath ? { wsKey, wsPath } : undefined;
+}
+
+/** 「工程」新会话的默认归属：不接受日常目录（见 ./projectWorkspace.ts）。 */
+function projectWsSnapshot(): { wsKey: string; wsPath: string } | undefined {
+  return pickProjectWorkspace(wsSnapshot(), workspaces.value, isDailyKey);
 }
 
 const effectiveWorkspacePath = computed(() => {
@@ -148,7 +154,7 @@ async function onNewTab() {
   const ws =
     pl.layout.chatMode === "daily"
       ? (dailyWorkspaceBind() ?? undefined)
-      : (pl.layout.defaultWs ?? wsSnapshot());
+      : (pl.layout.defaultWs ?? projectWsSnapshot());
   if (pl.layout.defaultWs) pl.setDefaultWs(null);
   pl.openBlankTab(`新会话 ${new Date().toLocaleTimeString()}`, ws);
 }
@@ -182,14 +188,15 @@ const currentMode = computed<ChatMode>(() =>
 
 /**
  * 模式切换：写模式意图 + 归属，**不切活动工作区**（同 onPickWorkspace 的范式）。
- * 归属按模式取：日常 → 日常工作区（懒加载一次）；工程 → 当前活动工作区快照，
+ * 归属按模式取：日常 → 日常工作区（懒加载一次）；工程 → 当前活动工作区快照
+ * （活动工作区是日常目录时改取列表里第一个工程——日常目录不能当工程归属），
  * 快照为空就绑「无」——「工程 + 还没选工作区」是能表达的真实状态，hero 上就地
  * 用 WorkspacePicker 选。
  */
 async function onPickMode(mode: ChatMode) {
   pl.setChatMode(mode);
   if (mode === "daily") await ensureDailyWorkspace();
-  const bind = mode === "daily" ? dailyWorkspaceBind() : wsSnapshot();
+  const bind = mode === "daily" ? dailyWorkspaceBind() : projectWsSnapshot();
   const tab = activeTab.value;
   if (tab && !tab.sessionId) {
     pl.setTabPendingWs(tab.id, bind ?? undefined);
