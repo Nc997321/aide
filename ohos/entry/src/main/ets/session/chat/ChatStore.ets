@@ -90,6 +90,11 @@ export class ChatStore {
   @Trace effortPop: boolean = false;
   /** 附件选入菜单展开（输入区「＋」；与 chip 浮层互斥由打开方保证）。 */
   @Trace plusPop: boolean = false;
+  /** 文件预览层标题（readChip 点击打开；空串 = 关闭。Index 返回键经
+   *  handlePopups 收、标题栏 ← 键走 closeFilePreview，两路共一态）。 */
+  @Trace fvTitle: string = '';
+  /** 预览正文（Read 卡 result 全文快照，≤50k 字；开层零 I/O）。 */
+  @Trace fvContent: string = '';
 
   /** 上次流式跟尾 bump 时刻（bumpTailThrottled 节流窗）。 */
   private lastStreamBumpAt: number = 0;
@@ -256,15 +261,34 @@ export class ChatStore {
     this.modelPop = false;
     this.effortPop = false;
     this.plusPop = false;
+    this.closeFilePreview();
   }
 
-  /** 收 chip 浮层（返回键/遮罩/输入框聚焦共用）：true = 有浮层被收起（消费返回键）。 */
+  /** 收 chip 浮层与文件预览层（返回键/遮罩/输入框聚焦共用）：true = 有
+   *  浮层被收起（消费返回键）。 */
   handlePopups(): boolean {
+    const hadFv: boolean = this.fvTitle !== '';
     const had: boolean = this.modelPop || this.effortPop || this.plusPop;
     this.modelPop = false;
     this.effortPop = false;
     this.plusPop = false;
-    return had;
+    if (hadFv) {
+      this.closeFilePreview();
+    }
+    return had || hadFv;
+  }
+
+  /** 打开文件预览层（readChip 点击：title = file_path 兜底工具名，
+   *  content = Read 卡 result 全文快照）。 */
+  openFilePreview(title: string, content: string): void {
+    this.fvTitle = title;
+    this.fvContent = content;
+  }
+
+  /** 关闭文件预览层（标题栏 ← 键；返回键路径见 handlePopups）。 */
+  closeFilePreview(): void {
+    this.fvTitle = '';
+    this.fvContent = '';
   }
 
   /**
@@ -279,6 +303,7 @@ export class ChatStore {
     this.cursorReady = false;
     this.liveActivities = [];
     this.bgTasks = [];
+    this.closeFilePreview();
   }
 
   // ── 消息列表结构原语（全部列表变形的唯一出口；变形必通知数据源对账）──

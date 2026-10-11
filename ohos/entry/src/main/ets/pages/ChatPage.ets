@@ -57,9 +57,10 @@ import {
   SubagentBlock, ChatMessage, PendingJump, LiveActivity, ImageBlock, VideoBlock
 } from '../session/chat/ChatBlocks';
 import { Attachment, ChatAttachments, attachmentsModel, durationLabel } from '../session/chat/ChatAttachments';
-import { toolSummary } from '../session/chat/ChatWire';
+import { toolSummary, extBadgeColor } from '../session/chat/ChatWire';
 import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
+import { FileViewer } from '../session/chat/FileViewer';
 import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
 import { ChatMessagesSource } from '../session/chat/ChatMessagesSource';
@@ -817,7 +818,8 @@ export struct ChatPage {
     })
   }
 
-  /** 用户消息里的 @mention 引用文件卡片（transcript 拆出的 Read 附件，无展开态）。 */
+  /** 用户消息里的 @mention 引用文件卡片（transcript 拆出的 Read 附件；
+   *  点击打开全屏文件预览层——md 走 MarkdownText 渲染、其余 monospace 原文）。 */
   @Builder
   readChip(b: ToolCallBlock) {
     Row({ space: 6 }) {
@@ -836,6 +838,10 @@ export struct ChatPage {
     .backgroundColor($r('app.color.card_bg'))
     .border({ width: 1, color: $r('app.color.line') })
     .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      const path: string = toolSummary(b.input);
+      this.store.openFilePreview(path !== '' ? path : b.name, b.result);
+    })
   }
 
   @Builder
@@ -1205,7 +1211,7 @@ export struct ChatPage {
       .width(32)
       .height(32)
       .borderRadius(9)
-      .backgroundColor(this.extBadgeColor(it.ext))
+      .backgroundColor(extBadgeColor(it.ext))
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
 
@@ -1241,26 +1247,6 @@ export struct ChatPage {
     .onClick(() => {
       this.att.remove(i);
     })
-  }
-
-  /** 文件徽标色（扩展名 → 强调色；代码紫 / PDF 红 / 文档蓝 / 压缩橙 / 表格绿）。 */
-  private extBadgeColor(ext: string): ResourceColor {
-    if (ext === 'ets' || ext === 'ts') {
-      return '#7B61FF';
-    }
-    if (ext === 'pdf') {
-      return '#F53F3F';
-    }
-    if (ext === 'doc' || ext === 'docx') {
-      return '#0A59F7';
-    }
-    if (ext === 'zip') {
-      return '#FF7D00';
-    }
-    if (ext === 'csv') {
-      return '#00B42A';
-    }
-    return '#86909C';
   }
 
   /** ＋ 追加格（余量 > 0 时末位虚线格；点击重开选入菜单）。 */
@@ -2010,6 +1996,18 @@ export struct ChatPage {
       AutomationEditor()
       AutomationRun()
       AutomationPlaybook()
+
+      // 文件预览层（readChip 点击打开：全屏 md/文本渲染；自动化浮层之上、
+      // 灯箱之下，返回键经 store.handlePopups 收）
+      if (this.store.fvTitle !== '') {
+        FileViewer({
+          title: this.store.fvTitle,
+          content: this.store.fvContent,
+          onClose: () => {
+            this.store.closeFilePreview();
+          }
+        })
+      }
 
       // 图片灯箱（最顶层：全屏遮罩 + 大图 + 关闭；点任意处关闭）
       if (this.lbUri !== '') {
