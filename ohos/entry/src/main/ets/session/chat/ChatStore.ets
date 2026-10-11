@@ -16,7 +16,7 @@
  * 平台差异：Vue reactive/ref → @ObservedV2 + @Trace。
  */
 import { ChatMessage, ContentBlock, PendingJump, PermissionRequest, ThinkingBlock, SubagentBlock, LiveActivity, BgTask, ToolCallBlock } from './ChatBlocks';
-import { BgTaskInfo, ModelOption } from '../../sdk/types';
+import { BgTaskInfo, ModelOption, ContextUsage } from '../../sdk/types';
 import { uuid, str } from './ChatWire';
 
 /** 流式跟尾节流间隔（毫秒）：text/thinking 增量高频到达，逐 bump 会把
@@ -84,6 +84,12 @@ export class ChatStore {
   @Trace model: string = '';
   /** 当前思考档（恒为归一后三档 low/high/max；空 = 未同步）。 */
   @Trace effort: string = '';
+  /**
+   * 上下文窗口用量快照（context_usage 事件每轮结束刷新；null = 尚无数据，
+   * 输入区环形不渲染）。窗口占用随会话走：切会话清空，断线重载保留
+   * （快照仍属本会话，下轮结束即刷新）。
+   */
+  @Trace contextUsage: ContextUsage | null = null;
   /** 模型浮层展开（自绘小面板；与 effortPop 互斥，Index 返回键经 handlePopups 收）。 */
   @Trace modelPop: boolean = false;
   /** 思考程度浮层展开（自绘小面板；与 modelPop 互斥）。 */
@@ -258,6 +264,8 @@ export class ChatStore {
     this.modelOptions = [];
     this.model = '';
     this.effort = '';
+    // 上下文用量快照同理随会话走（resetForReload 不清：快照仍属本会话）
+    this.contextUsage = null;
     this.modelPop = false;
     this.effortPop = false;
     this.plusPop = false;

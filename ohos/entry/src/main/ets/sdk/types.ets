@@ -9,6 +9,7 @@
  * BgTaskInfo（后台任务快照域；ohos 专有 RPC list_bg_tasks，上游 SDK 暂无对应）；
  * ProviderModelMappings / ProviderConfigView（抽屉供应商域；get_providers 返回）；
  * SendImage / SendDisplayBlock（发送域：图片附件 + 用户气泡 display 回灌块）；
+ * ContextUsage（context_usage 事件域：上下文用量环形指示）；
  * Schedule / AutomationTask / AutomationTaskInput / RunUsage / RunRecord /
  * RunStats（自动化任务域；⚠️ 此域命令未进远程 REGISTRY，见 api.ets 头注）。
  */
@@ -163,6 +164,20 @@ export interface ProviderConfigView {
 export interface ModelOption {
   value: string;
   displayName: string;
+}
+
+/**
+ * 上下文窗口用量快照（context_usage 事件载荷；对照 sidecar engine/types.ts
+ * 的同名臂 + 桌面端 ContextUsage 的环形消费子集）。wire 顶层 snake_case
+ * （total_tokens/max_tokens/percentage）由 ChatEvents 路由时经 num() 解析
+ * 填充；categories/breakdown/rawMaxTokens 明细切面手机端暂不消费（环形只
+ * 表达「用了几成」），不镜像。每轮结束后由 sidecar 刷新一次。
+ */
+export interface ContextUsage {
+  totalTokens: number;
+  maxTokens: number;
+  /** 0..100（provider 自报；环形渲染前再钳一次 0..100 防越界）。 */
+  percentage: number;
 }
 
 /**
