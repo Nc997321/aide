@@ -13,7 +13,7 @@
  * 行内码用 ContainerSpan（API 12）做灰底。
  */
 import { MdBlock, MdBlockKind, MdSpan, MdSpanKind, parseMarkdown } from './Markdown';
-import { StreamSplit, WaveStream, WaveTail, splitStreamingText, stripInlineMarks } from './StreamWave';
+import { StreamSplit, WaveStream, WaveTail, splitStreamingText, stripInlineMarks, CARET_BLINK_MS } from './StreamWave';
 
 const LIVE_THROTTLE_MS: number = 400;
 
@@ -28,13 +28,17 @@ export struct MarkdownText {
   @Local waveOn: boolean = false;
   /** 降级尾巴块（超长/含块级标记时替代波形）。 */
   @Local tailBlocks: MdBlock[] = [];
+  /** 降级尾巴流式光标闪烁相位（live 期翻转；隐相位换透明色保占位）。 */
+  @Local caretOn: boolean = true;
   private frozenSrc: string = '';
   private lastParseAt: number = 0;
   private timer: number = -1;
+  private caretTimer: number = -1;
 
   aboutToAppear(): void {
     if (this.live) {
       this.syncLive();
+      this.startCaretBlink();
     } else {
       this.finalize();
     }
@@ -42,6 +46,7 @@ export struct MarkdownText {
 
   aboutToDisappear(): void {
     this.clearTimer();
+    this.stopCaretBlink();
   }
 
   @Monitor('raw')
@@ -58,14 +63,33 @@ export struct MarkdownText {
   onLiveChange(m: IMonitor): void {
     if (!this.live) {
       this.clearTimer();
+      this.stopCaretBlink();
       this.finalize();
+      return;
     }
+    this.startCaretBlink();
   }
 
   private clearTimer(): void {
     if (this.timer >= 0) {
       clearTimeout(this.timer);
       this.timer = -1;
+    }
+  }
+
+  private startCaretBlink(): void {
+    if (this.caretTimer < 0) {
+      this.caretOn = true;
+      this.caretTimer = setInterval(() => {
+        this.caretOn = !this.caretOn;
+      }, CARET_BLINK_MS);
+    }
+  }
+
+  private stopCaretBlink(): void {
+    if (this.caretTimer >= 0) {
+      clearInterval(this.caretTimer);
+      this.caretTimer = -1;
     }
   }
 
@@ -119,7 +143,7 @@ export struct MarkdownText {
 
   private parseTail(): void {
     this.lastParseAt = Date.now();
-    this.tailBlocks = parseMarkdown(`${splitStreamingText(this.raw).tail} ▌`);
+    this.tailBlocks = parseMarkdown(splitStreamingText(this.raw).tail);
   }
 
   /** 收尾：全文终排一次，清空尾巴状态。 */
@@ -164,11 +188,21 @@ export struct MarkdownText {
 
   // ── 块级 ──
 
+  /** 流式光标（原型 .cursor）：1/8 em 细条 accent 闪烁，行内随末块文本。 */
   @Builder
-  blockView(b: MdBlock) {
+  caretSpan() {
+    Span(' ▏')
+      .fontColor(this.caretOn ? $r('app.color.accent') : Color.Transparent)
+  }
+
+  @Builder
+  blockView(b: MdBlock, caret: boolean) {
     if (b.kind === MdBlockKind.Heading) {
       Text() {
         this.spansView(b.spans)
+        if (caret) {
+          this.caretSpan()
+        }
       }
       .fontSize(b.level === 1 ? 20 : (b.level === 2 ? 18 : (b.level === 3 ? 16 : 15)))
       .fontWeight(FontWeight.Bold)
@@ -180,12 +214,17 @@ export struct MarkdownText {
         if (b.lang !== '') {
           Text(b.lang).fontSize(11).fontColor($r('app.color.text_secondary'))
         }
-        Text(b.text)
-          .fontSize(13)
-          .fontFamily('monospace')
-          .fontColor($r('app.color.text_primary'))
-          .lineHeight(20)
-          .width('100%')
+        Text() {
+          Span(b.text)
+          if (caret) {
+            this.caretSpan()
+          }
+        }
+        .fontSize(13)
+        .fontFamily('monospace')
+        .fontColor($r('app.color.text_primary'))
+        .lineHeight(20)
+        .width('100%')
       }
       .width('100%')
       .padding(12)
@@ -201,6 +240,9 @@ export struct MarkdownText {
           .width(b.order >= 0 ? 24 : 20 + b.indent * 12)
         Text() {
           this.spansView(b.spans)
+          if (caret) {
+            this.caretSpan()
+          }
         }
         .fontSize(15)
         .lineHeight(24)
@@ -217,6 +259,9 @@ export struct MarkdownText {
           .backgroundColor($r('app.color.line'))
         Text() {
           this.spansView(b.spans)
+          if (caret) {
+            this.caretSpan()
+          }
         }
         .fontSize(14)
         .lineHeight(22)
@@ -229,6 +274,9 @@ export struct MarkdownText {
     } else {
       Text() {
         this.spansView(b.spans)
+        if (caret) {
+          this.caretSpan()
+        }
       }
       .fontSize(15)
       .lineHeight(24)
@@ -240,13 +288,13 @@ export struct MarkdownText {
   build() {
     Column({ space: 8 }) {
       ForEach(this.blocks, (b: MdBlock, i: number) => {
-        this.blockView(b)
+        this.blockView(b, false)
       }, (b: MdBlock, i: number) => `${i}-${b.kind}-${b.text.length}`)
       if (this.waveOn) {
         WaveTail({ stream: this.wave })
       }
       ForEach(this.tailBlocks, (b: MdBlock, i: number) => {
-        this.blockView(b)
+        this.blockView(b, i === this.tailBlocks.length - 1)
       }, (b: MdBlock, i: number) => `${i}-${b.kind}-${b.text.length}`)
     }
     .width('100%')
