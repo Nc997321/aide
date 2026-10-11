@@ -196,8 +196,17 @@ export class ChatModel {
     let sid: string = this.store.sid;
     const spawn: boolean = sid === '';
     if (spawn) {
+      // 空态选定的模型/思考档只落 store（无真实 id 可写记忆），而 spawn 复位
+      // 会整体清模型域——先快照后回填，initialModel/initialEffort 才能随首条
+      // 消息带出，chip 也不回退占位/默认档
+      const keepOptions: ModelOption[] = this.store.modelOptions;
+      const keepModel: string = this.store.model;
+      const keepEffort: string = this.store.effort;
       sid = uuid();
       this.store.resetForOpen(sid, '新会话');
+      this.store.modelOptions = keepOptions;
+      this.store.model = keepModel;
+      this.store.effort = keepEffort;
       this.store.pendingSpawn = true;
       this.store.spawnWsKey = workspaceModel.selectedKey;
       this.store.hydrated = true; // 新会话无历史可拉：跳过 hydrate，避免加载卡常驻
