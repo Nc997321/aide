@@ -366,6 +366,27 @@ pub struct CurrentHost {
     pub home: String,
 }
 
+/// 调用方窗口绑着哪台 Host——**只是身份，不等连接**。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowHost {
+    /// `local` / `wsl:Debian` / `ssh:devbox`
+    pub key: String,
+    /// 显示名：`本机` / `WSL: Debian` / `SSH: devbox`
+    pub label: String,
+}
+
+/// 窗口绑着谁在开窗那一刻就定了，与连得上连不上无关。标题栏的 Host 标识和连接状态条靠它：
+/// 它们恰恰要在「还没连上 / 连不上」时说话，不能像 [`current_host`] 那样等连接就绪
+/// （2026-10-12：套件升级后首次连 WSL 要下 Claude CLI，窗口几分钟里既无标识也无提示，像连不上）。
+#[tauri::command]
+pub fn window_host(window: Window) -> WindowHost {
+    match window.app_handle().state::<HostWindows>().host_of(window.label()) {
+        None => WindowHost { key: crate::host_recents::LOCAL_KEY.into(), label: "本机".into() },
+        Some(host) => WindowHost { key: host.key(), label: host.label() },
+    }
+}
+
 #[tauri::command]
 pub async fn current_host(window: Window) -> Result<CurrentHost, String> {
     let app = window.app_handle();

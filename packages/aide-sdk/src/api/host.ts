@@ -32,10 +32,30 @@ export interface HostRecents {
   projects: HostRecentProject[];
 }
 
+/** 本窗口绑着哪台 Host——只是身份（开窗即定），不等连接。 */
+export interface WindowHost {
+  /** `local` / `wsl:Debian` / `ssh:devbox` */
+  key: string;
+  /** `本机` / `WSL: Debian` / `SSH: devbox` */
+  label: string;
+}
+
 let current: Promise<CurrentHost> | null = null;
+let identity: Promise<WindowHost> | null = null;
 
 export const hostApi = {
-  /** 本窗口连着的 Host（每个窗口固定，缓存；失败不缓存，下次重试）。 */
+  /** 本窗口绑着哪台 Host（立即返回，**不等连接就绪**）。要在「还没连上 / 连不上」时也能用的
+   *  界面——标题栏标识、连接状态条——用它；需要 Host 的系统 / 家目录才用 {@link current}。 */
+  identity(): Promise<WindowHost> {
+    identity ??= getTransport()
+      .invoke<WindowHost>("window_host")
+      .catch((e) => {
+        identity = null;
+        throw e;
+      });
+    return identity;
+  },
+  /** 本窗口连着的 Host（每个窗口固定，缓存；失败不缓存，下次重试）。**会等连接就绪**（首次含安装）。 */
   current(): Promise<CurrentHost> {
     current ??= getTransport()
       .invoke<CurrentHost>("current_host")

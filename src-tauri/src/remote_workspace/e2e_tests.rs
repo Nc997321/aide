@@ -76,7 +76,7 @@ async fn host_install_connect_and_workspace_ops() {
 
     // ── 安装（幂等：第二次运行应只做探测）──
     let t = std::time::Instant::now();
-    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let inst = install::ensure_installed(kit(), &host, &|_, _| {}).await.expect("install");
     println!("installed in {:?}: {inst:?}", t.elapsed());
 
     // ── serve 握手 ──
@@ -161,7 +161,7 @@ async fn host_install_connect_and_workspace_ops() {
 #[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）、pnpm build:remote-kit 与目标机 rust-analyzer"]
 async fn host_serve_runs_a_language_server() {
     let host = target();
-    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let inst = install::ensure_installed(kit(), &host, &|_, _| {}).await.expect("install");
     let conn = HostConnection::start(
         host.clone(),
         serve_cmd(&host, &inst, None),
@@ -259,7 +259,7 @@ async fn host_serve_runs_a_language_server() {
 async fn host_serve_runs_a_chat_round() {
     let cfg = env("AIDE_E2E_CLAUDE_CONFIG").expect("set AIDE_E2E_CLAUDE_CONFIG=<target claude home>");
     let host = target();
-    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let inst = install::ensure_installed(kit(), &host, &|_, _| {}).await.expect("install");
 
     let home = format!("/tmp/aide-e2e-host-{}", std::process::id());
     let prep = format!(
@@ -347,7 +347,7 @@ async fn host_serve_runs_a_chat_round() {
 #[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）与 pnpm build:remote-kit"]
 async fn host_connection_reports_an_unexpected_drop() {
     let host = target();
-    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let inst = install::ensure_installed(kit(), &host, &|_, _| {}).await.expect("install");
 
     // serve 自己写下 pid 再 exec——杀的只能是**这条**连接的进程（`exec` 保持 pid 不变），
     // 不会误伤同机别的 Host 窗口正在用的 serve。
@@ -418,7 +418,7 @@ async fn host_connection_reports_an_unexpected_drop() {
 #[ignore = "真机：需要 WSL 发行版 / SSH 别名（AIDE_E2E_WSL / AIDE_E2E_SSH）与 pnpm build:remote-kit"]
 async fn host_replays_events_missed_while_disconnected() {
     let host = target();
-    let inst = install::ensure_installed(kit(), &host).await.expect("install");
+    let inst = install::ensure_installed(kit(), &host, &|_, _| {}).await.expect("install");
     let noop_ev: super::connection::EventHandler = Arc::new(|_h: &HostId, _n: Notification| {});
     let noop_closed: super::connection::ClosedHandler = Arc::new(|_h: &HostId, _r: &str| {});
 

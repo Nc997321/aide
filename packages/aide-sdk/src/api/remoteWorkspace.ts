@@ -24,6 +24,8 @@ export interface RemoteHostStatus {
    */
   state: "connecting" | "installing" | "connected" | "error" | "disconnected" | "reconnecting" | "resync" | "";
   detail?: string;
+  /** `installing` 时可量化步骤（下载 / 上传）的完成比例 0–1；量不出来的步骤没有。 */
+  progress?: number;
   /** 目标机家目录（Host 原生路径），连接成功后才有。 */
   home?: string;
 }

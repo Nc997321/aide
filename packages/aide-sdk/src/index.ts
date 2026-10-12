@@ -14,7 +14,7 @@ export type { RemoteTargets, RemoteHostStatus, RemotePathInfo } from "./api/remo
 export { hostApi, HOST_OPEN_FOLDER_EVENT } from "./api/host";
 export { linkApi } from "./api/link";
 export type { LinkStatus, LinkOffer } from "./api/link";
-export type { CurrentHost, HostRecents, HostRecentProject } from "./api/host";
+export type { CurrentHost, WindowHost, HostRecents, HostRecentProject } from "./api/host";
 export type {
   MemoryIndexEntry,
   MemoryIndexInfo,

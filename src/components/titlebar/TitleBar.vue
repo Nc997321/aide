@@ -30,11 +30,12 @@ const hostLabel = ref("");
 const isHostWindow = ref(false);
 onMounted(async () => {
   try {
-    const h = await hostApi.current();
+    // 身份不等连接：还没连上 / 连不上时也要标出这扇窗口是谁的
+    const h = await hostApi.identity();
     hostLabel.value = h.label;
     isHostWindow.value = h.key !== "local";
   } catch {
-    /* 非桌面环境 / 连接未就绪：不标 */
+    /* 非桌面环境：不标 */
   }
 });
 
