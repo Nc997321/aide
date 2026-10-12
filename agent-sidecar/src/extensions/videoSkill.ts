@@ -1,7 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
+import { builtinSkillPath, ensureBuiltinSkill, type SkillEnv } from "./builtinSkill.js";
 
 /**
  * aide-video skill 自动落地（内建，免用户配置）：教 agent 用 Remotion 在用户工作区里做视频。
@@ -11,13 +8,10 @@ import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
  * 以及哪些事做不了要如实说。做法来自 Aide 自己那支介绍片的工程。
  */
 
-type Env = Record<string, string | undefined>;
+const SKILL_NAME = "aide-video";
 
-const SKILL_DIR_NAME = "aide-video";
-
-export function videoSkillPath(env: Env): string {
-  const dir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".aide", "claude");
-  return path.join(toForwardSlashes(path.join(toForwardSlashes(dir), "skills", SKILL_DIR_NAME)), "SKILL.md");
+export function videoSkillPath(env: SkillEnv): string {
+  return builtinSkillPath(env, SKILL_NAME);
 }
 
 export const VIDEO_SKILL_CONTENT = `---
@@ -182,24 +176,7 @@ npx remotion render Main out/part.mp4 --frames=0-149                      # 只�
 - 改了镜头时长但配乐 / 旁白没对上 → 音频时长是固定的，告诉用户而不是悄悄截断。
 `;
 
-/** 幂等落地：内容不同才写。任何失败都跳过，不影响会话。 */
-export function ensureVideoSkill(env: Env): void {
-  const file = videoSkillPath(env);
-  try {
-    // mkdirSync 独立 try：bun 的 recursive mkdir 对已存在目录抛 EEXIST（Node 是 no-op）
-    try {
-      mkdirSync(safeDirname(file), { recursive: true });
-    } catch {
-      /* 父目录已存在或不可创建，继续尝试写 */
-    }
-    let current: string | null = null;
-    try {
-      current = readFileSync(file, "utf8");
-    } catch {
-      /* 不存在，下面写 */
-    }
-    if (current !== VIDEO_SKILL_CONTENT) writeFileSync(file, VIDEO_SKILL_CONTENT, "utf8");
-  } catch {
-    /* 配置目录不可写等情况：跳过 */
-  }
+/** 幂等落地，失败静默（见 builtinSkill.ts）。 */
+export function ensureVideoSkill(env: SkillEnv): void {
+  ensureBuiltinSkill(env, SKILL_NAME, VIDEO_SKILL_CONTENT);
 }

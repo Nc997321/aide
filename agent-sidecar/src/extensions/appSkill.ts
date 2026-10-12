@@ -1,7 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
-import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
+import { builtinSkillPath, ensureBuiltinSkill, type SkillEnv } from "./builtinSkill.js";
 
 /**
  * aide-app skill 自动落地（内建，免用户配置）：教 agent 给 Aide 写「侧栏应用」。
@@ -13,13 +10,10 @@ import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
  * 设计见 docs/superpowers/specs/2026-10-09-sidebar-apps-design.md。
  */
 
-type Env = Record<string, string | undefined>;
+const SKILL_NAME = "aide-app";
 
-const SKILL_DIR_NAME = "aide-app";
-
-export function appSkillPath(env: Env): string {
-  const dir = env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), ".aide", "claude");
-  return path.join(toForwardSlashes(path.join(toForwardSlashes(dir), "skills", SKILL_DIR_NAME)), "SKILL.md");
+export function appSkillPath(env: SkillEnv): string {
+  return builtinSkillPath(env, SKILL_NAME);
 }
 
 export const APP_SKILL_CONTENT = `---
@@ -104,6 +98,8 @@ const info = await aide.host.info();           // { os, source }
 \`--aide-text-primary\`、\`--aide-text-secondary\`、\`--aide-border\`、\`--aide-accent\`、\`--aide-danger\`、\`--aide-success\`，
 界面就跟着用户的主题走。不要硬编码颜色。
 
+**观感**：写界面的 HTML / CSS 之前先读 aide-design 技能（层级、间距、窄栏布局、空状态怎么做）。
+
 ## 后端（可选）
 
 界面做不了的事（连数据库、跑命令、长连接）放后端。后端是一个 **stdio MCP server**，用 Host 上的 Node（18+）运行：
@@ -145,24 +141,7 @@ Aide 第一次看到一个应用就会写一行 \`manifest: ok\`（或清单的�
 - 后端往 stdout 打日志，把协议搅乱。
 `;
 
-/** 幂等落地：内容不同才写。任何失败都跳过，不影响会话。 */
-export function ensureAppSkill(env: Env): void {
-  const file = appSkillPath(env);
-  try {
-    // mkdirSync 独立 try：bun 的 recursive mkdir 对已存在目录抛 EEXIST（Node 是 no-op）
-    try {
-      mkdirSync(safeDirname(file), { recursive: true });
-    } catch {
-      /* 父目录已存在或不可创建，继续尝试写 */
-    }
-    let current: string | null = null;
-    try {
-      current = readFileSync(file, "utf8");
-    } catch {
-      /* 不存在，下面写 */
-    }
-    if (current !== APP_SKILL_CONTENT) writeFileSync(file, APP_SKILL_CONTENT, "utf8");
-  } catch {
-    /* 配置目录不可写等情况：跳过 */
-  }
+/** 幂等落地，失败静默（见 builtinSkill.ts）。 */
+export function ensureAppSkill(env: SkillEnv): void {
+  ensureBuiltinSkill(env, SKILL_NAME, APP_SKILL_CONTENT);
 }
