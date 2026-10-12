@@ -319,6 +319,7 @@ pub fn run() {
             host_recents::host_recents_list,
             host_recents::host_recents_forget,
             host_window::current_host,
+            host_window::window_host,
             host_window::import_local_providers,
             host_window::upload_local_files,
             ]);

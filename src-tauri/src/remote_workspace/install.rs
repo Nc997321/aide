@@ -139,25 +139,61 @@ fn read_kit(dirs: &[PathBuf], plat: Plat) -> Result<(Vec<u8>, Vec<u8>, String), 
 const PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 /// 上传 / 解包（Claude CLI 压缩包约 70MB，慢速 SSH 链路要留足时间）。
 const TRANSFER_TIMEOUT: Duration = Duration::from_secs(900);
+/// 上传分块：每送完一块报一次进度。
+const SEND_CHUNK: usize = 1 << 20;
+
+/// 安装进度回报：正在做什么 + 可量化时的完成比例（0–1）。
+pub type StageFn<'a> = &'a (dyn Fn(&str, Option<f64>) + Sync);
+
+/// 「正在下载 Claude CLI（37 / 107 MB）」；总量未知时只报已完成的量。
+fn transfer_text(what: &str, done: u64, total: Option<u64>) -> String {
+    const MB: u64 = 1024 * 1024;
+    match total {
+        Some(t) if t > 0 => format!("{what}（{} / {} MB）", done / MB, t.div_ceil(MB)),
+        _ => format!("{what}（{} MB）", done / MB),
+    }
+}
+
+fn ratio(done: u64, total: Option<u64>) -> Option<f64> {
+    total.filter(|t| *t > 0).map(|t| (done as f64 / t as f64).min(1.0))
+}
 
 /// 在目标机跑一段脚本并收集 stdout（带超时）。
 pub(super) async fn run_script(host: &HostId, script: &str, stdin: Option<&[u8]>) -> Result<String, String> {
+    run_script_sending(host, script, stdin, &|_, _| {}).await
+}
+
+/// 同 [`run_script`]，并在往目标机送 `stdin` 的途中回报（已送字节, 总字节）——大文件上传的进度。
+async fn run_script_sending(
+    host: &HostId,
+    script: &str,
+    stdin: Option<&[u8]>,
+    on_sent: &(dyn Fn(u64, u64) + Sync),
+) -> Result<String, String> {
     let limit = if stdin.is_some() { TRANSFER_TIMEOUT } else { PROBE_TIMEOUT };
     let mut cmd = launcher::command(host, script)?;
     let mut child = cmd.spawn().map_err(|e| format!("无法连接 {}：{e}", host.label()))?;
     let mut child_stdin = child.stdin.take().ok_or("no stdin")?;
-    let data = stdin.map(|d| d.to_vec());
-    let writer = tokio::spawn(async move {
-        if let Some(d) = data {
-            child_stdin.write_all(&d).await?;
+    // 边写边等：写完必须放掉 stdin（对端才见 EOF）；对端提前退出时写失败无所谓，以退出码为准
+    let write = async move {
+        if let Some(d) = stdin {
+            let total = d.len() as u64;
+            let mut sent = 0u64;
+            for chunk in d.chunks(SEND_CHUNK) {
+                if child_stdin.write_all(chunk).await.is_err() {
+                    break;
+                }
+                sent += chunk.len() as u64;
+                on_sent(sent, total);
+            }
         }
-        child_stdin.shutdown().await
-    });
-    let out = tokio::time::timeout(limit, child.wait_with_output())
+        let _ = child_stdin.shutdown().await;
+        drop(child_stdin);
+    };
+    let (out, ()) = tokio::time::timeout(limit, async { tokio::join!(child.wait_with_output(), write) })
         .await
-        .map_err(|_| format!("{} 上的安装步骤超时", host.label()))?
-        .map_err(|e| e.to_string())?;
-    let _ = writer.await;
+        .map_err(|_| format!("{} 上的安装步骤超时", host.label()))?;
+    let out = out.map_err(|e| e.to_string())?;
     if !out.status.success() {
         let err = String::from_utf8_lossy(&out.stderr);
         return Err(format!(
@@ -218,7 +254,8 @@ fn claude_pkg(plat: Plat, musl: bool) -> String {
 
 /// 确保目标机套件就绪（幂等：已装且版本一致则只做一次探测）。`kit` = 本机套件目录候选
 /// （见 [`kit_dirs`]）；参数化而非取 AppHandle，便于脱离 Tauri 做真机集成测试。
-pub async fn ensure_installed(kit: Vec<PathBuf>, host: &HostId) -> Result<Installed, String> {
+/// `stage`：真要装东西时报正在做什么与进度（已装好只探测时不调）。
+pub async fn ensure_installed(kit: Vec<PathBuf>, host: &HostId, stage: StageFn<'_>) -> Result<Installed, String> {
     let sdk = sdk_version()?;
     // 先拿架构才能选对 host 二进制；探测脚本里的版本号用占位，拿到 ver 后再精确判定。
     let arch_out = run_script(host, "uname -m", None).await?;
@@ -253,6 +290,7 @@ true"#
 
     if !probe.host_ok {
         tracing::info!(host = %host, %ver, "installing aide-host");
+        stage("正在安装远程套件…", None);
         upload(host, &format!("{base}/{ver}/aide-host"), &host_bytes, true).await?;
         upload(host, &format!("{base}/{ver}/runtime/runtime.js"), &runtime_bytes, false).await?;
         // 清理旧版本目录（只动形如 x.y.z-<hash> 的目录，deps/ 永不碰）
@@ -265,19 +303,26 @@ true"#
     if !probe.claude_ok {
         let pkg = claude_pkg(plat, probe.musl);
         tracing::info!(host = %host, %pkg, "installing claude cli");
+        stage("正在下载 Claude CLI（首次连接或升级后才需要）…", None);
         let tgz = fetch_cached(
             &format!("{pkg}-{sdk}.tgz"),
             NPM_REGISTRIES
                 .iter()
                 .map(|r| format!("{r}/@anthropic-ai/{pkg}/-/{pkg}-{sdk}.tgz"))
                 .collect(),
+            &|done, total| stage(&transfer_text("正在下载 Claude CLI", done, total), ratio(done, total)),
         )
         .await?;
         let script = format!(
             "mkdir -p {d} && tar -xzf - -C {d} --strip-components=1 package/claude && chmod +x {d}/claude",
             d = sh_quote(&claude_dir)
         );
-        run_script(host, &script, Some(&tgz)).await?;
+        let what = format!("正在把 Claude CLI 装到 {}", host.label());
+        stage(&format!("{what}…"), None);
+        run_script_sending(host, &script, Some(&tgz), &|sent, total| {
+            stage(&transfer_text(&what, sent, Some(total)), ratio(sent, Some(total)))
+        })
+        .await?;
     }
 
     // 登录入口：Claude 官方账号登录（system default 供应商）的凭据住在目标机自己的
@@ -305,6 +350,7 @@ true"#
                     ));
                 }
                 tracing::info!(host = %host, "installing node {NODE_VERSION}");
+                stage("正在下载 Node.js 运行时…", None);
                 let name = format!("node-{NODE_VERSION}-linux-{}.tar.gz", plat.npm());
                 let tgz = fetch_cached(
                     &name,
@@ -312,13 +358,19 @@ true"#
                         .iter()
                         .map(|m| format!("{m}/{NODE_VERSION}/{name}"))
                         .collect(),
+                    &|done, total| stage(&transfer_text("正在下载 Node.js 运行时", done, total), ratio(done, total)),
                 )
                 .await?;
                 let script = format!(
                     "mkdir -p {d} && tar -xzf - -C {d} --strip-components=1",
                     d = sh_quote(&dir)
                 );
-                run_script(host, &script, Some(&tgz)).await?;
+                let what = format!("正在把 Node.js 运行时装到 {}", host.label());
+                stage(&format!("{what}…"), None);
+                run_script_sending(host, &script, Some(&tgz), &|sent, total| {
+                    stage(&transfer_text(&what, sent, Some(total)), ratio(sent, Some(total)))
+                })
+                .await?;
             }
             Some(format!("{dir}/bin/node"))
         }
@@ -393,33 +445,94 @@ async fn upload(host: &HostId, dest: &str, bytes: &[u8], exec: bool) -> Result<(
 }
 
 /// 下载到本机缓存 `~/.aide/cache/remote-kit/<name>`（命中缓存直接读）。候选 URL 依次尝试。
-async fn fetch_cached(name: &str, urls: Vec<String>) -> Result<Vec<u8>, String> {
+/// `progress`（已下字节, 总字节）：只在真去下载时回报，命中缓存不调。
+async fn fetch_cached(
+    name: &str,
+    urls: Vec<String>,
+    progress: &(dyn Fn(u64, Option<u64>) + Sync),
+) -> Result<Vec<u8>, String> {
     let dir = crate::commands::our_config_dir().join("cache").join("remote-kit");
     let path = dir.join(name);
-    tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+    // 下载在阻塞线程里跑，进度经通道回到这边（回调借着调用方的东西，进不了 'static 闭包）
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(u64, Option<u64>)>();
+    let task = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
         if let Ok(b) = std::fs::read(&path) {
             if !b.is_empty() {
                 return Ok(b);
             }
         }
+        let report = |done: u64, total: Option<u64>| {
+            let _ = tx.send((done, total));
+        };
+        let save = |bytes: Vec<u8>| {
+            let _ = std::fs::create_dir_all(&dir);
+            write_atomic(&path, &bytes);
+            bytes
+        };
+        // 第一轮：太慢的源直接放弃换下一个（官方源经代理 50KB/s、镜像 19MB/s 是实测过的差距，
+        // 「没失败」不等于「能用」）；全都不行再回头把慢的那几个耐心下完——慢总比没有强。
         let mut errors = Vec::new();
+        let mut slow = Vec::new();
         for url in &urls {
-            match download(url) {
-                Ok(bytes) => {
-                    let _ = std::fs::create_dir_all(&dir);
-                    write_atomic(&path, &bytes);
-                    return Ok(bytes);
-                }
+            match download(url, &report, true) {
+                Ok(bytes) => return Ok(save(bytes)),
+                Err(DownloadError::Slow) => slow.push(url),
+                Err(DownloadError::Failed(e)) => errors.push(format!("{url}: {e}")),
+            }
+        }
+        for url in slow {
+            match download(url, &report, false) {
+                Ok(bytes) => return Ok(save(bytes)),
                 Err(e) => errors.push(format!("{url}: {e}")),
             }
         }
         Err(format!("下载远程套件失败：\n{}", errors.join("\n")))
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    });
+    // 发送端随闭包结束而释放，循环自然收尾
+    while let Some((done, total)) = rx.recv().await {
+        progress(done, total);
+    }
+    task.await.map_err(|e| e.to_string())?
 }
 
-fn download(url: &str) -> Result<Vec<u8>, String> {
+enum DownloadError {
+    /// 连得上但太慢（见 [`too_slow`]）：换个源可能快得多。
+    Slow,
+    Failed(String),
+}
+
+impl std::fmt::Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DownloadError::Slow => f.write_str("下载过慢"),
+            DownloadError::Failed(e) => f.write_str(e),
+        }
+    }
+}
+
+/// 起步这么久之后才评判快慢（握手、慢启动不算数）。
+const SLOW_AFTER: Duration = Duration::from_secs(8);
+/// 照当前速度还要这么久才下得完 = 太慢。
+const SLOW_ETA: Duration = Duration::from_secs(180);
+/// 总量未知时的最低可接受速度（字节 / 秒）。
+const SLOW_SPEED: u64 = 300 * 1024;
+
+/// 这个源是不是慢到该换一个：按「照现在的速度还要多久」判，不按绝对速度——小文件慢一点无所谓。
+fn too_slow(done: u64, total: Option<u64>, elapsed: Duration) -> bool {
+    if elapsed < SLOW_AFTER {
+        return false;
+    }
+    let speed = done as f64 / elapsed.as_secs_f64();
+    match total {
+        Some(t) => t.saturating_sub(done) as f64 > speed * SLOW_ETA.as_secs_f64(),
+        None => speed < SLOW_SPEED as f64,
+    }
+}
+
+/// `progress`（已下字节, 总字节）：每多下 1%（总量未知时每 1MB）报一次。
+/// `impatient`：太慢就以 [`DownloadError::Slow`] 放弃（调用方还有别的源可试时用）。
+fn download(url: &str, progress: &dyn Fn(u64, Option<u64>), impatient: bool) -> Result<Vec<u8>, DownloadError> {
+    let failed = |e: String| DownloadError::Failed(e);
     let mut builder = ureq::AgentBuilder::new()
         .timeout_connect(Duration::from_secs(15))
         .timeout_read(Duration::from_secs(60));
@@ -428,11 +541,32 @@ fn download(url: &str) -> Result<Vec<u8>, String> {
             builder = builder.proxy(p);
         }
     }
-    let resp = builder.build().get(url).call().map_err(|e| e.to_string())?;
-    let mut buf = Vec::new();
-    std::io::Read::read_to_end(&mut resp.into_reader(), &mut buf).map_err(|e| e.to_string())?;
+    let resp = builder.build().get(url).call().map_err(|e| failed(e.to_string()))?;
+    let started = std::time::Instant::now();
+    let total = resp.header("Content-Length").and_then(|v| v.parse::<u64>().ok()).filter(|t| *t > 0);
+    let step = total.map_or(1 << 20, |t| (t / 100).max(1));
+    let mut reader = resp.into_reader();
+    let mut buf = Vec::with_capacity(total.unwrap_or(0) as usize);
+    let mut chunk = vec![0u8; 64 * 1024];
+    let mut reported = 0u64;
+    progress(0, total);
+    loop {
+        let n = std::io::Read::read(&mut reader, &mut chunk).map_err(|e| failed(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        let done = buf.len() as u64;
+        if impatient && too_slow(done, total, started.elapsed()) {
+            return Err(DownloadError::Slow);
+        }
+        if done - reported >= step {
+            reported = done;
+            progress(done, total);
+        }
+    }
     if buf.len() < 1024 {
-        return Err(format!("响应过小（{} 字节），疑似错误页", buf.len()));
+        return Err(failed(format!("响应过小（{} 字节），疑似错误页", buf.len())));
     }
     Ok(buf)
 }
@@ -510,6 +644,36 @@ mod tests {
         let env = tool_switches(|k| (k == "AIDE_LSP_TOOLS").then(|| "off".to_string()));
         assert_eq!(env.len(), 1);
         assert_eq!(env["AIDE_LSP_TOOLS"], "off");
+    }
+
+    #[test]
+    fn transfer_progress_text_and_ratio() {
+        const MB: u64 = 1024 * 1024;
+        assert_eq!(transfer_text("正在下载 X", 37 * MB, Some(107 * MB)), "正在下载 X（37 / 107 MB）");
+        assert_eq!(transfer_text("正在下载 X", 3 * MB, None), "正在下载 X（3 MB）");
+        assert_eq!(ratio(50, Some(200)), Some(0.25));
+        assert_eq!(ratio(300, Some(200)), Some(1.0));
+        assert_eq!(ratio(50, None), None);
+        assert_eq!(ratio(50, Some(0)), None);
+    }
+
+    #[test]
+    fn slow_sources_are_judged_by_time_remaining() {
+        const MB: u64 = 1024 * 1024;
+        let secs = Duration::from_secs;
+        // 起步阶段不评判
+        assert!(!too_slow(0, Some(115 * MB), secs(3)));
+        // 2026-10-12 实测：官方源经代理 ~50KB/s，115MB 要半个多小时 → 换源
+        assert!(too_slow(500 * 1024, Some(115 * MB), secs(10)));
+        // 镜像 19MB/s：不换
+        assert!(!too_slow(100 * MB, Some(115 * MB), secs(10)));
+        // 小文件慢一点也很快下完：不换
+        assert!(!too_slow(500 * 1024, Some(2 * MB), secs(10)));
+        // 一个字节都没来
+        assert!(too_slow(0, Some(115 * MB), secs(10)));
+        // 总量未知：按最低速度判
+        assert!(too_slow(MB, None, secs(10)));
+        assert!(!too_slow(10 * MB, None, secs(10)));
     }
 
     #[test]

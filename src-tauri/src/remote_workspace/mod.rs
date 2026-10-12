@@ -49,6 +49,9 @@ pub struct HostStatus {
     /// 目标机家目录（Host 原生路径），连接成功后才有。
     #[serde(skip_serializing_if = "Option::is_none")]
     pub home: Option<String>,
+    /// `installing` 时可量化步骤（下载 / 上传）的完成比例 0–1；量不出来的步骤没有。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub progress: Option<f64>,
 }
 
 #[derive(Default)]
@@ -105,13 +108,20 @@ impl RemoteWorkspaces {
     }
 
     fn set_status(&self, host: &HostId, state: &str, detail: Option<String>, home: Option<String>) {
-        let s = HostStatus {
-            host: host.key(),
-            label: host.label(),
-            state: state.to_string(),
-            detail,
-            home,
-        };
+        self.publish(
+            host,
+            HostStatus {
+                host: host.key(),
+                label: host.label(),
+                state: state.to_string(),
+                detail,
+                home,
+                progress: None,
+            },
+        );
+    }
+
+    fn publish(&self, host: &HostId, s: HostStatus) {
         self.status
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -270,7 +280,21 @@ impl RemoteWorkspaces {
     async fn establish(&self, host: &HostId, resume: Option<Resume>) -> Result<Arc<HostConnection>, String> {
         let app = self.app()?.clone();
         self.set_status(host, "installing", None, None);
-        let inst = install::ensure_installed(install::kit_dirs(&app), host).await?;
+        // 安装走到哪一步如实报给窗口（下载 Claude CLI 可能要几分钟，不能让窗口干等）
+        let stage = |text: &str, progress: Option<f64>| {
+            self.publish(
+                host,
+                HostStatus {
+                    host: host.key(),
+                    label: host.label(),
+                    state: "installing".to_string(),
+                    detail: Some(text.to_string()),
+                    home: None,
+                    progress,
+                },
+            );
+        };
+        let inst = install::ensure_installed(install::kit_dirs(&app), host, &stage).await?;
         self.set_status(host, "connecting", None, None);
         let cmd = launcher::command(
             host,
@@ -410,6 +434,7 @@ pub async fn remote_ws_connect(
         state: "connected".into(),
         detail: None,
         home: Some(c.info.home.clone()),
+        progress: None,
     })
 }
 
