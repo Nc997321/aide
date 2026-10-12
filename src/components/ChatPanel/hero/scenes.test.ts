@@ -13,11 +13,14 @@ describe("欢迎页场景注册表", () => {
     }
   });
 
-  it("指引里点名的能力是 Aide 真有的：文档走 aide-docs，工作台/应用走 aide-app", () => {
+  it("指引里点名的能力是 Aide 真有的：文档走 aide-docs，工作台/应用走 aide-app，幻灯片/网页走 aide-design", () => {
     const brief = (id: string) => SCENES.find((s) => s.id === id)!.brief;
     expect(brief("docs")).toContain("mcp__aide-docs__write_docx");
     expect(brief("workbench")).toContain("aide-app");
     expect(brief("app")).toContain("aide-app");
+    expect(brief("slides")).toContain("aide-design");
+    expect(brief("webpage")).toContain("aide-design");
+    expect(brief("webpage")).toContain("单文件 HTML");
     // 没有的能力要如实说，不许让模型假装
     expect(brief("slides")).toContain("不能生成 .pptx");
   });
