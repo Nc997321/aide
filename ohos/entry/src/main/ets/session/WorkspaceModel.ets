@@ -62,6 +62,22 @@ export class WorkspaceModel {
   private listening: boolean = false;
   /** 用户已显式选过范围（App 运行期内默认日常让位；重启回落）。 */
   private userPicked: boolean = false;
+  /** 主机世代（resetForHost 自增）：在途 refresh 的迟到响应按世代丢弃。 */
+  private hostEpoch: number = 0;
+
+  /** 换主机整体复位（HostSync 编排）：清全量内存面，等 refresh 重建
+   *  （userPicked 一并清——新主机重新默认日常）。 */
+  resetForHost(): void {
+    this.hostEpoch++;
+    this.workspaces = [];
+    this.selectedKey = '';
+    this.activeKey = '';
+    this.activePath = '';
+    this.daily = null;
+    this.loaded = false;
+    this.metas = [];
+    this.userPicked = false;
+  }
 
   /** 页面挂载时调用：幂等挂重连监听——断线期间错过的日常/列表变更在重连后自愈。 */
   ensureListener(): void {
@@ -84,30 +100,40 @@ export class WorkspaceModel {
       return;
     }
     this.refreshing = true;
-    const activeJob: Promise<void> = this.fetchActive();
-    const dailyJob: Promise<void> = this.fetchDaily();
+    const epoch: number = this.hostEpoch;
+    const activeJob: Promise<void> = this.fetchActive(epoch);
+    const dailyJob: Promise<void> = this.fetchDaily(epoch);
     try {
-      this.workspaces = await api.listWorkspaces();
-      this.loaded = true;
+      const list: WorkspaceInfo[] = await api.listWorkspaces();
+      if (epoch === this.hostEpoch) {
+        this.workspaces = list;
+        this.loaded = true;
+      }
     } catch (e) {
       // 拉取失败静默：工作区卡退占位；弹层按 loaded 呈现空态，重开即重试
     } finally {
       await activeJob;
       await dailyJob;
-      this.adoptDailyDefault();
+      if (epoch === this.hostEpoch) {
+        this.adoptDailyDefault();
+      }
       this.refreshing = false;
     }
   }
 
   /** 只读解析桌面活动工作区；旧桌面版本无此 RPC（中继拒绝）或未设置 → 空串占位。 */
-  private async fetchActive(): Promise<void> {
+  private async fetchActive(epoch: number): Promise<void> {
     try {
       const aw: ActiveWorkspace | null = await api.getActiveWorkspace();
-      this.activeKey = aw !== null ? aw.key : '';
-      this.activePath = aw !== null ? aw.path : '';
+      if (epoch === this.hostEpoch) {
+        this.activeKey = aw !== null ? aw.key : '';
+        this.activePath = aw !== null ? aw.path : '';
+      }
     } catch (e) {
-      this.activeKey = '';
-      this.activePath = '';
+      if (epoch === this.hostEpoch) {
+        this.activeKey = '';
+        this.activePath = '';
+      }
     }
   }
 
@@ -116,10 +142,10 @@ export class WorkspaceModel {
    * 不再缺席）；旧桌面无此 RPC / 未设置 / 字段残缺 → 静默降级为无日常，一切
    * 与升级前一致（已解析出的身份保持不动，不闪行）。
    */
-  private async fetchDaily(): Promise<void> {
+  private async fetchDaily(epoch: number): Promise<void> {
     try {
       const d: DailyWorkspace = await api.dailyWorkspace();
-      if (d.key !== '' && d.path !== '') {
+      if (epoch === this.hostEpoch && d.key !== '' && d.path !== '') {
         this.daily = d;
       }
     } catch (e) {
@@ -219,6 +245,7 @@ export class WorkspaceModel {
       return;
     }
     this.loadingMetas = true;
+    const epoch: number = this.hostEpoch;
     try {
       // 并行拉取：'' 槽位 + 日常（新桌面）+ 各工作区各一次 invoke（经中继各约
       // 一个 RTT），单条目失败静默为零值占位，其余照常展示
@@ -229,7 +256,10 @@ export class WorkspaceModel {
       for (let i = 0; i < this.workspaces.length; i++) {
         jobs.push(this.metaOf(this.workspaces[i].key));
       }
-      this.metas = await Promise.all(jobs);
+      const metas: WsMeta[] = await Promise.all(jobs);
+      if (epoch === this.hostEpoch) {
+        this.metas = metas;
+      }
     } catch (e) {
       // 计数拉取失败静默——弹层退无计数展示
     } finally {

@@ -20,16 +20,32 @@ export class ProviderModel {
   /** 首次拉取完成（区分「加载中」与「真空」空态）。 */
   @Trace loaded: boolean = false;
 
+  /** 主机世代（resetForHost 自增）：在途 refresh 的迟到响应按世代丢弃。 */
+  private hostEpoch: number = 0;
+
+  /** 换主机整体复位（HostSync 编排）：清全量内存面，等 refresh 重建。 */
+  resetForHost(): void {
+    this.hostEpoch++;
+    this.providers = [];
+    this.activeId = '';
+    this.loaded = false;
+  }
+
   /** 拉取供应商列表 + 当前激活 id（authed 前置；防重入）。 */
   async refresh(): Promise<void> {
     if (this.refreshing || connModel.state !== 'authed') {
       return;
     }
     this.refreshing = true;
+    const epoch: number = this.hostEpoch;
     try {
-      this.providers = await api.getProviders();
-      this.activeId = await api.getActiveProviderId();
-      this.loaded = true;
+      const providers: ProviderConfigView[] = await api.getProviders();
+      const activeId: string = await api.getActiveProviderId();
+      if (epoch === this.hostEpoch) {
+        this.providers = providers;
+        this.activeId = activeId;
+        this.loaded = true;
+      }
     } catch (e) {
       // 拉取失败静默：徽标退占位；弹层按 loaded 呈现空态，重开即重试
     } finally {

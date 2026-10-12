@@ -1,11 +1,11 @@
 /**
  * 抽屉组件（v3：聊天升主屏，会话列表收进左侧抽屉）——对照 design/remote/
- * app.html 的 .dr-panel 结构：设备卡（logo + 连接状态点 + 供应商徽标 + ⏻
- * 断开）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 + 切换；日常态 =
- * 气泡头像 + 定位副标题占掉路径行）/ 自动化区
+ * app.html 的 .dr-panel 结构：设备卡（主机字母头像 + 连接状态点 + 主机名 +
+ * 红字断开 + 切换主机胶囊）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 +
+ * 切换；日常态 = 气泡头像 + 定位副标题占掉路径行）/ 自动化区
  * 段（呼吸点 + 折叠 + ＋ 新建；任务行两行制 + 行内启停小开关）/ 历史会话
- *（＋ 新会话 + ↻ 刷新 + 三态状态点列表）/ 底部搜索框，外加供应商、工作区
- * 两个半模态弹层。
+ *（＋ 新会话 + ↻ 刷新 + 三态状态点列表）/ 底部搜索框，外加供应商、工作区、
+ * 切换主机三个半模态弹层。
  *
  *  - 开合状态（drawerState，含两个半模态开关）与轻提示（toastModel）是全局
  *    单例：ChatPage 顶栏 ☰ 与 toast 宿主（ChatPage 挂载）跨组件共享；系统
@@ -20,8 +20,10 @@
  *    父子点击同时触发）
  *  - 会话点击 = chatModel.open 切会话（同会话幂等收敛，只收抽屉）；待确认
  *    会话切换后 toast 提示「有请求等待确认」；preview 文本为协议缺口，不展示
- *  - 设备卡 ⏻ 断开（原型 dr-quit 同位）：先收抽屉再 disconnectAll——Index
+ *  - 设备卡断开（原型 dr-quit 红字版）：先收抽屉再 disconnectActive——Index
  *    观察 conn 状态落回连接页（原 SessionsPage 顶栏断开入口随任务 5 迁入）
+ *  - 设备卡切换主机胶囊 → hsSheet 半模态（hosts 列表 + 添加新主机扫码行）：
+ *    v1 单活切换，选中即 conn.switchTo，复位编排见 session/HostSync
  *  - 半模态自绘（遮罩 + 底部面板 + transition），不依赖 bindSheet——与原型
  *    像素对齐，且选中描边/脚注/呼吸点均可用现有资源表达
  *  - 弹层计数快照来自 WorkspaceModel.loadMetas（'' 槽位 + 日常 + 各工作区
@@ -31,9 +33,15 @@
  *    「默认」角标 + 定位副标题，无路径行——日常路径是内部概念永不展示
  *    （桌面 spec：docs/superpowers/specs/2026-09-20-daily-mode-design.md）；
  *    旧桌面无 daily_workspace RPC 时整个日常层不存在，列表与升级前一致
- *  - 主机名固定「桌面 aide」：PairOk 只有 device_id + token，协议无主机名来源
+ *  - 主机名来自 hello_ok（conn.hostName；配对/旧凭据缺失时 UI 占位「aide Host」）
  */
-import { ConnModel, connModel } from '../conn/ConnModel';
+import { ConnModel, connModel, hostColor, hostTint, hostShortId } from '../conn/ConnModel';
+import { scanBarcode, scanCore } from '@kit.ScanKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { common } from '@kit.AbilityKit';
+import { parsePairUri, PairUriError } from '../sdk/pair-uri';
+import type { PairOffer } from '../sdk/pair-uri';
+import { StoredCreds } from '../sdk/storage';
 import { ChatModel, chatModel } from './ChatModel';
 import { ChatStore } from './chat/ChatStore';
 import { SessionsModel, sessionsModel } from './SessionsModel';
@@ -137,9 +145,10 @@ function kindLabel(kind: string): string {
 @ObservedV2
 export class DrawerState {
   @Trace open: boolean = false;
-  /** 供应商/工作区半模态（只随抽屉开；close 一并收起）。 */
+  /** 供应商/工作区/切换主机半模态（只随抽屉开；close 一并收起）。 */
   @Trace pvSheet: boolean = false;
   @Trace wsSheet: boolean = false;
+  @Trace hsSheet: boolean = false;
 
   openDrawer(): void {
     this.open = true;
@@ -149,10 +158,15 @@ export class DrawerState {
     this.open = false;
     this.pvSheet = false;
     this.wsSheet = false;
+    this.hsSheet = false;
   }
 
   /** 系统返回逐层收起：半模态 > 抽屉；无浮层返回 false 交还默认行为（退出）。 */
   handleBack(): boolean {
+    if (this.hsSheet) {
+      this.hsSheet = false;
+      return true;
+    }
     if (this.pvSheet) {
       this.pvSheet = false;
       return true;
@@ -268,6 +282,7 @@ export struct ChatDrawer {
       // 关抽屉时收起弹层：下次打开不残留（close() 已收，此处兜底直赋值路径）
       this.dr.pvSheet = false;
       this.dr.wsSheet = false;
+      this.dr.hsSheet = false;
       return;
     }
     // 每次开抽屉都重拉工作区（列表 + 活动工作区）：真名跟随桌面切换、桌面新
@@ -363,10 +378,73 @@ export struct ChatDrawer {
     this.dr.close();
   }
 
-  /** 断开（原型 dr-quit）：先收抽屉（drawerState 单例不随卸载复位）再断传输。 */
+  /** 断开（原型 dr-quit 红字版）：先收抽屉（drawerState 单例不随卸载复位）再
+   *  断传输；凭据保留——连接管理页随时可重连。 */
   onDisconnectTap(): void {
     this.dr.close();
-    this.conn.disconnectAll();
+    this.conn.disconnectActive();
+  }
+
+  // ── 切换主机（hsSheet 半模态）──
+
+  /** 设备卡「切换主机」胶囊：互斥开弹层（先收供应商/工作区弹层）。 */
+  onHostSwitchTap(): void {
+    this.dr.pvSheet = false;
+    this.dr.wsSheet = false;
+    this.dr.hsSheet = true;
+  }
+
+  /** 弹层行选中：收抽屉 + 切换（Banner/复位由 ConnModel/HostSync 编排）。 */
+  onHostPick(h: StoredCreds): void {
+    this.dr.close();
+    this.conn.switchTo(h.deviceId);
+  }
+
+  /** 添加新主机：收抽屉直接扫码（authed 下无法展示连接管理页，配对失败态
+   *  经 conn 状态回落——断开传输后 Index 自然落回连接页）。 */
+  onAddHostTap(): void {
+    this.dr.close();
+    this.onScan();
+  }
+
+  /** 扫码配对新主机（ScanKit；用户取消 1000500002 静默）。 */
+  private onScan(): void {
+    const ctx: common.Context | undefined = this.getUIContext().getHostContext();
+    if (ctx === undefined) {
+      toastModel.show('无法启动扫码', 'warn');
+      return;
+    }
+    const options: scanBarcode.ScanOptions = {
+      scanTypes: [scanCore.ScanType.QR_CODE],
+      enableMultiMode: false,
+      enableAlbum: true
+    };
+    scanBarcode.startScanForResult(ctx, options)
+      .then((result: scanBarcode.ScanResult) => {
+        this.handleUri(result.originalValue);
+      })
+      .catch((e: Error) => {
+        const err = e as BusinessError;
+        if (err.code !== 1000500002) { // 1000500002 = 用户取消扫码：静默
+          toastModel.show(`扫码失败（${err.code}）`, 'warn');
+        }
+      });
+  }
+
+  /** 扫码结果 → 解析 → 配对（hostName 由 hello_ok 落地）。 */
+  private handleUri(value: string): void {
+    const raw: string = value.trim();
+    if (raw === '') {
+      return;
+    }
+    let offer: PairOffer;
+    try {
+      offer = parsePairUri(raw);
+    } catch (e) {
+      toastModel.show(e instanceof PairUriError ? e.message : '不是有效的 aide-link 配对码', 'warn');
+      return;
+    }
+    void this.conn.pairWithOffer(offer);
   }
 
   onPvBadgeTap(): void {
@@ -421,21 +499,41 @@ export struct ChatDrawer {
 
   // ── 设备卡 / 区段 ──
 
+  /** 主机显示名（hello_ok 落地；缺失占位）。 */
+  private hostTitle(): string {
+    return this.conn.hostName !== null && this.conn.hostName !== '' ? this.conn.hostName : 'aide Host';
+  }
+
+  /** 主机字母头像首字母。 */
+  private hostInitial(): string {
+    return this.hostTitle().substring(0, 1).toUpperCase();
+  }
+
   @Builder
   deviceHead() {
     Column({ space: 12 }) {
       Row({ space: 10 }) {
-        Image($r('app.media.startIcon'))
-          .width(38)
-          .height(38)
-          .borderRadius(11)
+        // 主机字母头像（did 哈希取色，稳定不变）
+        Column() {
+          Text(this.hostInitial())
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor(hostColor(this.conn.activeDeviceId))
+        }
+        .width(38)
+        .height(38)
+        .borderRadius(11)
+        .backgroundColor(hostTint(this.conn.activeDeviceId))
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
 
         Column({ space: 2 }) {
-          Text('桌面 aide')
+          Text(this.hostTitle())
             .fontSize(15)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_primary'))
             .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
           Row({ space: 5 }) {
             if (this.conn.state === 'authed') {
               // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
@@ -443,28 +541,36 @@ export struct ChatDrawer {
             } else {
               PulseDot({ color: $r('app.color.status_warn'), dotSize: 6 })
             }
-            Text(this.conn.state === 'authed' ? '已连接 · 桌面 aide' : '设备离线 · 自动重连中')
+            Text(this.conn.state === 'authed' ? '已连接' : '设备离线 · 自动重连中')
               .fontSize(11)
               .fontColor($r('app.color.text_secondary'))
           }
           .alignItems(VerticalAlign.Center)
+          // 红字断开（原型 dr-quit 红字版；凭据保留，连接页可重连）
+          Text('断开连接')
+            .fontSize(11)
+            .fontColor($r('app.color.status_danger'))
+            .onClick(() => {
+              this.onDisconnectTap();
+            })
         }
         .layoutWeight(1)
         .alignItems(HorizontalAlign.Start)
 
-        // ⏻ 断开（原型 dr-quit 同位）
+        // 切换主机胶囊（开 hsSheet 半模态）
         Row() {
-          SymbolGlyph($r('sys.symbol.power'))
-            .fontSize(16)
-            .fontColor([$r('app.color.text_secondary')])
+          Text('切换主机')
+            .fontSize(11.5)
+            .fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_secondary'))
         }
-        .width(28)
-        .height(28)
-        .borderRadius(8)
-        .justifyContent(FlexAlign.Center)
+        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
+        .borderRadius(99)
+        .border({ width: 1, color: $r('app.color.line') })
+        .backgroundColor($r('app.color.card_bg'))
         .alignItems(VerticalAlign.Center)
         .onClick(() => {
-          this.onDisconnectTap();
+          this.onHostSwitchTap();
         })
       }
       .width('100%')
@@ -1328,6 +1434,148 @@ export struct ChatDrawer {
     .transition(TransitionEffect.translate({ y: 40 }).animation({ duration: 240, curve: Curve.EaseOut }))
   }
 
+  /** 切换主机弹层主体（v1 单活：hosts 列表 + 添加新主机扫码行）。 */
+  @Builder
+  hostSheetBody() {
+    Column() {
+      this.sheetGrip()
+      Row({ space: 8 }) {
+        Text('切换主机')
+          .fontSize(16)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.text_primary'))
+        Text('各主机凭据分别保存 · 断开的主机随时切回')
+          .fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+      }
+      .width('100%')
+      .padding({ left: 4, right: 4, bottom: 10 })
+      .alignItems(VerticalAlign.Center)
+
+      List({ space: 6 }) {
+        ForEach(this.conn.hosts, (h: StoredCreds) => {
+          ListItem() {
+            Row({ space: 11 }) {
+              Column() {
+                Text(h.hostName !== null && h.hostName !== ''
+                  ? h.hostName.substring(0, 1).toUpperCase()
+                  : hostShortId(h.deviceId).substring(0, 1).toUpperCase())
+                  .fontSize(15)
+                  .fontWeight(FontWeight.Bold)
+                  .fontColor(hostColor(h.deviceId))
+              }
+              .width(34)
+              .height(34)
+              .borderRadius(10)
+              .backgroundColor(hostTint(h.deviceId))
+              .justifyContent(FlexAlign.Center)
+              .alignItems(HorizontalAlign.Center)
+
+              Column({ space: 1 }) {
+                Text(h.hostName !== null && h.hostName !== '' ? h.hostName : hostShortId(h.deviceId))
+                  .fontSize(14)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor($r('app.color.text_primary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                Text(hostShortId(h.deviceId) + (h.lastSeen > 0 ? ` · 上次连接 ${relTime(h.lastSeen)}` : ''))
+                  .fontSize(10.5)
+                  .fontColor($r('app.color.text_secondary'))
+                  .maxLines(1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+              }
+              .layoutWeight(1)
+              .alignItems(HorizontalAlign.Start)
+
+              if (h.deviceId === this.conn.activeDeviceId && this.conn.state === 'authed') {
+                SymbolGlyph($r('sys.symbol.checkmark'))
+                  .fontSize(18)
+                  .fontColor([$r('app.color.accent')])
+              } else if (this.conn.state === 'connecting' && this.conn.pendingDeviceId === h.deviceId) {
+                LoadingProgress().width(14).height(14).color($r('app.color.accent'))
+              }
+            }
+            .width('100%')
+            .padding(11)
+            .borderRadius(14)
+            .backgroundColor(h.deviceId === this.conn.activeDeviceId && this.conn.state === 'authed'
+              ? $r('app.color.accent_weak') : $r('app.color.input_bg'))
+            .border({
+              width: 1.5,
+              color: h.deviceId === this.conn.activeDeviceId && this.conn.state === 'authed'
+                ? $r('app.color.accent') : Color.Transparent
+            })
+            .alignItems(VerticalAlign.Center)
+            .onClick(() => {
+              this.onHostPick(h);
+            })
+          }
+        }, (h: StoredCreds) => h.deviceId + '|' + (h.hostName ?? '') + '|' + h.lastSeen)
+
+        // 添加新主机（虚线行 → 收抽屉直接扫码）
+        ListItem() {
+          Row({ space: 11 }) {
+            Row() {
+              SymbolGlyph($r('sys.symbol.plus'))
+                .fontSize(17)
+                .fontColor([$r('app.color.accent')])
+            }
+            .width(34)
+            .height(34)
+            .borderRadius(10)
+            .backgroundColor($r('app.color.accent_weak'))
+            .justifyContent(FlexAlign.Center)
+            .alignItems(VerticalAlign.Center)
+
+            Text('添加新主机')
+              .fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.accent'))
+              .layoutWeight(1)
+
+            Text('扫码配对')
+              .fontSize(11)
+              .fontColor($r('app.color.text_secondary'))
+          }
+          .width('100%')
+          .padding(11)
+          .borderRadius(14)
+          .border({ width: 1, color: $r('app.color.line'), style: BorderStyle.Dashed })
+          .alignItems(VerticalAlign.Center)
+          .onClick(() => {
+            this.onAddHostTap();
+          })
+        }
+      }
+      .width('100%')
+      .layoutWeight(1)
+      .scrollBar(BarState.Off)
+      .edgeEffect(EdgeEffect.Spring)
+
+      Text('主机名来自 Host 设置 · 新主机在 Host aide → 设置 → Link 生成二维码')
+        .fontSize(11)
+        .fontColor($r('app.color.text_secondary'))
+        .width('100%')
+        .textAlign(TextAlign.Center)
+        .border({ width: { top: 1 }, color: $r('app.color.line') })
+        .padding({ top: 12 })
+        .margin({ top: 10 })
+    }
+    .width('100%')
+    .height('62%')
+    .backgroundColor($r('app.color.card_bg'))
+    .borderRadius({ topLeft: 24, topRight: 24 })
+    .padding({ left: 16, right: 16, top: 8, bottom: 20 })
+    .alignItems(HorizontalAlign.Start)
+    .onClick(() => {
+      // 面板内点击不落穿遮罩
+    })
+    .transition(TransitionEffect.translate({ y: 40 }).animation({ duration: 240, curve: Curve.EaseOut }))
+  }
+
   // ── 根：遮罩 + 左滑面板 + 两个弹层 ──
 
   build() {
@@ -1408,6 +1656,21 @@ export struct ChatDrawer {
           .backgroundColor(MASK_COLOR)
           .onClick(() => {
             this.dr.wsSheet = false;
+          })
+          .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
+        }
+
+        // 切换主机弹层
+        if (this.dr.hsSheet) {
+          Column() {
+            this.hostSheetBody()
+          }
+          .width('100%')
+          .height('100%')
+          .justifyContent(FlexAlign.End)
+          .backgroundColor(MASK_COLOR)
+          .onClick(() => {
+            this.dr.hsSheet = false;
           })
           .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
         }

@@ -59,6 +59,20 @@ export class SessionsModel {
   @Trace lastError: string = '';
 
   private listening: boolean = false;
+  /** 主机世代（resetForHost 自增）：在途 refresh 的迟到响应按世代丢弃。 */
+  private hostEpoch: number = 0;
+
+  /** 换主机整体复位（HostSync 编排）：清全量内存面，等 refresh 重建。 */
+  resetForHost(): void {
+    this.hostEpoch++;
+    this.sessions = [];
+    this.liveIds = [];
+    this.waitConfirmIds = [];
+    this.startedIds = [];
+    this.wsKey = '';
+    this.loaded = false;
+    this.lastError = '';
+  }
 
   /** 页面挂载时调用：幂等挂 chat-event + 重连监听（监听挂在传输实例上，只挂一次）。 */
   ensureListener(): void {
@@ -85,12 +99,16 @@ export class SessionsModel {
       return;
     }
     this.refreshing = true;
+    const epoch: number = this.hostEpoch;
     try {
-      this.sessions = this.wsKey === ''
+      const list: Session[] = this.wsKey === ''
         ? await api.listSessions()
         : await api.listSessionsForWorkspace(this.wsKey);
-      this.loaded = true;
-      this.lastError = '';
+      if (epoch === this.hostEpoch) {
+        this.sessions = list;
+        this.loaded = true;
+        this.lastError = '';
+      }
     } catch (e) {
       // 拉取失败不静默：显示错误条，下拉可重试
       if (connModel.state === 'authed') {

@@ -444,6 +444,23 @@ export struct ChatPage {
     .backgroundColor($r('app.color.status_warn_weak'))
   }
 
+  /** 切换主机横幅（accent 底 + 目标主机点名；优先于离线横幅——Index 在
+   *  switching 期间保持本页挂载，时间线压暗让位）。 */
+  @Builder
+  switchingBanner() {
+    Row({ space: 8 }) {
+      LoadingProgress().width(11).height(11).color($r('app.color.accent'))
+      Text(`正在连接 ${this.conn.switchingTo}…`)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.accent'))
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ top: 7, bottom: 7 })
+    .backgroundColor($r('app.color.accent_weak'))
+  }
+
   /** toast 宿主（原型 ch-toast：顶栏下方居中，2 秒自动隐藏）。 */
   @Builder
   toastView() {
@@ -2010,23 +2027,31 @@ export struct ChatPage {
       Column() {
         this.topBar()
 
-        if (this.conn.state !== 'authed') {
+        if (this.conn.switching) {
+          this.switchingBanner()
+        } else if (this.conn.state !== 'authed') {
           this.offlineBanner()
         }
 
-        if (this.store.sid === '') {
-          // 新会话空态：首条消息即 spawn（发往所选工作区），时间线让位
-          this.emptyState()
-        } else {
-          // if 分支切换 = 销毁重建 List（见 rebuildAtTail）：重建首帧按
-          // initialIndex 锚在最后一条，零滚动零动画；流式跟尾照旧走 scrollEdge
-          //（仅跟尾位有效时跟随，跟随时尾部恒已构建，精确贴底）
-          if (this.listEpoch % 2 === 0) {
-            this.chatList()
+        // 时间线/空态（切换主机期间压暗让位：横幅是唯一的视觉焦点）
+        Column() {
+          if (this.store.sid === '') {
+            // 新会话空态：首条消息即 spawn（发往所选工作区），时间线让位
+            this.emptyState()
           } else {
-            this.chatList()
+            // if 分支切换 = 销毁重建 List（见 rebuildAtTail）：重建首帧按
+            // initialIndex 锚在最后一条，零滚动零动画；流式跟尾照旧走 scrollEdge
+            //（仅跟尾位有效时跟随，跟随时尾部恒已构建，精确贴底）
+            if (this.listEpoch % 2 === 0) {
+              this.chatList()
+            } else {
+              this.chatList()
+            }
           }
         }
+        .width('100%')
+        .layoutWeight(1)
+        .opacity(this.conn.switching ? 0.45 : 1)
 
         if (this.store.bgTasks.length > 0) {
           BgTaskDock({ store: this.store })

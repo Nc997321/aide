@@ -1,0 +1,1122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 远程 · 多主机连接与切换原型（应用本体）</title>
+<style>
+  /* ===== token：镜像 entry/src/main/resources/base/element/color.json（浅色） ===== */
+  :root {
+    --page-bg: #F1F3F5;
+    --card: #FFFFFF;
+    --input-bg: #F5F6FA;
+    --text: #1D2129;
+    --text-2: #86909C;
+    --accent: #0A59F7;
+    --accent-weak: rgba(10,89,247,.08);
+    --ok: #00B42A;
+    --warn: #FF7D00;
+    --warn-weak: rgba(255,125,0,.1);
+    --danger: #F53F3F;
+    --danger-weak: rgba(245,63,63,.1);
+    --line: #E5E6EB;
+    --disabled: #C9CDD4;
+    --radius: 12px;
+    --shadow: 0 2px 10px rgba(29,33,41,.05);
+    --mono: Consolas, "Cascadia Code", monospace;
+    --ease: .18s cubic-bezier(.2,.8,.2,1);
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--page-bg); color: var(--text); overflow: hidden;
+    font: 14px/1.6 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  button { font-family: inherit; cursor: pointer; }
+  .page { display: none; height: 100vh; max-width: 420px; margin: 0 auto; flex-direction: column; position: relative; }
+  .page.show { display: flex; }
+
+  /* ===== 状态栏 ===== */
+  .statusbar {
+    height: 38px; flex: none; display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px; font-size: 12.5px; font-weight: 600;
+  }
+  .sb-icons { display: flex; align-items: center; gap: 6px; }
+
+  /* ===== 通用小组件 ===== */
+  .spinner {
+    width: 14px; height: 14px; flex: none; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: rot .7s linear infinite;
+  }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; background: var(--ok); }
+  .dot.warn { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.off { background: var(--warn); animation: pulse 1.4s ease-in-out infinite; }
+  .dot.info { background: var(--accent); }
+  @keyframes pulse { 50% { opacity: .4; } }
+  .logo {
+    width: 56px; height: 56px; border-radius: 16px; flex: none;
+    background: linear-gradient(135deg, #4C8DFF, #0A59F7); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 30px; font-weight: 800; box-shadow: 0 6px 18px rgba(10,89,247,.28);
+  }
+  .pv-fb { font-weight: 700; }
+
+  /* ============================================================
+     屏 1 · 主机管理（ConnectPage 升级：主机列表 + 添加 + 状态区）
+     ============================================================ */
+  .hosts { flex: 1; overflow-y: auto; padding: 20px 24px 28px; display: flex; flex-direction: column; }
+  .hosts::-webkit-scrollbar { width: 0; }
+  .hosts .logo { margin: 22px auto 14px; }
+  .hosts h2 { text-align: center; font-size: 21px; }
+  .hosts .sub { text-align: center; font-size: 12.5px; color: var(--text-2); margin: 6px 0 24px; }
+
+  .hs-sec { display: flex; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+  .hs-sec b { font-size: 12px; color: var(--text-2); letter-spacing: 1px; flex: 1; }
+  .hs-sec small { font-size: 11px; color: var(--text-2); }
+
+  .hs-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+  .hs-card {
+    width: 100%; display: flex; align-items: center; gap: 12px; padding: 12px 13px;
+    border-radius: 14px; border: 1px solid var(--line); background: var(--card);
+    box-shadow: var(--shadow); text-align: left; color: var(--text); transition: all var(--ease);
+    cursor: pointer;
+  }
+  .hs-card:active { transform: scale(.99); }
+  .hs-card.on { border-color: var(--accent); }
+  .hs-avatar {
+    width: 44px; height: 44px; flex: none; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 800;
+  }
+  .hs-avatar.sm { width: 38px; height: 38px; border-radius: 11px; font-size: 17px; }
+  .hs-txt { flex: 1; min-width: 0; }
+  .hs-name { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 700; }
+  .hs-tag { padding: 2px 8px; border-radius: 99px; background: var(--accent-weak); color: var(--accent); font-size: 10px; font-weight: 700; flex: none; }
+  .hs-did { font-family: var(--mono); font-size: 10.5px; color: var(--text-2); margin-top: 1px; }
+  .hs-status { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--text-2); margin-top: 4px; }
+  .hs-status .dot { width: 6px; height: 6px; }
+  .hs-status.on { color: var(--ok); font-weight: 600; }
+  .hs-status.danger { color: var(--danger); font-weight: 600; }
+  .hs-status .spinner { width: 11px; height: 11px; border-width: 1.5px; border-color: var(--line); border-top-color: var(--accent); }
+  .hs-side { flex: none; align-self: center; display: flex; align-items: center; gap: 12px; }
+  .hs-conn { display: inline-flex; align-items: center; gap: 3px; font-size: 12px; font-weight: 600; color: var(--accent); }
+  .hs-del {
+    flex: none; width: 22px; height: 22px; display: flex;
+    align-items: center; justify-content: center; border-radius: 7px;
+    border: none; background: none; color: var(--disabled);
+    transition: all var(--ease); opacity: .8;
+  }
+  .hs-card:hover .hs-del { color: var(--danger); opacity: 1; }
+  .hs-rescan { padding: 5px 12px; border-radius: 99px; border: 1px solid var(--danger); background: none; color: var(--danger); font-size: 11.5px; font-weight: 600; }
+  .dr-none { text-align: center; font-size: 12px; color: var(--text-2); padding: 22px 0; }
+
+  .btn-primary {
+    width: 100%; height: 48px; flex: none; border: none; border-radius: 24px;
+    background: var(--accent); color: #fff; font-size: 16px; font-weight: 600;
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    transition: all var(--ease);
+  }
+  .btn-primary:active { transform: scale(.98); }
+  .btn-primary:disabled { background: var(--disabled); cursor: default; }
+  .hs-paste { display: flex; gap: 8px; margin: 12px 0 4px; }
+  .hs-paste input {
+    flex: 1; min-width: 0; padding: 11px 13px; font-size: 13px; color: var(--text);
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    outline: none; font-family: inherit; transition: all var(--ease);
+  }
+  .hs-paste input::placeholder { color: var(--disabled); }
+  .hs-paste input:focus { border-color: var(--accent); box-shadow: 0 0 0 2.5px var(--accent-weak); }
+  .hs-paste button { flex: none; padding: 0 18px; border-radius: 12px; border: none; background: var(--accent-weak); color: var(--accent); font-size: 13px; font-weight: 700; }
+
+  .conn-status { min-height: 92px; margin-top: 16px; }
+  .st {
+    display: none; align-items: flex-start; gap: 10px; padding: 12px 14px;
+    border-radius: var(--radius); background: var(--card); border: 1px solid var(--line);
+    font-size: 12.5px; line-height: 1.55; box-shadow: var(--shadow);
+  }
+  .st.show { display: flex; animation: rise .25s cubic-bezier(.2,.8,.2,1); }
+  @keyframes rise { from { opacity: 0; transform: translateY(6px); } }
+  .st .st-ic { flex: none; display: flex; margin-top: 1px; color: var(--accent); }
+  .st b { display: block; font-size: 13px; }
+  .st small { color: var(--text-2); font-size: 11.5px; }
+  .st.ok .st-ic, .st.ok b { color: var(--ok); }
+  .st.danger .st-ic, .st.danger b { color: var(--danger); }
+  .conn-foot {
+    margin-top: auto; padding-top: 18px; text-align: center;
+    font-size: 11.5px; color: var(--text-2);
+  }
+
+  /* ===== 忘记主机确认（AlertDialog 样式） ===== */
+  .dlg-mask {
+    position: absolute; inset: 0; z-index: 9; background: rgba(29,33,41,.45);
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; visibility: hidden; transition: opacity .2s ease, visibility .2s;
+  }
+  .dlg-mask.show { opacity: 1; visibility: visible; }
+  .dlg {
+    width: 79%; max-width: 300px; padding: 22px 20px 14px; border-radius: 20px;
+    background: var(--card); box-shadow: 0 20px 60px rgba(0,0,0,.22);
+    transform: scale(.94); transition: transform .2s cubic-bezier(.2,.8,.2,1);
+  }
+  .dlg-mask.show .dlg { transform: none; }
+  .dlg b { display: block; font-size: 16.5px; text-align: center; }
+  .dlg p { margin: 9px 4px 16px; font-size: 12.5px; line-height: 1.7; color: var(--text-2); text-align: center; }
+  .dlg-btns { display: flex; gap: 9px; }
+  .dlg-btn { flex: 1; height: 38px; border-radius: 19px; border: 1px solid var(--line); background: var(--input-bg); color: var(--text); font-size: 13.5px; font-weight: 600; }
+  .dlg-btn.danger { background: var(--danger-weak); border-color: transparent; color: var(--danger); }
+  .dlg-btn:active { filter: brightness(.96); }
+
+  /* ============================================================
+     屏 2 · 聊天主屏（切换入口在抽屉；消息区为按主机隔离的静态演示）
+     ============================================================ */
+  .ch-top {
+    flex: none; display: flex; align-items: center; gap: 4px;
+    padding: 8px 10px 10px; background: var(--card); border-bottom: 1px solid var(--line);
+    position: relative; z-index: 4;
+  }
+  .icon-btn {
+    width: 34px; height: 34px; flex: none; display: flex; align-items: center; justify-content: center;
+    border-radius: 10px; border: none; background: none; color: var(--text-2);
+    transition: background var(--ease);
+  }
+  .icon-btn:active { background: var(--input-bg); }
+  .ch-title { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+  .ch-name { font-size: 16px; font-weight: 600; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .ch-sub {
+    display: inline-flex; align-items: center; gap: 5px; margin-top: 3px;
+    font-size: 10.5px; font-weight: 500; color: var(--text-2);
+  }
+  .ch-sub .dot { width: 6px; height: 6px; }
+  .icon-btn.ch-stop { color: var(--disabled); }
+
+  .ch-offbar {
+    display: none; flex: none; align-items: center; justify-content: center; gap: 8px;
+    padding: 7px; font-size: 12px; font-weight: 600; color: var(--warn);
+    background: var(--warn-weak); border-bottom: 1px solid rgba(255,125,0,.25);
+    position: relative; z-index: 3;
+  }
+  .ch-offbar.show { display: flex; animation: rise .25s; }
+  .ch-offbar .spinner { width: 11px; height: 11px; border-width: 1.5px; border-color: rgba(255,125,0,.3); border-top-color: var(--warn); }
+  /* 切换中横幅（accent 色：主动行为，区别于离线的 warn） */
+  .ch-swbar {
+    display: none; flex: none; align-items: center; justify-content: center; gap: 8px;
+    padding: 7px; font-size: 12px; font-weight: 600; color: var(--accent);
+    background: var(--accent-weak); border-bottom: 1px solid rgba(10,89,247,.18);
+    position: relative; z-index: 3;
+  }
+  .ch-swbar.show { display: flex; animation: rise .25s; }
+  .ch-swbar .spinner { width: 11px; height: 11px; border-width: 1.5px; border-color: rgba(10,89,247,.25); border-top-color: var(--accent); }
+
+  .ch-toast {
+    position: absolute; top: 96px; left: 50%; transform: translateX(-50%) translateY(-8px);
+    display: flex; align-items: center; gap: 7px; padding: 8px 15px; border-radius: 99px; z-index: 8;
+    font-size: 12px; font-weight: 600; color: #fff; background: rgba(29,33,41,.9);
+    box-shadow: 0 8px 24px rgba(0,0,0,.18); opacity: 0; pointer-events: none;
+    transition: all .3s cubic-bezier(.2,.8,.2,1); white-space: nowrap; max-width: 88%; overflow: hidden;
+  }
+  .ch-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .ch-toast .dot { width: 6px; height: 6px; }
+
+  .ch-msgs { flex: 1; overflow-y: auto; padding: 14px 14px 12px; transition: opacity .3s; }
+  .ch-msgs::-webkit-scrollbar { width: 0; }
+  .ch-msgs.dim { opacity: .45; pointer-events: none; }
+  .m-time { text-align: center; font-size: 11px; color: var(--text-2); margin: 2px 0 12px; }
+  .m-sys {
+    display: flex; align-items: center; gap: 10px; text-align: center;
+    font-size: 11px; color: var(--accent); margin: 10px 0;
+  }
+  .m-sys::before, .m-sys::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .m-row { display: flex; margin-bottom: 14px; }
+  .m-row.user { justify-content: flex-end; }
+  .m-bubble-user {
+    max-width: 82%; padding: 10px 13px; font-size: 14.5px; line-height: 1.55;
+    color: #fff; background: var(--accent); border-radius: 16px 16px 4px 16px;
+    white-space: pre-wrap; word-break: break-word;
+  }
+  .m-assistant { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+  .m-text { font-size: 15px; line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+
+  /* 输入区：textarea 整行在上；底部工具行 chip 居左、发送居右 */
+  .ch-input {
+    flex: none; display: flex; flex-direction: column; gap: 8px;
+    padding: 8px 12px 14px; background: var(--card); border-top: 1px solid var(--line);
+    position: relative; z-index: 4;
+  }
+  .ch-ta-wrap {
+    display: flex; background: var(--input-bg); border-radius: 20px;
+    border: 1px solid transparent; transition: all var(--ease);
+  }
+  .ch-ta-wrap:focus-within { border-color: var(--accent); background: var(--card); box-shadow: 0 0 0 2.5px var(--accent-weak); }
+  .ch-input textarea {
+    flex: 1; resize: none; border: none; outline: none; background: none;
+    padding: 10px 14px; font: 14px/1.5 inherit; color: var(--text); max-height: 104px;
+  }
+  .ch-input textarea::placeholder { color: var(--text-2); }
+  .ch-input textarea:disabled { opacity: .5; }
+  .ch-bar { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .md-chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 11px; border-radius: 99px;
+    border: 1px solid var(--line); background: var(--input-bg);
+    font-size: 11px; font-weight: 600; color: var(--text-2);
+  }
+  .ch-send {
+    width: 34px; height: 34px; flex: none; border-radius: 50%; border: none;
+    background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 8px rgba(10,89,247,.25); transition: all var(--ease);
+  }
+  .ch-send:active:not(:disabled) { transform: scale(.9); }
+  .ch-send:disabled { background: var(--disabled); box-shadow: none; }
+
+  /* ============================================================
+     抽屉（设备卡 + 切换主机 / 断开 + 工作区 + 历史会话）
+     ============================================================ */
+  .dr-mask {
+    position: absolute; inset: 0; z-index: 6; background: rgba(29,33,41,.4);
+    opacity: 0; visibility: hidden; transition: opacity .24s ease, visibility .24s;
+  }
+  .dr-mask.show { opacity: 1; visibility: visible; }
+  .dr-panel {
+    position: absolute; top: 0; bottom: 0; left: 0; width: 85%; max-width: 310px;
+    display: flex; flex-direction: column; background: var(--page-bg);
+    border-right: 1px solid var(--line); box-shadow: 8px 0 32px rgba(0,0,0,.1);
+    transform: translateX(-103%); transition: transform .26s cubic-bezier(.2,.8,.2,1);
+  }
+  .dr-mask.show .dr-panel { transform: none; }
+
+  .dr-head { flex: none; padding: 14px 14px 12px; }
+  .dr-id { display: flex; align-items: center; gap: 10px; }
+  .dr-id-name { flex: 1; min-width: 0; }
+  .dr-id-name b { display: block; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dr-id-name small { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-2); margin-top: 2px; }
+  .dr-id-name .dot { width: 6px; height: 6px; }
+  .dr-switch {
+    margin-left: auto; flex: none; align-self: center;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 6px 11px; border-radius: 99px; border: 1px solid var(--line);
+    background: var(--card); color: var(--text);
+    font-size: 12px; font-weight: 600; transition: all var(--ease);
+  }
+  .dr-switch:active { transform: scale(.97); }
+  .dr-switch > svg:first-child { color: var(--accent); flex: none; }
+  .dr-disconnect {
+    display: block; margin-top: 3px; padding: 0; border: none; background: none;
+    color: var(--danger); font-size: 11px; font-weight: 600; opacity: .8;
+  }
+  .dr-disconnect:active { opacity: 1; }
+
+  .dr-sec { flex: none; display: flex; align-items: center; gap: 8px; padding: 8px 15px 6px; }
+  .dr-sec b { flex: 1; font-size: 12px; color: var(--text-2); letter-spacing: 1px; }
+  .dr-sec .icon-btn { width: 28px; height: 28px; }
+
+  /* 工作区卡（沿远程原型版式） */
+  .dr-ws { flex: none; padding: 0 12px 8px; }
+  .ws-card {
+    width: 100%; display: flex; align-items: center; gap: 11px; padding: 11px 12px;
+    border-radius: 14px; border: 1px solid var(--line); background: var(--card);
+    box-shadow: var(--shadow); text-align: left; color: var(--text); transition: all var(--ease);
+  }
+  .ws-card:active { transform: scale(.99); }
+  .ws-avatar {
+    width: 42px; height: 42px; flex: none; border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 19px; font-weight: 700;
+  }
+  .ws-card-txt { flex: 1; min-width: 0; }
+  .ws-card-name { display: block; font-size: 15px; font-weight: 700; }
+  .ws-card-path {
+    display: block; font-family: var(--mono); font-size: 10.5px; color: var(--text-2);
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px;
+  }
+  .ws-card-meta { display: flex; flex-wrap: wrap; row-gap: 2px; align-items: center; gap: 7px; font-size: 10.5px; color: var(--text-2); margin-top: 4px; }
+  .ws-switch { flex: none; display: flex; align-items: center; font-size: 12px; font-weight: 600; color: var(--accent); }
+  .live { display: inline-flex; align-items: center; gap: 4px; color: var(--ok); font-weight: 600; }
+  .live .dot { width: 5px; height: 5px; background: var(--ok); animation: pulse 1.1s ease-in-out infinite; }
+  .meta-wait { display: inline-flex; align-items: center; gap: 3px; color: var(--warn); font-weight: 600; }
+  .meta-wait svg { flex: none; }
+
+  /* 抽屉会话列表 */
+  .dr-list { flex: 1; overflow-y: auto; padding: 2px 12px 10px; }
+  .dr-list::-webkit-scrollbar { width: 0; }
+  .sv-item {
+    display: block; width: 100%; text-align: left; padding: 11px 12px; margin-bottom: 8px;
+    border-radius: 14px; border: 1px solid var(--line); background: var(--card);
+    box-shadow: var(--shadow); color: var(--text); transition: all var(--ease);
+  }
+  .sv-item:active { transform: scale(.99); }
+  .sv-item.on { border-color: var(--accent); background: var(--accent-weak); }
+  .sv-row1 { display: flex; align-items: center; gap: 8px; }
+  .sv-name { flex: 1; font-size: 14px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-time { flex: none; font-size: 11px; color: var(--text-2); }
+  .sv-row2 { display: flex; align-items: center; gap: 7px; margin-top: 3px; }
+  .sv-prev { flex: 1; font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sv-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; }
+  .sv-dot.wait { background: var(--warn); animation: pulse 1.1s ease-in-out infinite; }
+  .sv-dot.live { background: var(--ok); animation: pulse 1.1s ease-in-out infinite; }
+
+  .dr-search { flex: none; padding: 10px 12px 14px; }
+  .dr-search-box {
+    display: flex; align-items: center; gap: 8px; padding: 9px 14px; border-radius: 99px;
+    background: var(--card); border: 1px solid var(--line); color: var(--text-2);
+    transition: all var(--ease);
+  }
+  .dr-search-box:focus-within { border-color: var(--accent); box-shadow: 0 0 0 2.5px var(--accent-weak); }
+  .dr-search-box input {
+    flex: 1; min-width: 0; border: none; outline: none; background: none;
+    color: var(--text); font: 13px/1.4 inherit;
+  }
+  .dr-search-box input::placeholder { color: var(--text-2); }
+
+  /* ============================================================
+     切换主机半模态
+     ============================================================ */
+  .sheet-mask {
+    position: absolute; inset: 0; z-index: 7; background: rgba(29,33,41,.4);
+    display: flex; align-items: flex-end;
+    opacity: 0; visibility: hidden; transition: opacity .22s ease, visibility .22s;
+  }
+  .sheet-mask.show { opacity: 1; visibility: visible; }
+  .sheet {
+    width: 100%; max-height: 78%; overflow-y: auto;
+    padding: 8px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+    background: var(--card); border-radius: 24px 24px 0 0;
+    box-shadow: 0 -12px 40px rgba(0,0,0,.14);
+    transform: translateY(30px); transition: transform .24s cubic-bezier(.2,.8,.2,1);
+  }
+  .sheet-mask.show .sheet { transform: none; }
+  .sheet::-webkit-scrollbar { width: 0; }
+  .sheet-grip { width: 36px; height: 4.5px; border-radius: 3px; background: var(--line); margin: 4px auto 10px; }
+  .sheet-head { display: flex; align-items: baseline; gap: 8px; padding: 0 4px 10px; }
+  .sheet-head b { font-size: 16px; }
+  .sheet-head small { font-size: 11px; color: var(--text-2); }
+  .sheet-foot {
+    margin-top: 10px; padding-top: 12px; border-top: 1px solid var(--line);
+    text-align: center; font-size: 11px; color: var(--text-2);
+  }
+
+  .sw-opts { display: flex; flex-direction: column; gap: 8px; }
+  .sw-opt {
+    width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 12px;
+    border-radius: 14px; border: 1.5px solid transparent; background: var(--input-bg);
+    text-align: left; color: var(--text); transition: all var(--ease);
+  }
+  .sw-opt:active { transform: scale(.99); }
+  .sw-opt.on { border-color: var(--accent); background: var(--accent-weak); }
+  .sw-av {
+    width: 40px; height: 40px; flex: none; border-radius: 11px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; font-weight: 800;
+  }
+  .sw-txt { flex: 1; min-width: 0; }
+  .sw-name { font-size: 14.5px; font-weight: 700; }
+  .sw-sub { display: flex; align-items: center; gap: 5px; font-size: 11px; color: var(--text-2); margin-top: 2px; }
+  .sw-sub .dot { width: 5px; height: 5px; }
+  .sw-sub.danger { color: var(--danger); font-weight: 600; }
+  .sw-check { flex: none; color: var(--accent); opacity: 0; transition: opacity var(--ease); }
+  .sw-opt.on .sw-check { opacity: 1; }
+  .sw-add {
+    width: 100%; display: flex; align-items: center; justify-content: center; gap: 7px;
+    margin-top: 10px; padding: 11px; border-radius: 14px;
+    border: 1.5px dashed var(--line); background: none; color: var(--accent);
+    font-size: 13.5px; font-weight: 600;
+  }
+  .sw-add:active { background: var(--accent-weak); }
+</style>
+</head>
+<body>
+
+<!-- ================= 屏 1 · 主机管理 ================= -->
+<div class="page" id="page-hosts">
+  <div class="statusbar">
+    <span>21:47</span>
+    <span class="sb-icons">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+      <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+      <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+    </span>
+  </div>
+
+  <div class="hosts">
+    <div class="logo">a</div>
+    <h2>aide 远程</h2>
+    <p class="sub">连接你的主机 · 多台机器随时切换</p>
+
+    <div class="hs-sec"><b>我的主机</b><small id="hsCount"></small></div>
+    <div class="hs-list" id="hsList"></div>
+
+    <button class="btn-primary" id="scanBtn">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>
+      <span>扫二维码添加主机</span>
+    </button>
+    <div class="hs-paste">
+      <input id="pasteInput" type="text" placeholder="或粘贴配对码 aide-link://pair?…" spellcheck="false">
+      <button id="pasteBtn">添加</button>
+    </div>
+
+    <div class="conn-status">
+      <div class="st" data-st="pairing">
+        <span class="st-ic"><span class="spinner"></span></span>
+        <span><b>配对中，等待 Host 确认…</b><small>二维码 10 分钟内有效，Host 点确认即完成</small></span>
+      </div>
+      <div class="st ok" data-st="added">
+        <span class="st-ic"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+        <span><b>已配对，正在连接…</b><small id="addedName">LAB-SERVER</small></span>
+      </div>
+      <div class="st danger" data-st="badcode">
+        <span class="st-ic"><svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.6"/><path d="M5.5 5.5l5 5M10.5 5.5l-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></span>
+        <span><b>配对码无效或已过期</b><small>请在 Host 的 设置 → Link 配对 里重新生成二维码</small></span>
+      </div>
+    </div>
+
+    <div class="conn-foot">自动连接上次使用的主机 · 各主机凭据分别保存</div>
+  </div>
+
+  <!-- 忘记主机确认（AlertDialog 样式） -->
+  <div class="dlg-mask" id="forgetDlg">
+    <div class="dlg">
+      <b id="dlgTitle">忘记这台主机？</b>
+      <p id="dlgBody">将删除它的配对凭据与续传位置，下次使用需重新扫码配对。</p>
+      <div class="dlg-btns">
+        <button class="dlg-btn" id="dlgCancel">取消</button>
+        <button class="dlg-btn danger" id="dlgOk">忘记</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ================= 屏 2 · 聊天主屏（切换入口在抽屉） ================= -->
+<div class="page" id="page-chat">
+  <div class="statusbar">
+    <span>21:47</span>
+    <span class="sb-icons">
+      <svg width="15" height="11" viewBox="0 0 15 11" fill="currentColor"><rect x="0" y="7" width="3" height="4" rx="1"/><rect x="4" y="5" width="3" height="6" rx="1"/><rect x="8" y="2.5" width="3" height="8.5" rx="1"/><rect x="12" y="0" width="3" height="11" rx="1" opacity=".35"/></svg>
+      <svg width="14" height="11" viewBox="0 0 16 12" fill="currentColor"><path d="M8 9.6a1.6 1.6 0 1 0 .01 3.2A1.6 1.6 0 0 0 8 9.6zM8 5.6c-1.7 0-3.2.66-4.3 1.75l1.4 1.42A4.1 4.1 0 0 1 8 7.6c1.13 0 2.15.45 2.9 1.17l1.4-1.42A5.9 5.9 0 0 0 8 5.6zM8 1.4C5.1 1.4 2.4 2.5.35 4.4l1.42 1.42A8.9 8.9 0 0 1 8 3.4c2.44 0 4.65.95 6.23 2.42L15.65 4.4A10.9 10.9 0 0 0 8 1.4z" transform="translate(0,-1)"/></svg>
+      <svg width="22" height="11" viewBox="0 0 25 12" fill="none"><rect x=".5" y=".5" width="21" height="11" rx="3.5" stroke="currentColor" opacity=".4"/><rect x="2" y="2" width="15" height="8" rx="2" fill="currentColor"/><path d="M23.5 4v4a2 2 0 0 0 0-4z" fill="currentColor" opacity=".4"/></svg>
+    </span>
+  </div>
+
+  <div class="ch-top">
+    <button class="icon-btn ch-menu" title="打开抽屉">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><path d="M3 5.5h14M3 10h14M3 14.5h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </button>
+    <div class="ch-title">
+      <div class="ch-name" id="chName"></div>
+      <div class="ch-sub"><span class="dot" id="chSubDot"></span><span id="chSubTxt"></span></div>
+    </div>
+    <button class="icon-btn ch-stop" title="停止会话">
+      <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8.2" stroke="currentColor" stroke-width="1.6"/><rect x="6.7" y="6.7" width="6.6" height="6.6" rx="1.6" fill="currentColor"/></svg>
+    </button>
+  </div>
+
+  <div class="ch-offbar" id="chOffbar"><span class="spinner"></span>设备离线，自动重连中…</div>
+  <div class="ch-swbar" id="chSwbar"><span class="spinner"></span><span id="chSwTxt">正在连接…</span></div>
+  <div class="ch-toast" id="chToast"><span class="dot"></span><span class="txt"></span></div>
+
+  <div class="ch-msgs" id="chMsgs"></div>
+
+  <div class="ch-input">
+    <div class="ch-ta-wrap">
+      <textarea id="chTa" rows="1" placeholder="发消息给桌面 aide…"></textarea>
+    </div>
+    <div class="ch-bar">
+      <span class="md-chip" id="mdChip"><span class="md-ic" id="mdIc"></span><span id="mdLabel"></span></span>
+      <button class="ch-send" id="chSend" title="发送">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <!-- 抽屉 -->
+  <div class="dr-mask" id="drMask">
+    <aside class="dr-panel">
+      <div class="dr-head">
+        <div class="dr-id">
+          <div class="hs-avatar sm" id="drAv">H</div>
+          <div class="dr-id-name">
+            <b id="drName"></b>
+            <small id="drStatus"></small>
+            <button class="dr-disconnect" id="drDisc">断开连接</button>
+          </div>
+          <button class="dr-switch" id="drSwitch" title="切换主机">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3 4 7l4 4"/><path d="M4 7h16"/><path d="m16 21 4-4-4-4"/><path d="M20 17H4"/></svg>
+            <span>切换主机</span>
+          </button>
+        </div>
+      </div>
+      <div class="dr-sec"><b>工作区</b></div>
+      <div class="dr-ws"><button class="ws-card" id="wsCard"></button></div>
+      <div class="dr-sec">
+        <b>历史会话</b>
+        <button class="icon-btn dr-new" title="新会话">
+          <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="dr-list" id="drList"></div>
+      <div class="dr-search">
+        <div class="dr-search-box">
+          <svg width="13" height="13" viewBox="0 0 16 16" fill="none"><circle cx="7" cy="7" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M10.5 10.5L14 14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <input id="drSearch" type="text" placeholder="搜索会话">
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- 切换主机弹层 -->
+  <div class="sheet-mask sw-mask" id="swMask">
+    <div class="sheet">
+      <div class="sheet-grip"></div>
+      <div class="sheet-head"><b>切换主机</b><small>同时只保持一台连接</small></div>
+      <div class="sw-opts" id="swOpts"></div>
+      <button class="sw-add" id="swAdd">
+        <svg width="15" height="15" viewBox="0 0 20 20" fill="none"><path d="M10 4.5v11M4.5 10h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>添加新主机</span>
+      </button>
+      <div class="sheet-foot">切换会断开当前连接 · 各主机凭据与续传位置独立保存</div>
+    </div>
+  </div>
+</div>
+<script>
+"use strict";
+/* ============ URL 参数：展台 iframe 用它决定初始形态 ============
+   ?screen=hosts            屏 1（主机管理）
+   ?screen=chat             屏 2（聊天主屏，默认 HEAVEN-PC 已连接）
+   &drawer=1                初始展开抽屉
+   &sheet=1                 初始展开切换弹层
+   &id=s2                   实例标识（跨屏同步时辨别来源）        */
+const params = new URLSearchParams(location.search);
+const MY_ID = params.get('id') || 'solo';
+const SCREEN = params.get('screen') || 'chat';
+const DRAWER0 = params.get('drawer') === '1';
+const SHEET0 = params.get('sheet') === '1';
+
+const $ = s => document.querySelector(s);
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const esc = s => { const d = document.createElement("div"); d.textContent = s; return d.innerHTML; };
+
+const pageHosts = $('#page-hosts');
+const pageChat = $('#page-chat');
+
+/* ================= 图标 ================= */
+const ICONS = {
+  trash: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>',
+  chevR: '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  check: '<svg width="18" height="18" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="7" stroke="currentColor" stroke-width="1.5"/><path d="M5 8.2l2 2 4-4.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  alert: '<svg width="11" height="11" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6.7" stroke="currentColor" stroke-width="1.5"/><path d="M8 4.6v4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.5" r=".95" fill="currentColor"/></svg>',
+};
+
+/* 供应商商标（anthropic path 取自桌面 providerLogos.ts；无商标回退字母） */
+const ANT_LOGO = {
+  color: "#D97757",
+  path: "M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z",
+};
+function pvMark(pv, size) {
+  if (pv.logo) return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="${pv.logo.color}"><path d="${pv.logo.path}"/></svg>`;
+  return `<b class="pv-fb">${esc(pv.letter || pv.name.charAt(0))}</b>`;
+}
+
+/* ================= 假数据：主机注册表（每主机一份凭据/会话/工作区/供应商） ================= */
+const HOSTS = [
+  { did: '7f3a9c21', name: 'HEAVEN-PC', plat: 'Windows 工作机', color: '#0A59F7', tint: 'rgba(10,89,247,.1)',
+    state: 'connected', lastSeen: '刚刚',
+    pv: { name: 'Claude 官方', logo: ANT_LOGO, letter: null }, model: 'Sonnet',
+    session: { name: '鸿蒙端 v3 原型', ws: 0,
+      msgs: [
+        { t: 'time', v: '今天 21:32' },
+        { t: 'user', v: '多主机切换的交互你出个原型看看' },
+        { t: 'ai', v: '已按「主机管理中心 + 抽屉切换」出好原型：连接页升级为主机列表，聊天抽屉里加切换入口，切换走半模态。你看下 design/multi-host/。' },
+        { t: 'user', v: '行，切换时记得把语音播报停掉' },
+        { t: 'ai', v: '收到。切换会复用同一传输实例换凭据重连，播报、听书、朗读都会先停再切。' },
+      ] },
+    workspaces: [
+      { name: 'aide', path: 'C:\\Users\\<user>\\IdeaProjects\\aide', color: '#0A59F7', tint: 'rgba(10,89,247,.1)',
+        sessions: [
+          { name: '鸿蒙端 v3 原型', time: '刚刚', prev: '多主机切换原型已出，等你确认交互细节…', live: true },
+          { name: '重构 session 状态机', time: '5 分钟前', prev: '请求运行 pnpm test protocol · 权限等待应答中', waitConfirm: true },
+          { name: 'relay-server 部署到 VPS', time: '昨天 23:12', prev: 'Caddy 反代配置写好了，wss 已通' },
+        ] },
+      { name: 'relay-server', path: 'C:\\Users\\<user>\\IdeaProjects\\aide\\relay-server', color: '#0FA3A3', tint: 'rgba(15,163,163,.12)',
+        sessions: [
+          { name: '中继单槽设备表', time: '12 分钟前', prev: 'devices 改成 HashMap，重注册互顶', live: true },
+          { name: 'wss 证书续期', time: '昨天 15:40', prev: 'Caddy 自动续期已配' },
+        ] },
+    ] },
+  { did: 'c2e80f77', name: 'heaven-mac', plat: 'macOS 小主机', color: '#0FA3A3', tint: 'rgba(15,163,163,.12)',
+    state: 'idle', lastSeen: '昨天 22:41',
+    pv: { name: 'DeepSeek 镜像', logo: null, letter: 'D' }, model: 'deepseek-v4-pro[1m]',
+    session: { name: '博客暗色主题', ws: 0,
+      msgs: [
+        { t: 'time', v: '昨天 22:26' },
+        { t: 'user', v: '暗色主题的代码高亮再调一版' },
+        { t: 'ai', v: '已换成 One Dark 配色，行号弱化，移动端导航折叠也一并改了。' },
+      ] },
+    workspaces: [
+      { name: 'homepage', path: '/Users/<user>/Sites/homepage', color: '#F77234', tint: 'rgba(247,114,52,.12)',
+        sessions: [
+          { name: '博客暗色主题', time: '昨天 22:41', prev: '换成 One Dark 配色，行号弱化', live: true },
+          { name: '相册页懒加载', time: '8/19', prev: '图片改 IntersectionObserver 按需加载' },
+        ] },
+      { name: 'swift-play', path: '/Users/<user>/Projects/swift-play', color: '#7C5CFF', tint: 'rgba(124,92,255,.12)',
+        sessions: [ { name: 'SwiftData 试验', time: '上周五', prev: 'ModelContainer 迁移还在报错' } ] },
+    ] },
+  { did: '91d40a3e', name: '公司工位机', plat: 'Windows 办公', color: '#F77234', tint: 'rgba(247,114,52,.12)',
+    state: 'idle', lastSeen: '上周三 18:02',
+    pv: { name: 'cpa-local', logo: null, letter: 'C' }, model: 'claude-sonnet-4-8',
+    session: { name: '周报整理', ws: 0,
+      msgs: [
+        { t: 'time', v: '上周三 17:55' },
+        { t: 'user', v: '把这周的 git log 整理成周报' },
+        { t: 'ai', v: '本周主要进展：中继设备表重构、wss 证书自动化、鸿蒙原型三屏走通。周报草稿已生成。' },
+      ] },
+    workspaces: [
+      { name: 'weekly', path: 'D:\\work\\weekly', color: '#0A59F7', tint: 'rgba(10,89,247,.1)',
+        sessions: [ { name: '周报整理', time: '上周三 18:02', prev: '周报草稿已生成，见 docs/weekly.md' } ] },
+      { name: 'intranet-tools', path: 'D:\\work\\intranet-tools', color: '#00B42A', tint: 'rgba(0,180,42,.1)',
+        sessions: [ { name: '内网导航页改版', time: '上周二', prev: '卡片栅格换成 4 列，图标重画' } ] },
+    ] },
+];
+let activeHost = HOSTS[0];
+let switching = false;
+let query = '';
+
+/* 扫码添加成功的新主机模板 */
+function makeLab() {
+  return { did: 'a6b2d1e9', name: 'LAB-SERVER', plat: 'Linux 主机', color: '#7C5CFF', tint: 'rgba(124,92,255,.12)',
+    state: 'connected', lastSeen: '刚刚',
+    pv: { name: '系统默认', logo: ANT_LOGO, letter: null }, model: 'Sonnet',
+    session: { name: '新会话', ws: 0,
+      msgs: [
+        { t: 'sys', v: '已连接 LAB-SERVER' },
+        { t: 'ai', v: '你好，我是 LAB-SERVER 上的桌面 aide，有什么可以帮你？' },
+      ] },
+    workspaces: [
+      { name: 'lab-tools', path: '/home/<user>/lab-tools', color: '#7C5CFF', tint: 'rgba(124,92,255,.12)',
+        sessions: [ { name: '新会话', time: '刚刚', prev: '连接成功', live: true } ] },
+    ] };
+}
+
+/* ================= 屏 1 · 主机管理 ================= */
+const hsList = $('#hsList'), hsCount = $('#hsCount');
+
+function hostAvatar(h, cls) {
+  return `<div class="hs-avatar ${cls || ''}" style="background:${h.tint};color:${h.color}">${esc(h.name.charAt(0))}</div>`;
+}
+
+function hostStatusHtml(h) {
+  if (h.state === 'connecting') return '<span class="hs-status"><span class="spinner"></span>正在连接…</span>';
+  if (h.state === 'revoked') return `<span class="hs-status danger">${ICONS.alert} 配对已被吊销</span>`;
+  if (h.state === 'connected') return '<span class="hs-status on"><span class="dot ok"></span>已连接 · 正在使用</span>';
+  return `<span class="hs-status">上次连接 ${esc(h.lastSeen)}</span>`;
+}
+
+function renderHosts() {
+  hsCount.textContent = `${HOSTS.length} 台`;
+  if (HOSTS.length === 0) {
+    hsList.innerHTML = '<div class="dr-none">还没有配对的主机 · 扫码添加</div>';
+    return;
+  }
+  hsList.innerHTML = HOSTS.map(h => {
+    const on = h.state === 'connected';
+    const side = [];
+    if (h.state === 'idle') side.push(`<span class="hs-conn">连接 ${ICONS.chevR}</span>`);
+    if (h.state === 'revoked') side.push('<button class="hs-rescan" data-act="rescan">重新扫码</button>');
+    side.push(`<button class="hs-del" data-act="del" title="忘记主机">${ICONS.trash}</button>`);
+    return `<div class="hs-card ${on ? 'on' : ''}" data-did="${h.did}" role="button">
+      ${hostAvatar(h)}
+      <span class="hs-txt">
+        <span class="hs-name">${esc(h.name)}${on ? '<span class="hs-tag">当前</span>' : ''}</span>
+        <span class="hs-did">${esc(h.did)} · ${esc(h.plat)}</span>
+        ${hostStatusHtml(h)}
+      </span>
+      <span class="hs-side">${side.join('')}</span>
+    </div>`;
+  }).join('');
+}
+
+hsList.addEventListener('click', e => {
+  const delBtn = e.target.closest('.hs-del');
+  const rescanBtn = e.target.closest('.hs-rescan');
+  const card = e.target.closest('.hs-card');
+  if (card === null) return;
+  const h = HOSTS.find(x => x.did === card.dataset.did);
+  if (h === undefined) return;
+  if (delBtn !== null) { openForget(h); return; }
+  if (rescanBtn !== null) { rescanHost(h); return; }
+  connectHost(h);
+});
+
+function connectHost(h) {
+  if (switching) return;
+  if (h.state === 'connected') { gotoChat(); return; }
+  if (h.state === 'revoked' || h.state === 'connecting') return;
+  h.state = 'connecting';
+  renderHosts();
+  setTimeout(() => {
+    if (activeHost !== h && activeHost.state === 'connected') {
+      activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+    }
+    h.state = 'connected'; h.lastSeen = '刚刚'; activeHost = h;
+    renderHosts();
+    gotoChat();
+  }, 1300);
+}
+
+function rescanHost(h) {
+  h.state = 'connecting';
+  renderHosts();
+  setTimeout(() => {
+    h.state = 'connected'; h.lastSeen = '刚刚';
+    if (activeHost !== h && activeHost.state === 'connected') {
+      activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+    }
+    activeHost = h;
+    renderHosts();
+    gotoChat();
+  }, 1300);
+}
+
+/* 忘记主机：AlertDialog 确认 */
+const forgetDlg = $('#forgetDlg');
+let forgetTarget = null;
+function openForget(h) {
+  forgetTarget = h;
+  $('#dlgTitle').textContent = `忘记 ${h.name}？`;
+  $('#dlgBody').textContent = '将删除它的配对凭据与续传位置，下次使用需重新扫码配对。';
+  forgetDlg.classList.add('show');
+}
+$('#dlgCancel').addEventListener('click', () => forgetDlg.classList.remove('show'));
+forgetDlg.addEventListener('click', e => { if (e.target === forgetDlg) forgetDlg.classList.remove('show'); });
+$('#dlgOk').addEventListener('click', () => {
+  const h = forgetTarget;
+  forgetDlg.classList.remove('show');
+  if (h === null) return;
+  const idx = HOSTS.indexOf(h);
+  if (idx >= 0) HOSTS.splice(idx, 1);
+  if (h === activeHost) {
+    activeHost = HOSTS[0] || null;
+    if (activeHost !== null && activeHost.state === 'connected') {
+      activeHost.state = 'idle'; // 断开并忘记：不自动顶替连接
+    }
+  }
+  forgetTarget = null;
+  renderHosts();
+});
+
+/* 添加主机（扫码 / 粘贴共用：配对中 → 成功入列并连接） */
+const stCards = () => document.querySelectorAll('#page-hosts .st');
+function showSt(name) {
+  stCards().forEach(el => el.classList.toggle('show', el.dataset.st === name));
+}
+function pairAdd() {
+  if (switching) return;
+  showSt('pairing');
+  setTimeout(() => {
+    if (HOSTS.some(x => x.did === 'a6b2d1e9')) { showSt(null); return; }
+    showSt('added');
+    $('#addedName').textContent = 'LAB-SERVER';
+    if (activeHost !== null && activeHost.state === 'connected') {
+      activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+    }
+    const lab = makeLab();
+    HOSTS.push(lab);
+    activeHost = lab;
+    renderHosts();
+    setTimeout(() => { showSt(null); gotoChat(); }, 900);
+  }, 1500);
+}
+$('#scanBtn').addEventListener('click', pairAdd);
+$('#pasteBtn').addEventListener('click', () => {
+  const v = $('#pasteInput').value.trim();
+  if (v === '') { showSt('badcode'); setTimeout(() => showSt(null), 2400); return; }
+  pairAdd();
+});
+
+/* ================= 屏 2 · 聊天主屏 ================= */
+const chName = $('#chName'), chSubDot = $('#chSubDot'), chSubTxt = $('#chSubTxt');
+const chMsgs = $('#chMsgs'), chTa = $('#chTa'), chSend = $('#chSend');
+const chOffbar = $('#chOffbar'), chSwbar = $('#chSwbar'), chSwTxt = $('#chSwTxt');
+const drMask = $('#drMask'), swMask = $('#swMask');
+
+let toastTimer = null;
+function flashToast(text, kind) {
+  const t = $('#chToast');
+  t.querySelector('.dot').className = 'dot ' + (kind === 'ok' ? 'ok' : kind === 'warn' ? 'warn' : kind === 'danger' ? 'warn' : 'info');
+  t.querySelector('.txt').textContent = text;
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2000);
+}
+
+function renderMsg(m) {
+  if (m.t === 'time') return `<div class="m-time">${esc(m.v)}</div>`;
+  if (m.t === 'sys') return `<div class="m-sys">${esc(m.v)}</div>`;
+  if (m.t === 'user') return `<div class="m-row user"><div class="m-bubble-user">${esc(m.v)}</div></div>`;
+  return `<div class="m-row"><div class="m-assistant"><div class="m-text">${esc(m.v)}</div></div></div>`;
+}
+
+function setDrawer(open) { drMask.classList.toggle('show', open); }
+function setSheet(open) { swMask.classList.toggle('show', open); }
+
+function setInputEnabled(on) {
+  chTa.disabled = !on;
+  chSend.disabled = !on;
+}
+
+function renderChat() {
+  const h = activeHost;
+  if (h === null) { showHosts(); return; }
+  chName.textContent = h.session.name;
+  const ws = h.workspaces[h.session.ws];
+  chSubDot.style.background = ws.color;
+  chSubTxt.textContent = ws.name;
+  $('#mdIc').innerHTML = pvMark(h.pv, 12);
+  $('#mdLabel').textContent = h.model;
+  chMsgs.innerHTML = h.session.msgs.map(renderMsg).join('');
+  chMsgs.scrollTop = chMsgs.scrollHeight;
+  renderDrawer();
+  renderSwSheet();
+}
+
+function renderDrawer() {
+  const h = activeHost;
+  if (h === null) return;
+  const av = $('#drAv');
+  av.style.background = h.tint; av.style.color = h.color;
+  av.textContent = h.name.charAt(0);
+  $('#drName').textContent = h.name;
+  $('#drStatus').innerHTML = h.state === 'connected'
+    ? '<span class="dot ok"></span>已连接 · 桌面 aide'
+    : (h.state === 'connecting' ? '<span class="dot info"></span>连接中…' : '<span class="dot warn"></span>离线');
+  const ws = h.workspaces[h.session.ws];
+  const live = ws.sessions.filter(s => s.live).length;
+  const wait = ws.sessions.filter(s => s.waitConfirm).length;
+  const metas = [`${ws.sessions.length} 个会话`];
+  if (live > 0) metas.push(`<span class="live"><span class="dot"></span>回复中 ${live}</span>`);
+  if (wait > 0) metas.push(`<span class="meta-wait">${ICONS.alert}待确认 ${wait}</span>`);
+  $('#wsCard').innerHTML = `
+    <span class="ws-avatar" style="background:${ws.tint};color:${ws.color}">${esc(ws.name.charAt(0))}</span>
+    <span class="ws-card-txt">
+      <span class="ws-card-name">${esc(ws.name)}</span>
+      <span class="ws-card-path">${esc(ws.path)}</span>
+      <span class="ws-card-meta">${metas.join('')}</span>
+    </span>
+    <span class="ws-switch">切换 ${ICONS.chevR}</span>`;
+  const list = ws.sessions.filter(s => query === '' || s.name.includes(query) || s.prev.includes(query));
+  $('#drList').innerHTML = list.length === 0
+    ? '<div class="dr-none">没有匹配的会话</div>'
+    : list.map(s => `
+      <button class="sv-item ${s.name === h.session.name ? 'on' : ''}">
+        <span class="sv-row1"><span class="sv-name">${esc(s.name)}</span><span class="sv-time">${esc(s.time)}</span></span>
+        <span class="sv-row2">
+          ${s.live ? '<span class="sv-dot live"></span>' : s.waitConfirm ? '<span class="sv-dot wait"></span>' : ''}
+          <span class="sv-prev">${esc(s.prev)}</span>
+        </span>
+      </button>`).join('');
+}
+
+function renderSwSheet() {
+  $('#swOpts').innerHTML = HOSTS.map(h => {
+    const on = h === activeHost && h.state === 'connected';
+    let sub;
+    if (on) sub = '<span class="dot ok"></span>当前连接';
+    else if (h.state === 'revoked') sub = `${ICONS.alert} 配对已被吊销 · 需重新扫码`;
+    else if (h.state === 'connecting') sub = '<span class="dot info"></span>连接中…';
+    else sub = `上次连接 ${esc(h.lastSeen)}`;
+    return `<button class="sw-opt ${on ? 'on' : ''}" data-did="${h.did}">
+      <span class="sw-av" style="background:${h.tint};color:${h.color}">${esc(h.name.charAt(0))}</span>
+      <span class="sw-txt">
+        <span class="sw-name">${esc(h.name)}</span>
+        <span class="sw-sub ${h.state === 'revoked' ? 'danger' : ''}">${sub}</span>
+      </span>
+      ${on ? `<span class="sw-check">${ICONS.check}</span>` : '<span class="sw-check"></span>'}
+    </button>`;
+  }).join('');
+}
+
+$('#swOpts').addEventListener('click', e => {
+  const opt = e.target.closest('.sw-opt');
+  if (opt === null) return;
+  const h = HOSTS.find(x => x.did === opt.dataset.did);
+  if (h === undefined) return;
+  if (h === activeHost && h.state === 'connected') { setSheet(false); return; }
+  if (h.state === 'revoked') {
+    setSheet(false); setDrawer(false);
+    showHosts();
+    flashToast('该主机需要重新配对', 'danger');
+    return;
+  }
+  startSwitch(h);
+});
+
+/* ── 切换主流程：收弹层/抽屉 → accent 横幅 + 消息区压暗 → 换数据 → toast + sync ── */
+function startSwitch(h) {
+  if (switching || h === null) return;
+  switching = true;
+  setSheet(false); setDrawer(false);
+  showChat();
+  chSwTxt.textContent = `正在连接 ${h.name}…`;
+  chSwbar.classList.add('show');
+  chMsgs.classList.add('dim');
+  setInputEnabled(false);
+  setTimeout(() => {
+    if (activeHost !== h && activeHost.state === 'connected') {
+      activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+    }
+    h.state = 'connected'; h.lastSeen = '刚刚'; activeHost = h;
+    switching = false;
+    chSwbar.classList.remove('show');
+    chMsgs.classList.remove('dim');
+    setInputEnabled(true);
+    renderChat();
+    flashToast(`已连接 ${h.name}`, 'ok');
+    try {
+      window.parent.postMessage({ event: 'sync', kind: 'host', did: h.did, from: MY_ID }, '*');
+    } catch (err) { /* 展台外打开：无父窗 */ }
+  }, 1500);
+}
+
+function requestSwitchByDid(did) {
+  const h = HOSTS.find(x => x.did === did);
+  if (h === undefined) return;
+  if (h === activeHost && h.state === 'connected') { showChat(); return; }
+  if (h.state === 'revoked') { showHosts(); return; }
+  startSwitch(h);
+}
+
+/* ── 抽屉 / 弹层 / 输入事件 ── */
+$('.ch-menu').addEventListener('click', () => setDrawer(true));
+drMask.addEventListener('click', e => { if (e.target === drMask) setDrawer(false); });
+$('#drSwitch').addEventListener('click', () => { setDrawer(false); setSheet(true); });
+$('#drDisc').addEventListener('click', () => {
+  setDrawer(false);
+  if (activeHost !== null && activeHost.state === 'connected') {
+    activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+  }
+  showHosts();
+  renderHosts();
+});
+$('#wsCard').addEventListener('click', () => flashToast('工作区切换见远程原型', 'info'));
+$('.dr-new').addEventListener('click', () => flashToast('新会话入口 · 见远程原型', 'info'));
+$('#drSearch').addEventListener('input', e => {
+  query = e.target.value.trim();
+  renderDrawer();
+});
+swMask.addEventListener('click', e => { if (e.target === swMask) setSheet(false); });
+$('#swAdd').addEventListener('click', () => {
+  setSheet(false); setDrawer(false);
+  showHosts();
+  pairAdd();
+});
+chSend.addEventListener('click', () => {
+  const v = chTa.value.trim();
+  const h = activeHost;
+  if (v === '' || h === null) return;
+  chTa.value = '';
+  h.session.msgs.push({ t: 'user', v });
+  renderChat();
+  setTimeout(() => {
+    h.session.msgs.push({ t: 'ai', v: '已收到。本原型聚焦多主机切换，聊天深度交互见远程原型。' });
+    if (activeHost === h) renderChat();
+  }, 900);
+});
+
+/* ── 页面切换 ── */
+function showChat() {
+  pageHosts.classList.remove('show');
+  pageChat.classList.add('show');
+}
+function showHosts() {
+  pageChat.classList.remove('show');
+  pageHosts.classList.add('show');
+  renderHosts();
+}
+function gotoChat() {
+  showChat();
+  renderChat();
+}
+
+/* ================= 演示指令（展台 postMessage） ================= */
+function demoAction(action) {
+  switch (action) {
+    case 'pairstart':
+      showSt('pairing');
+      setTimeout(() => showSt(null), 2400);
+      break;
+    case 'pairfail':
+      showSt('badcode');
+      setTimeout(() => showSt(null), 2800);
+      break;
+    case 'pairadd':
+      pairAdd();
+      break;
+    case 'revoke': {
+      const h = HOSTS.find(x => x.did === '91d40a3e');
+      if (h !== undefined && h !== activeHost) h.state = 'revoked';
+      renderHosts();
+      if (pageChat.classList.contains('show')) renderSwSheet();
+      break;
+    }
+    case 'forgetdlg': {
+      const h = HOSTS.find(x => x.state === 'idle') || HOSTS[HOSTS.length - 1];
+      if (h !== undefined) openForget(h);
+      break;
+    }
+    case 'offline':
+      chOffbar.classList.add('show');
+      setInputEnabled(false);
+      flashToast('设备离线，自动重连中', 'warn');
+      break;
+    case 'reconnect':
+      chOffbar.classList.remove('show');
+      setInputEnabled(true);
+      flashToast('已恢复连接', 'ok');
+      break;
+    case 'disconnect': {
+      setDrawer(false); setSheet(false);
+      if (activeHost !== null && activeHost.state === 'connected') {
+        activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+      }
+      showHosts();
+      break;
+    }
+    default: break;
+  }
+}
+
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d === null || typeof d !== 'object') return;
+  if (d.event === 'sync' && d.kind === 'host') {
+    /* 展台中继转发：其他屏切了主机，本地同步跟进 */
+    if (switching) return;
+    const h = HOSTS.find(x => x.did === d.did);
+    if (h === undefined || h === activeHost) return;
+    if (activeHost.state === 'connected') {
+      activeHost.state = 'idle'; activeHost.lastSeen = '刚刚';
+    }
+    h.state = 'connected'; h.lastSeen = '刚刚'; activeHost = h;
+    if (pageChat.classList.contains('show')) renderChat();
+    else renderHosts();
+    return;
+  }
+  switch (d.cmd) {
+    case 'demo': demoAction(d.action); break;
+    case 'switch': requestSwitchByDid(d.did); break;
+    case 'drawer': setDrawer(d.open); break;
+    case 'sheet': setSheet(d.open); break;
+    default: break;
+  }
+});
+
+/* ================= 初始化 ================= */
+renderHosts();
+if (SCREEN === 'hosts') {
+  showHosts();
+} else {
+  gotoChat();
+  if (SHEET0) setSheet(true);
+  if (DRAWER0) setDrawer(true);
+}
+</script>
+</body>
+</html>

@@ -72,6 +72,30 @@ export class AutomationModel {
   private aliases: Map<string, string> = new Map();
   /** 刷新排队标记：在途时再收终态事件，完成后补一拍（对账终值）。 */
   private refreshQueued: boolean = false;
+  /** 主机世代（resetForHost 自增）：在途拉取的迟到响应按世代丢弃。 */
+  private hostEpoch: number = 0;
+
+  /** 换主机整体复位（HostSync 编排）：清全量内存面（含全部浮层），等 refresh 重建。 */
+  resetForHost(): void {
+    this.hostEpoch++;
+    this.loaded = false;
+    this.tasks = [];
+    this.lastError = '';
+    this.view = '';
+    this.selectedTaskId = '';
+    this.editingTaskId = '';
+    this.runs = [];
+    this.stats = null;
+    this.runsError = '';
+    this.runView = null;
+    this.playbookView = false;
+    this.playbookLoading = false;
+    this.playbookText = '';
+    this.playbookError = '';
+    this.busyTaskId = '';
+    this.aliases.clear();
+    this.refreshQueued = false;
+  }
 
   /** 页面挂载时调用：幂等挂 chat-event + 重连监听（挂传输实例，只挂一次）。 */
   ensureListener(): void {
@@ -104,10 +128,14 @@ export class AutomationModel {
       return;
     }
     this.refreshing = true;
+    const epoch: number = this.hostEpoch;
     try {
-      this.tasks = await api.listAutomations();
-      this.loaded = true;
-      this.lastError = '';
+      const tasks: AutomationTask[] = await api.listAutomations();
+      if (epoch === this.hostEpoch) {
+        this.tasks = tasks;
+        this.loaded = true;
+        this.lastError = '';
+      }
     } catch (e) {
       // 拉取失败不静默：抽屉区段错误条如实呈现（REGISTRY 未开口子时的常态）
       if (connModel.state === 'authed') {
