@@ -727,9 +727,28 @@ export const api = {
   claudeCredentialsExist(): Promise<boolean> {
     return getTransport().invoke("claude_credentials_exist");
   },
-  /** 启动 Claude OAuth 登录。返回授权 URL（A2 成功）或 degraded=true（降级到 API key）。OAuth 未接入前恒返回 degraded。 */
-  claudeStartLogin(): Promise<{ authorizeUrl: string | null; degraded: boolean }> {
-    return getTransport().invoke("claude_start_login");
+  /** 开始用 Claude 账号登录（Host 驱动随包 claude CLI），返回登录链接。之后轮询 claudeLoginState。
+   *  openOnHost：让 CLI 在 Host 上开浏览器并自己接回调（本机 Host）；false = 由 GUI 打开
+   *  链接、用户把页面最后给的授权码粘贴回来（WSL / SSH Host，回调到不了目标机）。 */
+  claudeLoginStart(openOnHost: boolean): Promise<{ authorizeUrl: string }> {
+    return getTransport().invoke("claude_login_start", { openOnHost });
+  },
+  /** 把授权码交给进行中的登录（成败看 claudeLoginState）。 */
+  claudeLoginSubmitCode(code: string): Promise<void> {
+    return getTransport().invoke("claude_login_submit_code", { code });
+  },
+  claudeLoginState(): Promise<ClaudeLoginState> {
+    return getTransport().invoke("claude_login_state");
+  },
+  claudeLoginCancel(): Promise<void> {
+    return getTransport().invoke("claude_login_cancel");
+  },
+  /** 当前 Host 上的 Claude 账号登录状态（问 CLI，比「凭据文件在不在」可靠）。 */
+  claudeAuthStatus(): Promise<ClaudeAuthStatus> {
+    return getTransport().invoke("claude_auth_status");
+  },
+  claudeLogout(): Promise<void> {
+    return getTransport().invoke("claude_logout");
   },
 
   // 工作区
@@ -922,3 +941,19 @@ export type {
   ProjectScanResult,
   MemoryScanAllResult,
 } from "./api/memoryObservatory";
+
+/** 一次 Claude 账号登录走到哪了（Rust `claude_login::LoginPhase`）。 */
+export type ClaudeLoginState =
+  | { phase: "idle" }
+  | { phase: "waiting" }
+  | { phase: "succeeded" }
+  | { phase: "failed"; error: string };
+
+/** 当前 Host 上的 Claude 账号（Rust `claude_login::AuthStatus`）。 */
+export interface ClaudeAuthStatus {
+  loggedIn: boolean;
+  /** `claude.ai`（订阅）/ `console`（API 计费）/ `none`… */
+  authMethod: string;
+  email: string | null;
+  subscriptionType: string | null;
+}

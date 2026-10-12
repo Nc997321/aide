@@ -72,7 +72,7 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 - **事件总线是 Host 自己的**（`aide_core::bus`）：编号、留底、按会话订阅、断线回放。**新的多客户端出口一律实现 `bus::Consumer`，别再造平行广播。**
 - **事件隔离两头做**：后端只 `emit_to` 对应窗口（`src/host_window.rs`）；前端监听一律窗口作用域（`TauriTransport.listen`），**共享代码里不要用 Tauri 默认的全局 `listen`**（WSL 窗口会看到本机会话的 chat-event）。
 - **GUI 与 Host 之间的跨界必须显式、用户看得见**：本机文件进对话 = 上传到 Host 暂存（`upload_local_files`）；「用本机程序打开」对 WSL 路径译成 `\\wsl.localhost\…`、SSH 如实拒绝（`host_window::gui_path`）；「从本机复制供应商」是显式动作，不自动同步。
-- **供应商 / 插件 / MCP / hooks / 记忆都按 Host 自持**（各装各的 `~/.aide`）。**不同步 OAuth 凭据**（refresh token 轮换会互相顶掉）；官方账号登录在目标机上跑 `~/.aide/host/aide-claude` → `/login`。
+- **供应商 / 插件 / MCP / hooks / 记忆都按 Host 自持**（各装各的 `~/.aide`）。**不同步 OAuth 凭据**（refresh token 轮换会互相顶掉）；官方账号登录在界面里做（引导页 / 供应商设置的「用 Claude 账号登录」）：Host 驱动随包 claude CLI 的 `auth login`（`aide-core/src/claude_login.rs`，**不自己实现 OAuth**），本机 Host 由 CLI 开浏览器接回调，WSL / SSH Host 由 GUI 开链接、用户粘贴授权码；目标机上的 `~/.aide/host/aide-claude` → `/login` 仍是手动退路。
 - **Host 的启动职责只写在 `aide_core::host`**（`prepare_workspace` + `start`），桌面 setup 与 `aide-host serve` 都调它，**不许只写在某一扇前门里**（2026-09-30 事故：serve 漏了日常目录引导，WSL 会话 cwd 不存在，SDK 还误报成 libc 不匹配）。
 - **「目录还在吗」一律 `aide_core::workspace::present`**：误判 = 会话 cwd 回落活动工作区 = 「跑错项目」。
 - 远程套件 `pnpm build:remote-kit`（aide-host musl 静态二进制 + runtime.js，已挂进 `pnpm release`）；真机回归 `src/remote_workspace/e2e_tests.rs`（运行方式见文件头）。

@@ -29,6 +29,7 @@ import ProviderLogo from "./ProviderLogo.vue";
 import Icon from "./Icon.vue";
 import AToast from "../ui/AToast.vue";
 import ThemedSelect from "./ThemedSelect.vue";
+import ClaudeAccountLogin from "./ClaudeAccountLogin.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 import { hostApi } from "@aide/sdk";
@@ -382,6 +383,11 @@ const modelSuggestions = computed<string[]>(() => {
         <!-- SystemDefault 提示：认证走系统 env 兜底，仅配置模型变量与凭据 -->
         <div v-if="isSystemDefault" class="sys-default-hint">
           系统默认供应商：认证（API Key / Base URL 等）走系统环境变量兜底，此处可配置模型变量与凭据覆盖。
+        </div>
+        <!-- Claude 账号登录（订阅）：登录在当前窗口连着的 Host 上，凭据不跨 Host 同步 -->
+        <div v-if="isSystemDefault" class="form-field">
+          <label>Claude 账号</label>
+          <ClaudeAccountLogin show-account />
         </div>
 
         <!-- 名称：预置只读，Custom 可编辑 -->
