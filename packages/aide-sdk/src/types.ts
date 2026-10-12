@@ -336,6 +336,9 @@ export interface ProviderConfig {
   /** → CLAUDE_CODE_MAX_CONTEXT_TOKENS：模型上下文窗口本身（token 数）。直接设可突破 CLI 对未知/非 Anthropic 模型的 200K 默认上限（autoCompactWindow 阈值被此窗口夹住）。空 = CLI 默认（未知模型 200K） */
   maxContextTokens: string;
   knownModels: string[];
+  /** 模型取值 → 显示名（Host 算好、只读、不随保存回写）。目前只有官方供应商有：给静态
+   *  别名贴上 CLI 最近一次报回的版本（opus → "Opus 5.5"）。没有条目的模型显示取值本身。 */
+  modelLabels?: Record<string, string>;
 }
 
 /** Provider write DTO. It never contains a rehydrated credential. */

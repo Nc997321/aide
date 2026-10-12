@@ -59,7 +59,11 @@ function providerInput(
   provider: ProviderConfig,
   mutations: Partial<Pick<ProviderConfigInput, "apiKey" | "authToken">> = {},
 ): ProviderConfigInput {
-  const { apiKeyConfigured: _apiKeyConfigured, authTokenConfigured: _authTokenConfigured, ...publicFields } = provider;
+  // modelLabels 是 Host 算给界面看的只读字段，不随保存回写
+  const {
+    apiKeyConfigured: _apiKeyConfigured, authTokenConfigured: _authTokenConfigured,
+    modelLabels: _modelLabels, ...publicFields
+  } = provider;
   return {
     ...publicFields,
     apiKey: mutations.apiKey ?? { action: "unchanged" },
@@ -218,6 +222,19 @@ async function refreshSystemDefaultModels(): Promise<void> {
   }
 }
 
+/** Host 随 models_available 推来的官方别名版本标签（catalog_labels）→ 就地更新系统默认
+ *  供应商的 modelLabels，新会话的下拉当场带版本，不必重新拉供应商列表。内容没变不换
+ *  引用（事件每次 spawn 都来）。 */
+function applySystemDefaultModelLabels(labels: Record<string, string>): void {
+  const idx = allProviders.value.findIndex((p) => p.id === SYSTEM_DEFAULT_ID);
+  if (idx < 0) return;
+  const current = allProviders.value[idx];
+  if (JSON.stringify(current.modelLabels ?? {}) === JSON.stringify(labels)) return;
+  const providers = [...allProviders.value];
+  providers[idx] = { ...current, modelLabels: labels };
+  allProviders.value = providers;
+}
+
 function __resetForTest(): void {
   allProviders.value = [];
   activeProviderId.value = SYSTEM_DEFAULT_ID;
@@ -244,6 +261,7 @@ export function useProviders() {
     saveSystemDefaultMappings,
     saveSystemDefaultApiKey,
     refreshSystemDefaultModels,
+    applySystemDefaultModelLabels,
     refreshing,
     SYSTEM_DEFAULT_ID,
     __resetForTest,

@@ -247,7 +247,9 @@ export type ChatEvent =
   // 时序：插队消息在真正接入（promoteJumpQueue）时才发，不是登记（jump_queued）时发
   // ——接收端看到气泡的时机与模型真正收到这条消息的时机一致。
   | { type: "user_message"; text: string; display?: UserMessageBlock[] }
-  | { type: "models_available"; models: ModelOption[]; current: string }
+  // sdk_roster：SDK 原始清单（SDK 自己的 value + 带版本的显示名，未去重），只在 spawn
+  // 坐实那一发带。宿主用它给「未起会话时的静态别名清单」贴版本标签；UI 不读。
+  | { type: "models_available"; models: ModelOption[]; current: string; sdk_roster?: ModelOption[] }
   // 模型切换的坐实回执——只在用户显式 set_model 后由 sidecar 运行时路径发出
   // （init/assistant 坐实、query 未起的本地落账都不发），让前端能给出
   // 「成功/失败」瞬时提示。ok:false 时 error 带 CLI 驳回原因，下拉已被回滚

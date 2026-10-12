@@ -363,6 +363,10 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     let provider_env = build_runtime_env_vars(&active, &proxy);
     let provider_switched = runtime_mgr.connection_drifted(&session_id, &provider_env);
     runtime_mgr.upsert_fingerprint(&session_id, &provider_env);
+    runtime_mgr.mark_catalog_session(
+        &session_id,
+        crate::provider::roster_cache::speaks_catalog_aliases(active.kind, &provider_env),
+    );
     // 思考开关下发 sidecar：**档位是唯一事实源**（快速关、其余开，见
     // thinking_enabled_for_effort）。**只在 spawn（建 query）时生效**——SDK 没有
     // 运行时的 thinking setter，`applyFlagSettings({alwaysThinkingEnabled})` 被 CLI
@@ -432,10 +436,10 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // saves can broadcast `update_permission_policy` to this session.
     runtime_mgr.register_session_route(&session_id, Some(&cwd));
 
-    // Runtime 还没起来（Host 刚连上、首条消息先于后台拉起到达）：就地按激活供应商拉起，
+    // Runtime 还没起来（Host 刚连上、首条消息先于后台拉起到达）：就地拉起，
     // 而不是回一个「Runtime not spawned」。已在跑时这里只是一次内存判断。
     if !runtime_mgr.is_running() {
-        crate::runtime::start_with_active_provider(&app).await?;
+        crate::runtime::start(&app).await?;
     }
 
     runtime_mgr.send_to_runtime(&cmd).await

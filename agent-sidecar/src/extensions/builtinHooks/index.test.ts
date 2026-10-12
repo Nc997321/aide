@@ -37,17 +37,28 @@ describe("builtinHooks registry", () => {
   it("buildBuiltinHooks：policyHook 永远在 PreToolUse[0]", () => {
     const ctx = {
       cwd: "/x",
-      env: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" },
+      env: {},
+      sessionEnv: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" },
       session: sessionStub,
     };
     const { hooks } = buildBuiltinHooks(ctx);
     expect(hooks.PreToolUse[0].matcher).toBe(".*");
   });
 
+  it("subagentModel 读会话环境、不读进程环境（供应商参数随 send 走，进程 env 里没有）", () => {
+    const mounted = (ctx: Parameters<typeof buildBuiltinHooks>[0]) =>
+      buildBuiltinHooks(ctx).manifest.some((m) => m.id === "subagentModel");
+    const base = { cwd: "/x", session: sessionStub };
+    expect(mounted({ ...base, env: {}, sessionEnv: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" } })).toBe(true);
+    // 进程 env 里的残值（用户 shell 泄漏 / 旧版启动时写入的别家配置）不算数
+    expect(mounted({ ...base, env: { CLAUDE_CODE_SUBAGENT_MODEL: "sonnet" }, sessionEnv: {} })).toBe(false);
+  });
+
   it("guard=null（支线场景）→ PreModelSwitch/PostModelSwitch 两键缺席且不入 manifest", () => {
     const ctx = {
       cwd: "/x",
       env: {},
+      sessionEnv: {},
       session: sessionStub,
     };
     const { hooks, manifest } = buildBuiltinHooks(ctx);
@@ -65,6 +76,7 @@ describe("builtinHooks registry", () => {
     const ctx = {
       cwd: "/x",
       env: {},
+      sessionEnv: {},
       session: {
         ...sessionStub,
         makeModelSwitchGuard: () => guard,
@@ -78,7 +90,7 @@ describe("builtinHooks registry", () => {
   });
 
   it("kbMemoryGuard 只在有圈选登记簿时挂载（条件挂）", () => {
-    const base = { cwd: "/x", env: { CLAUDE_CONFIG_DIR: "/home/u/.aide/claude" }, session: sessionStub };
+    const base = { cwd: "/x", env: { CLAUDE_CONFIG_DIR: "/home/u/.aide/claude" }, sessionEnv: {}, session: sessionStub };
     expect(buildBuiltinHooks(base).manifest.some((m) => m.id === "kbMemoryGuard")).toBe(false);
     const withScopes = { ...base, kbScopes: new KbScopeStore() };
     expect(buildBuiltinHooks(withScopes).manifest.some((m) => m.id === "kbMemoryGuard")).toBe(true);

@@ -3,6 +3,7 @@
 //! IPC 薄命令留在 commands/provider.rs，调本模块。
 
 pub mod catalog;
+pub mod roster_cache;
 pub mod strategy;
 
 use serde::{Deserialize, Serialize};
@@ -138,6 +139,9 @@ pub struct ProviderConfigView {
     pub autocompact_pct_override: String,
     pub max_context_tokens: String,
     pub known_models: Vec<String>,
+    /// 模型取值 → 显示名（只读、不落盘）。目前只有官方供应商在用：给静态别名贴上
+    /// CLI 最近一次报回的版本（见 `roster_cache`）。没有条目的模型前端显示取值本身。
+    pub model_labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -196,6 +200,14 @@ impl ProviderConfig {
         } else {
             self.known_models
         };
+        // 版本标签只在别名仍指向 CLI 默认模型时成立：配了映射就不贴（会贴错）。
+        let model_labels = if self.kind == ProviderKind::SystemDefault
+            && mappings_to_env(&self.model_mappings).is_empty()
+        {
+            roster_cache::system_default_labels()
+        } else {
+            BTreeMap::new()
+        };
         ProviderConfigView {
             id: self.id,
             kind: self.kind,
@@ -211,6 +223,7 @@ impl ProviderConfig {
             autocompact_pct_override: self.autocompact_pct_override,
             max_context_tokens: self.max_context_tokens,
             known_models,
+            model_labels,
         }
     }
 }

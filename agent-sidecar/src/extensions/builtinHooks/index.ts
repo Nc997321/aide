@@ -12,6 +12,9 @@ import type { ModelSwitchGuard } from "../../engine/modelSwitchGuard";
 export interface HookBuildContext {
   cwd: string | undefined;
   env: NodeJS.ProcessEnv;
+  /** 本会话的生效环境（进程 env + 本条 send 的供应商参数，见 cliEnv.sessionEnvOf）。
+   *  读供应商配置（子代理模型、模型映射）的 hook 用它；`env` 里没有这些键。 */
+  sessionEnv: Record<string, string | undefined>;
   session: { makePolicyHook(cwd: string | undefined): HookCallback;
               makeStopEffortHook(): HookCallback;
               makeModelSwitchGuard(): ModelSwitchGuard | null };
@@ -40,7 +43,7 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
     build: (ctx) => ctx.session.makePolicyHook(ctx.cwd) },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$",
     purpose: "子代理模型选择兜底", alwaysMounted: false,
-    build: (ctx) => makeSubagentModelHook(ctx.env) },
+    build: (ctx) => makeSubagentModelHook(ctx.sessionEnv) },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },

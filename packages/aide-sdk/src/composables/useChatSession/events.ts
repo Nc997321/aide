@@ -32,6 +32,7 @@ import {
 } from "../useKbSelectionEvents";
 import { judgeReadRelay, lastLspContextInMessages } from "../../utils/lspRelay";
 import { useSessionNames } from "../useSessionNames";
+import { useProviders } from "../useProviders";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
@@ -417,6 +418,11 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // 无 PostModelSwitch，settleOnSend 收窄后模型落盘无人补位（审查打回项 3）。
       identity.bindRuntime(sid, store.currentModel);
       identity.setSdkModels(sid, store.models);
+      // Host 顺带算好的官方别名版本标签（只有官方会话的 spawn 坐实那一发带）：
+      // 更新系统默认供应商，别的「还没起进程」的会话下拉当场带上版本。
+      if (e["catalog_labels"]) {
+        useProviders().applySystemDefaultModelLabels(e["catalog_labels"] as Record<string, string>);
+      }
       void identity.commitModelFromRuntime(sid, {
         fromModel: "",
         toModel: store.currentModel,

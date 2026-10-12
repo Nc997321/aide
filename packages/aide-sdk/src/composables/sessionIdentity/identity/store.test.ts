@@ -402,6 +402,18 @@ describe("sessionIdentityStore (L2a 仓库)", () => {
       expect(id.displayModelsOf("s1").map((m) => m.value)).toEqual(["sonnet", "opus"]);
     });
 
+    it("系统默认的别名带 Host 给的版本标签（modelLabels）；没标签的显示取值本身", () => {
+      allProviders.value = [{ ...makeSystemDefault(["opus", "fable"]), modelLabels: { opus: "Opus 5.5" } }];
+      activeProviderId.value = "__system_default__";
+      expect(id.activeProviderModels()).toEqual([
+        { value: "opus", displayName: "Opus 5.5" }, // 取值不变（发给 CLI 的仍是别名）
+        { value: "fable", displayName: "fable" },
+      ]);
+      // Host 随 models_available 推来新标签 → 就地更新，下拉当场带版本
+      useProviders().applySystemDefaultModelLabels({ opus: "Opus 5.5", fable: "Fable 5.1" });
+      expect(id.activeProviderModels().map((m) => m.displayName)).toEqual(["Opus 5.5", "Fable 5.1"]);
+    });
+
     it("系统默认 → 无 sdkModels 则 knownModels 兜底（view() 从 catalog 注入）", async () => {
       allProviders.value = [makeSystemDefault(["sonnet", "opus", "haiku", "fable"])];
       activeProviderId.value = "__system_default__";

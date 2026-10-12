@@ -59,7 +59,7 @@ function providerConfigOf(pid: string): ProviderConfig | null {
 /** 第三方供应商的模型列表（providerModelList）。pid 悬空（供应商已删）→ 空列表。 */
 function providerModelsOf(pid: string): ModelOption[] {
   const p = providerConfigOf(pid);
-  return p ? providerModelList(p).map((v) => ({ value: v, displayName: v })) : [];
+  return p ? providerModelList(p).map((v) => ({ value: v, displayName: p.modelLabels?.[v] ?? v })) : [];
 }
 
 /** 全局口径的模型选项（无会话归属时用）。统一走 providerModelsOf——

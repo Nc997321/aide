@@ -58,7 +58,7 @@ pub fn start(core: &Arc<Core>) {
     {
         let core = Arc::clone(core);
         tokio::spawn(async move {
-            if let Err(e) = crate::runtime::start_with_active_provider(&core).await {
+            if let Err(e) = crate::runtime::start(&core).await {
                 tracing::error!("agent runtime failed to start: {e}");
             }
         });

@@ -37,7 +37,7 @@ import type { EffortSettable } from "./effortSwitch.js";
 import { applyAttachExtension, decideAttach } from "./attachDirs.js";
 import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
-import { buildCliEnv } from "./cliEnv.js";
+import { buildCliEnv, sessionEnvOf } from "./cliEnv.js";
 import { thinkingDisabledFor } from "./thinkingPolicy.js";
 import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
@@ -498,9 +498,14 @@ export class SessionWorker {
   // ---- 模型相关 ----
 
   private async emitModelsAvailable(q: Awaited<ReturnType<typeof query>>): Promise<void> {
-    const models = await this.modelRoster.adoptFromInit(q);
+    const models = await this.modelRoster.adoptFromInit(q, this.currentModel);
     // adoptFromInit 失败（SDK 版本不支持）返回 null——静默跳过（原语义）
-    if (models) this.emit({ type: "models_available", models, current: this.currentModel });
+    if (models) {
+      this.emit({
+        type: "models_available", models, current: this.currentModel,
+        sdk_roster: this.modelRoster.sdkRoster,
+      });
+    }
   }
 
   // ---- OutputTail（per-SessionWorker，替代模块级全局；池逻辑见 engine/tailPool.ts） ----
@@ -804,7 +809,7 @@ export class SessionWorker {
             automation: !!this.automationConfig,
             thinkingEnabled: this.thinkingEnabled,
           });
-          // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：白名单透传
+          // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：进程 env 为底
           // → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入）
           const cliEnv = buildCliEnv({
             processEnv: process.env,
@@ -828,6 +833,7 @@ export class SessionWorker {
             memoryRoots: () => [...new Set([...this.additionalDirs, ...this.kbScopes.linkedRoots()])],
             lspLanguages,
             processEnv: process.env,
+            sessionEnv: sessionEnvOf(process.env, this.envOverrides),
             emit: (e) => this.emit(e),
             kbScopes: this.kbScopes,
             automationConfig: this.automationConfig,

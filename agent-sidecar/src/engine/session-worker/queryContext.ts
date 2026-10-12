@@ -30,6 +30,8 @@ export interface QueryContextDeps {
   /** 该工作区配得上 LSP 的语言（空 = 不挂 aide-lsp 工具）。 */
   lspLanguages: string[];
   processEnv: NodeJS.ProcessEnv;
+  /** 本会话的生效环境（cliEnv.sessionEnvOf）——供应商参数只在这里，不在 processEnv。 */
+  sessionEnv: Record<string, string | undefined>;
   emit: (e: ChatEvent) => void;
   /** 本会话的「用户在知识库里圈选的范围」登记簿（由 worker 持有、随用户消息更新）；
    *  知识库工具据此把写入限制在圈选范围内。 */
@@ -102,6 +104,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   const { hooks: builtinHooks, manifest: builtinHookManifest } = buildBuiltinHooks({
     cwd: deps.cwd,
     env: deps.processEnv,
+    sessionEnv: deps.sessionEnv,
     session: deps.session,
     // grep 顺带作答与 aide-lsp 工具**同一道闸**（lspGate）：工具不在，附注里指向的工具也不存在。
     lsp: { mounted: lspToolsMounted(lspGate), emit: deps.emit },

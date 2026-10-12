@@ -63,6 +63,26 @@ describe("buildCliEnv", () => {
     expect("CLAUDE_CODE_SUBAGENT_MODEL" in env).toBe(true);
   });
 
+  it("子代理模型按本会话的供应商配置折算，不看进程 env", () => {
+    // 无法别名化的全 id → 硬钉死原值；来源必须是本条 send 的 env
+    const env = buildCliEnv({
+      processEnv: {} as NodeJS.ProcessEnv,
+      envOverrides: { CLAUDE_CODE_SUBAGENT_MODEL: "deepseek-v4.1-flash:cloud" },
+      thinkingDisabled: false,
+    });
+    expect(env.CLAUDE_CODE_SUBAGENT_MODEL).toBe("deepseek-v4.1-flash:cloud");
+    // 值等于本会话的 sonnet 映射 → 可别名化 → inherit（交给 hook 动态兜底）
+    const aliased = buildCliEnv({
+      processEnv: {} as NodeJS.ProcessEnv,
+      envOverrides: {
+        CLAUDE_CODE_SUBAGENT_MODEL: "deepseek-v4.1-flash:cloud",
+        ANTHROPIC_DEFAULT_SONNET_MODEL: "deepseek-v4.1-flash:cloud",
+      },
+      thinkingDisabled: false,
+    });
+    expect(aliased.CLAUDE_CODE_SUBAGENT_MODEL).toBe("inherit");
+  });
+
   it("关思考时注入 EXTRA_BODY（CLI 只对认识的模型名才发 thinking，名单外整个字段丢掉）", () => {
     const env = buildCliEnv({ processEnv: {} as NodeJS.ProcessEnv, envOverrides: {}, thinkingDisabled: true });
     expect(env.CLAUDE_CODE_EXTRA_BODY).toBe('{"thinking":{"type":"disabled"}}');

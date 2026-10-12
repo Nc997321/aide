@@ -57,6 +57,9 @@ pub struct AgentRuntimeManager {
     /// 手机端据此判断"该跟随全局供应商还是锁定会话自己的供应商"（对齐桌面第 3 笔
     /// 的语义：有活进程才锁定，没活进程就跟随全局）。
     session_alive: Mutex<HashSet<String>>,
+    /// 别名仍指向 CLI 默认模型的会话（官方供应商、没配映射；`send_message` 每条刷新）。
+    /// 事件泵只采纳这些会话报回的模型名册（见 `provider::roster_cache`）。
+    catalog_sessions: Mutex<HashSet<String>>,
     /// 测试缝合：true 时 `send_to_runtime` 把命令录进 `sent_commands` 而非写真实
     /// stdin（单测里 stdin 永远 None）。生产恒为 false，`sent_commands` 保持空。
     test_mode: bool,
@@ -83,6 +86,7 @@ impl AgentRuntimeManager {
             spawn_lock: TokioMutex::new(()),
             session_routes: Mutex::new(HashMap::new()),
             session_alive: Mutex::new(HashSet::new()),
+            catalog_sessions: Mutex::new(HashSet::new()),
             test_mode: false,
             sent_commands: Arc::new(Mutex::new(Vec::new())),
             #[cfg(windows)]
@@ -162,16 +166,15 @@ impl AgentRuntimeManager {
             cmd.env(k, v);
         }
 
-        // 透传 provider 连接参数（由调用方 build_runtime_env_vars 组好传入）
+        // 进程级 env（调用方用 env::runtime_process_env 组好：只有代理，不含供应商参数）
         for (k, v) in &env_vars {
             cmd.env(k, v);
         }
 
         // CLAUDE_CONFIG_DIR：让 claude.exe 把所有自有数据（settings.json / CLAUDE.md /
         // agents/ / skills/ / projects/ / sessions/ / plugins/）写到 Aide 自管理目录
-        // 下的 claude/ 子目录，而非回退到用户系统的 ~/.claude/。必须注在 env_vars 循环
-        // 之后——build_runtime_env_vars 的 fallback 列表里也含 CLAUDE_CONFIG_DIR，若进程
-        // env 有用户自定义值会被透传进 env_vars，这里显式覆盖以保证始终指向自管理目录。
+        // 下的 claude/ 子目录，而非回退到用户系统的 ~/.claude/。Host 进程 env 里若有
+        // 用户自定义的同名值会被子进程继承，这里显式覆盖以保证始终指向自管理目录。
         // 与 AIDE_ENABLED_PLUGINS_FILE 同属「Aide 自管理路径 env」，注在同一处。
         let claude_config_dir = crate::paths::our_config_dir().join("claude");
         cmd.env("CLAUDE_CONFIG_DIR", dunce::simplified(&claude_config_dir));
@@ -316,6 +319,20 @@ impl AgentRuntimeManager {
             .insert(session_id.to_string(), connection_fingerprint(env_vars));
     }
 
+    /// 登记/撤销「这条会话的别名就是 CLI 默认指向」（每条 send 按当次供应商刷新）。
+    pub fn mark_catalog_session(&self, session_id: &str, speaks_catalog: bool) {
+        let mut set = self.catalog_sessions.lock().unwrap();
+        if speaks_catalog {
+            set.insert(session_id.to_string());
+        } else {
+            set.remove(session_id);
+        }
+    }
+
+    pub fn is_catalog_session(&self, session_id: &str) -> bool {
+        self.catalog_sessions.lock().unwrap().contains(session_id)
+    }
+
     /// 记录/刷新一个 session 的工作区路由（`send_message` 在发出 send 前调用）。
     /// `cwd` 为 None 时不覆盖已有 workspace_root（保留首条 send 注册的值）。
     pub fn register_session_route(&self, session_id: &str, cwd: Option<&std::path::Path>) {
@@ -435,21 +452,16 @@ impl AgentRuntimeManager {
     }
 }
 
-/// Host 启动时拉起 Runtime：按当前激活供应商 + 代理设置组好进程 env（幂等，已在跑则不动）。
-/// 桌面 setup 与 `aide-host serve` 共用。
-pub async fn start_with_active_provider(core: &Arc<Core>) -> Result<(), String> {
+/// Host 启动时拉起 Runtime（幂等，已在跑则不动）。桌面 setup 与 `aide-host serve` 共用。
+/// 进程 env 只带代理、**不带供应商参数**（理由见 `env::runtime_process_env`）。
+pub async fn start(core: &Arc<Core>) -> Result<(), String> {
     let settings = core.settings.clone();
-    let (active, proxy) = crate::registry::blocking(move || {
-        let active = settings
-            .resolve_active_runtime_provider()
-            .map_err(|error| error.to_string())?;
-        let proxy = crate::app_settings::public_settings(&settings)?.proxy;
-        Ok((active, proxy))
+    let proxy = crate::registry::blocking(move || {
+        Ok(crate::app_settings::public_settings(&settings)?.proxy)
     })
     .await
-    .map_err(|e| format!("unable to resolve initial provider settings: {e}"))?;
-    let env_vars = env::build_runtime_env_vars(&active, &proxy);
-    core.runtime.ensure_runtime(core, env_vars).await
+    .map_err(|e| format!("unable to resolve initial proxy settings: {e}"))?;
+    core.runtime.ensure_runtime(core, env::runtime_process_env(&proxy)).await
 }
 
 fn emit_runtime_dead(core: &Core, tail_handle: &Arc<Mutex<VecDeque<String>>>, reason: &str) {

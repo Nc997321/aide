@@ -6,9 +6,9 @@ import type { ModelInfo, Query } from "@anthropic-ai/claude-agent-sdk";
 import { filterSelectableModels } from "./mapper.js";
 import type { ModelOption } from "./types.js";
 
-/** 名册用得上的 SDK 字段（ModelInfo 的结构子集）——只声明会被读的三个，
- *  测试桩与 SDK 多出来的字段都不受牵连。 */
-type SdkModelRow = Pick<ModelInfo, "value" | "displayName" | "resolvedModel">;
+/** 名册用得上的 SDK 字段（ModelInfo 的结构子集）——只声明会被读的几个，
+ *  测试桩与 SDK 多出来的字段都不受牵连。description 桩里常缺，按可选读。 */
+type SdkModelRow = Pick<ModelInfo, "value" | "displayName" | "resolvedModel"> & { description?: string };
 
 /** 真名命名空间下的模型 id：SDK 给了 resolvedModel 就用它，否则 value 本身就是
  *  真名（第三方 provider 的 SDK 回报不带 resolvedModel）。 */
@@ -16,9 +16,52 @@ function realModelOf(row: SdkModelRow): string {
   return row.resolvedModel ?? row.value;
 }
 
+/** description 的首段若是「带版本的模型名」就返回它，否则 null。CLI 0.3.292 把版本放在
+ *  这里（displayName "Opus" + description "Opus 5.5 · Best for…"）；0.3.293 起版本直接
+ *  写进 displayName、description 只剩一句介绍——所以只认「至多三个词、带数字、无括号」
+ *  的首段，一句话形态的介绍（哪怕碰巧带数字）不算。 */
+function versionedHead(row: SdkModelRow): string | null {
+  const head = (row.description ?? "").split(" · ")[0].trim();
+  return /\d/.test(head) && /^[\w.:-]+( [\w.:-]+){0,2}$/.test(head) ? head : null;
+}
+
+/** 默认槽实际指向的模型名：官方是 description 首段（"Opus 5.5 · …"），配了模型映射的
+ *  供应商是 "Use the default model (currently glm-5.3:cloud[1m])"。认不出 → null。 */
+function defaultSlotTarget(row: SdkModelRow): string | null {
+  return versionedHead(row) ?? /\(currently (.+)\)\s*$/.exec(row.description ?? "")?.[1] ?? null;
+}
+
+/** 下拉显示名：让用户看得出是哪个版本（"Opus" 看不出是 5.0 还是 5.5）。
+ *  - 默认槽（"Default (recommended)"）→ 它实际指向的模型名 +「（默认）」；
+ *  - displayName 自带版本 → 原样；
+ *  - description 首段是同名带版本形态 → 用首段；
+ *  - 都不是 → displayName 原样（第三方供应商走这里：显示名本就是真名）。 */
+export function versionedLabel(row: SdkModelRow): string {
+  if (row.value === "default") {
+    const target = defaultSlotTarget(row);
+    return target ? `${target}（默认）` : row.displayName;
+  }
+  if (/\d/.test(row.displayName)) return row.displayName;
+  const head = versionedHead(row);
+  return head && head.toLowerCase().startsWith(row.displayName.toLowerCase()) ? head : row.displayName;
+}
+
+/** 「钉死型号」行：SDK 的 value 就是完整模型 id 本身（不是 default/opus/sonnet 这类槽位）。
+ *  CLI 0.3.293 起在槽位之外还列出一串旧型号（Opus 5 / 4.8 / 4.7…），照单全收下拉会从
+ *  四五项涨到十几项；配了模型映射的第三方供应商下还会混进一行用不了的官方 Fable。
+ *  下拉只留槽位行 + 当前会话正在用的那个型号（resume 的老会话可能正用着旧型号，
+ *  不能让它从自己的下拉里消失）。SDK 没给 resolvedModel 的行无从判断，一律保留。 */
+function isPinnedModelRow(row: SdkModelRow): boolean {
+  return row.resolvedModel !== undefined && row.resolvedModel === row.value;
+}
+
+function offeredRows(rows: SdkModelRow[], currentModel: string): SdkModelRow[] {
+  return rows.filter((row) => !isPinnedModelRow(row) || realModelOf(row) === currentModel);
+}
+
 /** SDK 条目 → 下拉选项（真名命名空间）。 */
 function toModelOption(row: SdkModelRow): ModelOption {
-  return { value: realModelOf(row), displayName: row.displayName };
+  return { value: realModelOf(row), displayName: versionedLabel(row) };
 }
 
 /** 按真名去重，保留首条。CLI 的列表是按**槽位**给的（default / opus / sonnet /
@@ -64,15 +107,22 @@ export class ModelRoster {
   private realModels: string[] = [];
   /** 真名 → SDK 别名。**唯一**保留别名的用途：把 model 下发给 SDK 时反查回去。 */
   private aliasByRealModel = new Map<string, string>();
+  /** SDK 原始清单（**SDK 自己的 value**、未去重、显示名已带版本）。宿主拿它给
+   *  「还没起会话时的静态别名清单」贴版本标签——去重后的 models 不够用：默认槽与
+   *  opus 同真名时 opus 那一行被去掉，别名 opus 就查不到自己的版本了。 */
+  sdkRoster: ModelOption[] = [];
   /** 最近一次坐实的 assistant wire model（重复播报防抖）。 */
   lastConcreteModel = "";
 
   /** SDK init 回报 → 采纳列表并重建双命名空间账本；返回 models。
+   *  currentModel（真名）：钉死型号行里只有它留下，见 isPinnedModelRow。
    *  失败（SDK 版本不支持）返回 null，调用方静默跳过。 */
-  async adoptFromInit(q: Query): Promise<ModelOption[] | null> {
+  async adoptFromInit(q: Query, currentModel: string): Promise<ModelOption[] | null> {
     const sdkModels = await readInitModels(q);
     if (sdkModels === null) return null;
-    this.adopt(dedupeByRealModel(filterSelectableModels(sdkModels)));
+    const selectable = offeredRows(filterSelectableModels<SdkModelRow>(sdkModels), currentModel);
+    this.sdkRoster = selectable.map((row) => ({ value: row.value, displayName: versionedLabel(row) }));
+    this.adopt(dedupeByRealModel(selectable));
     return this.models;
   }
 

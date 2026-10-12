@@ -85,6 +85,10 @@ pub fn start(p: Pump) {
                             }
                         }
                     }
+                    // 模型名册：sidecar 在 spawn 坐实时随 models_available 带回 SDK 原始清单
+                    // （sdk_roster）。官方会话的那份记下来，并把算好的别名标签挂回事件——
+                    // 前端当场给「新会话」的静态别名下拉贴版本，不必等下次拉供应商列表。
+                    adopt_model_roster(&core, &mut event);
                     // 旁路观察（诊断黑匣子计量与留痕）：GUI 宿主的事，经钩子。
                     if let Some(hooks) = core.runtime.hooks() {
                         hooks.observe(&event, line.len());
@@ -150,4 +154,26 @@ pub fn start(p: Pump) {
             buf.push_back(line);
         }
     });
+}
+
+/// `models_available.sdk_roster` → 名册缓存 + `catalog_labels`。`sdk_roster` 是给宿主的，
+/// 不往前端送（恒摘掉）；非官方会话的清单不采纳，也不挂标签。
+fn adopt_model_roster(core: &Core, event: &mut serde_json::Value) {
+    use crate::provider::roster_cache;
+    let Some(obj) = event.as_object_mut() else { return };
+    if obj.get("type").and_then(|t| t.as_str()) != Some("models_available") {
+        return;
+    }
+    let Some(roster) = obj.remove("sdk_roster") else { return };
+    let sid = obj.get("session_id").and_then(|s| s.as_str()).unwrap_or("");
+    if !core.runtime.is_catalog_session(sid) {
+        return;
+    }
+    if roster_cache::remember(roster_cache::rows_from_event(&roster)) {
+        tokio::task::spawn_blocking(roster_cache::persist);
+    }
+    obj.insert(
+        "catalog_labels".to_string(),
+        serde_json::json!(roster_cache::system_default_labels()),
+    );
 }

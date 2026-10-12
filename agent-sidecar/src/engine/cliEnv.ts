@@ -1,5 +1,5 @@
 // CLI 子进程 env 组装（session-worker.ts 拆分批 3 迁出，纯移动）：
-// 白名单透传 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入。
+// 进程 env 为底 → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入。
 import { cliSubagentModelEnvValue } from "./subagentModelDefault.js";
 
 /** 关思考的请求体补丁：CLI 只对**它自己名单里**的模型名才发 thinking 参数，名单外整个字段
@@ -20,24 +20,25 @@ export interface CliEnvParams {
   thinkingDisabled: boolean;
 }
 
+/** 本会话的生效环境 = 进程 env 为底 + 本条 send 的 env 覆盖（空值不覆盖）。
+ *  **供应商参数只该从这里读**（地址 / 模型映射 / 子代理模型…）：它们是会话属性，
+ *  随每条 send 现带；sidecar 进程 env 里没有（Host 启动 sidecar 时刻意不写，见 Rust
+ *  `runtime::env::runtime_process_env`）。直接读 process.env 会读不到，或读到用户
+ *  shell 泄漏进来的无关值。 */
+export function sessionEnvOf(
+  processEnv: NodeJS.ProcessEnv,
+  envOverrides: Record<string, string>,
+): Record<string, string | undefined> {
+  const env: Record<string, string | undefined> = { ...processEnv };
+  for (const [k, v] of Object.entries(envOverrides)) {
+    if (v) env[k] = v;
+  }
+  return env;
+}
+
 /** 构造传给 claude CLI 子进程的显式 env。 */
 export function buildCliEnv(p: CliEnvParams): Record<string, string | undefined> {
-  const cliEnv: Record<string, string | undefined> = { ...p.processEnv };
-  for (const k of [
-    "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_MODEL", "CLAUDE_CONFIG_DIR", "CLAUDE_CODE_SUBAGENT_MODEL",
-    // 注意：CLAUDE_CODE_EFFORT_LEVEL 刻意不透传——它会压过 applyFlagSettings、
-    // 并与 options.effort 就高合并（2026-08-01 smoke 实锤），会让会话内
-    // effort 切换被 env 搅乱。effort 只走 options.effort + applyFlagSettings。
-    "CLAUDE_CODE_AUTO_COMPACT_WINDOW", "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE", "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    "HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy", "ALL_PROXY", "all_proxy",
-  ]) {
-    if (p.processEnv[k]) cliEnv[k] = p.processEnv[k];
-  }
-  // per-session env 覆盖（provider 连接参数）
-  for (const [k, v] of Object.entries(p.envOverrides)) {
-    if (v) cliEnv[k] = v;
-  }
+  const cliEnv = sessionEnvOf(p.processEnv, p.envOverrides);
   // 会话目录：协议一等字段（automation.session_dir）优先于透传/env。
   // automation 任务的子进程 CLAUDE_CONFIG_DIR 指向作用域隔离配置根，
   // 转录落 <sessionDir>/projects/<cwd 编码>/，不进全局 projects
@@ -56,7 +57,9 @@ export function buildCliEnv(p: CliEnvParams): Record<string, string | undefined>
   // 且值只认我们这份常量（不被残留值改写）。与 CLAUDE_CODE_EFFORT_LEVEL 同一个坑。
   delete cliEnv.CLAUDE_CODE_EXTRA_BODY;
   if (p.thinkingDisabled) cliEnv.CLAUDE_CODE_EXTRA_BODY = THINKING_DISABLED_BODY;
-  cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(p.processEnv);
+  // 子代理模型按**本会话**的供应商配置折算（此刻 cliEnv 还是未改写的会话环境）；
+  // 读 processEnv 的话拿到的是 sidecar 启动那一刻的值，切供应商后就是别家的。
+  cliEnv.CLAUDE_CODE_SUBAGENT_MODEL = cliSubagentModelEnvValue(cliEnv);
   // SDK 0.3.233 起 Todo/task 工具(TaskCreate/TaskGet/TaskUpdate/TaskList/
   // TodoWrite)在新模型(Opus 4.8/Sonnet 5/Fable 5)上不再默认进工具面——Aide
   // 的 TaskListPanel 与轮间 TODO 覆盖逻辑依赖它们，显式 env 保持默认可用。

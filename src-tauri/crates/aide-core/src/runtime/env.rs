@@ -1,12 +1,12 @@
-//! Runtime spawn env 组装。从 commands/chat.rs 迁入并改纯函数：
-//! 调用方负责取 active provider / proxy 传入，
-//! 本函数不做 config I/O，runtime 层不依赖 commands。
+//! Runtime env 组装（纯函数，不做 config I/O，runtime 层不依赖 commands）。两份、别混：
+//! - `build_runtime_env_vars`：**会话级**，供应商参数 + 代理，随每条 send 下发；
+//! - `runtime_process_env`：**进程级**，sidecar 启动时写一次，只有代理。
 
 use std::collections::HashMap;
 
 use crate::provider::ProviderConfig;
 
-/// 组 spawn env：active provider 直映；
+/// 组会话 env（send 的 `env` 字段）：provider 直映；
 /// 再补公共 fallback（CLAUDE_CONFIG_DIR + 代理），最后 proxy 覆盖。
 /// 纯函数——无 I/O，可单测。
 pub fn build_runtime_env_vars(active: &ProviderConfig, proxy: &str) -> HashMap<String, String> {
@@ -24,12 +24,28 @@ pub fn build_runtime_env_vars(active: &ProviderConfig, proxy: &str) -> HashMap<S
         }
     }
 
-    if !proxy.is_empty() {
-        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-            env_vars.insert(k.to_string(), proxy.to_string());
-        }
-    }
+    apply_proxy(&mut env_vars, proxy);
     env_vars
+}
+
+/// sidecar **进程级** env：只有代理（sidecar 自己出网用）。**刻意不含供应商参数**——
+/// 供应商是会话属性，每条 send 的 `env` 现算现带；写进进程 env 的话，sidecar 以它
+/// 为底拼 CLI 子进程环境，切到参数更少的供应商（官方：不设地址、不设模型映射）时
+/// 没有键可覆盖，启动时那家的地址和映射原样漏进新会话——选的是 A，请求发给 B
+/// （2026-10-12 实锤：Ollama 启动后切 Anthropic）。
+pub fn runtime_process_env(proxy: &str) -> HashMap<String, String> {
+    let mut env_vars = HashMap::new();
+    apply_proxy(&mut env_vars, proxy);
+    env_vars
+}
+
+fn apply_proxy(env_vars: &mut HashMap<String, String>, proxy: &str) {
+    if proxy.is_empty() {
+        return;
+    }
+    for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+        env_vars.insert(k.to_string(), proxy.to_string());
+    }
 }
 
 /// 剥掉 cargo 注入的 target 段。`cargo run` 会把当前构建的 profile 目录
@@ -105,6 +121,15 @@ C:\\Users\\yangx\\.cargo\\bin";
         assert_eq!(strip_cargo_target_segments(""), "");
         // 空段（";;"）原样保留，不做多余规范化
         assert_eq!(strip_cargo_target_segments("C:\\a;;C:\\b"), "C:\\a;;C:\\b");
+    }
+
+    #[test]
+    fn runtime_process_env_carries_proxy_only() {
+        // 进程级 env 不许出现任何供应商键：出现一个，就会在切供应商后漏进别家会话。
+        let env = runtime_process_env("http://127.0.0.1:7890");
+        assert_eq!(env.get("HTTPS_PROXY"), Some(&"http://127.0.0.1:7890".to_string()));
+        assert!(env.keys().all(|k| k.to_ascii_lowercase().ends_with("_proxy")), "{env:?}");
+        assert!(runtime_process_env("").is_empty());
     }
 
     #[test]
