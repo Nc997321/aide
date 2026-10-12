@@ -16,9 +16,35 @@ describe("summarizeToolInput", () => {
     expect(summarizeToolInput("Glob", { pattern: "*.rs", path: "crates" })).toBe("*.rs in crates");
   });
 
-  it("其它工具与缺字段时回退成截断的 JSON，input 为空不抛", () => {
-    expect(summarizeToolInput("WebFetch", { url: "https://x" })).toBe('{"url":"https://x"}');
-    expect(summarizeToolInput("Grep", {})).toBe("{}");
+  it("提问取问题文本、计划取首行标题，不露 JSON", () => {
+    const q = (question: string) => ({ question, header: "h", options: [] });
+    expect(summarizeToolInput("AskUserQuestion", { questions: [q("用哪个库？")] })).toBe("用哪个库？");
+    expect(summarizeToolInput("AskUserQuestion", { questions: [q("用哪个库？"), q("要测试吗？")] }))
+      .toBe("用哪个库？ 等 2 个问题");
+    expect(summarizeToolInput("AskUserQuestion", {})).toBe("");
+    expect(summarizeToolInput("ExitPlanMode", { plan: "\n# 重构摘要行\n\n1. 第一步" })).toBe("重构摘要行");
+    expect(summarizeToolInput("ExitPlanMode", {})).toBe("");
+    expect(summarizeToolInput("EnterPlanMode", {})).toBe("");
+  });
+
+  it("常用工具各取一个人读的字段：网址 / 搜索词 / 任务描述 / 技能名 / 待办", () => {
+    expect(summarizeToolInput("WebFetch", { url: "https://x", prompt: "p" })).toBe("https://x");
+    expect(summarizeToolInput("WebSearch", { query: "tauri v2" })).toBe("tauri v2");
+    expect(summarizeToolInput("Agent", { description: "查引用", prompt: "…" })).toBe("查引用");
+    expect(summarizeToolInput("Skill", { skill: "aide-design" })).toBe("aide-design");
+    expect(summarizeToolInput("NotebookEdit", { notebook_path: "/a/n.ipynb" })).toBe("/a/n.ipynb");
+    const todo = (content: string, status: string) => ({ content, status, activeForm: content });
+    expect(summarizeToolInput("TodoWrite", { todos: [todo("写测试", "completed"), todo("改实现", "in_progress")] }))
+      .toBe("改实现");
+    expect(summarizeToolInput("TodoWrite", { todos: [todo("写测试", "completed"), todo("改实现", "pending")] }))
+      .toBe("1/2 项已完成");
+    expect(summarizeToolInput("TodoWrite", {})).toBe("");
+  });
+
+  it("其它工具与缺字段时留空（不露原始 JSON），input 为空不抛", () => {
+    expect(summarizeToolInput("mcp__x__do", { a: 1 })).toBe("");
+    expect(summarizeToolInput("WebFetch", {})).toBe("");
+    expect(summarizeToolInput("Grep", {})).toBe("");
     expect(summarizeToolInput("Bash", undefined)).toBe("");
   });
 });

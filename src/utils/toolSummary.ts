@@ -11,6 +11,7 @@ export function summarizeToolInput(name: string, input: unknown): string {
   const record = (input ?? {}) as Record<string, unknown>;
   if (name === "Bash") return String(record.command ?? "");
   if (["Read", "Write", "Edit"].includes(name)) return String(record.file_path ?? "");
+  if (name === "NotebookEdit") return str(record.notebook_path);
   if (name === "Grep" && str(record.pattern)) {
     const scope = str(record.path) || str(record.glob) || (str(record.type) && `*.${str(record.type)}`);
     return scope ? `"${str(record.pattern)}" in ${scope}` : `"${str(record.pattern)}"`;
@@ -18,7 +19,37 @@ export function summarizeToolInput(name: string, input: unknown): string {
   if (name === "Glob" && str(record.pattern)) {
     return str(record.path) ? `${str(record.pattern)} in ${str(record.path)}` : str(record.pattern);
   }
-  return JSON.stringify(record).slice(0, 80);
+  // 提问 / 计划：input 是整份问题表 / 计划正文，截断的 JSON 没法读——取问题文本、
+  // 计划的首行标题。
+  if (name === "AskUserQuestion") {
+    const questions = Array.isArray(record.questions) ? record.questions : [];
+    const first = str((questions[0] as Record<string, unknown> | undefined)?.question);
+    return questions.length > 1 && first ? `${first} 等 ${questions.length} 个问题` : first;
+  }
+  if (name === "ExitPlanMode") return planTitle(str(record.plan));
+  if (name === "WebFetch") return str(record.url);
+  if (name === "WebSearch" || name === "ToolSearch") return str(record.query);
+  if (name === "Agent" || name === "Task") return str(record.description);
+  if (name === "Skill") return str(record.skill);
+  if (name === "TodoWrite") return todoSummary(record.todos);
+  // 其余工具（MCP 等参数形态不定）：头行只留工具名，原始 JSON 没人读。
+  return "";
+}
+
+/** 待办表：正在做的那一项；没有进行中的就报进度。 */
+function todoSummary(todos: unknown): string {
+  if (!Array.isArray(todos) || todos.length === 0) return "";
+  const items = todos as Record<string, unknown>[];
+  const active = items.find((t) => t?.status === "in_progress");
+  if (active && str(active.content)) return str(active.content);
+  const done = items.filter((t) => t?.status === "completed").length;
+  return `${done}/${items.length} 项已完成`;
+}
+
+/** 计划正文的第一个非空行，去掉 markdown 标题 / 列表记号。 */
+function planTitle(plan: string): string {
+  const line = plan.split("\n").find((l) => l.trim()) ?? "";
+  return line.trim().replace(/^(#+|[-*]|\d+\.)\s+/, "");
 }
 
 /** 工具行的结果预览：拐角下的几行正文。不配状态文字（"运行中" / "无匹配" / 行数
