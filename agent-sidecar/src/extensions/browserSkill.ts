@@ -44,7 +44,7 @@ export function browserReferencePath(env: Env, name: string): string {
 
 export const SKILL_CONTENT = `---
 name: browser-inspect
-description: Use when the user points you at a design prototype, wireframe, or spec page (often a link to a design-handoff tool) and asks what it contains or what needs building from it — or asks you to read, summarize, or operate the page they are currently viewing in Aide's embedded browser. Covers reading a page's structure, walking multiple pages of a prototype, and turning that into a specification.
+description: Use when the user points you at a design prototype, wireframe, or spec page and asks what it contains or what to build from it — or asks you to read, operate, test or debug a page in Aide's embedded browser (multi-step work with the aide-browser tools).
 ---
 
 # Reading a live page as a specification
@@ -60,6 +60,16 @@ The \`aide-browser\` MCP tools drive the embedded browser pane in Aide. The page
 5. **After an action, wait with \`browser_wait\` — never hand-roll a polling loop.** \`until:"condition"\` polls a synchronous expression you supply; \`until:"load"\` waits for a navigation to finish, which no in-page expression can do. A timeout is reported, not raised: it tells you how many times it polled and what it last saw. Read that before concluding the page is broken.
 6. **When the question is visual, look at it.** \`browser_screenshot\` answers "which panel is the user actually looking at" — and "did this render at all" — far faster than reasoning about coordinates. It is the fallback, not the default: an image costs far more context than text and gives you pixels rather than structure. Reach for it when the structured read genuinely cannot answer, not before. Pass \`text\` or \`selector\` to crop it to a single element — when one control is the whole question, that is usually the cheapest shot there is.
 7. **Deliver a specification, not a transcript.** The user wants a structured result — page inventory, tables with their columns, form fields with their labels, actions available, and how pages link. Do not paste raw page dumps into the answer.
+
+## When the page is not doing what you expect
+
+Look at what the page said before guessing.
+
+- \`browser_network\` lists the XHR/fetch calls with status, duration and a response snippet — the fastest answer to "why is this blank / why did nothing happen".
+- \`browser_console\` lists console messages and, separately, uncaught errors and unhandled rejections — where an error swallowed by the page's own try/catch shows up.
+- Both read a buffer that lives in the **current document only**; a navigation resets it. A view you opened with \`browser_tab\` is recording from its first request. For any other view, a call that has to install the recorder says so in its result — reload to capture that page's load-time requests.
+- A \`browser_eval\` script that throws is reported as an exception with its text, distinctly from one that legitimately returned null. Wrap statements in \`(() => { ... })()\`; an \`(async () => …)()\` is awaited.
+- Every failure comes back as text with the next step (no view open, view ambiguous, script error, unreadable frame). Report what it says instead of retrying blindly.
 
 ## Three things that will bite you
 

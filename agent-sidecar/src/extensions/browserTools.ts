@@ -100,10 +100,8 @@ const includeHiddenArg = z
   .boolean()
   .optional()
   .describe(
-    "Include hidden (display:none) tables / fields / clickables in the skeleton, and the hidden text in " +
-      "the raw text section (that section lists rendered text only). " +
-      "Default false — hidden poppers are noise. Pass true when the page stacks whole screens " +
-      "(design-tool prototypes).",
+    "Also list hidden (display:none) tables / fields / clickables and hidden raw text. Default false. " +
+      "Pass true when the page stacks whole screens that way (design-tool prototypes).",
   );
 
 export function buildBrowserTabsTool(
@@ -111,11 +109,10 @@ export function buildBrowserTabsTool(
 ) {
   return tool(
     "browser_tabs",
-    "List the browser views (tabs) currently open in Aide's embedded browser, with each one's id, " +
-      "url, title, label and whether it is displayed (on screen for the user) or parked (alive in the " +
-      "background — it still renders). " +
-      "Call this FIRST when a task involves a page: the other browser tools take a `view_id` and this is where you learn it. " +
-      "A view stays alive even when the browser panel is closed or the tab is switched away, so the page you need may already be open.",
+    "List the views (tabs) open in Aide's embedded browser: id, url, title, label, and whether each " +
+      "is displayed (on screen for the user) or parked (in the background — it still renders). Call " +
+      "this FIRST: the other browser tools take a `view_id`. Views survive the panel being closed, so " +
+      "the page you need may already be open.",
     {},
     () => call(emit, () => ({ op: "list_views" }), formatTabs),
   );
@@ -126,25 +123,18 @@ export function buildBrowserReadTool(
 ) {
   return tool(
     "browser_read",
-    "Read the page loaded in an embedded browser view as a STRUCTURED SKELETON: outline, tables (headers + rows), " +
-      "form fields (label / name / value / options), clickable elements, frames, and raw text. " +
-      "Use this to read a page — do not probe the DOM with browser_eval first. " +
-      "It reads the top document plus same-origin frames, and reaches into CROSS-ORIGIN frames too when the WebView2 " +
-      "runtime allows it (so you do not have to navigate away to read an embedded prototype). Anything it could not " +
-      "read is reported as such, with the reason. Hidden (display:none) tables/fields/clickables are skipped by default " +
-      "and counted in a note — pass include_hidden to list them too (prototype pages that stack whole screens that way). " +
-      "Raw text lists rendered text only; include_hidden applies to it too. When the page has tables/fields/buttons the " +
-      "raw text is clipped (the structure already carries it) — pass full_text for all of it. Runs of identical " +
-      "unlabeled fields (a checkbox per table row) are folded into one line with a value count. " +
-      "After you change the page, pass since_last to get only the lines that changed since your previous read. " +
-      "It does NOT run arbitrary script — use browser_eval for that.",
+    "Read a view's page as a STRUCTURED SKELETON: outline, tables, form fields (label / name / value " +
+      "/ options), clickable elements, frames and raw text — the top document, same-origin frames, and " +
+      "cross-origin frames when the runtime allows it; whatever it could not read is reported with the " +
+      "reason. Use this to read a page — do not probe the DOM with browser_eval first. Hidden " +
+      "(display:none) content is skipped and counted in a note. It does NOT run arbitrary script.",
     {
       view_id: viewIdArg,
       include_hidden: includeHiddenArg,
       full_text: z
         .boolean()
         .optional()
-        .describe("Return the whole raw text even when the page has structure. Default false."),
+        .describe("Return the whole raw text; by default it is clipped when the page has tables/fields/buttons."),
       since_last: z
         .boolean()
         .optional()
@@ -186,12 +176,10 @@ export function buildBrowserEvalTool(
 ) {
   return tool(
     "browser_eval",
-    "Run a JavaScript EXPRESSION in the page context of an embedded browser view and return its JSON-serialised result. " +
-      "This is the escape hatch for anything browser_read does not cover: pulling a custom shape, inspecting one element, " +
-      "filling a field, or answering a question about state the skeleton does not carry. " +
-      "The last expression's value is what comes back, so end with something serialisable — return a small object, not the whole DOM. " +
-      "The page carries the user's real logged-in session: only do what the user actually asked for, and never submit forms or " +
-      "perform writes on their behalf without being asked.",
+    "Run a JavaScript EXPRESSION in a view's page and return its JSON-serialised value. The escape " +
+      "hatch for what browser_read does not cover; return a small object, not the whole DOM. The page " +
+      "carries the user's real logged-in session: never submit forms or perform writes on their behalf " +
+      "without being asked.",
     {
       view_id: viewIdArg,
       script: z
@@ -299,15 +287,12 @@ export function buildBrowserActTool(
 ) {
   return tool(
     "browser_act",
-    "Perform an action on the page in an embedded browser view: click, fill, hover, or press a key. " +
-      "Target the element by `text` (its visible label — preferred, e.g. the 刷新 button) or by a CSS `selector`. " +
-      "This is how you move through a UI or fill a form. It does NOT submit anything by itself — submitting is a separate " +
-      "click on the submit control, so only do that when the user asked for it. " +
-      "Clicks use real CDP mouse input when the runtime supports it and fall back to synthetic events otherwise; " +
-      "the result tells you which path was used — synthetic clicks may not drive every widget, so verify the page changed. " +
-      "action=press sends a real key (Enter, Escape, Tab, …) to the focused element — after a `fill`, that is how you " +
-      "commit a field whose framework submits on Enter or blur rather than on the value itself (note that Enter may " +
-      "trigger the page's own submit handler: press it only when that is what you mean).",
+    "Click, fill, hover or press a key on a view's page. Target the element by `text` (its visible " +
+      "label — preferred) or a CSS `selector`. It does NOT submit anything by itself — submitting is a " +
+      "separate click, only when the user asked for it. The result says whether real CDP input or a " +
+      "synthetic fallback was used and whether a fill verifiably stuck; after a synthetic click, verify " +
+      "the page changed. action=press sends a real key (Enter, Escape, Tab, …) — the way to commit a " +
+      "field that submits on Enter or blur.",
     {
       view_id: viewIdArg,
       action: z
@@ -457,29 +442,25 @@ export function buildBrowserScreenshotTool(
 ) {
   return tool(
     "browser_screenshot",
-    "Take a screenshot of the embedded browser view. USE THIS SPARINGLY — it is the visual FALLBACK, not a way " +
-      "to read a page: an image costs far more context than the structured read and gives you pixels instead of structure. " +
-      "Reach for it when the question is genuinely visual — which panel is actually visible on screen, whether something " +
-      "rendered at all, what a canvas or image-only region contains — or when the structured read came back empty and you " +
-      "need to see why. It captures the visible viewport by default; pass full_page for the entire page, or pass `text` / " +
-      "`selector` to crop the shot to a single element (cheapest — do that when one control is all you need). " +
-      "It works on a parked view too — the page keeps rendering, so you do not need to bring it on screen first.",
+    "Screenshot a view. USE THIS SPARINGLY — it is the visual FALLBACK, not a way to read a page: an " +
+      "image costs far more context than browser_read and gives pixels instead of structure. Use it for " +
+      "genuinely visual questions (what is on screen, whether something rendered, what a canvas " +
+      "contains). Viewport by default; `full_page` for the whole page; `text` / `selector` crops to one " +
+      "element (cheapest). Works on a parked view too.",
     {
       view_id: viewIdArg,
       full_page: z
         .boolean()
         .optional()
         .describe(
-          "Capture the whole page instead of just the visible viewport. Default false: the viewport is what the user " +
-            "is actually looking at, and it costs less context. Ignored when `text` or `selector` is given (the crop wins).",
+          "Capture the whole page instead of the visible viewport. Default false. Ignored when `text` or `selector` is given.",
         ),
       text: z
         .string()
         .optional()
         .describe(
-          "Crop the shot to this element's box, matched by its visible label (e.g. the 保存 button) — the " +
-            "same matching browser_act uses, so it only reaches interactive elements; use `selector` for " +
-            "anything else. Use this instead of a full screenshot when you only need one control.",
+          "Crop to this element, matched by its visible label as in browser_act (interactive elements only; " +
+            "use `selector` for anything else).",
         ),
       selector: z
         .string()
@@ -489,8 +470,7 @@ export function buildBrowserScreenshotTool(
         .enum(["jpeg", "png"])
         .optional()
         .describe(
-          "Image format. Default 'jpeg' (quality 80) — much smaller than PNG, and a screenshot is re-sent in " +
-            "every later turn. Use 'png' only for pixel-exact fidelity (fine text, thin lines).",
+          "Default 'jpeg' (much smaller). Use 'png' only for pixel-exact fidelity (fine text, thin lines).",
         ),
     },
     async (args) => {
@@ -539,14 +519,10 @@ export function buildBrowserWaitTool(
 ) {
   return tool(
     "browser_wait",
-    "Wait in an embedded browser view until something becomes true, then return. Use this after browser_act " +
-      "when your next step depends on what the click triggered — do not hand-roll a polling loop with browser_eval. " +
-      "TWO MODES. `until:\"condition\"` (default) polls a JavaScript EXPRESSION you give; a truthy value means done. " +
-      "The expression must be SYNCHRONOUS and it may throw while the thing you are waiting for does not exist yet " +
-      "(that is treated as not-yet-true, not as a failure). `until:\"load\"` waits for the view to finish loading, " +
-      "which no in-page expression can express (document.readyState is answered by the OLD document during a " +
-      "navigation). A timeout is REPORTED, not raised: you get how many times it polled and the last value it saw — " +
-      "read that before concluding the page is broken.",
+    "Wait in a view until something becomes true. Use it after browser_act — do not hand-roll a " +
+      "polling loop with browser_eval. `until:\"condition\"` (default) polls a SYNCHRONOUS JavaScript " +
+      "expression; `until:\"load\"` waits for a navigation to finish, which no in-page expression can " +
+      "express. A timeout is REPORTED, not raised, with the poll count and the last value seen.",
     {
       view_id: viewIdArg,
       until: z
@@ -617,17 +593,11 @@ export function buildBrowserTabTool(
 ) {
   return tool(
     "browser_tab",
-    "Open, close, navigate or show a tab in the embedded browser (a view) — the tab-level " +
-      "companion to browser_tabs / browser_act. " +
-      "action=open creates a view OF YOUR OWN and returns its view_id: use that id for every " +
-      "later call. The view is created PARKED — the page runs in the background (rendering, " +
-      "timers, navigation and screenshots all work) and the user's panel is not disturbed, so " +
-      "you can keep working while they look at something else. " +
-      "action=close destroys a view — do it when you are done: parked views keep rendering. " +
-      "action=focus asks the panel to bring a view to the front, which STEALS what the user is " +
-      "looking at; use it only when they should actually look at the page. " +
-      "WHEN SEVERAL VIEWS EXIST always pass the view_id you got from action=open — the other " +
-      "tools refuse to guess (omitting it fails rather than acting on the wrong tab).",
+    "Open, close, navigate or focus a tab (view) in the embedded browser. action=open creates a view " +
+      "OF YOUR OWN and returns its view_id — pass that id to every later call. It is created PARKED: " +
+      "the page runs in the background and the user's panel is not disturbed. action=close destroys a " +
+      "view — do it when you are done. action=focus brings a view to the front and STEALS what the user " +
+      "is looking at; use it only when they should actually see the page.",
     {
       action: z
         .enum(["open", "close", "navigate", "back", "forward", "focus"])
@@ -644,8 +614,7 @@ export function buildBrowserTabTool(
         .string()
         .optional()
         .describe(
-          "Only for action=open: a short name shown on the tab until the page's own title is " +
-            "known (e.g. 'vue-admin dev'). Use it when several tabs point at the same dev server.",
+          "Only for action=open: a short name shown on the tab until the page's title is known.",
         ),
       view_id: z
         .string()
@@ -690,13 +659,10 @@ export function buildBrowserNetworkTool(
 ) {
   return tool(
     "browser_network",
-    "List the XHR/fetch requests the page has made — method, URL, status, duration, the request body (`req:`, " +
-      "clipped; credential-like fields such as password/token show as [redacted]) and a clipped response body, " +
-      "newest last. This is how you answer \"what did that request actually return?\": a blank page, an action that " +
-      "never advanced, a 500 behind a swallowed error. Unfinished requests show as pending. The recorder is installed " +
-      "on demand and lives in the CURRENT document only (it is cleared by any navigation); if this call installs it, " +
-      "a note says so — navigate or reload to capture a fresh load from its first request. " +
-      "Use browser_console for console messages and uncaught errors.",
+    "List the XHR/fetch requests the page has made, newest last: method, URL, status, duration, and " +
+      "clipped request / response bodies (credential-like fields show as [redacted]). This is how you " +
+      "answer \"what did that request actually return?\". The recorder lives in the CURRENT document " +
+      "only; if this call has to install it, a note says so — reload to capture a fresh load.",
     {
       view_id: viewIdArg,
       filter: z.string().optional().describe("Only requests whose URL contains this substring. Omit for all."),
@@ -743,11 +709,9 @@ export function buildBrowserConsoleTool(
 ) {
   return tool(
     "browser_console",
-    "List what the page logged: console.* calls AND the errors it never caught (uncaught exceptions, unhandled promise " +
-      "rejections — shown separately, because those are exactly the ones the page's own error handling did not swallow). " +
-      "Reach for it when something failed silently — an API error caught by the app and never surfaced, a blank panel. " +
-      "Same buffer rules as browser_network: it lives in the CURRENT document only and a call that has to install the " +
-      "recorder first says so.",
+    "List what the page logged: console.* calls and, separately, the errors it never caught (uncaught " +
+      "exceptions, unhandled promise rejections). Reach for it when something failed silently. Same " +
+      "buffer rules as browser_network.",
     {
       view_id: viewIdArg,
       level: z
