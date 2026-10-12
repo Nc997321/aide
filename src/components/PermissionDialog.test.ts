@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, vi } from "vitest";
 import { mount, enableAutoUnmount } from "@vue/test-utils";
 import { nextTick } from "vue";
 import PermissionDialog from "./PermissionDialog.vue";
@@ -635,6 +635,22 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
     const e = press("Enter");
     expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", true]);
     expect(e.defaultPrevented).toBe(true);
+  });
+
+  it("打字保护：刚敲过别的键的 Enter 不当确认（输入框被收起后打字的人不会误批准）", () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = mountAttached({ permission: bashPermission() });
+      press("a");
+      const e = press("Enter");
+      expect(wrapper.emitted("respond")).toBeUndefined();
+      expect(e.defaultPrevented).toBe(false);
+      vi.advanceTimersByTime(1000);
+      press("Enter");
+      expect(respondEvent(wrapper, 0, 1)).toEqual(["p1", true]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("工具调用：Esc = 展开理由输入（不直接拒绝），理由输入自动聚焦", async () => {

@@ -64,6 +64,7 @@ import ChatInputBox from "./ChatInputBox.vue";
 import { SCENES } from "./hero/scenes";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { __resetUsageTipsForTest } from "@/composables/useUsageTips";
+import { resetInputHistory } from "@/composables/useInputHistory";
 
 const WORKSPACE = "C:/repo";
 
@@ -442,5 +443,41 @@ describe("ChatInputBox · 欢迎页场景", () => {
     const [, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
     expect(opts.scene).toBeUndefined();
     expect(opts.mentions.sendText).toBe("你好");
+  });
+});
+
+describe("ChatInputBox — 发送历史（↑/↓）", () => {
+  beforeEach(() => resetInputHistory());
+
+  const valueOf = (w: VueWrapper) => (textarea(w).element as HTMLTextAreaElement).value;
+  async function key(w: VueWrapper, k: "ArrowUp" | "ArrowDown") {
+    await textarea(w).trigger("keydown", { key: k });
+    await nextTick();
+  }
+  /** 发送坐实由父层递增 nonce 驱动——这里直接模拟。 */
+  async function sendConfirmed(w: VueWrapper, text: string, nonce: number) {
+    await textarea(w).setValue(text);
+    await w.setProps({ sendConfirmedNonce: nonce });
+    await nextTick();
+  }
+
+  it("空输入框 ↑ 取回上一次发送，↓ 翻回空；有草稿时方向键不接管", async () => {
+    const w = mountBox();
+    await sendConfirmed(w, "first", 1);
+    await sendConfirmed(w, "second", 2);
+    expect(valueOf(w)).toBe("");
+
+    await key(w, "ArrowUp");
+    expect(valueOf(w)).toBe("second");
+    await key(w, "ArrowUp");
+    expect(valueOf(w)).toBe("first");
+    await key(w, "ArrowDown");
+    expect(valueOf(w)).toBe("second");
+    await key(w, "ArrowDown");
+    expect(valueOf(w)).toBe("");
+
+    await textarea(w).setValue("draft");
+    await key(w, "ArrowUp");
+    expect(valueOf(w)).toBe("draft");
   });
 });

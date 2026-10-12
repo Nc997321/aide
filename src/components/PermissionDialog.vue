@@ -119,7 +119,7 @@ const eyebrowLabel = computed(() => {
 });
 
 /** 折叠态：计划批准 / 澄清提问弹窗较高，与顶部 TaskListPanel 一同挤压时会把消息区
- *  夹到几乎不可见（perm-dock max-height 45vh）。右上角折叠按钮把正文收起、只留头部
+ *  夹到几乎不可见（perm-dock max-height 60vh）。右上角折叠按钮把正文收起、只留头部
  *  条，把高度还给 .chat-messages（flex:1 自动回收），用户回看上文后再展开决定。
  *  仅 plan / question 给按钮——工具调用弹窗本就矮（输入封顶 128px），折叠省不了多少。
  *  组件常驻挂载（外层 v-if 在内层 .perm-dock），collapsed 会跨请求残留，故新请求到达
@@ -199,7 +199,14 @@ function isSolePendingDialog(): boolean {
   return document.querySelectorAll(".perm-dock").length === 1;
 }
 
+/** 打字保护：弹窗出现时空着的输入框会被收起（ChatInputBox 的 stow），焦点随之掉到
+ *  body——刚想打字的人接下来那一下 Enter 本是想发消息，却会落到这里变成「允许」。
+ *  刚敲过别的键的 Enter 一律不当确认；专门来确认的人只按 Enter，不受影响。 */
+const TYPING_GUARD_MS = 1000;
+let lastTypedAt = 0;
+
 function onDialogKeydown(e: KeyboardEvent) {
+  if (e.key !== "Enter" && e.key !== "Escape") lastTypedAt = Date.now();
   if (!props.permission || e.isComposing || e.repeat) return;
   if (e.defaultPrevented || isOverlayBlocked() || !isSolePendingDialog()) return;
   if (e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
@@ -209,6 +216,7 @@ function onDialogKeydown(e: KeyboardEvent) {
 
 function onEnterKey(e: KeyboardEvent) {
   if (isTextEntryTarget(e.target) || isActionTarget(e.target)) return;
+  if (Date.now() - lastTypedAt < TYPING_GUARD_MS) return;
   e.preventDefault();
   if (denyOpen.value) submitDeny();
   else primaryAction();
@@ -724,7 +732,8 @@ const inputJson = computed(() => {
 /* 权限请求：GALLERY .perm — warning 渐变氛围框 + 图标盘 + mono 命令井 + 按钮行 */
 .perm-dock {
   flex-shrink: 0;
-  max-height: 45vh;
+  /* 弹窗在时输入框已收起（ChatInputBox 的 stow），那块高度归弹窗。 */
+  max-height: 60vh;
   overflow-y: auto;
   overflow-x: hidden;
   margin: 8px 12px 10px;

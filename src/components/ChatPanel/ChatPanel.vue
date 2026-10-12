@@ -383,6 +383,12 @@ const heroModelName = ref("");
 // 只动 transform，不碰滚动区——本项目有 O(n²) 渲染/强布局前科，此处保持零负担。
 // 输入盒根元素（.chat-input-area）经 ChatInputBox 的 defineExpose({ rootEl }) 暴露。
 const inputBoxRef = ref<{ rootEl: HTMLElement | null } | null>(null);
+
+// 待确认时收起输入框：此刻唯一要做的事是回应弹窗，输入框只是噪音，腾出的高度归弹窗。
+// 真实权限请求：有草稿就不收（人家正写着）；发送前确认：输入框里的就是待确认的那条，照收。
+const inputStow = computed<"off" | "unless-draft" | "always">(() =>
+  sendConfirm.value ? "always" : props.permission ? "unless-draft" : "off",
+);
 const heroLeaving = ref(false); // 首条消息淡入用的一次性 class
 
 watch(isHero, (now, prev) => {
@@ -595,7 +601,7 @@ function onOpenBgDock(taskId: string) {
 
     <!-- 权限确认 / AskUserQuestion / 发送前确认（变体 C）：挤在消息区和输入框之间，
          占真实布局空间而不是悬浮遮挡——上面 .chat-messages 是 flex:1，这块一出现
-         就自动让出高度，正文和输入框都不会被盖住。displayedPermission 优先显示
+         就自动让出高度，正文不会被盖住；输入框此时收起（inputStow；有草稿则不收）。displayedPermission 优先显示
          发送前确认（本地合成请求），其次真实权限请求。 -->
     <PermissionDialog
       :permission="displayedPermission"
@@ -670,6 +676,7 @@ function onOpenBgDock(taskId: string) {
          输入框相关的改动（如 effort 选择器）不再动 ChatPanel。发送走 send-request
          门控（onSendRequest），确认后经 sendConfirmedNonce 坐实清空输入。 -->
     <ChatInputBox
+      :stow="inputStow"
       ref="inputBoxRef"
       :session-id="props.sessionId"
       :workspace-path="props.workspacePath"

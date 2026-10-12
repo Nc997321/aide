@@ -33,6 +33,7 @@ import { useBtwSession } from "@/composables/useBtwSession";
 import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
 import { useToast } from "@/composables/useToast";
+import { pushInputHistory, useInputHistory } from "@/composables/useInputHistory";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
 import { defaultEffortFor } from "./effortDefault";
 import { inputPlaceholder } from "./inputPlaceholder";
@@ -79,6 +80,8 @@ const props = defineProps<{
   /** 发送坐实信号：ChatPanel 门控通过/确认后递增，本组件据此清空输入（取消确认
    *  不递增，输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
   sendConfirmedNonce: number;
+  /** 父层要求收起（有待确认弹窗）：unless-draft = 有草稿就不收；always = 照收。 */
+  stow?: "off" | "unless-draft" | "always";
 }>();
 
 const emit = defineEmits<{
@@ -103,6 +106,36 @@ const emit = defineEmits<{
 
 const rootEl = ref<HTMLElement | null>(null);
 defineExpose({ rootEl });
+
+// 收起态：弹窗在时空着的输入框是噪音，让位给弹窗。有草稿则留着（弹窗到达那一刻定夺，
+// 之后删空也不半路消失），直到这条发出去；发送前确认（always）的「草稿」就是待确认的
+// 那条，照收。v-show 而非 v-if——内容、芯片原样留着。
+const keptForDraft = ref(false);
+const hidden = computed(
+  () => props.stow === "always" || (props.stow === "unless-draft" && !keptForDraft.value),
+);
+function hasDraft(): boolean {
+  return !!inputText.value.trim() || pendingImages.value.length > 0
+    || pendingMentions.value.length > 0 || kbChips.value.length > 0;
+}
+watch(() => props.stow, (stow, prev) => {
+  if (stow === "unless-draft" && prev !== "unless-draft") keptForDraft.value = hasDraft();
+  else if (stow !== "unless-draft") keptForDraft.value = false;
+});
+// 收起会让输入框丢焦点；回来时只在「收起前焦点就在这、期间没挪去别处」时还回去，
+// 不从编辑器 / 终端手里抢。
+let hadFocus = false;
+watch(hidden, (h) => {
+  if (h) {
+    hadFocus = !!rootEl.value?.contains(document.activeElement);
+    return;
+  }
+  if (!hadFocus) return;
+  hadFocus = false;
+  nextTick(() => {
+    if (document.activeElement === document.body) textareaEl.value?.focus();
+  });
+});
 
 const identity = useSessionIdentityView();
 /** 使用小提示：用过某功能就让讲它的提示退役（markUsed 散在各功能入口），
@@ -707,6 +740,7 @@ function refreshSuggest() {
 /** textarea 的 input：先走既有的 `@path `→芯片转换层，再刷新补全菜单。
  *  IME 组合期不弹菜单（与转换层同一判据，避免打断中文输入）。 */
 function handleInput(e: InputEvent) {
+  inputHistory.reset();
   handleMentionInput(e);
   if (e.isComposing) return;
   refreshSuggest();
@@ -908,7 +942,9 @@ function handleArrowUp(e: KeyboardEvent) {
   if (slashDropdownVisible.value) {
     e.preventDefault();
     slashSelectedIndex.value = Math.max(0, slashSelectedIndex.value - 1);
+    return;
   }
+  recallHistory(e, -1);
 }
 
 function handleArrowDown(e: KeyboardEvent) {
@@ -920,7 +956,27 @@ function handleArrowDown(e: KeyboardEvent) {
   if (slashDropdownVisible.value) {
     e.preventDefault();
     slashSelectedIndex.value = Math.min(filteredSkills.value.length - 1, slashSelectedIndex.value + 1);
+    return;
   }
+  recallHistory(e, 1);
+}
+
+/** 终端式发送历史：↑ 上一条、↓ 下一条（翻过最新一条回到原内容）。
+ *  只在输入框为空或已在回溯时接管——有草稿时方向键仍是移动光标；多行内容里
+ *  光标到了首/末行才翻页。动手改了回溯出来的内容即成草稿（handleInput 里 reset）。 */
+const inputHistory = useInputHistory();
+function recallHistory(e: KeyboardEvent, dir: -1 | 1) {
+  const ta = textareaEl.value;
+  if (!ta || e.isComposing || e.shiftKey || e.ctrlKey || e.altKey || e.metaKey) return;
+  if (inputText.value && !inputHistory.browsing()) return;
+  if (ta.selectionStart !== ta.selectionEnd) return;
+  const beyond = dir < 0 ? ta.value.slice(0, ta.selectionStart) : ta.value.slice(ta.selectionEnd);
+  if (beyond.includes("\n")) return;
+  const text = dir < 0 ? inputHistory.prev(inputText.value) : inputHistory.next();
+  if (text === null) return;
+  e.preventDefault();
+  inputText.value = text;
+  nextTick(() => ta.setSelectionRange(ta.value.length, ta.value.length));
 }
 
 function insertAtCursor(text: string) {
@@ -1132,6 +1188,8 @@ async function performSend() {
     // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
     // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
     emit("send-btw", mentionPrefix + text);
+    pushInputHistory(text);
+    inputHistory.reset();
     inputText.value = "";
     pendingImages.value = [];
     pendingMentions.value = [];
@@ -1253,6 +1311,9 @@ watch(() => props.sendConfirmedNonce, () => {
   // 圈选：发出去了 → 标成 sent（之后的状态只由聊天事件推进）。无论是不是文档侧发起的都要标。
   if (sentKbIds.length) kbSel.markSent(sentKbIds, props.sessionId ?? undefined);
   sentKbIds = [];
+  pushInputHistory(inputText.value);
+  inputHistory.reset();
+  keptForDraft.value = false;
   inputText.value = "";
   pendingImages.value = [];
   pendingMentions.value = [];
@@ -1271,7 +1332,7 @@ const { actions: quickActions } = useQuickActions();
 </script>
 
 <template>
-  <div ref="rootEl" class="chat-input-area" :class="{ 'chat-input-area--hero': isHero }">
+  <div v-show="!hidden" ref="rootEl" class="chat-input-area" :class="{ 'chat-input-area--hero': isHero }">
     <!-- Slash command dropdown -->
     <div v-if="filteredSkills.length" ref="slashDropdownEl" class="skill-dropdown">
       <div

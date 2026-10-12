@@ -476,3 +476,49 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
     expect(tipText(w)).toBeNull();
   });
 });
+
+describe("ChatPanel — 待确认时收起输入框", () => {
+  const PERM = { id: "p1", name: "Bash", input: { command: "ls" } };
+  function mountAttached() {
+    return mount(ChatPanel, {
+      props: baseProps({ sessionId: "A", workspacePath: "C:/ws" }),
+      attachTo: document.body,
+      global: { directives: { tooltip: () => {} } },
+    });
+  }
+
+  it("输入框空着：弹窗在时收起，弹窗走后回来并把焦点还给它", async () => {
+    const wrapper = mountAttached();
+    await flush();
+    const area = wrapper.get(".chat-input-area");
+    const ta = wrapper.get("textarea").element as HTMLTextAreaElement;
+    ta.focus();
+
+    await wrapper.setProps({ permission: PERM });
+    await flush();
+    expect(area.isVisible()).toBe(false);
+    ta.blur(); // jsdom 不会因 display:none 自动丢焦点
+
+    await wrapper.setProps({ permission: null });
+    await flush();
+    expect(area.isVisible()).toBe(true);
+    expect(document.activeElement).toBe(ta);
+    wrapper.unmount();
+  });
+
+  it("有草稿：弹窗在时不收起，删空也不半路消失", async () => {
+    const wrapper = mountAttached();
+    await flush();
+    const area = wrapper.get(".chat-input-area");
+    await wrapper.get("textarea").setValue("草稿");
+
+    await wrapper.setProps({ permission: PERM });
+    await flush();
+    expect(area.isVisible()).toBe(true);
+
+    await wrapper.get("textarea").setValue("");
+    await flush();
+    expect(area.isVisible()).toBe(true);
+    wrapper.unmount();
+  });
+});
