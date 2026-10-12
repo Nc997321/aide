@@ -209,8 +209,17 @@ impl RemoteWorkspaces {
     /// 连的是守护进程（带得出重连凭据）→ 转入「重连中」，由调用方跑 [`resume`](Self::resume)；
     /// 否则直接标成已断开（需要用户显式重连）。
     pub async fn on_closed(&self, host: &HostId, reason: &str) -> Closed {
-        let conn = self.conns.lock().await.get(host).cloned();
-        let Some(conn) = conn.filter(|c| !c.is_alive()) else {
+        // 死连接当场摘掉：重连途中被丢弃的那些尝试（握手失败的、接上了却发现守护进程换过的）
+        // 退出时同样会回调到这里，登记表里若还留着最初那条死连接，就会被当成又一次意外断开、
+        // 再起一轮重连——Host 重启后窗口在「正在连接 / 已断开」之间无限往复（2026-10-12 实锤）。
+        let conn = {
+            let mut conns = self.conns.lock().await;
+            if conns.get(host).is_some_and(|c| c.is_alive()) {
+                return Closed::Ignored;
+            }
+            conns.remove(host)
+        };
+        let Some(conn) = conn else {
             return Closed::Ignored;
         };
         if let Some(token) = conn.resume_token() {

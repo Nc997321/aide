@@ -128,7 +128,7 @@ pub async fn run() -> i32 {
     let _ = restrict(&sock, 0o600);
     eprintln!("[aide-host] daemon {} listening on {}", core.bus.epoch(), sock.display());
 
-    let daemon = Arc::new(Daemon { core: Arc::clone(&core), kit, shutdown: Notify::new() });
+    let daemon = Arc::new(Daemon { core: Arc::clone(&core), kit, bridges: Default::default(), shutdown: Notify::new() });
 
     // 断开终端 / ssh 会话不能带走守护进程；SIGTERM 走正常收尾
     if let Ok(mut hup) = signal(SignalKind::hangup()) {
