@@ -31,6 +31,8 @@ const STAGGER_MS: number = 12;
 const STAGGER_CAP_MS: number = 200;
 /** 波形入场时长（桌面 CSS 0.46s 同源）。 */
 const WAVE_DURATION_MS: number = 460;
+/** 流式光标闪烁半周期（ms）：对照原型 .cursor 的 blink 1s steps——500 显 / 500 隐。 */
+export const CARET_BLINK_MS: number = 500;
 /** 词块长度上限：词块不可断行，过长会撑破 Flex 行宽。 */
 const WORD_CHUNK_MAX: number = 16;
 /** 落定前缀的保留上限（字符）：思考可上万字，超出从头丢弃并置 clipped 打省略号。 */
@@ -326,6 +328,33 @@ export struct WaveTail {
   @Param textSize: number = 15;
   @Param rowHeight: number = 24;
   @Param textColor: Resource = $r('app.color.text_primary');
+  /** 流式光标闪烁相位（仅流式挂载期翻转；隐相位换透明色保占位，版面不跳）。 */
+  @Local caretOn: boolean = true;
+  private caretTimer: number = -1;
+
+  aboutToAppear(): void {
+    this.startCaretBlink();
+  }
+
+  aboutToDisappear(): void {
+    this.stopCaretBlink();
+  }
+
+  private startCaretBlink(): void {
+    if (this.caretTimer < 0) {
+      this.caretOn = true;
+      this.caretTimer = setInterval(() => {
+        this.caretOn = !this.caretOn;
+      }, CARET_BLINK_MS);
+    }
+  }
+
+  private stopCaretBlink(): void {
+    if (this.caretTimer >= 0) {
+      clearInterval(this.caretTimer);
+      this.caretTimer = -1;
+    }
+  }
 
   @Builder
   lineView(ln: WaveLine) {
@@ -345,10 +374,12 @@ export struct WaveTail {
           ))
       }, (c: WaveChunk) => `C${c.id}`)
       if (ln.cursor) {
-        Text(' ▌')
+        // 流式光标（原型 .cursor）：1/8 em 细条 accent 闪烁——此前用整宽黑色
+        // 块字符「▌」随文字同色渲染，视觉上是黏在文末的黑块
+        Text(' ▏')
           .fontSize(this.textSize)
           .lineHeight(this.rowHeight)
-          .fontColor(this.textColor)
+          .fontColor(this.caretOn ? $r('app.color.accent') : Color.Transparent)
       }
     }
     .width('100%')

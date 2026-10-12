@@ -67,3 +67,24 @@ export function inputJson(input: Object): string {
     return String(input);
   }
 }
+
+/** 扩展名徽标色（代码紫 / PDF 红 / 文档蓝 / 压缩橙 / 表格绿；其余灰）。
+ *  附件卡与文件预览层共用（原 ChatPage 私有收敛至此统一出口）。 */
+export function extBadgeColor(ext: string): ResourceColor {
+  if (ext === 'ets' || ext === 'ts') {
+    return '#7B61FF';
+  }
+  if (ext === 'pdf') {
+    return '#F53F3F';
+  }
+  if (ext === 'doc' || ext === 'docx') {
+    return '#0A59F7';
+  }
+  if (ext === 'zip') {
+    return '#FF7D00';
+  }
+  if (ext === 'csv') {
+    return '#00B42A';
+  }
+  return '#86909C';
+}

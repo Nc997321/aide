@@ -48,7 +48,7 @@ import { common } from '@kit.AbilityKit';
 import { ConnModel, connModel } from '../conn/ConnModel';
 import { ChatModel, chatModel, EFFORT_TIERS, effortLabel, modelDisplayName } from '../session/ChatModel';
 import { EffortTier } from '../session/ChatModel';
-import { ModelOption } from '../sdk/types';
+import { ModelOption, ContextUsage } from '../sdk/types';
 import { ProviderMark } from '../session/ProviderLogos';
 import { ProviderModel, providerModel } from '../session/ProviderModel';
 import { ChatStore } from '../session/chat/ChatStore';
@@ -57,9 +57,10 @@ import {
   SubagentBlock, ChatMessage, PendingJump, LiveActivity, ImageBlock, VideoBlock
 } from '../session/chat/ChatBlocks';
 import { Attachment, ChatAttachments, attachmentsModel, durationLabel } from '../session/chat/ChatAttachments';
-import { toolSummary } from '../session/chat/ChatWire';
+import { toolSummary, extBadgeColor } from '../session/chat/ChatWire';
 import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
+import { FileViewer } from '../session/chat/FileViewer';
 import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
 import { ChatMessagesSource } from '../session/chat/ChatMessagesSource';
@@ -96,6 +97,10 @@ const EFFORT_POP_W: number = 218;
 
 /** 附件选入菜单卡宽（原型 .plus-pop 定宽 224：四行图标 + 名称 + 描述）。 */
 const PLUS_POP_W: number = 224;
+
+/** 上下文用量环的 Progress Ring 样式（桌面原型 stroke 3/36 视图坐标 @20px ≈ 1.7，
+ *  手机屏稍加粗到 2.5 保清晰；字面量需显式类型上下文，挂文件级常量）。 */
+const CTX_RING_STYLE: RingStyleOptions = { strokeWidth: 2.5 };
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
@@ -817,7 +822,8 @@ export struct ChatPage {
     })
   }
 
-  /** 用户消息里的 @mention 引用文件卡片（transcript 拆出的 Read 附件，无展开态）。 */
+  /** 用户消息里的 @mention 引用文件卡片（transcript 拆出的 Read 附件；
+   *  点击打开全屏文件预览层——md 走 MarkdownText 渲染、其余 monospace 原文）。 */
   @Builder
   readChip(b: ToolCallBlock) {
     Row({ space: 6 }) {
@@ -836,6 +842,10 @@ export struct ChatPage {
     .backgroundColor($r('app.color.card_bg'))
     .border({ width: 1, color: $r('app.color.line') })
     .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      const path: string = toolSummary(b.input);
+      this.store.openFilePreview(path !== '' ? path : b.name, b.result);
+    })
   }
 
   @Builder
@@ -1205,7 +1215,7 @@ export struct ChatPage {
       .width(32)
       .height(32)
       .borderRadius(9)
-      .backgroundColor(this.extBadgeColor(it.ext))
+      .backgroundColor(extBadgeColor(it.ext))
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
 
@@ -1241,26 +1251,6 @@ export struct ChatPage {
     .onClick(() => {
       this.att.remove(i);
     })
-  }
-
-  /** 文件徽标色（扩展名 → 强调色；代码紫 / PDF 红 / 文档蓝 / 压缩橙 / 表格绿）。 */
-  private extBadgeColor(ext: string): ResourceColor {
-    if (ext === 'ets' || ext === 'ts') {
-      return '#7B61FF';
-    }
-    if (ext === 'pdf') {
-      return '#F53F3F';
-    }
-    if (ext === 'doc' || ext === 'docx') {
-      return '#0A59F7';
-    }
-    if (ext === 'zip') {
-      return '#FF7D00';
-    }
-    if (ext === 'csv') {
-      return '#00B42A';
-    }
-    return '#86909C';
   }
 
   /** ＋ 追加格（余量 > 0 时末位虚线格；点击重开选入菜单）。 */
@@ -1308,6 +1298,74 @@ export struct ChatPage {
       this.store.modelPop = false;
       this.store.effortPop = false;
     })
+  }
+
+  /**
+   * 上下文用量环（桌面 ContextUsageRing 的手机侧镜像）：与 ＋ 同款 32 圆角
+   * 砖 chrome 内嵌 20 进度环，单色弧只表达「用了几成」（明细收进点按轻提示，
+   * 桌面为弹层）。轨道灰 + 弧色随水位：accent → ≥80% warn → ≥100% danger
+   * （桌面同阈值，设计稿 §3.1）。无数据不渲染由调用方 if 守卫。
+   */
+  @Builder
+  contextRing() {
+    Row() {
+      Progress({ value: this.ctxPct(), total: 100, type: ProgressType.Ring })
+        .style(CTX_RING_STYLE)
+        .width(20)
+        .height(20)
+        .color(this.ctxRingColor())
+        .backgroundColor($r('app.color.btn_disabled_bg'))
+    }
+    .width(32)
+    .height(32)
+    .borderRadius(10)
+    .backgroundColor($r('app.color.input_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+    .justifyContent(FlexAlign.Center)
+    .alignItems(VerticalAlign.Center)
+    .onClick(() => {
+      this.onContextRingTap();
+    })
+  }
+
+  /** 环形弧长百分比（钳 0..100——越界值是渲染问题不是数据问题；桌面 clampPct 同式）。 */
+  private ctxPct(): number {
+    const u: ContextUsage | null = this.store.contextUsage;
+    return u === null ? 0 : Math.min(100, Math.max(0, u.percentage));
+  }
+
+  /** 环形弧色阈值（桌面同款）：≥100% danger / ≥80% warn / 其余 accent。 */
+  private ctxRingColor(): ResourceColor {
+    const pct: number = this.ctxPct();
+    if (pct >= 100) {
+      return $r('app.color.status_danger');
+    }
+    if (pct >= 80) {
+      return $r('app.color.status_warn');
+    }
+    return $r('app.color.accent');
+  }
+
+  /** 点按展开用量数字（桌面 tooltip 的移动端等价物；数字千分位对齐可读性）。 */
+  private onContextRingTap(): void {
+    const u: ContextUsage | null = this.store.contextUsage;
+    if (u === null) {
+      return;
+    }
+    toastModel.show(`上下文 ${Math.round(u.percentage)}% · ${this.fmtTokens(u.totalTokens)} / ${this.fmtTokens(u.maxTokens)} tokens`, 'info');
+  }
+
+  /** token 数千分位（桌面 tooltip 的 toLocaleString 同款可读性）。 */
+  private fmtTokens(n: number): string {
+    const s: string = String(Math.round(n));
+    let out: string = '';
+    for (let i = s.length - 1, c = 0; i >= 0; i--, c++) {
+      out = s.charAt(i) + out;
+      if (c % 3 === 2 && i > 0) {
+        out = `,${out}`;
+      }
+    }
+    return out;
   }
 
   /** 附件选入菜单（原型 .plus-pop：遮罩 + 工具行上方右侧面板，四入口；结构同 md-pop）。 */
@@ -1496,11 +1554,16 @@ export struct ChatPage {
       .width('100%')
       .alignItems(VerticalAlign.Bottom)
 
-      // 工具行（原型 .ch-bar）：模型 / 思考程度 / ＋ 附件（右端）
+      // 工具行（原型 .ch-bar）：模型 / 思考程度 / ＋ 附件（右端）。
+      // ＋ 左侧的原型空白位挂上下文用量环（桌面 ContextUsageRing 的同位
+      // 语义：数据未到达不渲染，不挤占默认布局）
       Row({ space: 8 }) {
         this.modelChip()
         this.effortChip()
         Blank()
+        if (this.store.contextUsage !== null) {
+          this.contextRing()
+        }
         this.plusBtn()
       }
       .width('100%')
@@ -2010,6 +2073,18 @@ export struct ChatPage {
       AutomationEditor()
       AutomationRun()
       AutomationPlaybook()
+
+      // 文件预览层（readChip 点击打开：全屏 md/文本渲染；自动化浮层之上、
+      // 灯箱之下，返回键经 store.handlePopups 收）
+      if (this.store.fvTitle !== '') {
+        FileViewer({
+          title: this.store.fvTitle,
+          content: this.store.fvContent,
+          onClose: () => {
+            this.store.closeFilePreview();
+          }
+        })
+      }
 
       // 图片灯箱（最顶层：全屏遮罩 + 大图 + 关闭；点任意处关闭）
       if (this.lbUri !== '') {

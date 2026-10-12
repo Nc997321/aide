@@ -11,11 +11,12 @@
  *    跨轮次存活，停靠区展示）、子代理时间线、权限请求队列（AskUserQuestion
  *    的问题清单随请求解析成草稿）、跳队
  *    （jump_queued/promoted）、轮次收尾（message_stop）、模型切换回执
- *    （model_switch_result）、notification、error、session_dead、
+ *    （model_switch_result）、上下文窗口用量（context_usage，输入区环形
+ *    指示）、notification、error、session_dead、
  *    session_title
  *  - 显式忽略（随对应 UI 扩容接入）：models_available / model_switch_confirm
  *    （decision RPC 不在远程白名单，成本确认远程不可用） / effort_changed /
- *    context_usage / context_compaction / tasks_update /
+ *    context_compaction / tasks_update /
  *    rate_limit / health / permission_modes_available /
  *    slash_commands_available / image_input_*
  *  - 不收录（上游有、ohos 端无对应通路）：非交互别名链（自动化 run_xxx
@@ -26,7 +27,7 @@
  */
 import { api } from '../../sdk/api';
 import { sessionsModel } from '../SessionsModel';
-import { Session } from '../../sdk/types';
+import { Session, ContextUsage } from '../../sdk/types';
 import { ChatStore } from './ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, SubagentEntry, SubagentBlock,
@@ -288,6 +289,18 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
         store.finishStreaming(); // 落提示前收尾在途流式（同 notification 分支）
         pushAssistantNotice(store, `模型切换未生效：${str(payload, 'error')}`);
       }
+      break;
+    }
+    case 'context_usage': {
+      // 上下文窗口用量快照（每轮结束 sidecar 刷新一次）：输入区环形指示消费。
+      // categories/breakdown 明细切面不进 ohos 端（见 ContextUsage DTO 注释）；
+      // 坏帧零值兜底由 num() 承担，环形照常渲染（0% 空环）。
+      const u: ContextUsage = {
+        totalTokens: num(payload, 'total_tokens'),
+        maxTokens: num(payload, 'max_tokens'),
+        percentage: num(payload, 'percentage')
+      };
+      store.contextUsage = u;
       break;
     }
     case 'notification': {

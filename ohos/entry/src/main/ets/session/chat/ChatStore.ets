@@ -16,7 +16,7 @@
  * 平台差异：Vue reactive/ref → @ObservedV2 + @Trace。
  */
 import { ChatMessage, ContentBlock, PendingJump, PermissionRequest, ThinkingBlock, SubagentBlock, LiveActivity, BgTask, ToolCallBlock } from './ChatBlocks';
-import { BgTaskInfo, ModelOption } from '../../sdk/types';
+import { BgTaskInfo, ModelOption, ContextUsage } from '../../sdk/types';
 import { uuid, str } from './ChatWire';
 
 /** 流式跟尾节流间隔（毫秒）：text/thinking 增量高频到达，逐 bump 会把
@@ -84,12 +84,23 @@ export class ChatStore {
   @Trace model: string = '';
   /** 当前思考档（恒为归一后三档 low/high/max；空 = 未同步）。 */
   @Trace effort: string = '';
+  /**
+   * 上下文窗口用量快照（context_usage 事件每轮结束刷新；null = 尚无数据，
+   * 输入区环形不渲染）。窗口占用随会话走：切会话清空，断线重载保留
+   * （快照仍属本会话，下轮结束即刷新）。
+   */
+  @Trace contextUsage: ContextUsage | null = null;
   /** 模型浮层展开（自绘小面板；与 effortPop 互斥，Index 返回键经 handlePopups 收）。 */
   @Trace modelPop: boolean = false;
   /** 思考程度浮层展开（自绘小面板；与 modelPop 互斥）。 */
   @Trace effortPop: boolean = false;
   /** 附件选入菜单展开（输入区「＋」；与 chip 浮层互斥由打开方保证）。 */
   @Trace plusPop: boolean = false;
+  /** 文件预览层标题（readChip 点击打开；空串 = 关闭。Index 返回键经
+   *  handlePopups 收、标题栏 ← 键走 closeFilePreview，两路共一态）。 */
+  @Trace fvTitle: string = '';
+  /** 预览正文（Read 卡 result 全文快照，≤50k 字；开层零 I/O）。 */
+  @Trace fvContent: string = '';
 
   /** 上次流式跟尾 bump 时刻（bumpTailThrottled 节流窗）。 */
   private lastStreamBumpAt: number = 0;
@@ -253,18 +264,39 @@ export class ChatStore {
     this.modelOptions = [];
     this.model = '';
     this.effort = '';
+    // 上下文用量快照同理随会话走（resetForReload 不清：快照仍属本会话）
+    this.contextUsage = null;
     this.modelPop = false;
     this.effortPop = false;
     this.plusPop = false;
+    this.closeFilePreview();
   }
 
-  /** 收 chip 浮层（返回键/遮罩/输入框聚焦共用）：true = 有浮层被收起（消费返回键）。 */
+  /** 收 chip 浮层与文件预览层（返回键/遮罩/输入框聚焦共用）：true = 有
+   *  浮层被收起（消费返回键）。 */
   handlePopups(): boolean {
+    const hadFv: boolean = this.fvTitle !== '';
     const had: boolean = this.modelPop || this.effortPop || this.plusPop;
     this.modelPop = false;
     this.effortPop = false;
     this.plusPop = false;
-    return had;
+    if (hadFv) {
+      this.closeFilePreview();
+    }
+    return had || hadFv;
+  }
+
+  /** 打开文件预览层（readChip 点击：title = file_path 兜底工具名，
+   *  content = Read 卡 result 全文快照）。 */
+  openFilePreview(title: string, content: string): void {
+    this.fvTitle = title;
+    this.fvContent = content;
+  }
+
+  /** 关闭文件预览层（标题栏 ← 键；返回键路径见 handlePopups）。 */
+  closeFilePreview(): void {
+    this.fvTitle = '';
+    this.fvContent = '';
   }
 
   /**
@@ -279,6 +311,7 @@ export class ChatStore {
     this.cursorReady = false;
     this.liveActivities = [];
     this.bgTasks = [];
+    this.closeFilePreview();
   }
 
   // ── 消息列表结构原语（全部列表变形的唯一出口；变形必通知数据源对账）──
