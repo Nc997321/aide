@@ -7,7 +7,9 @@ import ProcessGroup from "./ProcessGroup.vue";
 
 /** 走真实分段链路造 process 段，不断言手搓夹具。 */
 function processSegmentsOf(blocks: ContentBlock[]): Segment[] {
-  const proc = segmentBlocks(blocks, { finalized: true }).find((s) => s.kind === "process");
+  // 末尾垫一段正文：消息尾的命令是「当前这一步」，留在胶囊外
+  const proc = segmentBlocks([...blocks, { type: "text", text: "完" }], { finalized: true })
+    .find((s) => s.kind === "process");
   if (!proc || proc.kind !== "process") throw new Error("fixture 未产生 process 段");
   return proc.segments;
 }

@@ -69,8 +69,8 @@ const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
  *  assistant 消息走 segmentBlocks：合计 ≥2 个连续过程项（思考/查询工具调用/子代理）
- *  收成一个过程胶囊，回复文本与变更卡留在原位不动。流式期同样收拢，只有"还活着"
- *  的块（未出结果的工具调用等）留在胶囊外——一串 Bash/Grep/Glob 不再逐行刷屏。
+ *  收成一个过程胶囊，回复文本与变更卡留在原位不动。消息尾的那条命令是「当前这一步」，
+ *  留在胶囊外带结果预览，等后面出现下一块（命令/思考/正文）才让位。
  *  留在外面的 tool_group 段逐条平铺，不套组内折叠壳（见 ProcessGroup 文件头）。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
@@ -117,13 +117,14 @@ function handleTextClick(e: MouseEvent) {
   >
     <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
       <template v-for="seg in segments" :key="seg.index">
-        <!-- 工具组段：没进胶囊的（单条 / 流式期还没出结果的）逐条平铺，不套折叠壳。
-             pending 那条自带执行中圆点与「等待结果…」，"正在执行"无需摘要代播。 -->
+        <!-- 工具组段：没进胶囊的逐条平铺成工具行，不套折叠壳。消息尾的那条是「当前
+             这一步」（seg.currentId），带结果预览；后面一有别的块它就让位。 -->
         <template v-if="seg.kind === 'tool_group'">
           <ToolCallBlock
             v-for="b in seg.blocks"
             :key="b.id"
             :block="b"
+            :current="b.id === seg.currentId"
             :bg-tasks="bgTasks"
             @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
           />
@@ -152,6 +153,7 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'tool_call'"
           :block="seg.block"
           :default-expanded="isChangeTool(seg.block.name)"
+          :card="isUser"
           :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"

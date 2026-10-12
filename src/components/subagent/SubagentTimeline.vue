@@ -69,7 +69,7 @@ function asToolBlock(e: ToolEntry): ToolCallBlockData {
          entry.truncated（P2-1 写入时截断）→ text/thinking 尾随省略小标，
          tool 走 asToolBlock 透传给 ToolCallBlock 的 .ti-truncated。 -->
     <template v-for="(entry, i) in block.entries" :key="i">
-      <ToolCallBlock v-if="entry.type === 'tool'" :block="asToolBlock(entry)" />
+      <ToolCallBlock v-if="entry.type === 'tool'" :block="asToolBlock(entry)" card />
       <p v-else-if="entry.type === 'thinking'" class="sa-thinking">
         {{ entry.text }}<span v-if="entry.truncated" class="sa-truncated">…{{ truncatedLabel(entry.truncated.originalBytes) }}</span>
       </p>

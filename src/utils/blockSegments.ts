@@ -1,24 +1,30 @@
 import type { ContentBlock, ToolCallBlock } from "@/types/chat";
 
 /**
- * 消息 blocks 的渲染分段，分两阶段：
+ * 消息 blocks 的渲染分段（所有 assistant 消息）。
  *
- * 一阶段：连续的查询类 tool_call 聚成一个 tool_group 段，其余块原样透传。该段不
- * 对应某个折叠组件——渲染时逐条平铺（留在胶囊外的与 ProcessGroup 展开体内的皆然），
- * 它的职责是二阶段的合并判定。
- * index 是段首块在原 blocks 里的下标——既当 v-for 的稳定 key，
- * 也让 ChatMessage 能继续用原始下标判定流式尾块（blockHtml 的缓存策略）。
- *
- * 二阶段（所有 assistant 消息）：把合计 ≥2 个"过程项"的连续段合并成一个 process 段
- * （ProcessGroup 胶囊，默认折叠）。过程项 = 思考 / 查询工具调用 / 子代理调用——模型
- * "干活"的痕迹；**工具组按组内条数计**，所以一串连续的 Bash/Grep/Glob 自己就够收拢，
- * 不必等旁边有思考块凑数（2026-10-10：此前按"段"计，单个工具组无论多少条都平铺，
- * 长回合里刷屏）。文本块（回复，无论中间叙述还是最终结论，结构上同为 TextBlock，
+ * 连续的"过程项"构成一个连续段。过程项 = 思考 / 查询工具调用 / 子代理调用——模型
+ * "干活"的痕迹。文本块（回复，无论中间叙述还是最终结论，结构上同为 TextBlock，
  * 位置即时序）与变更卡永不在段内，它们切断连续段、留在原位。
  *
- * 流式期（不传 finalized）同样收拢，只把"还活着"的块留在胶囊外：未出结果的工具
- * 调用、仍在跑的子代理、正在吐字的尾部思考块——"正在干什么"始终看得见，干完的才
- * 进摘要行。活块落定后在下一次重算时并入前面的胶囊（胶囊 index 取段首，key 稳定）。
+ * **收拢的触发点是"后面有东西显示出来了"，不是"这一条跑完了"**（2026-10-12）：
+ * 消息的最后一块若是命令（工具调用 / 子代理），它就是"当前这一步"，带结果预览留在
+ * 胶囊外；它后面一旦出现任何块——下一条命令、思考、或回复正文——才在同一次重算里
+ * 让位。此前（2026-10-10）是"出了结果就收"，命令刚跑完、下一块还没出现，画面上就
+ * 先空了一拍，读起来不连贯。被取代的部分合计 ≥2 项才成 process 段（ProcessGroup
+ * 胶囊，默认折叠）；只有 1 项时留在外面缩成一行（没有预览），不值得多套一层点击。
+ *
+ * 这条规则不看 finalized：回合总是以回复正文收尾，定稿时自然没有命令挂在外面；
+ * 被打断的回合停在命令上，那条命令留在原位。
+ *
+ * 流式期（不传 finalized）在此之上再把"还活着"的块留在胶囊外：未出结果的工具
+ * 调用（并行调用可能乱序返回，从第一条未出结果的调用处切开，其后一律留在外面，
+ * 保证原序不被打乱）、仍在跑的子代理、正在吐字的尾部思考块。
+ *
+ * 连续的查询类 tool_call 聚成一个 tool_group 段。该段不对应某个折叠组件——渲染时
+ * 逐条平铺（留在胶囊外的与 ProcessGroup 展开体内的皆然）。
+ * index 是段首块在原 blocks 里的下标——既当 v-for 的稳定 key，
+ * 也让 ChatMessage 能继续用原始下标判定流式尾块（blockHtml 的缓存策略）。
  *
  * 例外：代码变更类工具（CHANGE_TOOL_NAMES）不进任何折叠——它们产出的 diff/新文件
  * 内容是要直接被看到的，折叠进胶囊里就得翻两层才能找到。这类块作为独立段透传，
@@ -27,7 +33,9 @@ import type { ContentBlock, ToolCallBlock } from "@/types/chat";
  */
 export type Segment =
   | { kind: "block"; block: ContentBlock; index: number }
-  | { kind: "tool_group"; blocks: ToolCallBlock[]; index: number }
+  /** currentId：组内那条"当前这一步"的工具调用（它是消息的最后一块），渲染时带结果
+   *  预览；组里没有它（后面已有别的块 / 在胶囊里）则缺省。 */
+  | { kind: "tool_group"; blocks: ToolCallBlock[]; index: number; currentId?: string }
   /** 合计 ≥2 个过程项的连续段合并成的折叠胶囊；segments 保持原序，不会是 process 嵌套。 */
   | { kind: "process"; segments: Segment[]; index: number };
 
@@ -42,88 +50,91 @@ export function isChangeTool(name: string): boolean {
   return CHANGE_TOOL_NAMES.has(name);
 }
 
-/** 可折进 process 胶囊的段：查询工具组 / 思考 / 子代理调用。
+/** 连续段里的一项：块 + 它在原 blocks 里的下标。 */
+interface RunItem {
+  block: ContentBlock;
+  index: number;
+}
+
+/** 可进连续段的块：查询工具调用 / 思考 / 子代理调用。
  *  文本（回复）与变更卡永远不可折——它们是回合的"产出"，位置即时序。 */
-function isProcessFoldable(seg: Segment): boolean {
-  if (seg.kind === "tool_group") return true;
-  if (seg.kind !== "block") return false;
-  return seg.block.type === "thinking" || seg.block.type === "subagent";
+function isProcessItem(block: ContentBlock): boolean {
+  if (block.type === "tool_call") return !isChangeTool(block.name);
+  return block.type === "thinking" || block.type === "subagent";
 }
 
-/** 段内过程项数：工具组按条数计，思考/子代理各算一项。 */
-function processItemCount(seg: Segment): number {
-  return seg.kind === "tool_group" ? seg.blocks.length : 1;
+/** 命令 = 能当"当前这一步"的过程项。思考不算——它自己就是折叠胶囊，没有结果可预览。 */
+function isCommand(block: ContentBlock): boolean {
+  return block.type === "tool_call" || block.type === "subagent";
 }
 
-/** 流式期把一个可折叠段拆成「已落定（可进胶囊）」与「还活着（留在外面）」两部分。
- *  工具组从第一条未出结果的调用处切开——并行调用可能乱序返回，但切点之后一律留在
- *  外面，保证原序不被打乱；活的那半段 index 相应后移，仍是它段首块的原下标。 */
-function splitLive(seg: Segment, lastIndex: number): { settled?: Segment; live?: Segment } {
-  if (seg.kind === "tool_group") {
-    const cut = seg.blocks.findIndex((b) => b.isPending);
-    if (cut === -1) return { settled: seg };
-    if (cut === 0) return { live: seg };
-    return {
-      settled: { kind: "tool_group", blocks: seg.blocks.slice(0, cut), index: seg.index },
-      live: { kind: "tool_group", blocks: seg.blocks.slice(cut), index: seg.index + cut },
-    };
-  }
-  if (seg.kind !== "block") return { settled: seg };
-  const live =
-    seg.block.type === "subagent"
-      ? seg.block.isPending
-      : seg.block.type === "thinking" && seg.index === lastIndex;
-  return live ? { live: seg } : { settled: seg };
+/** 流式期"还活着"的项：未出结果的工具调用、仍在跑的子代理、正在吐字的尾部思考块。 */
+function isLive(item: RunItem, lastIndex: number): boolean {
+  const b = item.block;
+  if (b.type === "tool_call" || b.type === "subagent") return b.isPending;
+  return b.type === "thinking" && item.index === lastIndex;
 }
 
-/** 二阶段合并：每个合计 ≥2 个过程项的连续段合成一个 process 段；只有一项的原样保留
- *  （单独一个思考/一条工具调用沿用现有胶囊/卡片，不值得再多套一层点击）。
- *  liveTail 非空 = 流式期，值为消息最后一块的下标（判定尾部思考块是否还在吐字）。 */
-function mergeProcessRuns(segments: Segment[], liveTail: number | null): Segment[] {
+/** 把一串过程项排成段：连续的工具调用聚成 tool_group，其余各自成 block 段。 */
+function toSegments(items: RunItem[], currentId?: string): Segment[] {
   const out: Segment[] = [];
-  let run: Segment[] = [];
-  const flush = () => {
-    const items = run.reduce((sum, seg) => sum + processItemCount(seg), 0);
-    if (items >= 2) {
-      out.push({ kind: "process", segments: run, index: run[0].index });
-    } else {
-      out.push(...run);
-    }
-    run = [];
-  };
-  for (const seg of segments) {
-    if (!isProcessFoldable(seg)) {
-      flush();
-      out.push(seg);
+  for (const { block, index } of items) {
+    if (block.type !== "tool_call") {
+      out.push({ kind: "block", block, index });
       continue;
     }
-    const { settled, live } = liveTail === null ? { settled: seg, live: undefined } : splitLive(seg, liveTail);
-    if (settled) run.push(settled);
-    if (live) {
-      flush();
-      out.push(live);
+    let group = out[out.length - 1];
+    if (group?.kind !== "tool_group") {
+      group = { kind: "tool_group", blocks: [], index };
+      out.push(group);
     }
+    group.blocks.push(block);
+    if (block.id === currentId) group.currentId = currentId;
   }
-  flush();
   return out;
 }
 
+/** 一个连续段 → 段列表：切点之前是"已被取代"的部分（≥2 项成胶囊），切点起留在外面。
+ *  lastIndex = 消息最后一块的下标；streaming = 流式期（活块也要留在外面）。 */
+function segmentRun(run: RunItem[], lastIndex: number, streaming: boolean): Segment[] {
+  const tail = run[run.length - 1];
+  // 当前这一步：段尾就是消息尾、且是命令。后面只要还有块，它就已被取代
+  const current = tail.index === lastIndex && isCommand(tail.block) ? tail.block : undefined;
+  let cut = current ? run.length - 1 : run.length;
+  if (streaming) {
+    const firstLive = run.findIndex((item) => isLive(item, lastIndex));
+    if (firstLive !== -1) cut = Math.min(cut, firstLive);
+  }
+  const currentId = current?.type === "tool_call" ? current.id : undefined;
+  // 不成胶囊时整段一起排——被取代的那一条与当前这条若相邻，仍在同一个 tool_group 里
+  if (cut < 2) return toSegments(run, currentId);
+  return [
+    { kind: "process", segments: toSegments(run.slice(0, cut)), index: run[0].index },
+    ...toSegments(run.slice(cut), currentId),
+  ];
+}
+
 export function segmentBlocks(blocks: ContentBlock[], opts?: { finalized?: boolean }): Segment[] {
+  const lastIndex = blocks.length - 1;
+  const streaming = !opts?.finalized;
   const segments: Segment[] = [];
-  for (let i = 0; i < blocks.length; i++) {
-    const block = blocks[i];
-    if (block.type === "tool_call" && !isChangeTool(block.name)) {
-      const last = segments[segments.length - 1];
-      if (last?.kind === "tool_group") {
-        last.blocks.push(block);
-      } else {
-        segments.push({ kind: "tool_group", blocks: [block], index: i });
-      }
+  let run: RunItem[] = [];
+  const flush = () => {
+    if (run.length === 0) return;
+    segments.push(...segmentRun(run, lastIndex, streaming));
+    run = [];
+  };
+  for (let index = 0; index < blocks.length; index++) {
+    const block = blocks[index];
+    if (isProcessItem(block)) {
+      run.push({ block, index });
     } else {
-      segments.push({ kind: "block", block, index: i });
+      flush();
+      segments.push({ kind: "block", block, index });
     }
   }
-  return mergeProcessRuns(segments, opts?.finalized ? null : blocks.length - 1);
+  flush();
+  return segments;
 }
 
 /** 一组工具调用按次数降序的种类分布。 */

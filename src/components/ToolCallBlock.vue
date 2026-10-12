@@ -6,7 +6,7 @@ import StaticDiff from "./fileviewer/StaticDiff.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { estimateDiffHeight } from "@/utils/diffHeight";
-import { summarizeToolInput } from "@/utils/toolSummary";
+import { previewToolResult, summarizeToolInput } from "@/utils/toolSummary";
 import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
 import { parseToolDenial } from "@aide/sdk/utils/toolDenial";
@@ -19,12 +19,18 @@ const props = withDefaults(
     /** 变更类工具（Edit/Write/NotebookEdit）由 ChatMessage 传 true：变更卡默认展开，
      *  其余调用点（SubagentCallBlock 等）不传，保持收起。 */
     defaultExpanded?: boolean;
+    /** 「当前这一步」：这条调用是消息的最后一块（blockSegments 的 currentId）——头行下
+     *  带几行结果预览。后面一有别的块就不再是 current，预览收回、只剩头行。 */
+    current?: boolean;
+    /** 强制卡片外观。查询类工具默认是无框的「工具行」；用户气泡里的 @引用合成卡
+     *  是附件而不是过程，落在 accent 实心底上，需要自己的底与边。 */
+    card?: boolean;
     /** 「打开 ↗」定位用；缺省时 openResolved 退化为按原路径直接打开 */
     workspacePath?: string;
     /** 后台任务列表（仅 ChatMessage 链透传）——Bash 卡按 toolUseId 匹配出「后台运行中」徽章 */
     bgTasks?: BgTask[];
   }>(),
-  { defaultExpanded: false, workspacePath: undefined, bgTasks: undefined },
+  { defaultExpanded: false, current: false, card: false, workspacePath: undefined, bgTasks: undefined },
 );
 
 const emit = defineEmits<{
@@ -109,6 +115,20 @@ watch(
   { immediate: true },
 );
 
+/** 工具行外观：查询类工具（Bash/Grep/Glob/Read/MCP…）。变更卡要把 diff 当产出
+ *  摆出来，保持卡片。 */
+const asLine = computed(() => !props.card && !isChangeTool(props.block.name));
+
+/** 头行下的结果预览：只给「当前这一步」，展开后让位给全文。被拒 / 已截断的结果
+ *  正文不是工具输出（外框文案 / 占位摘要），不预览；拒绝态由徽章承担。还在跑的
+ *  命令取末尾几行——最新输出在尾部。不配"运行中 / 无匹配"这类状态文字：状态看
+ *  圆点，没有正文就什么都不显示。 */
+const peek = computed(() => {
+  if (!asLine.value || !props.current || expanded.value) return null;
+  if (denial.value || props.block.truncated) return null;
+  return previewToolResult(props.block.name, props.block.result, { tail: props.block.isPending });
+});
+
 const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
 
 /** F 方案（Read 接力显示）：接力徽章（绿=沿 LSP 坐标区间读 / 黄=LSP 已给定位
@@ -130,7 +150,7 @@ const readRange = computed(() =>
 </script>
 
 <template>
-  <div class="tool-item">
+  <div :class="['tool-item', { 'tool-item--line': asLine, 'tool-item--current': current }]">
     <button class="ti-row" :aria-expanded="expanded" @click="expanded = !expanded">
       <span
         :class="[
@@ -141,7 +161,10 @@ const readRange = computed(() =>
       <span class="ti-name">{{ block.name }}</span>
       <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
            省略号落在路径头部、文件名始终可见 -->
-      <span class="ti-summary" v-tooltip="inputSummary"><bdo dir="ltr">{{ inputSummary }}</bdo></span>
+      <span
+        :class="['ti-summary', { 'ti-summary--head': asLine && block.name !== 'Read' }]"
+        v-tooltip="inputSummary"
+      ><bdo dir="ltr">{{ inputSummary }}</bdo></span>
       <!-- 拒绝态（方案 B）：理由直接进头行，不展开就知道为什么被拒。长理由截断 +
            tooltip 给全文；没填理由就不显示这一项，只留状态徽章。 -->
       <span
@@ -193,6 +216,14 @@ const readRange = computed(() =>
         />
       </svg>
     </button>
+    <!-- 当前这一步的结果预览：拐角引出前几行，点它等同点头行（展开看全文） -->
+    <div v-if="peek" class="ti-peek" @click="expanded = true">
+      <span class="ti-elbow" aria-hidden="true"></span>
+      <div class="ti-peek-out">
+        <pre class="ti-peek-lines">{{ peek.lines.join("\n") }}</pre>
+        <span v-if="peek.rest > 0" class="ti-peek-more">还有 {{ peek.rest }} 行</span>
+      </div>
+    </div>
     <div v-if="expanded" class="ti-body">
       <BashOutputBlock v-if="isBash && block.result && !block.truncated" :content="block.result" :is-error="block.isError ?? false" />
       <div
@@ -440,6 +471,111 @@ const readRange = computed(() =>
   color: var(--aide-text-secondary);
   margin: 0;
   padding: 11px 14px;
+}
+
+/* ── 工具行（查询类工具）：去掉卡片的框与底，一行头 + 拐角引出的结果 ──
+   一串命令各套一个框时读起来是一摞卡片；去框后是一列"做了什么 → 得到什么"，
+   与正文同处书脊之内（2026-10-12）。 */
+.tool-item--line {
+  border: 0;
+  border-radius: 0;
+  background: none;
+  box-shadow: none;
+  overflow: visible;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.tool-item--line .ti-row {
+  gap: 8px;
+  padding: 1px 6px 1px 0;
+  border-radius: var(--aide-radius-sm);
+}
+.tool-item--line .ti-row:hover {
+  background: none;
+}
+.tool-item--line .ti-row:hover .ti-summary {
+  color: var(--aide-text-primary);
+}
+.tool-item--line .ti-dot {
+  width: 6px;
+  height: 6px;
+}
+/* 当前这一步跑完了：绿点。被取代后退回灰点——视线跟着最新一条走 */
+.tool-item--current .ti-dot:not(.ti-dot--run):not(.ti-dot--err):not(.ti-dot--deny) {
+  background: var(--aide-success);
+}
+.tool-item--line .ti-dot--run {
+  animation: ti-dot-pulse 1.2s infinite;
+}
+@keyframes ti-dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+.tool-item--line .ti-name {
+  min-width: 0;
+}
+.tool-item--line .ti-summary {
+  color: var(--aide-text-secondary);
+  font-size: 11.5px;
+  transition: color var(--aide-ease-t);
+}
+/* 命令 / 搜索式：保开头（省略号在尾部）。路径（Read）仍走默认的左侧省略保文件名 */
+.ti-summary--head {
+  direction: ltr;
+}
+.tool-item--line .ti-chev {
+  display: none;
+}
+
+.ti-peek {
+  display: flex;
+  gap: 8px;
+  padding: 1px 0 3px 1px;
+  min-width: 0;
+  cursor: pointer;
+}
+.ti-elbow {
+  flex-shrink: 0;
+  width: 9px;
+  height: 10px;
+  margin-left: 2px;
+  border-left: 1.5px solid var(--aide-border-strong);
+  border-bottom: 1.5px solid var(--aide-border-strong);
+  border-bottom-left-radius: 4px;
+}
+.ti-peek-out {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.ti-peek-lines {
+  margin: 0;
+  overflow: hidden;
+  white-space: pre;
+  font-family: var(--aide-font-mono);
+  font-size: 11.5px;
+  line-height: 1.65;
+  color: var(--aide-text-muted);
+}
+.ti-peek-more {
+  font-size: 11px;
+  color: var(--aide-text-muted);
+  opacity: 0.8;
+}
+
+/* 工具行展开体：缩进到拐角的位置，自己成一口井（外层已无框可依） */
+.tool-item--line .ti-body {
+  margin: 3px 0 4px 20px;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-md);
+  overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tool-item--line .ti-dot--run {
+    animation: none;
+  }
 }
 
 .ti-pending {

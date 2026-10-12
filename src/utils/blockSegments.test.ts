@@ -40,9 +40,11 @@ describe("segmentBlocks", () => {
     const subagent: ContentBlock = {
       type: "subagent", id: "s1", agentName: "Explore", description: "", entries: [], isPending: false,
     };
-    const segs = segmentBlocks([tool("Read"), text("x"), tool("Grep"), subagent, tool("Glob"), tool("Glob")]);
+    const segs = segmentBlocks([
+      tool("Read"), text("x"), tool("Grep"), subagent, tool("Glob"), tool("Glob"), text("y"),
+    ]);
     // text 切断连续段；Grep / 子代理 / 两条 Glob 同属一个连续段 → 一个胶囊，内部仍是三段
-    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "block", "process"]);
+    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "block", "process", "block"]);
     const inner = (segs[2] as { segments: Segment[] }).segments;
     expect(inner.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
     expect((inner[2] as { blocks: ToolCallBlock[] }).blocks).toHaveLength(2);
@@ -116,10 +118,10 @@ describe("segmentBlocks 过程合并", () => {
     expect(shortRuns.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
 
     const longRuns = segmentBlocks(
-      [tool("Read"), thinking("t1"), tool("Edit"), thinking("t2"), tool("Grep")],
+      [tool("Read"), thinking("t1"), tool("Edit"), thinking("t2"), tool("Grep"), text("完")],
       { finalized: true },
     );
-    expect(longRuns.map((s) => s.kind)).toEqual(["process", "block", "process"]);
+    expect(longRuns.map((s) => s.kind)).toEqual(["process", "block", "process", "block"]);
     expect((longRuns[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
   });
 
@@ -152,9 +154,9 @@ describe("segmentBlocks 流式期（finalized 缺省/false）", () => {
     expect(segs.map((s) => s.kind)).toEqual(["process", "tool_group"]);
     expect(segs[1]).toMatchObject({ index: 2 });
     expect((segs[1] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Glob"]);
-    // 同一批块定稿后：活块并入，整段一个胶囊，key（index）不变
-    const done = segmentBlocks([tool("Bash"), tool("Grep"), tool("Glob")], { finalized: true });
-    expect(done.map((s) => s.kind)).toEqual(["process"]);
+    // 后面出了正文：活块并入，整段一个胶囊，key（index）不变
+    const done = segmentBlocks([tool("Bash"), tool("Grep"), tool("Glob"), text("完")], { finalized: true });
+    expect(done.map((s) => s.kind)).toEqual(["process", "block"]);
     expect(done[0].index).toBe(segs[0].index);
   });
 
@@ -166,10 +168,10 @@ describe("segmentBlocks 流式期（finalized 缺省/false）", () => {
     expect((segs[1] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Bash", "Grep"]);
   });
 
-  it("只落定一条时不成胶囊：单条工具调用保持原卡片", () => {
+  it("只落定一条时不成胶囊：与当前这条同在一个工具组里平铺", () => {
     const segs = segmentBlocks([tool("Read"), tool("Grep", { isPending: true })]);
-    expect(segs.map((s) => s.kind)).toEqual(["tool_group", "tool_group"]);
-    expect(segs.map((s) => s.index)).toEqual([0, 1]);
+    expect(segs.map((s) => s.kind)).toEqual(["tool_group"]);
+    expect((segs[0] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Grep"]);
   });
 
   it("正在吐字的尾部思考块、仍在跑的子代理留在胶囊外", () => {
@@ -185,16 +187,69 @@ describe("segmentBlocks 流式期（finalized 缺省/false）", () => {
   });
 });
 
+describe("segmentBlocks 当前这一步（消息尾的命令留在胶囊外）", () => {
+  const currentOf = (seg: Segment) => (seg as { currentId?: string }).currentId;
+
+  it("命令跑完但后面还没有任何块：不收，带 currentId", () => {
+    const last = tool("Bash");
+    const segs = segmentBlocks([tool("Grep"), tool("Glob"), last]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+    expect((segs[1] as { blocks: ToolCallBlock[] }).blocks).toEqual([last]);
+    expect(currentOf(segs[1])).toBe(last.id);
+  });
+
+  it("下一条命令出现的同一次重算里，上一条才让位", () => {
+    const a = tool("Grep"), b = tool("Glob"), c = tool("Bash", { isPending: true });
+    // 只有 a：留在外面；a+b：a 缩成一行、b 当前；a+b+c：a、b 进胶囊，c 当前
+    expect(segmentBlocks([a]).map((s) => s.kind)).toEqual(["tool_group"]);
+    const two = segmentBlocks([a, b]);
+    expect(two.map((s) => s.kind)).toEqual(["tool_group"]);
+    expect(currentOf(two[0])).toBe(b.id);
+    const three = segmentBlocks([a, b, c]);
+    expect(three.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+    expect(currentOf(three[1])).toBe(c.id);
+  });
+
+  it("正文出现也算「下一条」：前面的命令让位，不再有 currentId", () => {
+    const segs = segmentBlocks([tool("Grep"), tool("Bash"), text("结论")]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block"]);
+    const single = segmentBlocks([tool("Bash"), text("结论")]);
+    expect(single.map((s) => s.kind)).toEqual(["tool_group", "block"]);
+    expect(currentOf(single[0])).toBeUndefined();
+  });
+
+  it("思考出现同样取代前一条命令", () => {
+    const segs = segmentBlocks([tool("Grep"), tool("Bash"), thinking("想")]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block"]);
+  });
+
+  it("只有消息尾的那一段有当前项：前面被正文隔开的段全部收拢", () => {
+    const segs = segmentBlocks([tool("Grep"), tool("Glob"), text("中间"), tool("Read"), tool("Bash")]);
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block", "tool_group"]);
+    expect(currentOf(segs[2])).toBe((segs[2] as { blocks: ToolCallBlock[] }).blocks[1].id);
+  });
+
+  it("不看 finalized：被打断的回合停在命令上，那条命令留在原位", () => {
+    const blocks = [tool("Grep"), tool("Glob"), tool("Bash")];
+    expect(segmentBlocks(blocks, { finalized: true }).map((s) => s.kind)).toEqual(["process", "tool_group"]);
+  });
+
+  it("消息尾是跑完的子代理：同样留在胶囊外", () => {
+    const segs = segmentBlocks([tool("Grep"), tool("Glob"), subagent("s1")], { finalized: true });
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block"]);
+  });
+});
+
 describe("processStats", () => {
   it("统计思考段数 / 子代理数 / 工具种类分布", () => {
     const segs = segmentBlocks(
       [
         tool("Read"), tool("Grep", { isError: true }), thinking("t1"),
-        subagent("s1"), thinking("t2"), tool("Glob"),
+        subagent("s1"), thinking("t2"), tool("Glob"), text("完"),
       ],
       { finalized: true },
     );
-    expect(segs).toHaveLength(1);
+    expect(segs).toHaveLength(2);
     const stats = processStats((segs[0] as { segments: Segment[] }).segments);
     expect(stats).toEqual({
       thinkingCount: 2,
