@@ -20,6 +20,8 @@
  *    父子点击同时触发）
  *  - 会话点击 = chatModel.open 切会话（同会话幂等收敛，只收抽屉）；待确认
  *    会话切换后 toast 提示「有请求等待确认」；preview 文本为协议缺口，不展示
+ *  - 会话行长按 = 删除（delete_session：确认后杀运行中 worker + 删桌面记录，
+ *    当前打开的会话删后整体回空态）；存活会话行尾 ⏻ = 结束进程不删记录
  *  - 设备卡断开（原型 dr-quit 红字版）：先收抽屉再 disconnectActive——Index
  *    观察 conn 状态落回连接页（原 SessionsPage 顶栏断开入口随任务 5 迁入）
  *  - 设备卡切换主机胶囊 → hsSheet 半模态（hosts 列表 + 添加新主机扫码行）：
@@ -376,6 +378,66 @@ export struct ChatDrawer {
   onNewSession(): void {
     this.chat.newSession();
     this.dr.close();
+  }
+
+  /** 结束会话进程确认（行内 ⏻；stop_chat_session 杀桌面 worker）：进程级
+   *  操作先确认再执行——进行中的回复/后台任务一并终止，记录保留可重开续聊。 */
+  confirmStopSession(s: Session): void {
+    this.getUIContext().showAlertDialog({
+      title: '结束会话进程',
+      message: `「${s.name}」的桌面侧进程将退出，进行中的回复与后台任务会被终止。会话记录保留，可重新打开继续。`,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '结束',
+        fontColor: $r('app.color.status_danger'),
+        action: () => {
+          void this.onStopSession(s.id);
+        }
+      }
+    });
+  }
+
+  private async onStopSession(sid: string): Promise<void> {
+    const ok: boolean = await this.chat.stopSession(sid);
+    if (ok) {
+      toastModel.show('已结束会话进程', 'warn');
+    } else {
+      toastModel.show('结束会话失败，请重试', 'warn');
+    }
+  }
+
+  /** 删除会话确认（行长按；delete_session：桌面删元数据 + 转录，不可恢复）。
+   *  删的是桌面端记录文件，进行中的会话先杀进程再删（模型层编排）。 */
+  confirmDeleteSession(s: Session): void {
+    this.getUIContext().showAlertDialog({
+      title: '删除会话',
+      message: `「${s.name}」及其聊天记录将从桌面端删除，不可恢复。`,
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '删除',
+        fontColor: $r('app.color.status_danger'),
+        action: () => {
+          void this.onDeleteSession(s.id);
+        }
+      }
+    });
+  }
+
+  private async onDeleteSession(sid: string): Promise<void> {
+    const ok: boolean = await this.chat.deleteSession(sid);
+    if (ok) {
+      toastModel.show('已删除会话', 'ok');
+    } else {
+      toastModel.show('删除失败，请重试', 'warn');
+    }
   }
 
   /** 断开（原型 dr-quit 红字版）：先收抽屉（drawerState 单例不随卸载复位）再
@@ -1072,6 +1134,26 @@ export struct ChatDrawer {
           .fontSize(11)
           .fontColor($r('app.color.text_secondary'))
       }
+      // ⏻ 结束会话进程（stop_chat_session）：运行时存活的会话才显示（started
+      // 含回复中/待确认）；点 = 确认后杀桌面 worker，非当前会话只清徽标。
+      // hitTestBehavior(Block) 阻冒泡（行点击是切会话，父子不并触发——同
+      // autSwitch 小开关）
+      if (this.sm.startedIds.indexOf(s.id) >= 0) {
+        Row() {
+          SymbolGlyph($r('sys.symbol.power'))
+            .fontSize(13)
+            .fontColor([$r('app.color.status_danger')])
+        }
+        .width(24)
+        .height(24)
+        .borderRadius(12)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
+        .hitTestBehavior(HitTestMode.Block)
+        .onClick(() => {
+          this.confirmStopSession(s);
+        })
+      }
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 11, bottom: 11 })
@@ -1082,6 +1164,14 @@ export struct ChatDrawer {
     .onClick(() => {
       this.onSessionTap(s);
     })
+    // 长按 = 删除会话（delete_session：删桌面记录不可恢复，先确认；与点按
+    // 切会话不冲突——单击/长按是不同手势）
+    .gesture(
+      LongPressGesture()
+        .onAction((_e: GestureEvent) => {
+          this.confirmDeleteSession(s);
+        })
+    )
   }
 
   @Builder

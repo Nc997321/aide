@@ -199,6 +199,17 @@ export class AideApi {
   }
 
   /**
+   * 结束会话进程（stop_chat_session）：桌面侧杀掉该会话 worker（interrupt 只停
+   * 本轮回复、进程仍存活，本命令进程一并退出）。fire-and-forget 语义（Rust 侧
+   * 只往 sidecar stdin 写一行即返回）；用户主动杀 host 抑制 session_dead 事件
+   * （docs/superpowers/specs/2026-07-04-session-state-hardening-design.md），调用
+   * 方须本机即清存活徽标，不等事件。会话记录落盘保留，可重开续聊（resumeId）。
+   */
+  stopChatSession(sessionId: string): Promise<void> {
+    return getTransport().invoke<void>('stop_chat_session', { 'sessionId': sessionId });
+  }
+
+  /**
    * 权限弹窗应答（参数形状与上游零偏差）。answers = AskUserQuestion 选项
    * 作答；nextMode = 「允许并切换模式」（编辑工具的 auto / 计划批准
    * 的 auto）；message = 拒绝理由；sessionRules = 规则草稿（ohos 不推导，
@@ -237,6 +248,15 @@ export class AideApi {
    */
   createSession(id: string, name: string): Promise<Session> {
     return getTransport().invoke<Session>('create_session', { 'id': id, 'name': name });
+  }
+
+  /**
+   * 删除会话（delete_session）：桌面删元数据 + 全局搜删 jsonl 转录 + 清最近
+   * 访问，不可恢复。运行中的 worker 由调用方先 stop_chat_session 杀掉（对照
+   * 桌面 contextMenus 删除序：防进程泄漏 & 删除后 jsonl 被写回）。
+   */
+  deleteSession(id: string): Promise<void> {
+    return getTransport().invoke<void>('delete_session', { 'id': id });
   }
 
   /** 终止后台任务；终态经 bg_task_ended(status:"stopped") 回来，无单独回执。 */

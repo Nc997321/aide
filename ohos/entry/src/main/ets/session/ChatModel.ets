@@ -151,6 +151,30 @@ export class ChatModel {
     void hydrateStore(this.store);
     void this.syncBgTasks();
     void this.syncModelEffort();
+    void this.syncSessionAlive(sid);
+  }
+
+  /**
+   * 打开会话时对账存活（session_alive 权威存活表）：断线/重启窗口的徽标偏差
+   * 双向修正——运行中而未点亮（假阴性）点亮，已死而残留（无 session_dead 可
+   * 收：用户主动杀被 host 抑制 / 断线窗口内桌面侧死亡）清除。顶栏 ⏻ 与抽屉
+   * 行尾 ⏻（结束进程入口）的显隐闸门是 startedIds，此处保证打开的会话现势
+   * 准确；探测失败保持现状（瞬态离线，事件流/refresh 对账自愈）。
+   */
+  private async syncSessionAlive(sid: string): Promise<void> {
+    if (sid === '' || connModel.state !== 'authed') {
+      return;
+    }
+    try {
+      const alive: boolean = await api.sessionAlive(sid);
+      if (alive) {
+        sessionsModel.markSessionStarted(sid);
+      } else {
+        sessionsModel.markSessionStopped(sid);
+      }
+    } catch (e) {
+      // 保持现状：下次对账自愈
+    }
   }
 
   /** 历史加载失败后的显式重试（d88dd73c 回滚保证此处可恢复）。 */
@@ -297,6 +321,70 @@ export class ChatModel {
         sessionsModel.markRoundEnd(sid);
       }
     }
+  }
+
+  /**
+   * 结束会话进程（stop_chat_session）：桌面侧杀掉该会话 worker，进行中的
+   * 回复/权限/后台任务一并终止；会话记录落盘保留，重开/再发消息即 resume。
+   * 用户主动杀 host 抑制 session_dead 事件——徽标本机即清（对照桌面
+   * stopSessionById）；当前打开的会话同步复位时间线运行态。失败不落状态
+   * （进程仍在），由调用方按返回值提示。
+   */
+  async stopSession(sid: string): Promise<boolean> {
+    if (sid === '') {
+      return false;
+    }
+    try {
+      await api.stopChatSession(sid);
+    } catch (e) {
+      if (this.store.sid === sid) {
+        this.store.sysNote = `结束会话失败：${e instanceof Error ? e.message : String(e)}`;
+      }
+      return false;
+    }
+    sessionsModel.markSessionStopped(sid);
+    if (this.store.sid === sid) {
+      ttsModel.stop(); // 进程覆灭即停播报（对照 interrupt / session_dead 收尾）
+      this.store.resetRuntimeState();
+      this.store.bgTasks = []; // 后台任务随进程覆灭（对照 session_dead 分支）
+      if (this.store.messages.length > 0) {
+        this.store.appendMessage(ChatMessage.systemNote(uuid(), '已结束会话 · 进程已退出'));
+        this.store.bumpTail();
+      }
+    }
+    return true;
+  }
+
+  /**
+   * 删除会话（delete_session：桌面删元数据 + jsonl 转录，不可恢复）。对照
+   * 桌面 contextMenus 删除序：运行中 worker 先杀（防进程泄漏 & 删除后转录
+   * 被写回，失败静默——多半本就没在跑），再删记录；列表本机移除，当前打开
+   * 的会话整体回空态（时间线/附件/输入草稿一并清）。
+   */
+  async deleteSession(sid: string): Promise<boolean> {
+    if (sid === '') {
+      return false;
+    }
+    try {
+      await api.stopChatSession(sid);
+    } catch (e) {
+      // 杀进程失败静默：会话多半没在跑，删除照走（桌面同款 catch 语义）
+    }
+    try {
+      await api.deleteSession(sid);
+    } catch (e) {
+      return false;
+    }
+    sessionsModel.markSessionStopped(sid);
+    sessionsModel.removeSession(sid);
+    if (this.store.sid === sid) {
+      ttsModel.stop();
+      readerModel.stop();
+      this.store.resetForOpen('', '新会话');
+      attachmentsModel.reset();
+      void this.syncModelEffort();
+    }
+    return true;
   }
 
   /** 终止后台任务（fire-and-forget；终态经 bg_task_ended 回来自然收尾）。 */
