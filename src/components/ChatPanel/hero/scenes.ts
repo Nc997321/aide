@@ -77,7 +77,7 @@ export const SCENES: readonly Scene[] = [
   },
   {
     id: "webpage",
-    label: "网页",
+    label: "设计",
     icon: "◰",
     placeholder: "想做一个什么页面？给谁看、放哪些内容",
     brief:
@@ -94,7 +94,7 @@ export const SCENES: readonly Scene[] = [
   },
   {
     id: "app",
-    label: "应用",
+    label: "Aide 应用",
     icon: "◫",
     placeholder: "想在 Aide 里加个什么工具？",
     brief:
