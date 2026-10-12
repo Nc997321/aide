@@ -11,4 +11,12 @@ export interface HeroViewProps {
   readonly workspacePath: string;
   /** 当前选中模型名（无选择时显示「默认模型」） */
   readonly modelName: string;
+  /** 「接着上次」：最近一场日常对话（标题 + 多久前）；没有就不显示那一行 */
+  readonly resume: HeroResume | null;
+}
+
+export interface HeroResume {
+  readonly sessionId: string;
+  readonly title: string;
+  readonly ago: string;
 }

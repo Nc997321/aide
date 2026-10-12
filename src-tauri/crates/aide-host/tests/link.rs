@@ -147,6 +147,8 @@ async fn a_real_host_pairs_a_phone_through_a_real_relay() {
     // 订阅：Host 上发生的对话事件会推给手机（用 Host 自己的 notify 造一个系统通知事件）
     phone.send(json!({"type":"subscribe","sessions":null})).await;
     assert_eq!(phone.recv().await["type"], "subscribed");
+    // 手机的订阅不算桥：否则套件升级后旧守护进程永远「正忙」、换不掉（见 `Daemon::bridges`）
+    assert_eq!(host.hello().clients, 1, "only the desktop bridge counts as a client");
 
     // 手机离开后用 resume 回来：不再需要二维码
     phone.ws.close(None).await.ok();

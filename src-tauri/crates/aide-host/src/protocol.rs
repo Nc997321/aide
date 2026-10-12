@@ -85,7 +85,8 @@ pub struct HelloInfo {
     /// 守护进程身份（每次启动随机）：它变了 = Host 进程换了，上面的会话都没了。
     #[serde(default)]
     pub daemon_id: String,
-    /// 此刻连着守护进程的客户端数（含发起 `hello` 的这一个，若它已 attach）。
+    /// 此刻 attach 着守护进程的**桥**（桌面窗口）数，含发起 `hello` 的这一个（若它已 attach）。
+    /// 不含手机网关的订阅——那不是「换版本会打断的窗口」。
     #[serde(default)]
     pub clients: u32,
     /// 本连接的接入结果（attach 之后的 `hello` 才有）。

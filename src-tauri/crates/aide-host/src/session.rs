@@ -8,6 +8,7 @@
 //! 并发模型：每条请求独立 spawn（慢的全树搜索不堵住文件树的 list_directory）；所有出站帧
 //! （应答 + 事件）经同一个 mpsc 串行写出，保证一行一帧不交错。
 
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use aide_core::bus::{Attach, ClientId, Consumer, Event, Resume as BusResume};
@@ -32,6 +33,10 @@ pub type Frame = Arc<str>;
 pub struct Daemon {
     pub core: Arc<Core>,
     pub kit: Arc<HostKit>,
+    /// 此刻 attach 着的**桥**（桌面窗口）数。「守护进程正忙、不能换版本」只看它，不看总线的
+    /// 客户端数——后者还含手机网关的订阅：手机常年连着，算进去旧守护进程就永远「正忙」，
+    /// 套件升级后新桥只能将就着接旧进程，修复永远不生效（2026-10-12 实锤）。手机会自己重连。
+    pub bridges: AtomicUsize,
     /// 有人要求退出（`shutdown`）时被唤醒；daemon 主循环等它。
     pub shutdown: Notify,
 }
@@ -133,6 +138,7 @@ where
                     let line = serde_json::to_string(&Response { id, ok: Some(ok), err: None }).unwrap_or_default();
                     let _ = ack_tx.send(line.into());
                 });
+                d.bridges.fetch_add(1, Ordering::SeqCst);
                 attached = Some((cid, wire_info(&bus_info)));
             }
             METHOD_SUBSCRIBE => {
@@ -148,7 +154,7 @@ where
             }
             METHOD_SHUTDOWN => {
                 let force = parse::<ShutdownParams>(req.params, "shutdown").map(|p| p.force).unwrap_or(false);
-                let others = d.core.bus.client_count() - usize::from(attached.is_some());
+                let others = d.bridges.load(Ordering::SeqCst) - usize::from(attached.is_some());
                 if others > 0 && !force {
                     reply(&tx, req.id, Err(format!("还有 {others} 个客户端连着")));
                 } else {
@@ -172,6 +178,7 @@ where
         }
     }
     if let Some((id, _)) = attached {
+        d.bridges.fetch_sub(1, Ordering::SeqCst);
         d.core.bus.detach(id);
     }
 }
@@ -189,7 +196,7 @@ fn hello(d: &Daemon, attached: Option<&(ClientId, AttachInfo)>) -> HelloInfo {
         home: std::env::var("HOME").unwrap_or_default(),
         user: std::env::var("USER").or_else(|_| std::env::var("LOGNAME")).unwrap_or_default(),
         daemon_id: d.core.bus.epoch().to_string(),
-        clients: d.core.bus.client_count() as u32,
+        clients: d.bridges.load(Ordering::SeqCst) as u32,
         attach: attached.map(|(_, info)| info.clone()),
     }
 }

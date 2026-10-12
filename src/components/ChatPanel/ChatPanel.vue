@@ -109,6 +109,8 @@ const emit = defineEmits<{
   "select-workspace": [ws: WorkspaceInfo];
   /** hero 模式切换（日常 / 工程）：同样只改归属与意图，不切活动工作区 */
   "select-mode": [mode: ChatMode];
+  /** hero「接着上次」：打开一场已有会话 */
+  "open-session": [sessionId: string];
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
 }>();
@@ -669,6 +671,7 @@ function onOpenBgDock(taskId: string) {
         :model-name="heroModelName"
         @select-workspace="(ws) => emit('select-workspace', ws)"
         @select-mode="(m) => emit('select-mode', m)"
+        @open-session="(sid) => emit('open-session', sid)"
       />
     </Transition>
 
