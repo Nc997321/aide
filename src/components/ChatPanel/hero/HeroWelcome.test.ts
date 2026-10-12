@@ -13,7 +13,16 @@ vi.mock("../../../ui/WorkspacePicker.vue", () => ({
   },
 }));
 
+// 「接着上次」的取数走日常归属 + 会话列表；mock 边界指 SDK 包内模块（不是 @/ 壳）。
+const { listSessions } = vi.hoisted(() => ({ listSessions: vi.fn() }));
+vi.mock("@aide/sdk/api", () => ({ api: { listSessionsForWorkspace: listSessions } }));
+vi.mock("@aide/sdk/utils/dailyWorkspace", () => ({
+  ensureDailyWorkspace: async () => true,
+  dailyWorkspaceBind: () => ({ wsKey: "daily", wsPath: "/daily" }),
+}));
+
 import HeroWelcome from "./HeroWelcome.vue";
+import { flushPromises } from "@vue/test-utils";
 
 /** 固定系统时间：2026-09-01（周二）14:30 → 下午好。 */
 const AFTERNOON = new Date(2026, 8, 1, 14, 30, 0, 0);
@@ -23,6 +32,7 @@ beforeEach(() => {
   vi.setSystemTime(AFTERNOON);
   // seed 固定为 0 → 文案池第一条
   vi.spyOn(Math, "random").mockReturnValue(0);
+  listSessions.mockReset().mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -109,6 +119,45 @@ describe("HeroWelcome 模式分叉（日常 / 工程）", () => {
     await wrapper.setProps({ mode: "project" });
     expect(wrapper.text()).toContain("今天想从哪块代码开始？");
     expect(wrapper.text()).not.toContain("今天想聊点什么？");
+  });
+});
+
+describe("HeroWelcome 日常模式的环境脚注", () => {
+  it("日常不渲染模型脚注（模型名就在输入盒的下拉里，不重复）", () => {
+    const wrapper = mount(HeroWelcome, {
+      props: { mode: "daily", workspacePath: "", modelName: "Opus 5.5" },
+    });
+    expect(wrapper.text()).not.toContain("Opus 5.5");
+    expect(wrapper.find(".va-rule").exists()).toBe(false);
+  });
+
+  it("有日常对话时给「接着上次」：取时间最新的一场，点一下上抛 open-session", async () => {
+    const hour = 3_600_000;
+    listSessions.mockResolvedValue([
+      { id: "old", name: "旧的那场", timestamp: AFTERNOON.getTime() - 30 * hour },
+      { id: "new", name: "合同要点整理", timestamp: AFTERNOON.getTime() - 3 * hour },
+    ]);
+    const wrapper = mount(HeroWelcome, {
+      props: { mode: "daily", workspacePath: "", modelName: "" },
+      global: { directives: { tooltip: {} } },
+    });
+    await flushPromises();
+    const row = wrapper.get(".va-resume");
+    expect(row.text()).toContain("合同要点整理");
+    expect(row.text()).toContain("3小时前");
+    expect(row.text()).not.toContain("旧的那场");
+    await row.trigger("click");
+    expect(wrapper.emitted("open-session")).toEqual([["new"]]);
+  });
+
+  it("工程模式不取、不显示「接着上次」", async () => {
+    listSessions.mockResolvedValue([{ id: "a", name: "某场", timestamp: AFTERNOON.getTime() }]);
+    const wrapper = mount(HeroWelcome, {
+      props: { mode: "project", workspacePath: "", modelName: "" },
+    });
+    await flushPromises();
+    expect(wrapper.find(".va-resume").exists()).toBe(false);
+    expect(listSessions).not.toHaveBeenCalled();
   });
 });
 

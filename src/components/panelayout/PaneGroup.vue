@@ -256,6 +256,7 @@ async function onPickMode(mode: ChatMode) {
       @send-btw="onSendBtw"
       @select-workspace="onPickWorkspace"
       @select-mode="onPickMode"
+      @open-session="(sid: string) => pl.openSession(sid)"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-effort="setEffort"

@@ -9,6 +9,7 @@ defineProps<HeroViewProps>();
 const emit = defineEmits<{
   "select-workspace": [ws: WorkspaceInfo];
   "select-mode": [mode: ChatMode];
+  "open-session": [sessionId: string];
 }>();
 </script>
 
@@ -42,18 +43,32 @@ const emit = defineEmits<{
     <h1 class="va-headline">{{ copy.headline }}</h1>
     <p class="va-body">{{ copy.body }}</p>
 
-    <div class="va-rule" />
-
-    <!-- 环境脚注：工程给「归属 + 模型」，交互保留在 WorkspacePicker；
-         日常**没有工作区这个概念**，只留模型名（档位在输入盒工具栏那颗药丸上） -->
-    <div class="va-meta">
-      <template v-if="mode === 'project'">
+    <!-- 分隔线下那一行：工程给环境脚注（归属 + 模型，交互保留在 WorkspacePicker）；
+         日常**没有工作区这个概念**，给「接着上次」——最近一场日常对话，点一下回去。
+         日常不放模型名：同一个名字就在正下方输入盒的模型下拉里。一场都没聊过就整段不渲染 -->
+    <template v-if="mode === 'project'">
+      <div class="va-rule" />
+      <div class="va-meta">
         <span class="va-meta-label">新会话位于</span>
         <WorkspacePicker :path="workspacePath" @select="(ws) => emit('select-workspace', ws)" />
         <span class="va-meta-sep">·</span>
-      </template>
-      <span class="va-meta-model">{{ modelName }}</span>
-    </div>
+        <span class="va-meta-model">{{ modelName }}</span>
+      </div>
+    </template>
+    <template v-else-if="resume">
+      <div class="va-rule" />
+      <button
+        type="button"
+        class="va-resume"
+        v-tooltip="'回到这场对话'"
+        @click="emit('open-session', resume.sessionId)"
+      >
+        <span class="va-resume-label">接着上次</span>
+        <span class="va-resume-title">{{ resume.title }}</span>
+        <span class="va-resume-ago">{{ resume.ago }}</span>
+        <span class="va-resume-arrow" aria-hidden="true">→</span>
+      </button>
+    </template>
   </div>
 </template>
 
@@ -170,5 +185,62 @@ const emit = defineEmits<{
 }
 .va-meta-model {
   color: var(--aide-accent);
+}
+
+/* 「接着上次」：平时是一行安静的脚注，hover 才显出它是个入口（标题提亮、箭头滑出） */
+.va-resume {
+  appearance: none;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 10px;
+  max-width: min(520px, 90%);
+  padding: 4px 12px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--aide-text-secondary);
+  cursor: pointer;
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.va-resume:hover,
+.va-resume:focus-visible {
+  background: var(--aide-surface-hover);
+}
+.va-resume-label {
+  flex-shrink: 0;
+  color: var(--aide-text-muted);
+}
+.va-resume-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: color var(--aide-ease-t);
+}
+.va-resume:hover .va-resume-title,
+.va-resume:focus-visible .va-resume-title {
+  color: var(--aide-text-primary);
+}
+.va-resume-ago {
+  flex-shrink: 0;
+  font-family: var(--aide-font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--aide-text-muted);
+}
+.va-resume-arrow {
+  flex-shrink: 0;
+  font-size: 14px;
+  color: var(--aide-accent);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
+}
+.va-resume:hover .va-resume-arrow,
+.va-resume:focus-visible .va-resume-arrow {
+  opacity: 1;
+  transform: translateX(0);
 }
 </style>

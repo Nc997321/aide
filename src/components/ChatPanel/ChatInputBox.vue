@@ -439,7 +439,9 @@ const permissionModeSelectOptions = computed(() =>
   displayPermissionModes.value.map((m) => ({ value: m.value, label: m.displayName })),
 );
 
-// 订阅额度展示：把每个并行窗口折成一个小徽标（已用% + 状态色 + 重置时间）。
+// 订阅额度展示：工具条上只留**一个**徽标——最吃紧的那个窗口（状态点 + 名字 + 已用%），
+// 其余窗口与重置时间进悬浮提示，明细环在用量弹层里。每个窗口各占一条进度条时，
+// 两个窗口就吃掉工具条近三分之一宽度，窄栏下把发送按钮挤变形（2026-10-12）。
 // 按已用比例降序（最吃紧的排前面），空则不显示。
 const rateLimitWindows = computed(() => {
   const wins = props.rateLimit?.windows ?? [];
@@ -454,6 +456,11 @@ const rateLimitWindows = computed(() => {
       if (status === "exceeded") parts.push("已达上限");
       return { key: w.key, label: w.label, pct, status, title: parts.join(" · ") };
     });
+});
+const quotaBadge = computed(() => {
+  const [top] = rateLimitWindows.value;
+  if (!top) return null;
+  return { ...top, title: rateLimitWindows.value.map((w) => w.title).join("\n") };
 });
 
 /** resetsAt 可能是秒或毫秒的 unix 时间戳——启发式归一到毫秒后折成"还剩 Xh/Xm"。 */
@@ -1566,23 +1573,23 @@ const { actions: quickActions } = useQuickActions();
             v-tooltip="'已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'"
           >⚠️ 跳过确认</span>
         </div>
-        <div
-          v-for="w in rateLimitWindows"
-          :key="w.key"
-          class="chat-quota"
-          :class="`chat-quota--${w.status}`"
-          v-tooltip="w.title"
-        >
-          <span class="chat-quota-dot" />
-          <span class="chat-quota-label">{{ w.label }}</span>
-          <div class="chat-ctx-bar">
-            <div class="chat-ctx-bar-fill" :style="{ width: w.pct + '%' }" />
-          </div>
-          <span class="chat-ctx-percent">{{ w.pct }}%</span>
-        </div>
         <!-- 右侧组整体吸边：auto margin 挂在组容器上而不是发送按钮——否则
              弹性空隙会插在环形与发送之间，环形被留在左侧队列（真踩过） -->
         <div class="chat-toolbar-right">
+          <!-- 有上下文环时点它开同一个用量弹层（额度环明细在那里）；欢迎页没有环，只给提示 -->
+          <component
+            :is="contextUsage ? 'button' : 'div'"
+            v-if="quotaBadge"
+            :type="contextUsage ? 'button' : undefined"
+            class="chat-quota"
+            :class="[`chat-quota--${quotaBadge.status}`, { 'chat-quota--clickable': !!contextUsage }]"
+            v-tooltip="quotaBadge.title"
+            @click="contextUsage && (usagePanelOpen = true)"
+          >
+            <span class="chat-quota-dot" />
+            <span class="chat-quota-label">{{ quotaBadge.label }}</span>
+            <span class="chat-quota-pct">{{ quotaBadge.pct }}%</span>
+          </component>
           <ContextUsageRing
             v-if="contextUsage"
             ref="usageRingRef"
@@ -1754,33 +1761,26 @@ const { actions: quickActions } = useQuickActions();
   white-space: nowrap;
 }
 
-/* chat-ctx-bar / chat-ctx-bar-fill / chat-ctx-percent 仍被 5h 额度胶囊使用 */
-.chat-ctx-bar {
-  width: 48px;
-  height: 5px;
-  border-radius: 3px;
-  background: var(--aide-surface-hover);
-  overflow: hidden;
-}
-
-.chat-ctx-bar-fill {
-  height: 100%;
-  background: var(--aide-accent);
-  transition: width var(--aide-ease-t);
-}
-
-.chat-ctx-percent {
-  white-space: nowrap;
-  min-width: 28px;
-}
-
 .chat-quota {
   display: flex;
   align-items: center;
   gap: 4px;
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
   font-size: 11px;
   color: var(--aide-text-muted);
+  white-space: nowrap;
   cursor: default;
+}
+
+.chat-quota--clickable {
+  cursor: pointer;
+}
+
+.chat-quota--clickable:hover {
+  color: var(--aide-text-secondary);
 }
 
 .chat-quota-dot {
@@ -1791,22 +1791,12 @@ const { actions: quickActions } = useQuickActions();
   background: var(--aide-accent);
 }
 
-.chat-quota-label {
-  white-space: nowrap;
-}
+/* 归一化状态色：ok 走强调色、warning 橙、exceeded 红（点 + 文字同步变色）。 */
+.chat-quota--warning .chat-quota-dot { background: var(--aide-warning); }
+.chat-quota--warning { color: var(--aide-warning); }
 
-/* 归一化状态色：ok 走强调色、warning 橙、exceeded 红（点 + 进度条同步变色）。 */
-.chat-quota--warning .chat-quota-dot,
-.chat-quota--warning .chat-ctx-bar-fill {
-  background: var(--aide-warning);
-}
-.chat-quota--warning .chat-quota-label { color: var(--aide-warning); }
-
-.chat-quota--exceeded .chat-quota-dot,
-.chat-quota--exceeded .chat-ctx-bar-fill {
-  background: var(--aide-danger);
-}
-.chat-quota--exceeded .chat-quota-label { color: var(--aide-danger); font-weight: 600; }
+.chat-quota--exceeded .chat-quota-dot { background: var(--aide-danger); }
+.chat-quota--exceeded { color: var(--aide-danger); font-weight: 600; }
 
 .chat-input {
   resize: none;
