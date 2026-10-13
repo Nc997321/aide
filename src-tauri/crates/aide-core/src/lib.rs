@@ -77,6 +77,8 @@ pub struct Core {
     pub link: Arc<link::LinkService>,
     /// 侧栏应用的后端进程（给界面用的那一份；会话里的由 SDK 自己拉起）。
     pub apps: Arc<apps::servers::ServerPool>,
+    /// 侧栏应用在工作区里起的进程（按 应用 × 工作区 记账，见 `apps::process`）。
+    pub app_procs: Arc<apps::process::ProcessPool>,
     /// Claude 官方账号的登录流程（驱动随包 claude CLI，见 `claude_login.rs`）。
     pub claude_login: claude_login::ClaudeLogin,
     /// Host 的事件总线：全部事件在这里编号、留底、按订阅投给前门 / 网关（见 `bus.rs`）。
@@ -105,6 +107,7 @@ impl Core {
             pty: pty::ShellManager::new(),
             link: Arc::new(link::LinkService::new()),
             apps: Arc::new(apps::servers::ServerPool::default()),
+            app_procs: Arc::new(apps::process::ProcessPool::default()),
             claude_login: claude_login::ClaudeLogin::default(),
             bus,
             events,

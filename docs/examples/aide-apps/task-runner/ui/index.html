@@ -1,0 +1,131 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>任务面板</title>
+<style>
+  body { margin: 0; padding: 12px; font: 13px/1.6 system-ui, sans-serif; background: var(--aide-bg-base); color: var(--aide-text-primary); }
+  h2 { margin: 14px 0 4px; font-size: 12px; font-weight: 600; color: var(--aide-text-secondary); }
+  .task { display: flex; align-items: center; gap: 8px; padding: 5px 0; }
+  .task code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task small { color: var(--aide-text-secondary); white-space: nowrap; }
+  button { padding: 2px 12px; border: 1px solid var(--aide-border); border-radius: 6px; background: var(--aide-bg-raised); color: inherit; cursor: pointer; }
+  .empty { color: var(--aide-text-secondary); }
+  #log { margin-top: 12px; padding: 8px 10px; max-height: 45vh; overflow: auto; border: 1px solid var(--aide-border); border-radius: 6px; font: 12px/1.6 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #log .err { color: var(--aide-danger); }
+  #log a { color: var(--aide-accent); cursor: pointer; text-decoration: underline; }
+  #log .note { color: var(--aide-text-secondary); }
+</style>
+<div id="tasks" class="empty">正在找这个工程里的脚本…</div>
+<div id="log" hidden></div>
+<script src="/aide-app.js"></script>
+<script>
+  // 列出工作区里每个 package.json 的 scripts，点一下就跑，日志实时滚动，报错里的「文件:行」可以点。
+  // 进程归 Aide 管：面板重载（比如用户切了工作区再切回来）后，从 process.list 把还在跑的接回来。
+  const tasksEl = document.getElementById("tasks");
+  const logEl = document.getElementById("log");
+  const running = new Map(); // "目录\n脚本" -> runId
+  let packages = [];        // [{ dir, scripts: [名字…] }]
+  let shown = null;         // 日志区正在显示的 runId
+
+  const key = (dir, script) => `${dir}\n${script}`;
+  // 文本只进 textContent：脚本名、日志都是工程里来的，不能当 HTML
+  function el(tag, props, ...kids) {
+    const node = Object.assign(document.createElement(tag), props);
+    node.append(...kids);
+    return node;
+  }
+
+  function render() {
+    tasksEl.className = "";
+    tasksEl.replaceChildren();
+    if (!packages.length) {
+      tasksEl.className = "empty";
+      tasksEl.textContent = "这个工程里没有带 scripts 的 package.json。";
+      return;
+    }
+    for (const pkg of packages) {
+      tasksEl.append(el("h2", { textContent: pkg.dir || "（工程根）" }));
+      for (const script of pkg.scripts) {
+        const runId = running.get(key(pkg.dir, script));
+        const btn = el("button", { textContent: runId ? "停止" : "运行" });
+        btn.onclick = () => (runId ? aide.process.kill(runId) : start(pkg.dir, script));
+        tasksEl.append(el("div", { className: "task" }, el("code", { textContent: script }), el("small", { textContent: runId ? "运行中" : "" }), btn));
+      }
+    }
+  }
+
+  // 报错里的「路径:行」变成可点的链接（路径相对这次运行的目录）
+  function appendLine(text, isErr, dir) {
+    const line = el("div", { className: isErr ? "err" : "" });
+    let last = 0;
+    for (const m of text.matchAll(/([\w@.\-\/]+\.\w+)[:(](\d+)/g)) {
+      line.append(text.slice(last, m.index));
+      const path = (dir ? `${dir}/` : "") + m[1].replace(/^\.\//, "");
+      const link = el("a", { textContent: m[0] });
+      link.onclick = () => aide.editor.open(path, { line: Number(m[2]) }).catch((e) => aide.ui.toast(e.message));
+      line.append(link);
+      last = m.index + m[0].length;
+    }
+    line.append(text.slice(last));
+    const atBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 4;
+    logEl.append(line);
+    if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function follow(runId, dir, script) {
+    running.set(key(dir, script), runId);
+    shown = runId;
+    logEl.hidden = false;
+    logEl.replaceChildren(el("div", { className: "note", textContent: `$ npm run ${script}${dir ? `   （在 ${dir}）` : ""}` }));
+    aide.on(`process:${runId}`, (e) => {
+      if (e.type === "exit") {
+        running.delete(key(dir, script));
+        render();
+      }
+      if (shown !== runId) return;
+      if (e.type === "output") appendLine(e.data, e.stream === "stderr", dir);
+      else if (e.type === "gap") appendLine(`… 输出太快，中间有 ${e.lost} 行没留住 …`, false, "");
+      else appendLine(e.killed ? "已结束" : e.code === 0 ? "完成" : `失败，退出码 ${e.code}`, e.code !== 0 && !e.killed, "");
+    });
+    render();
+  }
+
+  async function start(dir, script) {
+    try {
+      // 不经 shell：command 是可执行文件，脚本名只是一个参数，拼不成别的命令
+      const info = await aide.process.run({ command: "npm", args: ["run", script], cwd: dir });
+      follow(info.runId, dir, script);
+    } catch (e) {
+      aide.ui.toast(e.message);
+    }
+  }
+
+  async function loadPackages() {
+    const files = (await aide.fs.find("package.json", { limit: 100 })).filter((f) => f.split("/").pop() === "package.json");
+    const found = [];
+    for (const file of files.sort()) {
+      try {
+        const scripts = Object.keys(JSON.parse((await aide.fs.read(file)).text).scripts || {});
+        if (scripts.length) found.push({ dir: file.split("/").slice(0, -1).join("/"), scripts });
+      } catch (_) { /* 读不了、不是合法 JSON：跳过这一个 */ }
+    }
+    packages = found;
+    render();
+  }
+
+  (async () => {
+    if (!(await aide.workspace.info())) {
+      tasksEl.textContent = "先打开一个工程。";
+      return;
+    }
+    await loadPackages();
+    // 面板重载之前起的、还在跑的：接回来，日志从缓冲里最早的一行重放
+    for (const p of (await aide.process.list()).filter((p) => p.running)) {
+      const script = p.command.split(" ").pop();
+      follow(p.runId, p.cwd, script);
+      aide.process.attach(p.runId);
+    }
+    // 有 package.json 变了就重新列（粒度是目录：收到后自己重读）
+    let timer = null;
+    aide.fs.watch(() => { clearTimeout(timer); timer = setTimeout(loadPackages, 500); });
+  })().catch((e) => { tasksEl.className = "empty"; tasksEl.textContent = e.message; });
+</script>

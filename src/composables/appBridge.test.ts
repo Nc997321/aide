@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { handleBridgeMessage, type BridgeHost } from "./appBridge";
+import { handleBridgeMessage, hostKindOf, projectTreeChange, type BridgeHost } from "./appBridge";
 
 function host(over: Partial<BridgeHost> = {}): BridgeHost {
   return {
@@ -9,6 +9,8 @@ function host(over: Partial<BridgeHost> = {}): BridgeHost {
     setBadge: vi.fn(),
     hasPermission: () => true,
     fillComposer: vi.fn(),
+    openFile: vi.fn(async () => {}),
+    hostKind: async () => "wsl" as const,
     hostCall: vi.fn(async () => "from-host"),
     ...over,
   };
@@ -130,5 +132,58 @@ describe("projectSessionEvent", () => {
     }
     expect(projectSessionEvent(null)).toBeNull();
     expect(projectSessionEvent({ type: "tool_use_start", session_id: "s", id: "t" })).toBeNull();
+  });
+});
+
+describe("editor.open", () => {
+  it("要 workspace:read，路径必须是工作区内的相对路径", async () => {
+    const denied = host({ hasPermission: () => false });
+    expect(await handleBridgeMessage(msg("editor.open", { path: "a.ts" }), denied)).toMatchObject({ ok: false });
+    expect(denied.openFile).not.toHaveBeenCalled();
+
+    const h = host();
+    for (const path of ["", "/etc/passwd", "../x", "a/../../x", "C:/x", "a\\b", "a//b"]) {
+      expect(await handleBridgeMessage(msg("editor.open", { path }), h)).toMatchObject({ ok: false });
+    }
+    expect(h.openFile).not.toHaveBeenCalled();
+  });
+
+  it("带行号打开；不像样的行号当没给", async () => {
+    const h = host();
+    expect(await handleBridgeMessage(msg("editor.open", { path: "src/a.ts", line: 42 }), h)).toMatchObject({ ok: true });
+    expect(h.openFile).toHaveBeenLastCalledWith("src/a.ts", 42);
+    await handleBridgeMessage(msg("editor.open", { path: "src/a.ts", line: -3 }), h);
+    expect(h.openFile).toHaveBeenLastCalledWith("src/a.ts", undefined);
+    expect(h.hostCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("Host 的种类由 GUI 补上", () => {
+  it("host.info / workspace.info 的结果带上 host", async () => {
+    const h = host({ hostCall: vi.fn(async () => ({ os: "linux" })) });
+    expect(await handleBridgeMessage(msg("host.info"), h)).toMatchObject({ result: { os: "linux", host: "wsl" } });
+    expect(await handleBridgeMessage(msg("workspace.info"), h)).toMatchObject({ result: { os: "linux", host: "wsl" } });
+  });
+
+  it("没有打开工作区（null）原样返回", async () => {
+    const h = host({ hostCall: vi.fn(async () => null) });
+    expect(await handleBridgeMessage(msg("workspace.info"), h)).toMatchObject({ ok: true, result: null });
+  });
+
+  it("窗口 Host 的 key 归成三种", () => {
+    expect([hostKindOf("local"), hostKindOf("wsl:Debian"), hostKindOf("ssh:devbox")]).toEqual(["local", "wsl", "ssh"]);
+  });
+});
+
+describe("projectTreeChange", () => {
+  it("绝对目录转成相对工作区根，工作区之外的不给", () => {
+    expect(projectTreeChange(["/ws/a/src", "/ws/a", "/ws/ab/x", "/other"], "/ws/a")).toEqual({ dirs: ["src", ""] });
+    expect(projectTreeChange(["C:\\ws\\a\\src\\ui"], "C:\\ws\\a\\")).toEqual({ dirs: ["src/ui"] });
+  });
+
+  it("空数组 = 全量；全在别处 = 不打扰；没有工作区 = 不发", () => {
+    expect(projectTreeChange([], "/ws/a")).toEqual({ full: true });
+    expect(projectTreeChange(["/other/x"], "/ws/a")).toBeNull();
+    expect(projectTreeChange([], "")).toBeNull();
   });
 });

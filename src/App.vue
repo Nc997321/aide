@@ -23,6 +23,7 @@ import { useMemoryObservatory } from "./composables/useMemoryObservatory";
 import { useKnowledgeBase } from "./composables/useKnowledgeBase";
 import { useRightPanel, rightPanelWidthSource, type RightTabId } from "./composables/useRightPanel";
 import { useApps, appTabId, appIdOfTab, type AppIcon } from "./composables/useApps";
+import { useAppProcesses } from "./composables/useAppProcesses";
 import { useBrowserViews } from "./composables/browser/useBrowserViews";
 import { useChatSession, setAuthRequiredHandler } from "./composables/useChatSession";
 import { usePaneLayout } from "./composables/usePaneLayout";
@@ -140,6 +141,13 @@ const browserMaximized = rightPanel.maximized;
 // 侧栏应用：右栏 rail 的动态 tab + 左侧导航组里占主区的那一类（见 composables/useApps）。
 const sidebarApps = useApps();
 sidebarApps.start();
+// 应用起的进程：标题栏徽标与面板顶条共用。「去那个工作区」走侧栏的切换入口（唯一入口，不另开一条）。
+const appProcesses = useAppProcesses();
+appProcesses.start();
+appProcesses.setWorkspaceSwitcher((path) => {
+  const ws = useWorkspaces().workspaces.value.find((w) => w.name === path);
+  if (ws) void sidebarRef.value?.switchToWorkspaceByKey(ws.key);
+});
 /** 右栏应用面板首次激活才挂、之后保活（同浏览器的 browserEverActive）：切走不丢应用里的状态。 */
 const rightAppsEverActive = ref<string[]>([]);
 watch(
@@ -1198,6 +1206,7 @@ onUnmounted(() => {
           v-else-if="sidebarApps.mainOpenApp.value"
           :key="sidebarApps.mainOpenApp.value.id"
           :app="sidebarApps.mainOpenApp.value"
+          :workspace-root="workspacePath"
           class="h-full"
         />
         <!-- 内嵌浏览器已不在主区：它是右栏的一个 tab（见 .panel-right-inner）。
@@ -1260,6 +1269,7 @@ onUnmounted(() => {
               v-show="rightTab === appTabId(a.id)"
               :key="a.id"
               :app="a"
+              :workspace-root="workspacePath"
             />
           </div>
         </div>

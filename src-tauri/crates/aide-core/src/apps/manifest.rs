@@ -52,6 +52,7 @@ const PERMISSIONS: &[&str] = &[
     "workspace:write",
     "session:read",
     "composer",
+    "process",
 ];
 
 const MAX_ID: usize = 40;
@@ -209,5 +210,23 @@ mod tests {
         let mut no_server = base.clone();
         no_server.server = None;
         assert_ne!(base.grant(), no_server.grant());
+    }
+
+    /// 仓库里的示例应用都得过清单校验（示例申请了新权限而白名单没跟上，就在这里露出来）。
+    #[test]
+    fn the_example_apps_have_valid_manifests() {
+        let examples = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../docs/examples/aide-apps");
+        let mut seen = Vec::new();
+        for entry in std::fs::read_dir(&examples).unwrap().flatten() {
+            let id = entry.file_name().to_string_lossy().into_owned();
+            let text = std::fs::read_to_string(entry.path().join(MANIFEST_FILE)).unwrap();
+            let manifest = parse(&text, &id).unwrap_or_else(|e| panic!("{id}: {e}"));
+            assert!(entry.path().join(&manifest.panel.entry).is_file(), "{id}: 入口文件不存在");
+            seen.push(id);
+        }
+        seen.sort();
+        assert_eq!(seen, ["api-tester", "counter", "task-runner"]);
+        let runner = parse(&std::fs::read_to_string(examples.join("task-runner").join(MANIFEST_FILE)).unwrap(), "task-runner").unwrap();
+        assert!(runner.has_permission("process") && runner.has_permission("workspace:read"));
     }
 }

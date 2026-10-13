@@ -39,8 +39,11 @@ pub struct Roots {
     /// 日常目录的应用目录（恒受信任）。会话可以住在日常目录而窗口开着别的工作区——agent 把应用写在
     /// 自己的 cwd 里，只扫活动工作区就永远看不到它。与 `workspace_apps` 相同时只扫一遍。
     pub daily_apps: Option<PathBuf>,
-    /// 活动工作区的根（`fs.*` 的边界；与是否受信任无关）。
+    /// 这次调用所在的工作区（`fs.*` / `process.*` 的边界），由面板带来、Host 校验过；
+    /// 不是 Host 当下的活动工作区。列清单这类不属于任何工作区的操作里是 `None`。
     pub workspace_root: Option<PathBuf>,
+    /// 上面那个工作区是否受信任（起进程要它；读写文件不要）。
+    pub workspace_trusted: bool,
     /// 应用数据与同意记录的根（刻意不在应用目录里：卸载重装不丢，agent 改应用文件时碰不到）。
     pub data: PathBuf,
 }
@@ -349,13 +352,18 @@ impl Located {
         let server = self.manifest.server.as_ref()?;
         Some(Spec {
             id: self.manifest.id.clone(),
+            workspace: roots.workspace_root.clone(),
             program: node.to_path_buf(),
             args: vec![self.dir.join(&server.entry).to_string_lossy().into_owned()],
             cwd: self.dir.clone(),
             env: vec![
                 ("AIDE_APP_ID".into(), self.manifest.id.clone()),
                 ("AIDE_APP_DATA".into(), roots.data_dir(&self.manifest.id).to_string_lossy().into_owned()),
-            ],
+            ]
+            .into_iter()
+            // 给界面用的那一份按工作区各起一个，根在它一生中不变；会话里的那一份由 sidecar 按会话的 cwd 给
+            .chain(roots.workspace_root.iter().map(|ws| ("AIDE_WORKSPACE_ROOT".into(), ws.to_string_lossy().into_owned())))
+            .collect(),
             revision: revision(&self.dir),
         })
     }
@@ -616,6 +624,7 @@ pub(crate) mod tests {
             workspace_apps: Some(base.join("wsroot").join(".aide").join("apps")),
             daily_apps: None,
             workspace_root: Some(base.join("wsroot")),
+            workspace_trusted: true,
             data: base.join("data"),
         };
         fs::create_dir_all(&roots.user_apps).unwrap();

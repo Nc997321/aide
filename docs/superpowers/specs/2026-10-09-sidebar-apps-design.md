@@ -59,7 +59,9 @@
 
 ## 3. 桥：应用能调什么
 
-界面通过 `postMessage` 与外层通信；Aide 提供一个小脚本 `aide-app.js` 包成 `window.aide`。**GUI 只做管道**：每次调用原样转成一条 Host 命令 `app_call { appId, method, params }`，**权限检查只在 Host 的 `apps::bridge` 一处**（同 `catalog.rs` 的 `prepare` 只在一处）。
+界面通过 `postMessage` 与外层通信；Aide 提供一个小脚本 `aide-app.js` 包成 `window.aide`。**GUI 只做管道**：每次调用原样转成一条 Host 命令 `app_call { appId, method, params, workspace }`，**权限检查只在 Host 的 `apps::bridge` 一处**（同 `catalog.rs` 的 `prepare` 只在一处）。
+
+> 2026-10-13 起另有一批围绕工作区的接口（工作区信息、搜索、文件变化、运行命令、在编辑器里打开、后端推事件），并且调用改为显式带面板所在的工作区、不再现取 Host 的活动工作区。见 [平台能力扩展](2026-10-12-app-platform-capabilities-design.md)。
 
 | API | 作用 | 所需权限 |
 |---|---|---|

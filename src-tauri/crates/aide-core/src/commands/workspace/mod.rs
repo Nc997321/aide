@@ -181,6 +181,18 @@ pub fn is_path_trusted(path: &str) -> bool {
     is_path_trusted_in(&crate::app_settings::load_state(), &daily, path)
 }
 
+/// 这个路径是不是用户登记过的工作区（或日常目录）。调用方带来一个「我在这个工作区里」的路径时
+/// 用它把关：不认识的路径不能当工作区用。
+/// 状态与日常目录由调用方给（同 [`is_path_trusted_in`]）。
+pub fn is_known_workspace_in(config: &serde_json::Value, daily_dir: &std::path::Path, path: &str) -> bool {
+    let path = normalize_registration_path(path);
+    if path.is_empty() {
+        return false;
+    }
+    let key = path_to_key(&path);
+    daily::is_daily_path(daily_dir, &path) || registry::registered(config).iter().any(|w| w.key == key)
+}
+
 /// `is_path_trusted` 的纯函数形态（状态与日常目录由调用方给），便于测试。
 pub fn is_path_trusted_in(config: &serde_json::Value, daily_dir: &std::path::Path, path: &str) -> bool {
     daily::is_daily_path(daily_dir, path) || trusted_keys(config).contains(&trust_key_from_path(path))
@@ -758,6 +770,22 @@ mod tests {
             assert_eq!(resolve_path_from_key(&path_to_key(&path)).as_deref(), Some(path.as_str()));
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn only_registered_workspaces_and_the_daily_dir_are_known() {
+        let daily = std::env::temp_dir().join("aide_known_ws").join("daily");
+        let mut cfg = serde_json::json!({});
+        let project = std::env::temp_dir().join("aide_known_ws").join("project");
+        let project = project.to_string_lossy().into_owned();
+        assert!(!is_known_workspace_in(&cfg, &daily, &project));
+        assert!(register_in_config(&mut cfg, &project, 1));
+        assert!(is_known_workspace_in(&cfg, &daily, &project));
+        // 尾部分隔符不影响；别的目录、空串不认
+        assert!(is_known_workspace_in(&cfg, &daily, &format!("{project}/")));
+        assert!(is_known_workspace_in(&cfg, &daily, &daily.to_string_lossy()));
+        assert!(!is_known_workspace_in(&cfg, &daily, &format!("{project}-other")));
+        assert!(!is_known_workspace_in(&cfg, &daily, "  "));
     }
 
     #[test]

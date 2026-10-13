@@ -7,6 +7,7 @@ const LABELS: Record<string, string> = {
   "workspace:write": "修改当前工作区的文件",
   "session:read": "查看当前会话里 agent 的活动",
   composer: "往输入框里填内容（不会替你发送）",
+  process: "在当前工作区里运行任意命令（和你自己在终端里敲的一样）",
 };
 
 export function describePermission(permission: string): string {

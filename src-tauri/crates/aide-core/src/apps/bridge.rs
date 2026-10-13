@@ -4,11 +4,12 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{json, Value};
 
-use super::servers::ServerPool;
+use super::process::{Listener, ProcessPool, RunRequest};
+use super::servers::{Notify, ServerPool};
 use super::store::{self, Located, Roots};
 use super::{net, wsfs};
 use crate::settings::SecretStore;
@@ -23,6 +24,9 @@ pub struct Ctx<'a> {
     pub roots: &'a Roots,
     pub secrets: &'a dyn SecretStore,
     pub servers: &'a ServerPool,
+    pub processes: &'a ProcessPool,
+    /// 后端推的事件、进程的动静从这里出去。
+    pub listener: Arc<dyn Listener>,
     /// 找到跑后端用的 Node；找不到就如实报错。
     pub node: &'a dyn Fn() -> Result<PathBuf, String>,
 }
@@ -55,6 +59,14 @@ const METHODS: &[(&str, Need)] = &[
     ("fs.read", Need::Permission("workspace:read")),
     ("fs.list", Need::Permission("workspace:read")),
     ("fs.write", Need::Permission("workspace:write")),
+    ("fs.stat", Need::Permission("workspace:read")),
+    ("fs.find", Need::Permission("workspace:read")),
+    ("fs.search", Need::Permission("workspace:read")),
+    ("workspace.info", Need::Permission("workspace:read")),
+    ("process.run", Need::Permission("process")),
+    ("process.kill", Need::Permission("process")),
+    ("process.list", Need::Permission("process")),
+    ("process.attach", Need::Permission("process")),
     ("tools.list", Need::Server),
     ("tools.call", Need::Server),
 ];
@@ -112,6 +124,30 @@ pub fn call(ctx: &Ctx, id: &str, method: &str, params: &Value) -> Result<Value, 
         "fs.read" => wsfs::read(workspace, params),
         "fs.list" => wsfs::list(workspace, params),
         "fs.write" => wsfs::write(workspace, params),
+        "fs.stat" => wsfs::stat(workspace, params),
+        "fs.find" => wsfs::find(workspace, params),
+        "fs.search" => wsfs::search(workspace, params),
+        // 没有打开工作区不是错：应用据此显示「先打开一个工程」
+        "workspace.info" => Ok(workspace.map_or(Value::Null, |root| {
+            json!({
+                "name": root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                "root": root.to_string_lossy(),
+                "trusted": roots.workspace_trusted,
+            })
+        })),
+        "process.run" => {
+            let workspace = process_workspace(roots)?;
+            let (cwd, cwd_rel) = wsfs::dir(Some(workspace), params.get("cwd").and_then(Value::as_str))?;
+            let request = RunRequest::parse(params, cwd, cwd_rel)?;
+            let info = ctx.processes.run(id, workspace, request, Arc::clone(&ctx.listener))?;
+            Ok(json!(info))
+        }
+        "process.list" => Ok(json!(ctx.processes.list(id, process_workspace(roots)?))),
+        "process.kill" => ctx.processes.kill(id, process_workspace(roots)?, run_id(params)?).map(|_| Value::Null),
+        "process.attach" => {
+            let since = params.get("since").and_then(Value::as_u64).unwrap_or(0);
+            ctx.processes.attach(id, process_workspace(roots)?, run_id(params)?, since)
+        }
         "tools.list" => backend(ctx, &app, "tools/list", json!({})),
         "tools.call" => {
             let name = params.get("name").and_then(Value::as_str).ok_or("tools.call 需要 name")?;
@@ -127,14 +163,32 @@ fn backend(ctx: &Ctx, app: &Located, method: &str, params: Value) -> Result<Valu
     let node = (ctx.node)()?;
     let spec = app.server_spec(ctx.roots, &node).ok_or("清单里没有 server")?;
     let _ = fs::create_dir_all(ctx.roots.data_dir(&app.manifest.id));
-    let result = ctx.servers.request(&spec, method, params);
-    for line in ctx.servers.take_stderr(&app.manifest.id) {
+    let notify: Notify = {
+        let (listener, id, workspace) = (Arc::clone(&ctx.listener), app.manifest.id.clone(), spec.workspace.clone());
+        Arc::new(move |channel: &str, payload: Value| listener.event(&id, workspace.as_deref(), channel, payload))
+    };
+    let result = ctx.servers.request(&spec, method, params, &notify);
+    for line in ctx.servers.take_stderr(&spec) {
         app.dev_log(&format!("server: {line}"));
     }
     if let Err(e) = &result {
         app.dev_log(&format!("server {method} failed: {e}"));
     }
     result
+}
+
+/// 起进程的地方：得有工作区，而且是受信任的——应用跑的多半是工程自己定义的脚本
+/// （`npm run build`），在不受信任的仓库里跑它等于执行那个仓库的代码。
+fn process_workspace(roots: &Roots) -> Result<&std::path::Path, String> {
+    let workspace = roots.workspace_root.as_deref().ok_or("没有打开的工作区")?;
+    if !roots.workspace_trusted {
+        return Err("这个工作区还没有被信任，应用不能在里面运行命令".into());
+    }
+    Ok(workspace)
+}
+
+fn run_id(params: &Value) -> Result<&str, String> {
+    params.get("runId").and_then(Value::as_str).filter(|s| !s.is_empty()).ok_or_else(|| "需要 runId".to_string())
 }
 
 /// 密钥在 Host 密钥库里的键：按应用隔开，应用只说得出自己名下的。
@@ -185,13 +239,29 @@ mod tests {
     use crate::apps::store::tests::{temp_roots, write_app};
     use crate::settings::MemorySecretStore;
 
+    struct Quiet;
+    impl Listener for Quiet {
+        fn event(&self, _: &str, _: Option<&std::path::Path>, _: &str, _: Value) {}
+        fn changed(&self) {}
+    }
+
     /// 用内存密钥库、空的后端池跑一次调用。
     fn call(roots: &Roots, id: &str, method: &str, params: &Value) -> Result<Value, String> {
         thread_local! { static SECRETS: MemorySecretStore = MemorySecretStore::default(); }
+        thread_local! { static PROCESSES: ProcessPool = ProcessPool::default(); }
         let servers = ServerPool::default();
         SECRETS.with(|secrets| {
-            let ctx = Ctx { roots, secrets, servers: &servers, node: &|| Err("这台机器上没有 Node".into()) };
-            super::call(&ctx, id, method, params)
+            PROCESSES.with(|processes| {
+                let ctx = Ctx {
+                    roots,
+                    secrets,
+                    servers: &servers,
+                    processes,
+                    listener: Arc::new(Quiet),
+                    node: &|| Err("这台机器上没有 Node".into()),
+                };
+                super::call(&ctx, id, method, params)
+            })
         })
     }
 
@@ -237,7 +307,7 @@ mod tests {
     #[test]
     fn unknown_methods_are_refused() {
         let roots = consented("unknown", &["composer"]);
-        assert!(call(&roots, "notes", "process.run", &json!({})).unwrap_err().contains("没有这个方法"));
+        assert!(call(&roots, "notes", "shell.exec", &json!({})).unwrap_err().contains("没有这个方法"));
         // 屏幕上的事由 GUI 自己答；漏到 Host 来的一律不认
         assert!(call(&roots, "notes", "composer.fill", &json!({})).unwrap_err().contains("没有这个方法"));
     }
@@ -296,6 +366,47 @@ mod tests {
         call(&roots, "notes", "fs.write", &json!({ "path": "b.txt", "text": "new" })).unwrap();
         assert_eq!(std::fs::read_to_string(ws.join("b.txt")).unwrap(), "new");
         assert!(call(&roots, "notes", "fs.read", &json!({ "path": "../user/notes/app.json" })).is_err());
+    }
+
+    #[test]
+    fn workspace_info_describes_the_panels_workspace_or_says_there_is_none() {
+        let mut roots = consented("wsinfo", &["workspace:read"]);
+        let info = call(&roots, "notes", "workspace.info", &json!({})).unwrap();
+        assert_eq!((info["name"].clone(), info["trusted"].clone()), (json!("wsroot"), json!(true)));
+        assert_eq!(info["root"], roots.workspace_root.as_ref().unwrap().to_string_lossy().as_ref());
+        roots.workspace_root = None;
+        assert_eq!(call(&roots, "notes", "workspace.info", &json!({})).unwrap(), Value::Null);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn processes_run_inside_a_trusted_workspace_only() {
+        let mut roots = consented("proc", &["process"]);
+        let ws = roots.workspace_root.clone().unwrap();
+        std::fs::create_dir_all(ws.join("sub")).unwrap();
+
+        // cwd 越界、不是目录：还没起进程就拒
+        for cwd in ["..", "/tmp", "nope"] {
+            assert!(call(&roots, "notes", "process.run", &json!({ "command": "true", "cwd": cwd })).is_err(), "{cwd}");
+        }
+        let started = call(&roots, "notes", "process.run", &json!({ "command": "pwd", "cwd": "sub" })).unwrap();
+        let id = started["runId"].as_str().unwrap().to_string();
+        assert_eq!(started["cwd"], "sub");
+        let attach = || call(&roots, "notes", "process.attach", &json!({ "runId": id })).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while attach()["running"] == true {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(attach()["lines"][0]["text"], ws.canonicalize().unwrap().join("sub").to_string_lossy().as_ref());
+        assert_eq!(call(&roots, "notes", "process.list", &json!({})).unwrap()[0]["runId"], id.as_str());
+
+        // 不受信任的工作区：文件照读，命令不许跑
+        roots.workspace_trusted = false;
+        assert!(call(&roots, "notes", "process.run", &json!({ "command": "true" })).unwrap_err().contains("信任"));
+        assert!(call(&roots, "notes", "process.list", &json!({})).unwrap_err().contains("信任"));
+        roots.workspace_root = None;
+        assert!(call(&roots, "notes", "process.run", &json!({ "command": "true" })).unwrap_err().contains("没有打开的工作区"));
     }
 
     #[test]

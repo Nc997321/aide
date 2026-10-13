@@ -7,11 +7,12 @@
 pub mod bridge;
 pub mod manifest;
 pub mod net;
+pub mod process;
 pub mod servers;
 pub mod store;
 pub mod wsfs;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use serde::Deserialize;
@@ -31,12 +32,40 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("app_set_placement", app_set_placement),
     command!("app_install", app_install),
     command!("app_uninstall", app_uninstall),
+    command!("app_process_list", app_process_list),
+    command!("app_process_kill", app_process_kill),
 ];
 
 /// 应用增删改后发的事件；面板据此重新 `app_list`（不做本地乐观更新）。
 pub const APPS_CHANGED: &str = "apps-changed";
+/// Host 发给某个应用面板的事件：`{ appId, workspace, channel, payload }`。GUI 只转给那个应用
+/// 在那个工作区的面板。载荷刻意很小（后端事件有上限，进程只报序号）：它和对话事件走同一条总线。
+pub const APP_EVENT: &str = "app-event";
+/// 应用起的进程有增减；「正在运行」的清单据此重新 `app_process_list`。
+pub const APP_PROCESSES_CHANGED: &str = "app-processes-changed";
 
-/// 真实布局。开发态目录只认**受信任**的活动工作区——不受信任的仓库里放一个
+/// 进程池与后端池往外说话的口子：落到 Host 的事件出口上。
+struct CoreListener(Arc<dyn crate::EventSink>);
+
+impl process::Listener for CoreListener {
+    fn event(&self, app_id: &str, workspace: Option<&Path>, channel: &str, payload: Value) {
+        self.0.emit(
+            APP_EVENT,
+            json!({ "appId": app_id, "workspace": workspace.map(|w| w.to_string_lossy()), "channel": channel, "payload": payload }),
+        );
+    }
+    fn changed(&self) {
+        self.0.emit(APP_PROCESSES_CHANGED, json!({}));
+    }
+}
+
+/// Host 退出前收掉应用名下的一切子进程（给界面用的后端、应用起的进程）。**每扇前门退出时都要调**。
+pub fn shutdown(core: &Core) {
+    core.apps.stop_all();
+    core.app_procs.kill_all_now();
+}
+
+/// 真实布局（不属于任何工作区的那一份：列清单、同意、启停）。开发态目录只认**受信任**的活动工作区——不受信任的仓库里放一个
 /// `.aide/apps/x`，不能让它出现在 rail 上等用户误点同意。外加日常目录（恒受信任）：
 /// 日常会话的 cwd 在那儿，而窗口的活动工作区可以是别的。
 fn roots(core: &Core) -> Roots {
@@ -52,9 +81,33 @@ fn roots(core: &Core) -> Roots {
         user_apps: base.join("apps"),
         workspace_apps,
         daily_apps,
-        workspace_root: core.workspace.active_root(),
+        workspace_root: None,
+        workspace_trusted: false,
         data: base.join("app-data"),
     }
+}
+
+/// 一次应用调用的布局：在 [`roots`] 上加上**面板带来的**工作区。
+///
+/// 不取 Host 当下的活动工作区：窗口里多个工作区并存，「活动」只是文件树此刻显示哪个，
+/// 调用落地时现取就可能读写到另一个工程里（会话侧踩过的「跑错项目」）。面板带来的路径也不能
+/// 照单全收——必须是用户登记过的工作区，且目录还在。
+fn roots_at(core: &Core, workspace: Option<&str>) -> Result<Roots, String> {
+    let mut roots = roots(core);
+    let Some(path) = workspace.map(str::trim).filter(|p| !p.is_empty()) else { return Ok(roots) };
+    // 登记与信任都记在 state.json 里：读一次，两样一起判（这条路径每次应用调用都走）
+    let state = crate::app_settings::load_state();
+    let daily = crate::commands::workspace::daily::daily_path_in(&crate::paths::our_config_dir());
+    if !crate::commands::workspace::is_known_workspace_in(&state, &daily, path) {
+        return Err(format!("「{path}」不是已打开过的工作区"));
+    }
+    let root = PathBuf::from(path);
+    if !crate::workspace::present(&root) {
+        return Err(format!("工作区「{path}」已经不在了"));
+    }
+    roots.workspace_trusted = crate::commands::workspace::is_path_trusted_in(&state, &daily, path);
+    roots.workspace_root = Some(root);
+    Ok(roots)
 }
 
 /// 跑应用后端用的 Node。找到一次就记住（`find` 每次都要起子进程问版本，`app_list` 是被轮询的）。
@@ -93,7 +146,7 @@ fn read_only_tools(core: &Core, roots: &Roots, node: &std::path::Path, id: &str)
             }
         }
     }
-    let tools = match core.apps.request(&spec, "tools/list", json!({})) {
+    let tools = match core.apps.request(&spec, "tools/list", json!({}), &servers::silent()) {
         Ok(list) => store::read_only_tools(app.source, &list),
         Err(e) => {
             tracing::warn!("[apps] 问不到应用「{id}」的工具清单，它的工具全部逐次确认：{e}");
@@ -180,6 +233,8 @@ pub fn start(core: &Arc<Core>) {
             let roots = roots(&core);
             let apps = store::list(&roots);
             log_manifest_problems(&roots, &apps);
+            // 应用不在了（卸载、禁用、开发态应用随它的工作区切走）：它起的进程一并结束
+            core.app_procs.stop_where(&|id, _| !apps.iter().any(|a| a.id == id && a.error.is_none() && a.enabled && a.consented));
             let now = serde_json::to_string(&apps).unwrap_or_default();
             if now != before {
                 // 第一轮只是记下起点：界面挂载时自己会 list 一次
@@ -227,15 +282,20 @@ pub struct AppCallArgs {
     method: String,
     #[serde(default)]
     params: Value,
+    /// 面板所在的工作区根（外层 GUI 带来的，不是应用自己说的）。没有打开工作区时不带。
+    #[serde(default)]
+    workspace: Option<String>,
 }
 
 async fn app_call(core: Arc<Core>, a: AppCallArgs) -> Result<Value, String> {
     blocking(move || {
-        let roots = roots(&core);
+        let roots = roots_at(&core, a.workspace.as_deref())?;
         let ctx = bridge::Ctx {
             roots: &roots,
             secrets: core.settings.secrets().as_ref(),
             servers: &core.apps,
+            processes: &core.app_procs,
+            listener: Arc::new(CoreListener(core.events())),
             node: &|| node(&core, false),
         };
         bridge::call(&ctx, &a.app_id, &a.method, &a.params)
@@ -281,6 +341,7 @@ async fn app_set_enabled(core: Arc<Core>, a: AppSetEnabledArgs) -> Result<(), St
         store::set_enabled(&roots, &a.app_id, a.enabled)?;
         if !a.enabled {
             c.apps.stop(&a.app_id);
+            c.app_procs.stop_app(&a.app_id);
         }
         sync_mcp_file(&c, &roots);
         Ok(())
@@ -322,6 +383,7 @@ async fn app_uninstall(core: Arc<Core>, a: AppIdArgs) -> Result<(), String> {
     blocking(move || {
         let roots = roots(&c);
         c.apps.stop(&a.app_id);
+        c.app_procs.stop_app(&a.app_id);
         store::uninstall(&roots, &a.app_id)?;
         sync_mcp_file(&c, &roots);
         Ok::<(), String>(())
@@ -331,3 +393,19 @@ async fn app_uninstall(core: Arc<Core>, a: AppIdArgs) -> Result<(), String> {
     Ok(())
 }
 
+
+/// 所有应用、所有工作区正在跑（和刚结束）的进程：Aide 自己的「正在运行」清单用，
+/// 让用户不依赖应用的界面也能看到并结束它们。
+async fn app_process_list(core: Arc<Core>, _a: crate::commands::NoArgs) -> Result<Vec<process::ProcessInfo>, String> {
+    Ok(core.app_procs.list_all())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppProcessKillArgs {
+    run_id: String,
+}
+
+async fn app_process_kill(core: Arc<Core>, a: AppProcessKillArgs) -> Result<(), String> {
+    blocking(move || core.app_procs.kill_any(&a.run_id)).await
+}

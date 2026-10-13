@@ -65,8 +65,8 @@ Aide 应用 = 一个文件夹：清单 \`app.json\` + 网页界面（+ 可选后
   这只是初始位置：用户在面板上挪过之后以他挪的为准，你再改清单里的这一项不会把它挪回去。
 - \`permissions\`：只申请用得到的。每多一项，用户就要重新同意一次。
   \`storage\` 存自己的数据 · \`secrets\` 存密码令牌 · \`net\` 访问任意地址 · \`net:<主机名>\` 只访问一台主机 ·
-  \`workspace:read\` / \`workspace:write\` 读写工作区文件 · \`session:read\` 看 agent 的活动 ·
-  \`composer\` 往用户的输入框里填内容。
+  \`workspace:read\` / \`workspace:write\` 读写工作区文件（读还包括搜索、文件变化通知、在编辑器里打开）·
+  \`process\` 在工作区里运行命令 · \`session:read\` 看 agent 的活动 · \`composer\` 往用户的输入框里填内容。
 - \`server\`：可选，见下文「后端」。
 - 所有路径都是应用文件夹内的相对路径，用正斜杠。
 
@@ -89,10 +89,59 @@ await aide.fs.write("notes.md", "…");                  // 写不进 .git 和 .
 aide.session.onEvent((e) => { /* tool.start / tool.end / subagent.* / turn.start / turn.end */ });
 await aide.composer.fill("帮我分析这个响应：…");         // 填进用户的输入框，不会替用户发送
 aide.ui.toast("已保存");  aide.ui.setBadge(3);
-const info = await aide.host.info();           // { os, source }
+const info = await aide.host.info();           // { os, source, host: "local" | "wsl" | "ssh" }
 \`\`\`
 
 没申请对应权限的调用会被拒绝（Promise reject，原因写明缺哪项权限）。
+
+## 围绕当前工程干活（构建面板、测试运行器、TODO 汇总……）
+
+\`\`\`js
+const ws = await aide.workspace.info();        // { name, root, trusted, host }；没有打开工作区 → null
+const files = await aide.fs.find("package.json", { limit: 200 });   // 相对路径数组
+const hits = await aide.fs.search("TODO", { mask: "*.ts", limit: 500 });
+//    → { files: [{ file, matches: [{ line, column, lineText }] }], total, truncated }
+const st = await aide.fs.stat("package.json");                      // { isDir, size, mtime }
+aide.fs.watch((e) => { /* { dirs: ["src", …] } 或 { full: true } */ });
+await aide.editor.open("src/app.ts", { line: 42 });                 // 在 Aide 的编辑器里打开并跳到那一行
+\`\`\`
+
+- **\`find\` 按文件名找**（名字相等的在前，其次名字包含），不是 glob；\`search\` 的 \`mask\` 是文件名掩码（\`*.ts\`），
+  也不是路径 glob。两者都遵守 \`.gitignore\`、跳过隐藏文件——被忽略目录里的东西找不到。
+- **\`watch\` 的粒度是目录**：只告诉你哪些目录里有东西变了，收到后自己重新 \`list\` / \`read\`。
+  \`{ full: true }\` = 说不清哪里变了，全部重读。
+- 路径一律相对工作区根，用正斜杠。**没有打开工作区时这些都会失败**——启动时先 \`workspace.info()\`，
+  是 \`null\` 就显示「先打开一个工程」，别让界面白着。
+- **用户切去另一个工作区时，面板会整页重载**，你的代码从头跑一遍、看到的是新工程。所以不用监听切换，
+  但也别指望内存里的状态留得住：要留的放 \`aide.storage\`，正在跑的进程用下面的 \`process.list\` 找回来。
+
+### 运行命令
+
+\`\`\`js
+const { runId } = await aide.process.run({
+  command: "npm", args: ["run", "build"],   // 不经 shell：command 是可执行文件，args 是参数数组
+  cwd: "packages/core",                      // 相对工作区根；省略 = 根
+  env: { NODE_ENV: "production" },
+});
+aide.on(\`process:\${runId}\`, (e) => {
+  // { type: "output", data, stream: "stdout" | "stderr", seq }   一行输出
+  // { type: "exit", code, killed }                               结束；code 是真实退出码
+  // { type: "gap", lost }                                        输出太快，中间丢了 lost 行
+});
+await aide.process.kill(runId);
+const mine = await aide.process.list();   // 本应用在当前工作区的进程：[{ runId, command, cwd, running, code, startedAt }]
+\`\`\`
+
+- **\`command\` 不是一整条命令行**。\`"npm run build"\` 会被当成一个名字里带空格的可执行文件，找不到。
+  管道、重定向、\`&&\` 都没有；确实要用就显式起 shell：\`{ command: "sh", args: ["-c", "a | b"] }\`
+  （Windows 上是 \`cmd\` + \`["/c", …]\`，先看 \`host.info().os\`）。从工程文件里读出来的名字只放进 \`args\`，别拼进 shell 字符串。
+- 输出是管道，不是终端：一行一条，默认没有颜色。想要颜色就给工具加强制着色的参数，并自己处理颜色码。
+- **进程归 Aide 管，不归面板**：面板关了、重载了、用户切去别的工作区，它照跑。所以面板**每次启动**都要
+  先 \`process.list()\`，把还在跑的接回来：先 \`aide.on(\`process:\${id}\`, fn)\`，再 \`aide.process.attach(id)\`
+  （从缓冲里最早的一行重放；只要新的就传 \`{ since: 上次看到的 seq }\`）。不这么做，用户切回来就看到一个
+  空面板，而构建其实还在跑。
+- 每个应用同时最多跑 4 个；缓冲留最近 5000 行。工作区没被信任时不能运行命令。
+- 用户在 Aide 的标题栏和你面板顶上都能看到并结束这些进程——收到 \`killed: true\` 的 \`exit\` 是正常情况，别当成报错。
 
 **配色**：桥会把 Aide 的主题变量铺到页面根元素上，直接写 \`var(--aide-bg-base)\`、\`--aide-bg-raised\`、
 \`--aide-text-primary\`、\`--aide-text-secondary\`、\`--aide-border\`、\`--aide-accent\`、\`--aide-danger\`、\`--aide-success\`，
@@ -111,6 +160,14 @@ const info = await aide.host.info();           // { os, source }
 - **后端的工具有两个调用方**：界面（\`aide.tools.call(name, args)\` / \`aide.tools.list()\`）和 agent 会话
   （工具名 \`mcp__app-<id>__<工具名>\`）。两边各起各的进程，所以**状态不要放在内存里**，
   落到环境变量 \`AIDE_APP_DATA\` 指的目录。
+- 工作区根在环境变量 \`AIDE_WORKSPACE_ROOT\` 里（没有打开工作区时没有这个变量）。给界面用的那一份
+  每个工作区各起一个，所以它在进程一生中不变。
+- **长任务不要塞进一次工具调用**（一次调用最多等 120 秒）：工具里启动任务后立刻返回，进度用通知推给界面——
+  往 stdout 写一行不带 id 的
+  \`{"jsonrpc":"2.0","method":"notifications/aide/event","params":{"channel":"build","payload":{…}}}\`，
+  界面用 \`aide.on("build", fn)\` 收。单条不超过 16KB、每秒不超过 20 条（超出的被丢掉），所以推进度和状态，
+  不要推大块数据——大块数据让界面再调一次工具来取。
+  只是要跑个命令看输出的话，用界面的 \`aide.process.run\` 就够了，不必写后端。
 - 只往 stdout 写协议消息；日志写 stderr。
 - 不改动任何东西的工具，在 \`tools/list\` 里标上 \`"annotations": { "readOnlyHint": true }\`：
   应用**安装后**，agent 调这类工具不再逐次问用户。开发态下不生效（每次都问），别为此困惑。
@@ -139,6 +196,8 @@ Aide 第一次看到一个应用就会写一行 \`manifest: ok\`（或清单的�
 - 用了 \`localStorage\` → 抛 SecurityError。
 - 清单里申请了权限却没用，或用了没申请的。
 - 后端往 stdout 打日志，把协议搅乱。
+- 把一整条命令行塞进 \`process.run\` 的 \`command\`。
+- 面板启动时没有 \`process.list()\`，重载后把正在跑的进程弄丢了。
 `;
 
 /** 幂等落地，失败静默（见 builtinSkill.ts）。 */
