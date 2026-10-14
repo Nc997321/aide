@@ -349,7 +349,7 @@ function uninstall() {
       class="app-frame"
       :src="src"
       :sandbox="SANDBOX"
-      :title="app.name"
+      :aria-label="app.name"
       referrerpolicy="no-referrer"
     />
 
