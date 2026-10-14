@@ -495,7 +495,7 @@ const inputJson = computed(() => {
           <span class="perm-title-main">
             <template v-if="isConfirm">{{ confirmInput?.title }}</template>
             <template v-else-if="isPlanApproval">批准执行这份计划？</template>
-            <template v-else-if="isQuestion">Claude 有问题要问你</template>
+            <template v-else-if="isQuestion">Aide 有问题要问你</template>
             <template v-else><code class="perm-tool-chip">{{ permission.name }}</code></template>
           </span>
         </div>

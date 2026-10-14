@@ -380,7 +380,7 @@ export function useConversationChanges(sessionId: () => string) {
     const ok = await modal.confirm(
       "撤回到此处",
       active
-        ? "Claude 正在运行，回滚将强制终止进程。对话与文件将回滚到该轮开始之前，此操作不可撤销。确定继续？"
+        ? "Aide 正在运行，回滚将强制终止进程。对话与文件将回滚到该轮开始之前，此操作不可撤销。确定继续？"
         : "对话与文件将回滚到该轮开始之前，此操作不可撤销。确定继续？",
       "撤回",
       true,
