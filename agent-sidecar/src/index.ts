@@ -5,6 +5,7 @@ import { ensureBrowserSkill } from "./extensions/browserSkill.js";
 import { ensureAppSkill } from "./extensions/appSkill.js";
 import { ensureDesignSkill } from "./extensions/designSkill.js";
 import { ensureVideoSkill } from "./extensions/videoSkill.js";
+import { ensureWebAcceptanceSkill } from "./extensions/webAcceptanceSkill.js";
 import { removeLegacyCodegraphSkill } from "./extensions/legacySkills.js";
 import { setStdoutBackpressureNotifier, writeStdoutFrame } from "./engine/stdoutFrames.js";
 import { installExitReaper, sweepStaleRegistryEntries } from "./engine/subprocessReaper.js";
@@ -34,6 +35,7 @@ async function mainDesktop(): Promise<void> {
   ensureAppSkill(process.env);
   ensureVideoSkill(process.env);
   ensureDesignSkill(process.env);
+  ensureWebAcceptanceSkill(process.env);
 
   // 过滤 SDK 的 CLAUDE_SDK_CAN_USE_TOOL_SHADOWED 警告。
   // 该警告是 SDK 提醒 canUseTool 不会对 allowedTools 里的裸名（"Agent","Task"）
