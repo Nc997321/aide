@@ -212,11 +212,24 @@ fn now_ms() -> u64 {
 pub struct ProcessPool {
     procs: Arc<Mutex<HashMap<String, Arc<Proc>>>>,
     next: AtomicU64,
+    /// Windows：池里所有进程收在一个 `KILL_ON_JOB_CLOSE` 的 job 里，句柄由 Host 进程持有。
+    /// Host 不管怎么没的（终端里 Ctrl+C、被结束任务、崩溃）内核都会把整棵树收走——
+    /// `kill_all_now` 只在 Host 走到正常退出那条路时才跑得到（2026-10-14 真机：dev 退出后
+    /// 应用起的 `npm run dev` → vite 整条链还活着、端口还占着）。建不出来就没有这层兜底。
+    #[cfg(windows)]
+    job: Option<crate::runtime::job_object::KillOnCloseJob>,
 }
 
 impl Default for ProcessPool {
     fn default() -> Self {
-        Self { procs: Arc::default(), next: AtomicU64::new(1) }
+        Self {
+            procs: Arc::default(),
+            next: AtomicU64::new(1),
+            #[cfg(windows)]
+            job: crate::runtime::job_object::KillOnCloseJob::new()
+                .inspect_err(|e| tracing::warn!(error = %e, "apps: Job Object 建不出来，Host 被强杀时应用进程收不掉"))
+                .ok(),
+        }
     }
 }
 
@@ -274,6 +287,15 @@ impl ProcessPool {
             cmd.process_group(0);
         }
         let mut child = cmd.spawn().map_err(|e| format!("「{}」启动失败：{e}", req.command))?;
+        #[cfg(windows)]
+        if let Some(job) = &self.job {
+            use std::os::windows::io::AsRawHandle;
+            use windows::Win32::Foundation::HANDLE;
+            // 收不进去不拦着它跑：退回「正常退出时逐个结束」那一层。
+            if let Err(e) = job.add(HANDLE(child.as_raw_handle() as _)) {
+                tracing::warn!(error = %e, command = %req.command, "apps: 进程没收进 Job Object");
+            }
+        }
         let stdout = child.stdout.take().ok_or("进程没有 stdout")?;
         let stderr = child.stderr.take().ok_or("进程没有 stderr")?;
 
