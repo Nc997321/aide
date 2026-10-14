@@ -12,6 +12,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { getBaseUrl, kb, KbError } from "./kbClient";
 import type { KbDocument } from "./kbClient";
 import { renderKbMarkdown } from "./markdown";
+import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
 import { createAssetLoader, type AssetLoader } from "./assetLoader";
 import { previewKindFor } from "./previewKind";
 import { useKbDocLock } from "@/composables/useKbDocLock";
@@ -168,8 +169,9 @@ const selectable = computed(() => outlineOn.value && props.editable);
 /** 阅读时长：中文按 500 字/分钟粗估。只是个量级感，所以不精确到秒、最少 1 分钟。 */
 const readMinutes = computed(() => Math.max(1, Math.round((props.doc.content?.length ?? 0) / 500)));
 
-/** 代码块的「复制」：按钮在 v-html 里，事件委托在正文容器上。 */
+/** 正文里的互链 / 目录锚点 / 代码块「复制」：都在 v-html 里，事件委托在正文容器上。 */
 async function onBodyClick(e: MouseEvent): Promise<void> {
+  if (handleMarkdownAnchorClick(e, e.currentTarget as HTMLElement)) return;
   const wiki = (e.target as HTMLElement | null)?.closest<HTMLElement>("[data-kb-wiki]");
   if (wiki) {
     emit("wiki", wiki.dataset.kbWiki ?? "");

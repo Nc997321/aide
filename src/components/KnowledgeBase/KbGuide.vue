@@ -16,6 +16,7 @@
  */
 import { computed, ref } from "vue";
 import { renderKbMarkdown } from "./markdown";
+import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
 // Vite 的 ?raw：把交付给客户的 compose 原样打进包，避免前端另存一份导致漂移。
 // 路径指向 knowledge-server/docker-compose.yml（仓库内唯一真源）。
 import composeText from "../../../knowledge-server/docker-compose.yml?raw";
@@ -92,7 +93,7 @@ async function copyCompose(): Promise<void> {
     </section>
 
     <!-- v-html 的内容来自 renderKbMarkdown，已做默认拒绝处理，见 ./markdown.ts -->
-    <div class="kb-guide-body msg-text" v-html="bodyHtml" />
+    <div class="kb-guide-body msg-text" @click="handleMarkdownAnchorClick($event, $event.currentTarget as HTMLElement)" v-html="bodyHtml" />
   </article>
 </template>
 

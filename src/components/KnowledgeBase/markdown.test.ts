@@ -282,3 +282,22 @@ describe("renderKbMarkdown 的属性注入（2026-10-02 实测的存储型 XSS�
   });
 });
 
+
+describe("文档内目录锚点", () => {
+  it("标题带 md- 前缀的 GitHub slug，同名追加 -1；每篇重新计数", () => {
+    const html = renderKbMarkdown("## 一、通用约定\n\n## 一、通用约定");
+    expect(html).toContain('id="md-一通用约定"');
+    expect(html).toContain('id="md-一通用约定-1"');
+    expect(renderKbMarkdown("## 一、通用约定\n\n正文")).toContain('id="md-一通用约定"');
+  });
+
+  it("# 锚点留在当前页，外链仍开新窗口", () => {
+    const html = renderKbMarkdown("[目录](#一通用约定) [外](https://example.com)");
+    expect(html).toContain('<a href="#一通用约定">目录</a>');
+    expect(html).toMatch(/href="https:\/\/example\.com" target="_blank"/);
+  });
+
+  it("原始 HTML 标题的 id 仍丢弃（不放行文档自带 id）", () => {
+    expect(renderKbMarkdown('<h2 id="config">x</h2>')).not.toContain('id="config"');
+  });
+});

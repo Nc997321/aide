@@ -1,22 +1,25 @@
 // 知识库的 Markdown 渲染：**默认拒绝**，不是"渲染完再消毒"。
 //
-// 背景：aide 现有的 v-html 渲染（ChatMessage / FileViewer / PermissionDialog）喂的是
-// 模型输出与本盘文件，信任边界在这台机器之内；marked 的 code/codespan 渲染器已经
-// 做了 escapeHtml（见 packages/aide-sdk/src/utils/markdown.ts:41,51），够用。
+// 为什么不复用 SDK 的实例（packages/aide-sdk/src/utils/markdown.ts）：
+// 两边共有的只是 "marked + 原始 HTML 转义 + URL 白名单"这层底；在它之上是两种不同的东西。
+//   - SDK 实例是**对话流渲染器**：流式尾块不高亮、按原文 LRU 缓存、Insight 旁注块，
+//     桌面与手机端共用。
+//   - 本文件是**文档渲染器**：块级源文偏移 data-s/data-e（圈选编辑 kbref 的落点，
+//     见 docs/superpowers/specs/2026-10-02-kb-selection-edit-design.md）、文档站组件
+//     标签（Note/Steps…）、[[互链]]、asset:// 图片、带复制按钮的代码块。
+// 合成一个就得把圈选/互链这些知识库语义塞进手机端也引的 SDK，或者做成一堆开关的
+// 配置汤——两条都比现在差。所以分开是**职责不同**，不是历史遗留。
 //
-// 知识库不同：正文是**团队里任何人可写**的，还可能来自导入的 docx / pdf。
-// marked 自 v5 起不再自带 sanitize，原始 HTML 块是透传的——
-// 一个账号失守就能往全团队的页面里种脚本。
+// 信任边界也更严：正文是**团队里任何人可写**的，还可能来自导入的 docx / pdf，
+// 一个账号失守就能往全团队的页面里种脚本。所以这里额外做了：属性位转义引号
+// （escapeAttr）、原始 HTML 标签白名单且丢弃全部属性、图片与链接分开的协议判定。
 //
 // 为什么不用 DOMPurify：
-//   它是"默认允许、逐个剔除"的白名单模型，对知识库这种只需要标准 Markdown 的
-//   场景是过度配置，还要为此多一个 20KB 依赖。这里改用**默认拒绝**——
-//   覆盖 html renderer 把原始 HTML 转成纯文本，再给 URL 加协议白名单。
-//   少一个依赖，且语义上更难出错：漏掉的是"少渲染一个标签"，不是"放进一个脚本"。
-//
-// ⚠️ 将来若要给 aide 全局收紧渲染，改这里一处即可，不要在各 v-html 点重复写。
+//   它是"默认允许、逐个剔除"的模型，对只需要标准 Markdown 的场景是过度配置，还要
+//   多一个 20KB 依赖。这里覆盖 html renderer + URL 协议白名单，漏掉的是"少渲染一个
+//   标签"，不是"放进一个脚本"。
 import { Marked, type Tokens } from "marked";
-import { escapeHtml } from "@aide/sdk/utils/markdown";
+import { createHeadingIds, escapeHtml } from "@aide/sdk/utils/markdown";
 import { hljs } from "@aide/sdk/utils/highlight";
 
 /**
@@ -66,8 +69,8 @@ function safeImageUrl(raw: string): string | null {
  * `<h2 id="x"> 标题 </h2>`，全转义的话就把标签源码原样摆在正文里。
  * 为什么安全：只出标签名、不带任何属性 → 没有事件属性、style、href、src 可注入；
  * 白名单之外（script/iframe/img/a/style/不认识的标签……）与标签之间的文字仍然整段转义。
- * `id` 也一并丢掉：它会和应用自身 DOM 的 id 撞车（DOM clobbering），而文档内锚点
- * 本来就因为链接 target=_blank 用不上。
+ * `id` 也一并丢掉：它会和应用自身 DOM 的 id 撞车（DOM clobbering）。文档内锚点
+ * 只认 Markdown 标题——它们的 id 由 renderer 按 GitHub 规则生成、带 `md-` 前缀（见 heading）。
  */
 const ALLOWED_TAGS = new Set([
   "h1", "h2", "h3", "h4", "h5", "h6",
@@ -247,9 +250,20 @@ kbMarked.use({
   ],
 });
 
+/** 标题 id 分配：与 SDK 同一份规则（GitHub slug + `md-` 前缀 + 同名追加 -1）。
+ *  renderAnnotated 是逐块调 parser 的，所以不能挂 preprocess 钩子清零，由 renderKbMarkdown 每篇清一次。 */
+const headingIds = createHeadingIds();
+
 kbMarked.use({
   renderer: {
     code: renderCode,
+
+    heading({ tokens, depth }: Tokens.Heading): string {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const inner = (this as any).parser.parseInline(tokens) as string;
+      const id = headingIds.idFor(inner);
+      return `<h${depth}${id ? ` id="${id}"` : ""}>${inner}</h${depth}>\n`;
+    },
 
     /** 原始 HTML（块与行内同走这里）：只放行白名单标签（无属性），其余转义成文本，
      *  绝不把原样 HTML 交给浏览器解析。 */
@@ -272,6 +286,8 @@ kbMarked.use({
       // 协议不允许 → 退化成纯文本，而不是渲染一个危险的 <a>
       if (!url) return text;
       const t = title ? ` title="${escapeAttr(title)}"` : "";
+      // 文档内锚点（目录）留在当前页，由 KbDocumentView 的点击委托滚到标题；其余开新窗口
+      if (url.startsWith("#")) return `<a href="${escapeAttr(url)}"${t}>${text}</a>`;
       return `<a href="${escapeAttr(url)}"${t} target="_blank" rel="noopener noreferrer">${text}</a>`;
     },
 
@@ -398,6 +414,7 @@ export function renderKbMarkdown(text: string): string {
   const hit = cache.get(text);
   if (hit !== undefined) return hit;
   openCallouts = [];
+  headingIds.reset();
   let html = renderAnnotated(text);
   // 漏写闭标签的提示块：在文末补上，别让它的外框连带后面的内容一起开着
   while (openCallouts.length) html += `</${openCallouts.pop()}>`;

@@ -17,6 +17,7 @@ import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
 import { effortLabel } from "@aide/sdk/utils/effort";
+import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -90,6 +91,8 @@ function isStreamingTail(index: number): boolean {
 
 function handleTextClick(e: MouseEvent) {
   const target = e.target as HTMLElement;
+  // 回复里的 `[x](#标题)`：只在本条消息内找标题
+  if (handleMarkdownAnchorClick(e, target.closest(".msg-row"))) return;
 
   const anchorEl = target.closest("a[href]");
   const href = anchorEl?.getAttribute("href")?.trim() ?? "";

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, renderStreaming, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
+import { renderMarkdown, headingSlug, renderStreaming, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
  *  语法高亮只在定稿态出现。见 utils/markdown.ts 的注释与
@@ -342,5 +342,29 @@ describe("Insight 旁注块", () => {
     expect(html).not.toContain("<img");
     expect(html).not.toContain("<script>");
     expect(html).toContain("&lt;img");
+  });
+});
+
+describe("标题锚点：手写目录 [x](#slug) 要能对上标题 id（GitHub 规则）", () => {
+  it.each([
+    ["一、通用约定", "一通用约定"],
+    ["三、领域对象契约 ModelAggregateVO", "三领域对象契约-modelaggregatevo"],
+    ["四、模型：查询与建单元", "四模型查询与建单元"],
+    ["九、批次模型版本（锁定与显式升级）", "九批次模型版本锁定与显式升级"],
+    ["十一、兼容垫片（现有 4 个运行页）", "十一兼容垫片现有-4-个运行页"],
+  ])("%s → #%s", (title, slug) => {
+    expect(headingSlug(title)).toBe(slug);
+    expect(renderMarkdown(`## ${title}`)).toContain(`id="md-${slug}"`);
+  });
+
+  it("同名标题追加 -1，且每次渲染重新计数", () => {
+    const html = renderStreaming("## A\n\n## A");
+    expect(html).toContain('id="md-a"');
+    expect(html).toContain('id="md-a-1"');
+    expect(renderStreaming("## A")).toContain('id="md-a"');
+  });
+
+  it("slug 用标题可见文字，不带内联标记", () => {
+    expect(renderMarkdown("# 用 `foo` 和 **bar**")).toContain('id="md-用-foo-和-bar"');
   });
 });

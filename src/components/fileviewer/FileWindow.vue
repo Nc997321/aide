@@ -18,7 +18,7 @@ import { useContextMenu, type MenuItem } from "../../composables/useContextMenu"
 import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { openHtmlInBuiltinBrowser } from "../../composables/useOpenHtml";
-import { marked } from "../../utils/markdown";
+import { marked, handleMarkdownAnchorClick } from "../../utils/markdown";
 import { lspLangFor } from "../../utils/lspLang";
 
 const props = defineProps<{
@@ -91,6 +91,11 @@ const renderedMarkdown = computed(() => {
     return source;
   }
 });
+
+// 预览里的目录链接 `[x](#标题)`：在本预览容器内滚到对应标题
+function onPreviewClick(e: MouseEvent) {
+  handleMarkdownAnchorClick(e, e.currentTarget as HTMLElement);
+}
 
 // ── 关闭：干净直接关；当前文件或栈内文件有未保存修改时让用户选 ──
 const stackDirty = computed(() => navStackHasDirty(props.win));
@@ -632,6 +637,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
         v-else-if="win.isMarkdown && win.mdMode === 'preview'"
         v-scroll-memory="scrollKey('md-preview')"
         class="fw-scroll viewer-markdown"
+        @click="onPreviewClick"
         v-html="renderedMarkdown"
       ></div>
 
@@ -653,7 +659,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
           />
         </div>
         <!-- 分屏预览是半宽，换行位置与全预览不同，滚动位置分开记 -->
-        <div v-scroll-memory="scrollKey('md-split-preview')" class="fw-split-pane fw-scroll viewer-markdown" v-html="renderedMarkdown"></div>
+        <div v-scroll-memory="scrollKey('md-split-preview')" class="fw-split-pane fw-scroll viewer-markdown" @click="onPreviewClick" v-html="renderedMarkdown"></div>
       </div>
 
       <!-- 默认：直接可编辑（含 Markdown 全编辑） -->

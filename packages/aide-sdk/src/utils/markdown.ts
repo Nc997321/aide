@@ -241,13 +241,95 @@ const insightExtension: TokenizerAndRendererExtension = {
   },
 };
 
+/** 标题 id 的统一前缀。标题文字来自模型输出 / 文件 / 知识库正文（不可信），裸 slug 当 id
+ *  会和应用自身 DOM 的 id 撞车，或经 window 具名访问覆盖全局（DOM clobbering，例如标题
+ *  「config」→ window.config）。加前缀后 id 空间与应用隔开；点击跳转时同样带前缀去找。 */
+export const HEADING_ID_PREFIX = "md-";
+
+/** 标题锚点 slug：与 GitHub（github-slugger）同规则——小写、删掉字母/数字/连字符/
+ *  空格以外的字符（中文标点「、（）：」都删）、空格换 `-`。文档里手写的目录
+ *  `[一、通用约定](#一通用约定)` 就是按这个规则写的，规则一漂移目录就点不动。 */
+export function headingSlug(text: string): string {
+  return text
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+    .replace(/ /g, "-");
+}
+
+/** 标题的纯文本：内联渲染后剥标签、还原转义的实体（slug 算在用户看到的字上）。 */
+function headingPlainText(html: string): string {
+  return html
+    .replace(/<[^>]*>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&");
+}
+
+/** 一篇文档内的标题 id 分配器：同名标题按 GitHub 规则追加 -1、-2。
+ *  `idFor` 吃标题**内联渲染后的 HTML**，返回已带前缀、可直接进属性的 id 串（空标题返回 ""）。
+ *  每篇文档开始渲染前 `reset()`。SDK 与知识库两个渲染器共用这一份规则。 */
+export function createHeadingIds(): { idFor(innerHtml: string): string; reset(): void } {
+  const seen = new Map<string, number>();
+  return {
+    idFor(innerHtml) {
+      const base = headingSlug(headingPlainText(innerHtml));
+      if (!base) return "";
+      const n = seen.get(base) ?? 0;
+      seen.set(base, n + 1);
+      const slug = n === 0 ? base : `${base}-${n}`;
+      return escapeHtml(HEADING_ID_PREFIX + slug).replace(/"/g, "&quot;");
+    },
+    reset: () => seen.clear(),
+  };
+}
+
 function makeMarked(code: (token: CodeToken) => string): Marked {
   const instance = new Marked({ gfm: true, breaks: false });
+  // 计数器每次 parse 开头清零（实例是同步共享的）。
+  const ids = createHeadingIds();
+  function heading(this: Renderer, token: Tokens.Heading): string {
+    const inner = this.parser.parseInline(token.tokens);
+    const id = ids.idFor(inner);
+    return `<h${token.depth}${id ? ` id="${id}"` : ""}>${inner}</h${token.depth}>\n`;
+  }
   instance.use({
-    renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage },
+    hooks: {
+      preprocess(src: string) {
+        ids.reset();
+        return src;
+      },
+    },
+    renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage, heading },
     extensions: [insightExtension],
   });
   return instance;
+}
+
+/** 预览容器内的 `#锚点` 链接点击：在 root 里找对应标题滚过去。命中返回 true（已
+ *  preventDefault）；不是锚点链接返回 false，调用方继续自己的处理。不改 location.hash——
+ *  整个窗口共用一个 location，且同名 id 可能在别的面板里也有，必须限定在 root 内找。 */
+export function handleMarkdownAnchorClick(e: MouseEvent, root: HTMLElement | null): boolean {
+  const a = (e.target as HTMLElement | null)?.closest?.("a[href]");
+  const href = a?.getAttribute("href")?.trim() ?? "";
+  if (!href.startsWith("#")) return false;
+  e.preventDefault();
+  if (!root || href.length < 2) return true;
+  let id = href.slice(1);
+  try {
+    id = decodeURIComponent(id);
+  } catch {
+    /* 非法转义就按原文找 */
+  }
+  // 先按原样找（手写目录本就是 GitHub slug），对不上再把锚点也 slug 一遍（大小写/标点写法不一）
+  // 按 id 精确比对而不拼选择器：锚点是文档里的任意文字，不必过选择器转义这一关。
+  const byId = (want: string) =>
+    Array.from(root.querySelectorAll<HTMLElement>("[id]")).find((el) => el.id === want);
+  const target = byId(HEADING_ID_PREFIX + id) ?? byId(HEADING_ID_PREFIX + headingSlug(id));
+  target?.scrollIntoView({ behavior: "smooth", block: "start" });
+  return true;
 }
 
 /** 高亮实例：定稿正文（renderMarkdown）、文件 .md 预览、plan 预览都用它。 */
