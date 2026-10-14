@@ -51,6 +51,10 @@ pub fn prepare_workspace() -> WorkspaceState {
 pub fn start(core: &Arc<Core>) {
     // 手机网关：上次是启用状态就接上中继（身份没有就生成）
     core.link.start(core);
+    // 界面状态搬出 settings.json（幂等；失败不挡启动，读取侧会退回旧值）。
+    if let Err(e) = crate::app_settings::migrate_ui_state_out_of_settings(&core.settings) {
+        tracing::warn!("ui state migration failed: {e}");
+    }
     // 老 provider schema 迁移（幂等）——必须在 runtime 取 env 之前。
     if let Err(e) = crate::provider::ensure_migrated() {
         tracing::error!("provider schema migration failed: {e}（继续用旧配置）");

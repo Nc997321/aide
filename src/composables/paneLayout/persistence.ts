@@ -8,7 +8,8 @@ import { listSnapshotTabs, parseSnapshot } from "./tree";
 
 /**
  * 布局持久化胶水：全局唯一一份布局快照（混合 tab——不同工作区的会话同屏并存，
- * 切换活动工作区不再动布局），存在 settings.paneLayouts 的固定键下。
+ * 切换活动工作区不再动布局），经 settings 的 paneLayouts 字段进出、固定键下；
+ * Host 把它落在 state.json（运行时状态），不进 settings.json。
  *
  * 单独成层的原因：usePaneLayout 保持不 import Tauri（api/settings 都会拉起
  * @tauri-apps 依赖链），布局语义可脱离宿主单测；落盘/恢复这点脏活集中在这里。

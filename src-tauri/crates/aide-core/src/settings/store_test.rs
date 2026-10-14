@@ -460,6 +460,72 @@ fn mutations_reject_descriptor_and_permission_rule_violations() {
         .is_err());
 }
 
+/// 并发写不许互相覆盖：每条写都基于上一条写完的文档。无锁时两条写各读各的旧文档，
+/// 后写的把先写的那一项盖掉；Windows 上换文件的瞬间还会读到「没有文件」、整份清零。
+#[test]
+fn concurrent_mutations_do_not_lose_each_others_writes() {
+    let fixture = TestStore::new();
+    fixture.write_user(document(json!({"providers": [{"id": "p1", "kind": "custom"}]})));
+    let (threads, rounds) = (8, 12);
+    std::thread::scope(|scope| {
+        for t in 0..threads {
+            let service = fixture.service();
+            scope.spawn(move || {
+                for r in 0..rounds {
+                    service
+                        .mutate_scope_blocking(SettingsScope::User, None, |doc| {
+                            let mut hidden = doc
+                                .values
+                                .get("hiddenWorkspaces")
+                                .and_then(Value::as_array)
+                                .cloned()
+                                .unwrap_or_default();
+                            hidden.push(json!(format!("ws-{t}-{r}")));
+                            doc.values.insert("hiddenWorkspaces".into(), Value::Array(hidden));
+                            Ok(())
+                        })
+                        .unwrap();
+                }
+            });
+        }
+    });
+    let saved = fixture.read_user();
+    assert_eq!(
+        saved["values"]["hiddenWorkspaces"].as_array().unwrap().len(),
+        threads * rounds
+    );
+    assert_eq!(saved["values"]["providers"][0]["id"], "p1");
+}
+
+/// 已加载过的用户文档，文件被外力拿走后再写一项：其余设置必须还在，
+/// 不能当成「用户从没设置过」写回一份只有这一项的文档。
+#[test]
+fn mutation_after_the_user_file_vanishes_keeps_the_loaded_document() {
+    let fixture = TestStore::new();
+    fixture
+        .service()
+        .mutate_scope_blocking(SettingsScope::User, None, |doc| {
+            doc.values
+                .insert("providers".into(), json!([{"id": "p1", "kind": "custom"}]));
+            doc.values
+                .insert("settings".into(), json!({"theme": "glass"}));
+            Ok(())
+        })
+        .unwrap();
+    std::fs::remove_file(fixture.paths.user()).unwrap();
+    fixture
+        .service()
+        .mutate_scope_blocking(SettingsScope::User, None, |doc| {
+            doc.values.insert("activeProvider".into(), json!("p1"));
+            Ok(())
+        })
+        .unwrap();
+    let saved = fixture.read_user();
+    assert_eq!(saved["values"]["activeProvider"], "p1");
+    assert_eq!(saved["values"]["providers"][0]["id"], "p1");
+    assert_eq!(saved["values"]["settings"]["theme"], "glass");
+}
+
 #[cfg(windows)]
 #[test]
 fn windows_atomic_write_replaces_an_existing_destination() {

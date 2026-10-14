@@ -181,7 +181,9 @@ pub struct AppSettings {
     /// 「最近访问」每类列表保留条数（会话与文件共用），默认 10。
     #[serde(default = "default_recent_limit")]
     pub recent_limit: u32,
-    /// 聊天区分屏布局快照——前端不透明数据（按工作区键控），Rust 只负责存取。
+    /// 聊天区分屏布局快照——前端不透明数据，Rust 只负责存取。界面状态，落 state.json
+    /// （见 [`UI_STATE_KEYS`]，下面的 workbench_height / jdk_prompt_dismissed /
+    /// left_sidebar_pinned / onboarded 同此）。
     #[serde(default)]
     pub pane_layouts: Value,
     /// 已启用的固定市场源 source_id 列表（默认空；前端首次进入可写默认两条）。
@@ -441,13 +443,153 @@ where
     F: FnOnce(&mut Value) -> Result<R, String>,
 {
     let _guard = CONFIG_LOCK.lock().map_err(|e| e.to_string())?;
-    let mut state = load_state();
-    if state.is_null() {
-        state = serde_json::json!({});
-    }
+    let mut state = load_state_for_update(&state_path())?;
     let r = f(&mut state)?;
     save_state(&state)?;
     Ok(r)
+}
+
+/// 「改并写回」用的读：只有**文件真不在**才从 `{}` 起步。文件在却读不出来（杀软/索引器
+/// 瞬时占用）时重试几次，仍失败就报错、本次改动不落盘——绝不能把「暂时读不到」当成
+/// 「空状态」写回去，那会把工作区登记、信任、布局一并清掉（settings.json 2026-10-14
+/// 就是这样被整份重置的）。内容损坏则留一份 `.corrupt` 副本再从空白开始。
+fn load_state_for_update(path: &Path) -> Result<Value, String> {
+    let mut last_error = String::new();
+    for attempt in 0..5 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        match fs::read_to_string(path) {
+            Ok(content) if content.trim().is_empty() => return Ok(serde_json::json!({})),
+            Ok(content) => {
+                return Ok(match serde_json::from_str::<Value>(&content) {
+                    Ok(Value::Null) => serde_json::json!({}),
+                    Ok(v) => v,
+                    Err(e) => {
+                        let backup = path.with_extension("json.corrupt");
+                        let _ = fs::write(&backup, &content);
+                        tracing::warn!(path = %path.display(), error = %e, backup = %backup.display(), "state file is corrupt; starting from an empty state");
+                        serde_json::json!({})
+                    }
+                });
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(serde_json::json!({})),
+            Err(e) => last_error = e.to_string(),
+        }
+    }
+    Err(format!("{}: unreadable, state not modified: {last_error}", path.display()))
+}
+
+/// **设置 vs 状态的边界**（`settings.json` vs `state.json`）：
+/// - 设置 = 用户**声明**的偏好：在设置界面里明确选的，换台机器值得原样带走，
+///   「恢复默认」对它有意义（主题、字体、代理、快捷键、供应商、插件开关…）。
+/// - 状态 = 应用**用出来**的记录：界面停在哪、拖到多大、哪条提示点过「稍后」、
+///   引导走完没有。用户从不为它打开设置页，丢了只是回到初始样子。
+///
+/// 下面这几项按这条线属于状态，落在 `state.json` 的 `ui` 对象里。对前端的契约不变——
+/// 仍随 `get_settings` / `set_settings` 的同名字段进出（[`AppSettings`] 只是进出口），
+/// 换的只是落点：高频的界面记录不再去碰存着供应商的那份文档。
+/// 新增字段先过这条线；属于状态的加进本表，**不要**加设置描述符。
+pub const UI_STATE_KEYS: &[&str] = &[
+    // 分屏与标签布局：开关标签、切聚焦就变，500ms 一存
+    "paneLayouts",
+    // 底部工作台高度：拖出来的
+    "workbenchHeight",
+    // 侧栏钉住与否：界面当前形态
+    "leftSidebarPinned",
+    // 「检测到 Java 项目」提示点过「稍后」的工作区
+    "jdkPromptDismissed",
+    // 首次引导走完没有（与 state.json 里的 claudeMigrationDone 同类）
+    "onboarded",
+];
+
+const UI_STATE_ROOT: &str = "ui";
+
+/// 从 `set_settings` 入参里摘出属于状态的项（入参里剩下的才是设置）。
+fn split_ui_state(incoming: &mut serde_json::Map<String, Value>) -> serde_json::Map<String, Value> {
+    UI_STATE_KEYS
+        .iter()
+        .filter_map(|key| Some((key.to_string(), incoming.remove(*key)?)))
+        .collect()
+}
+
+fn write_ui_state(state: &mut Value, entries: serde_json::Map<String, Value>) {
+    if !state[UI_STATE_ROOT].is_object() {
+        state[UI_STATE_ROOT] = serde_json::json!({});
+    }
+    for (key, value) in entries {
+        state[UI_STATE_ROOT][key] = value;
+    }
+}
+
+/// 把 state.json 里的界面状态盖到给前端的设置视图上。state 里没有的项保留原值
+/// （= 旧版本留在 settings.json 里的，或默认值）——迁移没跑成也读得到。
+fn overlay_ui_state(settings: &mut Value, state: &Value) {
+    let (Some(target), Some(ui)) = (settings.as_object_mut(), state[UI_STATE_ROOT].as_object())
+    else {
+        return;
+    };
+    for key in UI_STATE_KEYS {
+        if let Some(value) = ui.get(*key).filter(|v| !v.is_null()) {
+            target.insert(key.to_string(), value.clone());
+        }
+    }
+}
+
+/// 旧版本存在 settings.json 里的界面状态 → state.json（state 已有的不覆盖）。
+/// 返回旧文档里是否还留着这些键（调用方据此决定要不要清）。
+fn adopt_legacy_ui_state(state: &mut Value, legacy_settings: &serde_json::Map<String, Value>) -> bool {
+    let mut legacy = legacy_settings.clone();
+    let mut found = split_ui_state(&mut legacy);
+    let present = !found.is_empty();
+    found.retain(|key, value| !value.is_null() && state[UI_STATE_ROOT].get(key).is_none());
+    write_ui_state(state, found);
+    present
+}
+
+/// 一次性迁移（幂等，Host 启动时调）：界面状态搬出 settings.json。先落 state.json，
+/// 成功后才从设置文档里删——中途失败最坏是两边都有，读取以 state 为准，下次启动再清。
+pub fn migrate_ui_state_out_of_settings(service: &SettingsService) -> Result<(), String> {
+    let legacy = service
+        .effective_document_blocking(None)
+        .map_err(|error| error.to_string())?
+        .values
+        .get("settings")
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if !UI_STATE_KEYS.iter().any(|key| legacy.contains_key(*key)) {
+        return Ok(());
+    }
+    with_state_mut(|state| {
+        adopt_legacy_ui_state(state, &legacy);
+        Ok(())
+    })?;
+    service
+        .mutate_scope_blocking(SettingsScope::User, None, |document| {
+            if let Some(target) = document.values.get_mut("settings").and_then(Value::as_object_mut) {
+                for key in UI_STATE_KEYS {
+                    target.remove(*key);
+                }
+            }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+/// 给前端的设置视图：设置文档 + state.json 里的界面状态。
+fn settings_view(service: &SettingsService) -> Result<AppSettings, String> {
+    let effective = service
+        .effective_document_blocking(None)
+        .map_err(|error| error.to_string())?;
+    let mut value = effective
+        .values
+        .get("settings")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({}));
+    overlay_ui_state(&mut value, &load_state());
+    serde_json::from_value(value).map_err(|error| format!("Failed to deserialize settings: {error}"))
 }
 
 pub fn public_settings(service: &SettingsService) -> Result<AppSettings, String> {
@@ -468,7 +610,7 @@ pub static COMMANDS: &[Command] = &[
 ];
 
 async fn get_settings(core: Arc<Core>, _: crate::commands::NoArgs) -> Result<AppSettings, String> {
-    blocking(move || public_settings(&core.settings)).await
+    blocking(move || settings_view(&core.settings)).await
 }
 
 #[derive(Deserialize)]
@@ -479,7 +621,21 @@ pub struct SetSettingsArgs {
 async fn set_settings(core: Arc<Core>, a: SetSettingsArgs) -> Result<(), String> {
     blocking(move || {
         let service = &core.settings;
-        let incoming = a.settings;
+        let mut incoming = a.settings;
+        let fields = incoming
+            .as_object_mut()
+            .ok_or_else(|| "settings must be an object".to_string())?;
+        // 界面状态走 state.json；只动了它的话，settings.json 一个字节都不碰。
+        let ui_state = split_ui_state(fields);
+        if !ui_state.is_empty() {
+            with_state_mut(move |state| {
+                write_ui_state(state, ui_state);
+                Ok(())
+            })?;
+        }
+        if fields.is_empty() {
+            return Ok(());
+        }
         service
             .mutate_scope_blocking(SettingsScope::User, None, |document| {
                 let target = document
@@ -511,6 +667,66 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn set_settings_input_splits_into_ui_state_and_real_settings() {
+        let mut incoming = serde_json::json!({
+            "paneLayouts": {"__global__": {}}, "workbenchHeight": 320, "theme": "glass"
+        });
+        let ui = split_ui_state(incoming.as_object_mut().unwrap());
+        assert_eq!(ui.len(), 2);
+        assert_eq!(incoming, serde_json::json!({"theme": "glass"}));
+
+        let mut state = serde_json::json!({"workspaces": ["a"]});
+        write_ui_state(&mut state, ui);
+        assert_eq!(state["ui"]["workbenchHeight"], 320);
+        assert_eq!(state["workspaces"][0], "a");
+    }
+
+    #[test]
+    fn settings_view_prefers_state_and_falls_back_to_the_legacy_value() {
+        // onboarded 只在旧设置文档里、leftSidebarPinned 两边都有：state 赢，没有的沿用旧值。
+        let mut view = serde_json::json!({"onboarded": true, "leftSidebarPinned": false, "theme": "glass"});
+        overlay_ui_state(&mut view, &serde_json::json!({"ui": {"leftSidebarPinned": true, "theme": "x"}}));
+        assert_eq!(view, serde_json::json!({"onboarded": true, "leftSidebarPinned": true, "theme": "glass"}));
+    }
+
+    #[test]
+    fn legacy_ui_state_is_adopted_without_overwriting_newer_state() {
+        let legacy = serde_json::json!({"onboarded": true, "workbenchHeight": 100, "theme": "glass"});
+        let mut state = serde_json::json!({"ui": {"workbenchHeight": 400}});
+        assert!(adopt_legacy_ui_state(&mut state, legacy.as_object().unwrap()));
+        assert_eq!(state, serde_json::json!({"ui": {"workbenchHeight": 400, "onboarded": true}}));
+        let none = serde_json::json!({"theme": "glass"});
+        assert!(!adopt_legacy_ui_state(&mut state, none.as_object().unwrap()));
+    }
+
+    #[test]
+    fn state_read_for_update_starts_empty_only_when_the_file_is_absent() {
+        let tmp = seed_tmp("read_for_update");
+        let path = tmp.join("state.json");
+        assert_eq!(load_state_for_update(&path).unwrap(), serde_json::json!({}));
+        fs::write(&path, r#"{"workspaces":["a"]}"#).unwrap();
+        assert_eq!(load_state_for_update(&path).unwrap()["workspaces"][0], "a");
+    }
+
+    #[test]
+    fn state_read_for_update_refuses_an_unreadable_file_instead_of_resetting_it() {
+        // 目录占着这个路径 = 「在，但读不出来」：必须报错，不能当空状态写回去。
+        let tmp = seed_tmp("read_for_update_unreadable");
+        let path = tmp.join("state.json");
+        fs::create_dir_all(&path).unwrap();
+        assert!(load_state_for_update(&path).is_err());
+    }
+
+    #[test]
+    fn state_read_for_update_keeps_a_copy_of_a_corrupt_file() {
+        let tmp = seed_tmp("read_for_update_corrupt");
+        let path = tmp.join("state.json");
+        fs::write(&path, "{ not json").unwrap();
+        assert_eq!(load_state_for_update(&path).unwrap(), serde_json::json!({}));
+        assert_eq!(fs::read_to_string(tmp.join("state.json.corrupt")).unwrap(), "{ not json");
     }
 
     #[test]

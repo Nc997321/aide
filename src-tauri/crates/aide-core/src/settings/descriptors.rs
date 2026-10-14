@@ -72,6 +72,9 @@ impl SettingDescriptor {
 }
 
 static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
+    // 界面状态（paneLayouts / workbenchHeight / leftSidebarPinned / jdkPromptDismissed /
+    // onboarded）已搬到 state.json（见 `app_settings::UI_STATE_KEYS`）。它们的描述符只为
+    // 读得进旧文档而留——新的界面状态不要再往这张表里加。
     vec![
         ui("settings.fontSize", json!(14), SettingValueKind::Number),
         ui("settings.fontFamily", json!("'Maple Mono NF CN', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace"), SettingValueKind::String),

@@ -288,6 +288,10 @@ pub struct SettingsService {
     store: SettingsStore,
     secrets: Arc<dyn SecretStore>,
     state: RwLock<SettingsState>,
+    /// 串行化「读文件 → 改 → 写回」。没有它，两条并发写各读各的旧文档、后写的盖掉先写的；
+    /// Windows 上更糟：`ReplaceFileW` 换文件的瞬间目标路径不存在，另一条写读到「没有文件」
+    /// 就从空文档起步，把整份设置（供应商、主题…）写没（2026-10-14 工作机实锤）。
+    mutation: std::sync::Mutex<()>,
 }
 
 impl SettingsService {
@@ -296,6 +300,7 @@ impl SettingsService {
             store: SettingsStore::new(paths),
             secrets,
             state: RwLock::new(SettingsState::default()),
+            mutation: std::sync::Mutex::new(()),
         }
     }
 
@@ -383,7 +388,14 @@ impl SettingsService {
         F: FnOnce(&mut SettingsDocument) -> Result<(), SettingsError>,
     {
         let path = self.path_for_mutable_scope(scope, project)?;
-        let mut candidate = self.store.read(&path, scope)?.unwrap_or_default();
+        let _serial = self
+            .mutation
+            .lock()
+            .map_err(|e| SettingsError::Storage(e.to_string()))?;
+        let mut candidate = match self.store.read(&path, scope)? {
+            Some(document) => document,
+            None => self.missing_document_base(scope, &path)?,
+        };
         validate_document(&candidate, scope)?;
         f(&mut candidate)?;
         validate_document(&candidate, scope)?;
@@ -404,6 +416,30 @@ impl SettingsService {
             path,
             revision,
         })
+    }
+
+    /// 文件不在时的起点。用户文档已加载过 → 以内存里那份为底（文件是被外力拿走的，
+    /// 不能当成「用户从没设置过」而写回一份空文档）；其余情形才是真的从空白开始。
+    fn missing_document_base(
+        &self,
+        scope: SettingsScope,
+        path: &Path,
+    ) -> Result<SettingsDocument, SettingsError> {
+        if scope != SettingsScope::User {
+            return Ok(SettingsDocument::default());
+        }
+        let state = self
+            .state
+            .read()
+            .map_err(|e| SettingsError::Storage(e.to_string()))?;
+        if !state.initialized {
+            return Ok(SettingsDocument::default());
+        }
+        tracing::warn!(
+            path = %path.display(),
+            "user settings file is missing; rebuilding it from the loaded document"
+        );
+        Ok(state.user_document.clone())
     }
 
     fn path_for_mutable_scope(
