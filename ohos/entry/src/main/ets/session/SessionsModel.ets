@@ -59,6 +59,20 @@ export class SessionsModel {
   @Trace lastError: string = '';
 
   private listening: boolean = false;
+  /** 主机世代（resetForHost 自增）：在途 refresh 的迟到响应按世代丢弃。 */
+  private hostEpoch: number = 0;
+
+  /** 换主机整体复位（HostSync 编排）：清全量内存面，等 refresh 重建。 */
+  resetForHost(): void {
+    this.hostEpoch++;
+    this.sessions = [];
+    this.liveIds = [];
+    this.waitConfirmIds = [];
+    this.startedIds = [];
+    this.wsKey = '';
+    this.loaded = false;
+    this.lastError = '';
+  }
 
   /** 页面挂载时调用：幂等挂 chat-event + 重连监听（监听挂在传输实例上，只挂一次）。 */
   ensureListener(): void {
@@ -85,12 +99,19 @@ export class SessionsModel {
       return;
     }
     this.refreshing = true;
+    const epoch: number = this.hostEpoch;
     try {
-      this.sessions = this.wsKey === ''
+      const list: Session[] = this.wsKey === ''
         ? await api.listSessions()
         : await api.listSessionsForWorkspace(this.wsKey);
-      this.loaded = true;
-      this.lastError = '';
+      if (epoch === this.hostEpoch) {
+        this.sessions = list;
+        this.loaded = true;
+        this.lastError = '';
+        // 存活徽标对账：断线窗口内桌面侧死亡无 session_dead 可收（用户主动
+        // 杀也被 host 抑制），列表落地即自愈（fire-and-forget）
+        void this.syncLiveness();
+      }
     } catch (e) {
       // 拉取失败不静默：显示错误条，下拉可重试
       if (connModel.state === 'authed') {
@@ -123,6 +144,48 @@ export class SessionsModel {
   markRoundEnd(sid: string): void {
     this.setLive(sid, false);
     this.setWait(sid, false);
+  }
+
+  /** 用户主动结束会话进程（stop_chat_session）：三态全清。host 对用户主动杀
+   *  抑制 session_dead 事件（非意外死亡不播报），不等事件、本机即清——对照
+   *  session_dead 事件分支的三态清理，迟到重复事件到达无害（幂等）。 */
+  markSessionStopped(sid: string): void {
+    this.setLive(sid, false);
+    this.setWait(sid, false);
+    this.setStarted(sid, false);
+  }
+
+  /** 删除会话后本机移除列表条目（整体替换驱动 @Trace；幂等——不在列表即原样）。 */
+  removeSession(sid: string): void {
+    this.sessions = this.sessions.filter((s: Session) => s.id !== sid);
+  }
+
+  /** 运行时存活点亮（open 时 session_alive 对账回填；事件流照常维持）。 */
+  markSessionStarted(sid: string): void {
+    this.setStarted(sid, true);
+  }
+
+  /**
+   * 存活徽标对账（session_alive 权威存活表）：startedIds 逐个探测，死进程即
+   * 清。事件驱动外的自愈通道——断线/重启窗口的偏差双向修正由 open 的单点
+   * 探测（ChatModel.syncSessionAlive）与本方法（refresh 落地后批量）承担；
+   * bounded = 只探测已点亮集合（通常 0~3 个），单个失败保持现状等下次对账。
+   */
+  async syncLiveness(): Promise<void> {
+    if (connModel.state !== 'authed' || this.startedIds.length === 0) {
+      return;
+    }
+    const ids: string[] = this.startedIds.slice();
+    for (let i = 0; i < ids.length; i++) {
+      try {
+        const alive: boolean = await api.sessionAlive(ids[i]);
+        if (!alive) {
+          this.markSessionStopped(ids[i]);
+        }
+      } catch (e) {
+        // 单个探测失败保持现状：瞬态离线，下次对账自愈
+      }
+    }
   }
 
   /**

@@ -2,9 +2,13 @@
  * 聊天主屏（v3：常驻组件，Index authed 后直接渲染；不再 @Entry / 路由参数）。
  *
  * 结构（对照 design/remote/app.html 屏 2 .ch-*）：
- *  - 顶栏：☰ 开抽屉 + 标题/副标题（工作区色点 + 名称，纯展示）+ ⏹ 停止会话
- *    （常驻：闲态置灰点击 toast 提示；回复中转红，点击 interrupt——残段冻结
- *    后落「已停止会话」系统分隔线，见 ChatModel.interrupt）
+ *  - 顶栏：☰ 开抽屉 + 标题/副标题（工作区色点 + 名称，纯展示）
+ *  - 停止回复 chip：输入栏上方右侧悬空（StopChip，仅回复中渲染——红色均衡器
+ *    跳动条浮在页底背景上，点击 interrupt——残段冻结后落「已停止会话」系统
+ *    分隔线，见 ChatModel.interrupt；闲态不占位）
+ *  - 结束会话进程：顶栏右端 ⏻（仅运行中显示——startedIds 闸门，open/refresh
+ *    经 session_alive 对账，事件流维持）——确认后 stop_chat_session 杀桌面
+ *    worker，徽标本机即清（用户主动杀抑制 session_dead 事件）
  *  - 新会话空态（store.sid 为空）：logo + 「新会话」+「发消息即创建 · 发往
  *    工作区 X」——首条消息即 spawn（ChatModel.send 空态分支）；日常默认
  *    范围变体「发消息即创建 · 日常对话」（暖橙，design/daily/app.html）
@@ -65,9 +69,11 @@ import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
 import { ChatMessagesSource } from '../session/chat/ChatMessagesSource';
 import { VoiceChip } from '../session/chat/VoiceChip';
+import { StopChip } from '../session/chat/StopChip';
 import { readerModel } from '../session/chat/ReaderModel';
 import { ttsModel } from '../session/chat/TtsModel';
 import { ChatDrawer, drawerState, toastModel, ToastModel, wsAccentColor } from '../session/ChatDrawer';
+import { SessionsModel, sessionsModel } from '../session/SessionsModel';
 import { WorkspaceModel, workspaceModel } from '../session/WorkspaceModel';
 import { automationModel } from '../session/AutomationModel';
 import { AutomationDetail } from '../session/AutomationDetail';
@@ -133,6 +139,8 @@ export struct ChatPage {
   @Local ws: WorkspaceModel = workspaceModel;
   @Local toast: ToastModel = toastModel;
   @Local pv: ProviderModel = providerModel;
+  /** 会话列表三态徽标（顶栏 ⏻ 结束进程入口的存活闸门）。 */
+  @Local sm: SessionsModel = sessionsModel;
   @Local draft: string = '';
   /** 附件域（单例：选入/编码/移除全在 ChatAttachments；发送后与切会话整体复位）。 */
   @Local att: ChatAttachments = attachmentsModel;
@@ -315,7 +323,7 @@ export struct ChatPage {
     this.lbUri = '';
   }
 
-  /** 停止会话可点（interrupt_session 语义；闲态置灰）。 */
+  /** 回复进行中（interrupt_session 语义；输入框上方停止 chip 的显隐闸门）。 */
   canStop(): boolean {
     return this.store.isBusy && this.conn.state === 'authed';
   }
@@ -331,6 +339,37 @@ export struct ChatPage {
     }
     void this.model.interrupt();
     toastModel.show('已停止会话', 'warn');
+  }
+
+  /** 结束会话进程确认（stop_chat_session）：进行中的回复/权限/后台任务一并
+   *  终止，记录保留可重开续聊；进程级操作先确认再执行。 */
+  private confirmStopSession(): void {
+    this.getUIContext().showAlertDialog({
+      title: '结束会话进程',
+      message: '桌面侧进程将退出，进行中的回复与后台任务会被终止。会话记录保留，可重新打开继续。',
+      primaryButton: {
+        value: '取消',
+        action: () => {
+        }
+      },
+      secondaryButton: {
+        value: '结束',
+        fontColor: $r('app.color.status_danger'),
+        action: () => {
+          void this.onStopSession();
+        }
+      }
+    });
+  }
+
+  private async onStopSession(): Promise<void> {
+    const sid: string = this.store.sid;
+    const ok: boolean = await this.model.stopSession(sid);
+    if (ok) {
+      toastModel.show('已结束会话进程', 'warn');
+    } else {
+      toastModel.show('结束会话失败，请重试', 'warn');
+    }
   }
 
   showTimeGap(idx: number, ts: number): boolean {
@@ -392,33 +431,24 @@ export struct ChatPage {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Center)
 
-      // ⏹ 停止会话（常驻：闲态置灰，回复中转红）
-      Row() {
-        Stack() {
-          // 容器环/方块替代 Circle+Rect 的 fill/stroke（drawing 组件 API 26 告警）
-          Column()
-            .width(20)
-            .height(20)
-            .borderRadius(10)
-            .border({
-              width: 1.6,
-              color: this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg')
-            })
-          Column()
-            .width(7)
-            .height(7)
-            .borderRadius(1.6)
-            .backgroundColor(this.canStop() ? $r('app.color.status_danger') : $r('app.color.btn_disabled_bg'))
+      // ⏻ 结束会话进程（stop_chat_session）：仅运行中显示（startedIds 闸门，
+      // 事件流维持 + open/refresh 经 session_alive 对账）；点 = 确认后杀
+      // 桌面 worker。未启动的历史会话不显示——没有进程可结束
+      if (this.sm.startedIds.indexOf(this.store.sid) >= 0) {
+        Row() {
+          SymbolGlyph($r('sys.symbol.power'))
+            .fontSize(17)
+            .fontColor([$r('app.color.status_danger')])
         }
+        .width(34)
+        .height(34)
+        .borderRadius(10)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
+        .onClick(() => {
+          this.confirmStopSession();
+        })
       }
-      .width(34)
-      .height(34)
-      .borderRadius(10)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(VerticalAlign.Center)
-      .onClick(() => {
-        this.onStopTap();
-      })
     }
     .width('100%')
     .padding({ left: 10, right: 10, top: 8, bottom: 10 })
@@ -442,6 +472,23 @@ export struct ChatPage {
     .justifyContent(FlexAlign.Center)
     .padding({ top: 7, bottom: 7 })
     .backgroundColor($r('app.color.status_warn_weak'))
+  }
+
+  /** 切换主机横幅（accent 底 + 目标主机点名；优先于离线横幅——Index 在
+   *  switching 期间保持本页挂载，时间线压暗让位）。 */
+  @Builder
+  switchingBanner() {
+    Row({ space: 8 }) {
+      LoadingProgress().width(11).height(11).color($r('app.color.accent'))
+      Text(`正在连接 ${this.conn.switchingTo}…`)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.accent'))
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.Center)
+    .padding({ top: 7, bottom: 7 })
+    .backgroundColor($r('app.color.accent_weak'))
   }
 
   /** toast 宿主（原型 ch-toast：顶栏下方居中，2 秒自动隐藏）。 */
@@ -1510,6 +1557,22 @@ export struct ChatPage {
     .transition(TransitionEffect.OPACITY.animation({ duration: 200 }))
   }
 
+  /** 停止回复 chip 的悬空位：输入栏上方右对齐（页底背景上浮着，与语音 chip
+   *  的时间线浮空同款视觉，不嵌输入栏白卡）；仅回复中渲染，闲态不占位。 */
+  @Builder
+  stopChipRow() {
+    Row() {
+      StopChip({
+        onStop: () => {
+          this.onStopTap();
+        }
+      })
+    }
+    .width('100%')
+    .justifyContent(FlexAlign.End)
+    .padding({ left: 16, right: 16, bottom: 6 })
+  }
+
   @Builder
   inputBarView() {
     // 原型 .ch-input：附件条（有附件时）在上、输入行、工具行（.ch-bar）在下
@@ -2010,23 +2073,31 @@ export struct ChatPage {
       Column() {
         this.topBar()
 
-        if (this.conn.state !== 'authed') {
+        if (this.conn.switching) {
+          this.switchingBanner()
+        } else if (this.conn.state !== 'authed') {
           this.offlineBanner()
         }
 
-        if (this.store.sid === '') {
-          // 新会话空态：首条消息即 spawn（发往所选工作区），时间线让位
-          this.emptyState()
-        } else {
-          // if 分支切换 = 销毁重建 List（见 rebuildAtTail）：重建首帧按
-          // initialIndex 锚在最后一条，零滚动零动画；流式跟尾照旧走 scrollEdge
-          //（仅跟尾位有效时跟随，跟随时尾部恒已构建，精确贴底）
-          if (this.listEpoch % 2 === 0) {
-            this.chatList()
+        // 时间线/空态（切换主机期间压暗让位：横幅是唯一的视觉焦点）
+        Column() {
+          if (this.store.sid === '') {
+            // 新会话空态：首条消息即 spawn（发往所选工作区），时间线让位
+            this.emptyState()
           } else {
-            this.chatList()
+            // if 分支切换 = 销毁重建 List（见 rebuildAtTail）：重建首帧按
+            // initialIndex 锚在最后一条，零滚动零动画；流式跟尾照旧走 scrollEdge
+            //（仅跟尾位有效时跟随，跟随时尾部恒已构建，精确贴底）
+            if (this.listEpoch % 2 === 0) {
+              this.chatList()
+            } else {
+              this.chatList()
+            }
           }
         }
+        .width('100%')
+        .layoutWeight(1)
+        .opacity(this.conn.switching ? 0.45 : 1)
 
         if (this.store.bgTasks.length > 0) {
           BgTaskDock({ store: this.store })
@@ -2042,6 +2113,10 @@ export struct ChatPage {
         if (this.store.pendingPermissions.length > 0) {
           PermissionSheet({ store: this.store, planBodyMax: this.planBodyMax() })
         } else {
+          // 停止回复 chip：输入栏上方右侧悬空（页底背景），仅回复中占位
+          if (this.canStop()) {
+            this.stopChipRow()
+          }
           this.inputBarView()
         }
       }

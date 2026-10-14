@@ -32,7 +32,9 @@ struct Index {
 
   build() {
     Column() {
-      if (this.conn.state === 'authed') {
+      // switching 期间 ChatPage 保持挂载（横幅 + 时间线压暗）：切换失败
+      //（needsPairing）自动落回连接页；监听/状态常驻不卸载
+      if (this.conn.state === 'authed' || this.conn.switching) {
         ChatPage()
       } else {
         ConnectPage()

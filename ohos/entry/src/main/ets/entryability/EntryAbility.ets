@@ -4,6 +4,7 @@ import { window, KeyboardAvoidMode, UIContext } from '@kit.ArkUI';
 import { WindowManager } from '@kit.SpeechKit';
 import { connModel } from '../conn/ConnModel';
 import { initStorage } from '../sdk/storage';
+import { registerHostSync } from '../session/HostSync';
 import { BroadcastStandby } from './BroadcastStandby';
 
 export default class EntryAbility extends UIAbility {
@@ -13,10 +14,12 @@ export default class EntryAbility extends UIAbility {
   private readonly standby: BroadcastStandby = new BroadcastStandby();
 
   onCreate(want: Want, launchParam: AbilityConstant.LaunchParam): void {
-    // 启动序：凭据存储 → 连接模型（context + 上次中继地址 + 已配对标记）→ 有凭据自动续连。
-    // makeOpenUrl(this.context) 由 ConnModel.ensureClient 构造 RemoteTransport 时注入。
+    // 启动序：凭据存储 → 连接模型（context + 已配对主机/active）→ 换主机复位
+    // 回调注册 → 有凭据自动续连 active 主机。makeOpenUrl(this.context) 由
+    // ConnModel.ensureClient 构造 RemoteTransport 时注入。
     initStorage(this.context);
     connModel.init(this.context);
+    registerHostSync();
     connModel.autoConnect();
     hilog.info(0x0000, 'aide', '%{public}s', 'Ability onCreate');
   }

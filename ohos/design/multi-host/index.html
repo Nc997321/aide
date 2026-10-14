@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>aide 鸿蒙端原型 · 多主机连接与切换</title>
+<style>
+  :root {
+    --text: #1D2129; --text-2: #86909C; --accent: #0A59F7; --ok: #00B42A;
+    --warn: #FF7D00; --danger: #F53F3F; --line: #E5E6EB;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font: 14px/1.65 "HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #E9EBEE; color: var(--text);
+    padding: 34px 20px 40px;
+  }
+  .page-head { text-align: center; margin-bottom: 30px; }
+  .page-head h1 { font-size: 20px; font-weight: 700; }
+  .page-head h1 small { font-size: 12px; color: var(--accent); font-weight: 600; margin-left: 8px; vertical-align: 2px; }
+  .page-head p { font-size: 12.5px; color: var(--text-2); margin-top: 8px; max-width: 960px; margin-left: auto; margin-right: auto; line-height: 1.9; }
+  .page-head p b { color: #4E5969; }
+
+  .stage {
+    display: flex; gap: 28px; justify-content: center; align-items: flex-start;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+  .phone-wrap { display: flex; flex-direction: column; align-items: center; gap: 12px; }
+  .phone-label { font-size: 13px; font-weight: 700; color: #4E5969; letter-spacing: .5px; }
+  .phone-label span { color: var(--text-2); font-weight: 500; margin-left: 6px; font-size: 11.5px; }
+
+  /* 手机框（纯布景，中性深色边框） */
+  .phone {
+    width: 375px; height: 740px; flex: none;
+    border-radius: 46px; padding: 11px;
+    background: linear-gradient(160deg, #23242e, #101118 40%, #1a1b23);
+    border: 1px solid rgba(255,255,255,.17);
+    box-shadow: 0 20px 60px rgba(0,0,0,.35), inset 0 1px 1px rgba(255,255,255,.14);
+    position: relative;
+  }
+  .phone::before, .phone::after {
+    content: ""; position: absolute; right: -2.5px; width: 3px; border-radius: 2px; background: #2c2d38;
+  }
+  .phone::before { top: 150px; height: 56px; }
+  .phone::after { top: 220px; height: 88px; }
+  .screen {
+    width: 100%; height: 100%; border-radius: 36px; overflow: hidden;
+    background: #F1F3F5; position: relative;
+  }
+  .screen iframe { width: 100%; height: 100%; border: 0; display: block; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; max-width: 375px; }
+  .chips .cap { width: 100%; text-align: center; font-size: 10.5px; color: var(--text-2); margin-bottom: -1px; }
+  .chip {
+    padding: 4px 11px; font-size: 11px; cursor: pointer; border-radius: 99px;
+    color: #4E5969; background: #fff; border: 1px solid var(--line);
+    font-family: inherit; transition: all .16s;
+  }
+  .chip:hover { border-color: #C9CDD4; color: var(--text); }
+
+  /* ===== 说明卡 ===== */
+  .cover { max-width: 1180px; margin: 44px auto 0; }
+  .cover summary {
+    display: inline-flex; align-items: center; gap: 8px; cursor: pointer; list-style: none;
+    font-size: 12.5px; font-weight: 600; color: #4E5969;
+    padding: 7px 14px; border-radius: 99px; background: #fff; border: 1px solid var(--line);
+  }
+  .cover summary::-webkit-details-marker { display: none; }
+  .cover-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 14px; margin-top: 14px; }
+  .cover-card {
+    padding: 14px 16px; border-radius: 14px; font-size: 12px; line-height: 2;
+    background: #fff; border: 1px solid var(--line);
+  }
+  .cover-card h4 { font-size: 12.5px; color: var(--accent); margin-bottom: 4px; }
+  .cover-card li { list-style: none; color: var(--text-2); }
+  .cover-card li::before { content: "✓ "; color: var(--ok); font-weight: 700; margin-right: 3px; }
+  .cover-card li em { font-style: normal; color: #4E5969; }
+  .cover-card.todo li::before { content: "→ "; color: var(--warn); }
+  .cover-card.skip li::before { content: "✗ "; color: var(--danger); }
+  .cover-card a { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header class="page-head">
+  <h1>aide 鸿蒙端原型 · 多主机连接与切换<small>v1 单活连接 · 主机管理中心 + 抽屉切换</small></h1>
+  <p>按已确认的设计方案出原型：<b>同一时刻只保持一台活动连接</b>，切换 = 复用传输实例换凭据重连。连接页升级为<b>主机管理中心</b>（列表 / 忘记 / 添加），聊天侧切换入口收进<b>抽屉设备卡</b>，切换走半模态 + accent 过渡横幅，<b>会话 / 工作区 / 供应商数据按主机整体换血</b>。三个手机框是同一个 <b>app.html</b> 的 iframe 实例——URL 参数决定初始形态，展台经 postMessage 遥控，切换动作跨屏同步。聊天深度交互不在此重复，见 <b>../remote/index.html</b>。</p>
+</header>
+
+<div class="stage">
+
+  <!-- ================= 屏 1 · 主机管理 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 1 · 主机管理<span>连接页升级为主机列表</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s1" src="app.html?screen=hosts&amp;id=s1" title="主机管理"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"pairadd"}'>扫码添加流程 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"pairstart"}'>配对中 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"pairfail"}'>配对失败 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"revoke"}'>吊销公司工位机 ↗</button>
+      <button class="chip" data-target="s1" data-send='{"cmd":"demo","action":"forgetdlg"}'>忘记主机弹窗 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 2 · 聊天 + 抽屉 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 2 · 聊天主屏<span>切换入口在抽屉设备卡</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s2" src="app.html?screen=chat&amp;drawer=1&amp;id=s2" title="聊天主屏"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" id="btnDrawer2">收起抽屉</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"sheet","open":true}'>打开切换弹层 ↗</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"switch","did":"c2e80f77"}'>切到 heaven-mac ↗</button>
+      <button class="chip" id="btnOff2">模拟离线</button>
+      <button class="chip" id="btnReconn2" style="display:none">恢复连接</button>
+      <button class="chip" data-target="s2" data-send='{"cmd":"demo","action":"disconnect"}'>断开连接 ↗</button>
+    </div>
+  </section>
+
+  <!-- ================= 屏 3 · 切换弹层 ================= -->
+  <section class="phone-wrap">
+    <div class="phone-label">屏 3 · 切换弹层<span>半模态选主机 · 点击即切换</span></div>
+    <div class="phone">
+      <div class="screen">
+        <iframe id="s3" src="app.html?screen=chat&amp;sheet=1&amp;id=s3" title="切换弹层"></iframe>
+      </div>
+    </div>
+    <div class="chips">
+      <span class="cap">演示控制</span>
+      <button class="chip" id="btnSheet3">关闭弹层</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"switch","did":"c2e80f77"}'>选 heaven-mac ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"switch","did":"91d40a3e"}'>选 公司工位机 ↗</button>
+      <button class="chip" data-target="s3" data-send='{"cmd":"switch","did":"7f3a9c21"}'>回 HEAVEN-PC ↗</button>
+    </div>
+  </section>
+</div>
+
+<!-- ===== 说明卡 ===== -->
+<details class="cover">
+  <summary><span class="caret">▾</span>结构说明 · 各屏要点 · 实施清单 · 未采纳</summary>
+  <div class="cover-grid">
+    <div class="cover-card">
+      <h4>原型结构 · 与设计方案的对应</h4>
+      <ul>
+        <li><em>app.html = 应用本体</em>：两屏共用一份 DOM 与状态，URL 参数决定初始形态（<em>?screen=hosts</em> / <em>?screen=chat&amp;drawer=1</em> / <em>?screen=chat&amp;sheet=1</em>），与未来 ArkTS 页面一一对应（ConnectPage 升级版 / ChatPage + ChatDrawer + 切换 Sheet）。</li>
+        <li>三屏同一实例，切换动作经展台 <em>sync</em> 中继跨屏同步（切 heaven-mac 后屏 2/3 同步换血）。</li>
+        <li>假数据形状对齐多凭据设计：<em>每主机一条记录</em>（did / 凭据态 / 上次连接 / 会话 / 工作区 / 供应商 / 续传位置），活动主机 = connected。</li>
+        <li>聊天深度交互（流式 / 权限卡 / 后台任务）不在此重复，见 <em><a href="../remote/index.html">../remote/index.html</a></em>；会话页深挖见 <em><a href="../chat-layout-mock.html">../chat-layout-mock.html</a></em>。</li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 1 · 主机管理（ConnectPage 升级）</h4>
+      <ul>
+        <li><em>主机列表卡</em>：字母头像着色 + 主机名 + did·平台 + 状态行四态（<em>已连接·正在使用 / 上次连接 x / 正在连接… / 配对已被吊销</em>）</li>
+        <li>非活动主机右侧 <em>「连接 ›」</em> affordance；被吊销主机给 <em>重新扫码</em> 按钮（按主机归因，不影响其他主机）</li>
+        <li><em>忘记主机</em>：垃圾桶 → AlertDialog 确认（删凭据与续传位置）；删除活动主机 = 断开并忘记</li>
+        <li>添加主机：扫码（主路径）+ <em>粘贴配对码兜底</em>；配对成功入列并自动连接</li>
+        <li>脚注：<em>自动连接上次使用的主机 · 各主机凭据分别保存</em></li>
+      </ul>
+    </div>
+    <div class="cover-card">
+      <h4>屏 2/3 · 抽屉切换入口 + 半模态</h4>
+      <ul>
+        <li>设备卡行内右侧 <em>「⇄ 切换主机」胶囊按钮</em>（不占整行）；<em>断开连接</em> 红字收进信息列（断开不删凭据）</li>
+        <li>切换半模态：主机行（头像 / 名称 / 当前勾选 or 上次连接时间 / 被吊销标红提示）+ <em>添加新主机</em> 虚线行 + 脚注（凭据独立保存）</li>
+        <li><em>切换过渡</em>：accent 横幅「正在连接 x…」+ 消息区压暗 + 输入禁用 ≈1.5s → 完成 toast「已连接 x」+ 顶栏/消息/抽屉整体换血</li>
+        <li>数据隔离一眼可验：heaven-mac 是 DeepSeek + homepage 工作区，公司工位机是 cpa-local + 周报会话</li>
+      </ul>
+    </div>
+    <div class="cover-card todo">
+      <h4>实施清单（ohos 工程 · 本页只出原型，未动代码）</h4>
+      <ul>
+        <li>storage：<em>aide-remote-hosts 数组 + aide-remote-active</em>，迁移旧单键 creds；接口 loadHosts/saveHosts/forgetHost/setActive</li>
+        <li>ConnModel：<em>pairWithOffer 按 deviceId 去重覆盖</em>；新增 <em>switchTo(deviceId)</em> 与 <em>onHostChanged</em> 回调；disconnectAll 拆 disconnectActive / forgetHost</li>
+        <li>会话层复位联动：authed 且 hostChanged 时 <em>chat/sessions/workspace/provider/automation 全部清缓存重拉</em>（防旧主机数据串台）</li>
+        <li>UI：ConnectPage 重构为主机列表；ChatDrawer 加切换行 + 断开；新增 <em>HostSwitchSheet</em> 半模态</li>
+        <li>切换时序：先停 <em>TTS/听书/朗读</em> 再 disconnect（防旧主机声音串播）</li>
+        <li>autoConnect / onForeground 补连：读 <em>activeDeviceId</em> 对应凭据</li>
+      </ul>
+    </div>
+    <div class="cover-card skip">
+      <h4>未采纳 / 留待 v2</h4>
+      <ul>
+        <li>多活并行连接（每 Host 一个 transport、后台主机收推送）：改造面大，v1 单活；存储结构已按主机分行，v2 无需二次迁移</li>
+        <li>非活动主机实时在线状态：不保持连接就无实时态，只诚实显示「上次连接」</li>
+        <li>主机拖拽排序 / 分组：列表 ≤5 台时无必要</li>
+        <li>主机级独立身份密钥：现有设计身份跨 Host 复用，配对更省事</li>
+      </ul>
+    </div>
+  </div>
+</details>
+
+<script>
+/* 展台 = 纯布景：演示胶囊 → postMessage；sync 中继转发到除来源外的所有屏。 */
+const send = (id, msg) => document.getElementById(id).contentWindow.postMessage(msg, '*');
+
+document.querySelectorAll('[data-send]').forEach(b => b.addEventListener('click', () => {
+  send(b.dataset.target, JSON.parse(b.dataset.send));
+}));
+
+/* 屏 2 抽屉开合 */
+const btnDrawer2 = document.getElementById('btnDrawer2');
+let dr2 = true;
+btnDrawer2.addEventListener('click', () => {
+  dr2 = !dr2;
+  send('s2', { cmd: 'drawer', open: dr2 });
+  btnDrawer2.textContent = dr2 ? '收起抽屉' : '打开抽屉';
+});
+
+/* 屏 3 弹层开合 */
+const btnSheet3 = document.getElementById('btnSheet3');
+let sh3 = true;
+btnSheet3.addEventListener('click', () => {
+  sh3 = !sh3;
+  send('s3', { cmd: 'sheet', open: sh3 });
+  btnSheet3.textContent = sh3 ? '关闭弹层' : '打开弹层';
+});
+
+/* 屏 2 离线 / 恢复（按钮互换） */
+const btnOff2 = document.getElementById('btnOff2');
+const btnReconn2 = document.getElementById('btnReconn2');
+btnOff2.addEventListener('click', () => {
+  send('s2', { cmd: 'demo', action: 'offline' });
+  btnOff2.style.display = 'none';
+  btnReconn2.style.display = '';
+});
+btnReconn2.addEventListener('click', () => {
+  send('s2', { cmd: 'demo', action: 'reconnect' });
+  btnReconn2.style.display = 'none';
+  btnOff2.style.display = '';
+});
+
+/* sync 中继：广播到除来源外的其余屏 */
+window.addEventListener('message', e => {
+  const d = e.data;
+  if (d && d.event === 'sync') {
+    ['s1', 's2', 's3'].forEach(id => {
+      const w = document.getElementById(id).contentWindow;
+      if (w !== e.source) w.postMessage(d, '*');
+    });
+  }
+});
+</script>
+</body>
+</html>
