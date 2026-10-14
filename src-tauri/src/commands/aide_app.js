@@ -174,7 +174,16 @@
     try { return JSON.stringify(v); } catch (_) { return String(v); }
   };
   const report = (text) => { call("log.write", { level: "error", text: String(text).slice(0, 4000) }).catch(() => {}); };
-  window.addEventListener("error", (e) => report(`${e.message} (${e.filename || "?"}:${e.lineno || 0})`));
+  // 捕获阶段才看得到资源加载失败（脚本 / 样式 / 图片的 error 不冒泡）：引错路径、被拦的模块，
+  // 否则就是一片空白、日志里什么都没有。
+  window.addEventListener("error", (e) => {
+    const el = e.target;
+    if (el && el !== window && el.tagName) {
+      report(`加载失败：<${el.tagName.toLowerCase()}> ${el.src || el.href || ""}`);
+      return;
+    }
+    report(`${e.message} (${e.filename || "?"}:${e.lineno || 0})`);
+  }, true);
   window.addEventListener("unhandledrejection", (e) => report(`unhandled rejection: ${describe(e.reason)}`));
   const consoleError = console.error.bind(console);
   console.error = (...args) => { consoleError(...args); report(args.map(describe).join(" ")); };

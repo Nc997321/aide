@@ -76,7 +76,15 @@ Aide 应用 = 一个文件夹：清单 \`app.json\` + 网页界面（+ 可选后
 
 1. **不能自己联网**：\`fetch\`、XHR、WebSocket 都被拦。要联网用 \`aide.net.fetch\`。CDN 上的脚本和样式也加载不了——依赖要放进应用文件夹。
 2. **没有 localStorage / cookie / IndexedDB**。要存数据用 \`aide.storage\`。
-3. 页面里引入桥：\`<script src="/aide-app.js"></script>\`（Aide 提供，路径固定）。
+3. 页面里引入桥：\`<script src="/aide-app.js"></script>\`（Aide 提供，路径固定），**放在 \`<head>\` 里、
+   排在自己的脚本前面**——桥会把界面报错和资源加载失败记进 \`.aide-dev.log\`，晚于报错引入就记不到。
+
+ES module（\`type="module"\`、打包器输出的 ESM）可以用。自己的文件一律用**相对路径**引用：\`/\` 开头的
+绝对路径会跳出应用的地址前缀，404（Vite 要设 \`base: "./"\`）。
+
+主题变量 \`--aide-*\` 由桥在页面加载后推过来，到达之前和没引桥时都不存在——\`var()\` 不带兜底值时整条
+声明失效（文字变黑、背景透明，深色主题下看着就是白屏）。根元素的颜色写成 \`var(--aide-text-primary, #ddd)\`
+这样带兜底值。
 
 \`\`\`js
 await aide.storage.set("key", anyJsonValue);   // get / delete / keys
@@ -193,6 +201,8 @@ Aide 第一次看到一个应用就会写一行 \`manifest: ok\`（或清单的�
 
 - 忘了引 \`/aide-app.js\`，\`aide\` 未定义。
 - 从 CDN 引库 → 被拦，白屏。把文件下载进应用文件夹。
+- 用 \`/assets/…\` 这样的绝对路径引自己的文件 → 404，白屏。改相对路径。
+- 主题变量不带兜底值 → 深色主题下黑字透明底，像白屏。
 - 用了 \`localStorage\` → 抛 SecurityError。
 - 清单里申请了权限却没用，或用了没申请的。
 - 后端往 stdout 打日志，把协议搅乱。

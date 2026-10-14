@@ -186,12 +186,16 @@ fn csp(port: u16) -> String {
     )
 }
 
+/// `Access-Control-Allow-Origin: *`：沙箱 iframe 的来源不透明（`null`），它发的 CORS 模式请求——
+/// `<script type="module">` / `import()`、`@font-face` 字体、带 `crossorigin` 的资源——在浏览器眼里都是
+/// 跨源，没有这个头就整张模块图静默不执行（白屏，连 `window.onerror` 都不触发）。放开读取不削弱隔离：
+/// 能读到某个应用文件的前提仍是知道它 128 位随机前缀，页面自己联网照旧被 CSP 的 `connect-src 'none'` 拦着。
 fn respond(status: u16, content_type: &str, body: &[u8], port: u16) -> Vec<u8> {
     let reason = if status == 200 { "OK" } else { "Not Found" };
     let mut out = format!(
         "HTTP/1.1 {status} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
          Content-Security-Policy: {}\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\
-         Connection: close\r\n\r\n",
+         Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
         body.len(),
         csp(port)
     )
@@ -234,6 +238,8 @@ mod tests {
             assert!(text.contains("connect-src 'none'"), "{text}");
             assert!(text.contains("default-src http://127.0.0.1:4321 "), "{text}");
             assert!(text.contains("X-Content-Type-Options: nosniff"));
+            // 沙箱来源不透明：没有它，type="module" 的脚本全被 CORS 拦下
+            assert!(text.contains("Access-Control-Allow-Origin: *"), "{text}");
             assert!(text.ends_with("\r\n\r\nx"));
         }
     }
