@@ -100,3 +100,5 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 - **desktop 语义**：`display` 通道、`jumpQueue`、会话 tab 管理、automation/btw——不进 engine。
 
 新增逻辑先问是不是 engine 职责，别默认"跟会话有关就进 sidecar"。内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`）。引擎提供机制、宿主决定策略（browser facade / browser_agent 即此口径）。
+
+**改 aide-browser 工具面前先读 [docs/browser-agent-feedback-log.md](docs/browser-agent-feedback-log.md)**（历轮 agent 反馈的取舍记录，含「不做」的理由与取舍原则）；每轮新反馈与实施结果都记回去。
