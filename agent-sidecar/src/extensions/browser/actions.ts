@@ -466,7 +466,12 @@ export function buildResolveScript(target: ActTarget, opts: { scroll?: boolean }
       rect: { x: Math.round(rect.left + sx), y: Math.round(rect.top + sy),
               w: Math.round(rect.width), h: Math.round(rect.height) },
       x: Math.round(rect.left + rect.width / 2),
-      y: Math.round(rect.top + rect.height / 2)
+      y: Math.round(rect.top + rect.height / 2),
+      // 动作**之前**页面在哪：点击后的回报拿它对比（见 act.ts 的 observeAfterClick）。
+      at: (function () {
+        try { return { url: String(location.href), title: String(document.title || '') }; }
+        catch (e) { return null; }
+      })()
     };
   } catch (e) {
     return { ok: false, error: 'resolve failed: ' + String((e && e.message) || e) };

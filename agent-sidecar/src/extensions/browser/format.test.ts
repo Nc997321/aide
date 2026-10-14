@@ -357,6 +357,60 @@ describe("formatRead：输出体积", () => {
     expect(s).toContain('label="名称"');
   });
 
+  it("连续同名的可点元素折成一行；去向一致才印，不一致就明说", () => {
+    const item = (href: string | null) => ({ tag: "div", text: "新对话", href, disabled: false });
+    const s = formatRead(
+      envelope({
+        ok: true,
+        clickables: [
+          { tag: "button", text: "+ 新建对话", href: null, disabled: false },
+          ...Array(23).fill(item(null)),
+          ...[1, 2, 3, 4].map((n) => ({ tag: "a", text: "详情", href: `/d/${n}`, disabled: false })),
+          ...Array(4).fill({ tag: "a", text: "帮助", href: "/help", disabled: false }),
+        ],
+      }),
+    );
+    expect(s).toContain("## Clickable elements (32)"); // 总数照报，折叠不改计数
+    expect(s).toContain('- button "+ 新建对话"');
+    expect(s).toContain('- 23 × div "新对话" — pick one with index');
+    expect(s).toContain('- 4 × a "详情" (targets differ) — pick one with index');
+    expect(s).toContain('- 4 × a "帮助" → /help — pick one with index');
+    expect(s.match(/新对话/g)).toHaveLength(1);
+  });
+
+  it("不足阈值的同名可点元素照常逐行列（带各自的去向）", () => {
+    const s = formatRead(
+      envelope({
+        ok: true,
+        clickables: [1, 2, 3].map((n) => ({ tag: "a", text: "详情", href: `/d/${n}`, disabled: false })),
+      }),
+    );
+    expect(s).toContain('- a "详情" → /d/1');
+    expect(s).toContain('- a "详情" → /d/3');
+    expect(s).not.toContain("×");
+  });
+
+  it("scope 生效时明说这不是整页；命中多个时带上报数", () => {
+    const one = formatRead(envelope({ ok: true, scope: { selector: "main", matched: 1 }, text: "x" }));
+    expect(one).toContain("SCOPE: only the subtree of main was read");
+    expect(one).not.toContain("elements matched");
+    const many = formatRead(envelope({ ok: true, scope: { selector: ".card", matched: 3 }, text: "x" }));
+    expect(many).toContain("(3 elements matched; this is the first)");
+    expect(formatRead(envelope({ ok: true, scope: null, text: "x" }))).not.toContain("SCOPE");
+  });
+
+  it("include_hidden 列出来的隐藏项标 HIDDEN，禁用标 DISABLED", () => {
+    const s = formatRead(
+      envelope({
+        ok: true,
+        fields: [{ tag: "input", type: "text", label: "档位", value: "A", disabled: true, hidden: true }],
+        clickables: [{ tag: "button", text: "提交", href: null, disabled: true, hidden: true }],
+      }),
+    );
+    expect(s).toContain('[input:text] label="档位" DISABLED HIDDEN');
+    expect(s).toContain('- button "提交" (DISABLED) (HIDDEN)');
+  });
+
   it("有结构时正文默认收起并说明；full_text 给全文", () => {
     const text = "x".repeat(TEXT_CLIP_WITH_STRUCTURE + 500);
     const value = { ok: true, tables: [{ headers: ["a"], rows: [["1"]] }], text, textFiltered: true };

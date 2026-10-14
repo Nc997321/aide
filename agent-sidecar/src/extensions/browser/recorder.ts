@@ -28,7 +28,8 @@
  *
  * 1. **幂等**：`if (window.__aideRec) return` —— 注册会重发（每个视图一次），重复包装会套娃。
  * 2. **不改页面行为**：fetch 的失败分支继续 `throw`；`res.clone()` 不动原响应；console 转发原实现。
- * 3. **有界**：`cap: 100` + 每条文本 `slice(0, 300)`。
+ * 3. **有界**：`cap: 100` + 每条文本 `slice(0, 300)`。请求体**先折叠超长的值、再整体截断**
+ *    （见 `RECORDER_FOLD_MIN`）——顺序反过来，一个大字段就把它后面的字段全挤出窗口。
  * 4. **如实标截断**：`bodyCut` / `bodyLen` / `bodyNote: 'body skipped (N bytes)'` 都要带出来
  *    （另一种 skip 形态是事件流：`bodyNote: 'body skipped (event stream)'`）。
  *    ⚠️ skip 是**非错误的事实**，所以它有自己的字段：`err` 只留"这条请求真的失败了"
@@ -67,6 +68,15 @@ export const RECORDER_BODY_GATE = 262144;
  */
 export const RECORDER_REQ_CAP = 600;
 /**
+ * 请求体里**单个值**超过这个长度就折叠成 `开头…<N chars>`（留 `RECORDER_FOLD_HEAD` 个字符认形状）。
+ *
+ * 为什么按值折、而不是只靠整体截断：要核的字段经常恰好排在大字段**后面**（2026-10-14 agent 实测：
+ * 8.6KB 的 base64 图片把其后的 `uploadedUrl` 挤出了 600 字符的窗口，只好换一张 1×1 的图重做一遍）。
+ * 只管得到认得出键值结构的三种形状（JSON / urlencoded / FormData）；一整段无结构文本照旧从头截。
+ */
+export const RECORDER_FOLD_MIN = 200;
+export const RECORDER_FOLD_HEAD = 40;
+/**
  * 请求体里要脱敏的键名（不区分大小写，**子串**匹配：`satoken` / `accessToken` / `x-auth` 都算）。
  * 宁可多遮：遮错一个普通字段，agent 看见 `[redacted]` 会自己去 eval 里问；漏遮一个凭据就进了上下文。
  */
@@ -86,7 +96,13 @@ export const RECORDER_SOURCE = `(function () {
   }
   var SECRET_KEY = new RegExp(${JSON.stringify(SECRET_KEY_PATTERN)}, 'i');
   var REQ = ${RECORDER_REQ_CAP};
+  var FOLD_MIN = ${RECORDER_FOLD_MIN};
+  var FOLD_HEAD = ${RECORDER_FOLD_HEAD};
+  function fold(s) {
+    return s.length > FOLD_MIN ? s.slice(0, FOLD_HEAD) + '\u2026<' + s.length + ' chars>' : s;
+  }
   function redactJson(v, depth) {
+    if (typeof v === 'string') return fold(v);
     if (depth > 8 || v === null || typeof v !== 'object') return v;
     if (Array.isArray(v)) return v.map(function (x) { return redactJson(x, depth + 1); });
     var out = {};
@@ -102,10 +118,11 @@ export const RECORDER_SOURCE = `(function () {
       var key = eq < 0 ? pair : pair.slice(0, eq);
       var name = key;
       try { name = decodeURIComponent(key.replace(/\\+/g, ' ')); } catch (e) { /* 原样判 */ }
-      return eq >= 0 && SECRET_KEY.test(name) ? key + '=[redacted]' : pair;
+      if (eq < 0) return pair;
+      return SECRET_KEY.test(name) ? key + '=[redacted]' : key + '=' + fold(pair.slice(eq + 1));
     }).join('&');
   }
-  /** 文本体：JSON 按键脱敏、像 urlencoded 的按键脱敏，其余原样（认不出键就没有可遮的）。 */
+  /** 文本体：JSON / 像 urlencoded 的按键脱敏并折叠超长值，其余原样（认不出键就没有可遮、可折的）。 */
   function redactText(t) {
     var head = t.replace(/^\\s+/, '').charAt(0);
     if (head === '{' || head === '[') {
@@ -127,7 +144,7 @@ export const RECORDER_SOURCE = `(function () {
         var parts = [];
         b.forEach(function (val, key) {
           if (SECRET_KEY.test(key)) parts.push(key + '=[redacted]');
-          else if (typeof val === 'string') parts.push(key + '=' + val);
+          else if (typeof val === 'string') parts.push(key + '=' + fold(val));
           else parts.push(key + '=[file ' + (val && val.name ? val.name + ', ' : '') + (val && val.size) + ' bytes]');
         });
         return 'multipart: ' + parts.join('; ');

@@ -47,7 +47,9 @@ describe("投影脚本：装配不变量", () => {
 
   it("Raw text 走 innerText（在原文档上取，不是游离 clone）", () => {
     const s = buildProjectionScript();
-    expect(s).toContain("doc.body.innerText");
+    expect(s).toContain("box.innerText");
+    // box 只能是原文档里的节点：整页时是 doc.body，scope 时是命中的那个元素。
+    expect(s).toContain("projectText(root || doc.body)");
     // ⚠️ 游离节点上的 innerText 会退化成 textContent 语义——写成 clone.innerText 就是"看着改了、
     // 实际没过滤"的假修复（spec §9.3 的已知陷阱）。这条把那条岔路钉死。
     expect(s).not.toContain("clone.innerText");
@@ -57,7 +59,7 @@ describe("投影脚本：装配不变量", () => {
     expect(buildProjectionScript({ includeHidden: true })).toContain("var INCLUDE_HIDDEN = true;");
     // 装配不变量：取正文那段真的把结果接到了信封上（少这一行，format.ts 的旁注永远不出现）
     expect(SCRIPT).toContain("out.textFiltered = body.filtered;");
-    expect(SCRIPT).toContain("function projectText(doc)");
+    expect(SCRIPT).toContain("function projectText(box)");
   });
 
   /**
@@ -82,7 +84,7 @@ describe("投影脚本：装配不变量", () => {
     // 选择器经 JSON.stringify 内插，源码里是转义过的字符串字面量——按同一形态比对。
     expect(SCRIPT).toContain(JSON.stringify(CLICKABLE_MARKUP_SELECTOR));
     expect(SCRIPT).toContain("function clickableByStyle(el)");
-    expect(SCRIPT).toContain("var cs = doc.querySelectorAll(CLICKABLE_MARKUP);");
+    expect(SCRIPT).toContain("var cs = find(CLICKABLE_MARKUP);");
     // 光标扫描：剪枝 + 预算，两边都在（少了任一，"点不到的 div 按钮"就回来了）。
     expect(SCRIPT).toContain("probes--");
     expect(SCRIPT).toContain("if (probes <= 0) truncated = true;");

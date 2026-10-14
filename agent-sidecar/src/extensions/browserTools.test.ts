@@ -121,7 +121,7 @@ describe("browser_read", () => {
     );
 
     const q = events[0] as any;
-    expect(q.params.expression).toContain("doc.body.innerText");
+    expect(q.params.expression).toContain("box.innerText");
 
     reply(
       q,
@@ -261,6 +261,27 @@ function evalOk(value: unknown, type = "object"): { ok: boolean; data: unknown }
 }
 
 
+/**
+ * 同 `waitForQuery`，但等得起**真实时间**：落点探针前面有一段固定等待（`CLICK_SETTLE_MS`），
+ * 零延时的轮询在它发出来之前就数完了。
+ */
+async function waitForSettledQuery(events: ChatEvent[], n: number): Promise<any> {
+  for (let i = 0; i < 200 && events.length <= n; i++) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  return waitForQuery(events, n);
+}
+
+/**
+ * 点击成功后的**落点探针**（`observeAfterClick`）：答掉它，点击才会结算。
+ * 返回那条请求，供用例断言跑的确实是探针。
+ */
+async function replyAfterClick(events: ChatEvent[], n: number, at: { url: string; title?: string }): Promise<any> {
+  const q = await waitForSettledQuery(events, n);
+  reply(q, evalOk({ url: at.url, title: at.title ?? "" }));
+  return q;
+}
+
 /** 求值请求的断言门面：`op` 与包装形态变了，用例关心的是"跑的是不是那段脚本"。 */
 function expectEvalRequest(q: any, scriptFragment: string): void {
   expect(q.op).toBe("call_cdp");
@@ -292,11 +313,12 @@ describe("browser_act — 点击的两条路", () => {
     const q3 = await waitForQuery(events, 2);
     expect(q3.params).toMatchObject({ type: "mouseReleased", x: 10, y: 20 });
     reply(q3, { ok: true, data: { value: {} } });
+    await replyAfterClick(events, 3, { url: "http://a/" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
     expect(text).toContain("刷新");
-    expect(events).toHaveLength(3); // 解析 + press + release（旧实现还多一发可见性探测）
+    expect(events).toHaveLength(4); // 解析 + press + release + 落点探针（没有可见性探测那一发）
   });
 
   /**
@@ -318,6 +340,7 @@ describe("browser_act — 点击的两条路", () => {
     expect(q3.op).toBe("call_cdp");
     expect((q3.params as any).expression).toContain("pointerdown");
     reply(q3, evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
+    await replyAfterClick(events, 3, { url: "http://a/" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("SYNTHETIC");
@@ -361,6 +384,7 @@ describe("browser_act — 点击的两条路", () => {
       data: { value: { error: { code: -32601, message: "'Input.dispatchMouseEvent' wasn't found" } } },
     });
     reply(await waitForQuery(events, 2), evalOk({ ok: true, hit: { tag: "button", text: "刷新" } }));
+    await replyAfterClick(events, 3, { url: "http://a/" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("SYNTHETIC"); // 走了兜底，而不是报成功
@@ -390,7 +414,7 @@ describe("browser_act — 点击的两条路", () => {
   /**
   /**
    * 反向钉子：parking 之后**不再有可见性探测**（不显示的视图照样合成），所以既不多发那一发，
-   * 结果里也不该出现任何「隐藏视图」的告警。
+   * 结果里也不该出现任何「隐藏视图」的告警。点击后唯一多出来的一发是**落点探针**。
    */
   it("点击成功后**没有**可见性告警，也不多发探测那一发", async () => {
     const { events, emit } = emitCollector();
@@ -402,11 +426,56 @@ describe("browser_act — 点击的两条路", () => {
     reply(await waitForQuery(events, 0), evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20 }));
     reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
     reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+    const probe = await replyAfterClick(events, 3, { url: "http://a/" });
+    expect(probe.params.expression).toContain("location.href");
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
     expect(text).not.toContain("hidden");
-    expect(events).toHaveLength(3); // 解析 + press + release，没有第四发
+    expect(events).toHaveLength(4); // 解析 + press + release + 落点探针，没有第五发
+  });
+
+  /** 点击后的落点回报：省掉「点完再 wait、再 read 才知道跳没跳」那两个来回。 */
+  describe("点击后回报页面落点", () => {
+    const AT = { url: "http://a/#/list", title: "列表" };
+
+    async function clickThenLand(after: { ok: true; url: string; title?: string } | { ok: false }): Promise<string> {
+      const { events, emit } = emitCollector();
+      const p = toolByName(emit, "browser_act").handler({ action: "click", text: "刷新" }, {});
+      reply(
+        await waitForQuery(events, 0),
+        evalOk({ ok: true, hit: { tag: "button", text: "刷新" }, x: 10, y: 20, at: AT }),
+      );
+      reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
+      reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+      if (after.ok) await replyAfterClick(events, 3, after);
+      else reply(await waitForSettledQuery(events, 3), { ok: false, error: "the document is being replaced" });
+      return (await p).content[0].text as string;
+    }
+
+    it("地址变了 → 前后都给", async () => {
+      const text = await clickThenLand({ ok: true, url: "http://a/#/detail/7", title: "详情" });
+      expect(text).toContain("URL changed: http://a/#/list → http://a/#/detail/7");
+    });
+
+    it("地址没变、标题变了 → 说标题", async () => {
+      const text = await clickThenLand({ ok: true, url: AT.url, title: "列表 (3)" });
+      expect(text).toContain('title changed: "列表" → "列表 (3)"');
+    });
+
+    it("都没变 → 说地址没变并指向 since_last，**不说成没反应**", async () => {
+      const text = await clickThenLand({ ok: true, ...AT });
+      expect(text).toContain("URL unchanged");
+      expect(text).toContain("since_last");
+      expect(text).toContain("via CDP"); // 点击本身仍如实报成功
+    });
+
+    it("点完读不到页面（正在换文档）→ 如实说，点击仍算点过", async () => {
+      const text = await clickThenLand({ ok: false });
+      expect(text).toContain("via CDP");
+      expect(text).toContain("could not be read right after the click");
+      expect(text).toContain("mid-navigation");
+    });
   });
 
   it("目标解析失败 → 带候选清单，且**不发** CDP", async () => {
@@ -445,6 +514,7 @@ describe("browser_act — 命中歧义报数", () => {
     );
     reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } }); // mousePressed
     reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } }); // mouseReleased
+    await replyAfterClick(events, 3, { url: "http://a/" });
 
     const text = (await p).content[0].text;
     expect(text).toContain("via CDP");
@@ -463,6 +533,7 @@ describe("browser_act — 命中歧义报数", () => {
     );
     reply(await waitForQuery(events, 1), { ok: true, data: { value: {} } });
     reply(await waitForQuery(events, 2), { ok: true, data: { value: {} } });
+    await replyAfterClick(events, 3, { url: "http://a/" });
 
     const text = (await p).content[0].text;
     expect(text).not.toContain("elements matched");

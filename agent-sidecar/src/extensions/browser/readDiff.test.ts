@@ -37,6 +37,15 @@ describe("ReadBaselines", () => {
     expect(b.get("v1", true)).toBe("H");
   });
 
+  it("scope 不同就是不同的底稿（两块之间的差异不是「变了什么」）", () => {
+    const b = new ReadBaselines();
+    b.set("v1", false, "WHOLE");
+    b.set("v1", false, "MAIN", "main");
+    expect(b.get("v1", false)).toBe("WHOLE");
+    expect(b.get("v1", false, "main")).toBe("MAIN");
+    expect(b.get("v1", false, ".dialog")).toBeUndefined();
+  });
+
   it("有上限，淘汰最久没更新的", () => {
     const b = new ReadBaselines();
     for (let i = 0; i < 40; i++) b.set(`v${i}`, false, String(i));

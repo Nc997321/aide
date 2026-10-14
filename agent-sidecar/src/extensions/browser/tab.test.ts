@@ -5,7 +5,7 @@
 // 而超时文案会把"你少给了 url"伪装成"浏览器卡了"。
 import { describe, it, expect, afterEach } from "vitest";
 
-import { buildTabCall, performTabAction, renderTabResult, type TabAction } from "./tab.js";
+import { LANDING_PROBE, buildTabCall, performTabAction, renderTabResult, type TabAction } from "./tab.js";
 import { cancelAllBrowserQueries, resolveBrowserResult } from "../browserClient.js";
 import type { ChatEvent } from "../../engine/types.js";
 
@@ -134,12 +134,40 @@ describe("navigate：回报**观测到的**落点，不是请求值", () => {
 
     const read = await waitForQuery(events, 1);
     expect(read.method).toBe("Runtime.evaluate");
-    expect(read.params.expression).toBe("location.href");
-    resolveBrowserResult({ request_id: read.request_id, ...evalOk("http://a/#/two") });
+    expect(read.params.expression).toBe(LANDING_PROBE);
+    resolveBrowserResult({ request_id: read.request_id, ...evalOk({ url: "http://a/#/two", ready: "complete" }) });
 
     const text = await p;
     expect(text).toContain("document confirms");
     expect(text).toContain("http://a/#/two");
+    // 已载完就明说不用再等——否则下一发 `browser_wait until:"load"` 是白走的来回。
+    expect(text).toContain("readyState: complete");
+    expect(text).toContain("no browser_wait");
+    // 回包没带 displayed ⇒ 不许凭空提醒"用户的页面被换了"。
+    expect(text).not.toContain("DISPLAYED");
+  });
+
+  it("加载进度三态各说各的；读不到 readyState 就不说", () => {
+    const view = { id: "browser-7", nav: { url: "http://a/" } };
+    const say = (ready?: string) =>
+      renderTabResult("navigate", { view_id: "browser-7", view }, { url: "http://a/", ready });
+    expect(say("loading")).toContain('browser_wait until:"load" to wait');
+    expect(say("interactive")).toContain("subresources still loading");
+    expect(say("complete")).toContain("no browser_wait");
+    expect(say()).not.toContain("readyState");
+  });
+
+  it("导航的是用户正看着的视图 → 提醒他眼前的页面被换了，并指向 open", () => {
+    const view = { id: "browser-1", displayed: true, nav: { url: "http://a/" } };
+    const text = renderTabResult("navigate", { view_id: "browser-1", view }, { url: "http://a/", ready: "complete" });
+    expect(text).toContain("DISPLAYED");
+    expect(text).toContain('action="open"');
+    const parked = renderTabResult(
+      "navigate",
+      { view_id: "browser-1", view: { ...view, displayed: false } },
+      { url: "http://a/", ready: "complete" },
+    );
+    expect(parked).not.toContain("DISPLAYED");
   });
 
   it("落点与请求不一致（守卫把 hash 弹回）→ 两边都给出来 + 说明两种成因", async () => {
@@ -148,7 +176,7 @@ describe("navigate：回报**观测到的**落点，不是请求值", () => {
     const nav = await waitForQuery(events, 0);
     resolveBrowserResult({ request_id: nav.request_id, ...navOk });
     const read = await waitForQuery(events, 1);
-    resolveBrowserResult({ request_id: read.request_id, ...evalOk("http://a/#/one") });
+    resolveBrowserResult({ request_id: read.request_id, ...evalOk({ url: "http://a/#/one", ready: "complete" }) });
 
     const text = await p;
     expect(text).toContain("http://a/#/one");

@@ -185,6 +185,51 @@ async function cdpClick(
   return { ok: true };
 }
 
+/**
+ * 点击后让页面起跳的一小段固定等待（路由切换 / 跨文档导航的提交都要时间；取值同 `tab.ts` 的
+ * `NAV_SETTLE_MS`，那边有实测依据）。
+ */
+export const CLICK_SETTLE_MS = 250;
+
+/** 点击后的落点探针。 */
+export const CLICK_PROBE = "({ url: location.href, title: document.title })";
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 点击**之后**页面在哪——与解析那一发带回来的 `at`（点击之前）对比，一句话接在回报后面。
+ *
+ * 为什么做（2026-10-14 agent 实测，列为当轮最大的摩擦）：一次点击要 act → wait → read 三个来回
+ * 才知道有没有生效。最常见的问题「跳没跳页」在这里顺手答掉，省掉后两发。
+ *
+ * 只报**地址与标题**这两个便宜且确定的事实：就地变化（弹层、列表刷新）这里看不见，如实说
+ * 「地址没变」并指向 `since_last`，**不把「地址没变」说成「没反应」**。读不到也如实说——
+ * 点击触发跨文档导航时，探针撞上正在换的文档是常态，不是故障。
+ */
+async function observeAfterClick(
+  viewId: string | undefined,
+  resolved: Record<string, unknown>,
+  emit: (e: ChatEvent) => void,
+): Promise<string> {
+  await sleep(CLICK_SETTLE_MS);
+  const r = await runEval(CLICK_PROBE, { viewId }, emit);
+  if (!r.ok) {
+    return ` The page could not be read right after the click (${r.error}) — it may be mid-navigation.`;
+  }
+  const now = asRecord(r.value);
+  const url = typeof now?.["url"] === "string" ? now["url"] : "";
+  if (!url) return "";
+  const before = asRecord(resolved["at"]);
+  const was = typeof before?.["url"] === "string" ? before["url"] : "";
+  // 旧载荷 / 兜底脚本没带点击前的位置：没得比，只报现在在哪。
+  if (!was) return ` The page is now at ${url}.`;
+  if (was !== url) return ` URL changed: ${was} → ${url}.`;
+  const titleWas = typeof before?.["title"] === "string" ? before["title"] : "";
+  const title = typeof now?.["title"] === "string" ? now["title"] : "";
+  if (titleWas !== title) return ` URL unchanged; title changed: "${titleWas}" → "${title}".`;
+  return ` URL unchanged — an in-page effect, if any, shows in browser_read since_last.`;
+}
+
 /** 点击：先 CDP 真实输入，不可用则脚本派发兜底，并**如实标注**走了哪条路。 */
 export async function performClick(
   viewId: string | undefined,
@@ -207,7 +252,10 @@ export async function performClick(
 
   const viaCdp = await cdpClick(viewId, x, y, emit);
   if (viaCdp.ok) {
-    return (`Clicked ${hit} with a real mouse event via CDP at (${x}, ${y})${matchNote(v)}.`);
+    return (
+      `Clicked ${hit} with a real mouse event via CDP at (${x}, ${y})${matchNote(v)}.` +
+      (await observeAfterClick(viewId, v, emit))
+    );
   }
 
   // 兜底：CDP 不可用（WebView2 版本差异）。**必须说清这不是等价路径。**
@@ -224,7 +272,8 @@ export async function performClick(
     `Clicked ${describeHit(fv)} using a SYNTHETIC event (script fallback)${matchNote(fv)} — ` +
       `CDP real input was unavailable (${viaCdp.reason}). ` +
       `The click is not a trusted event, so widgets that only react to real input (some dropdowns, ` +
-      `file pickers, drag targets) may not respond. Verify the page actually changed.`
+      `file pickers, drag targets) may not respond. Verify the page actually changed.` +
+      (await observeAfterClick(viewId, v, emit))
   );
 }
 

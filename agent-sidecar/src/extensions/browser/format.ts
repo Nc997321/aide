@@ -195,6 +195,7 @@ function fieldIdentity(field: Record<string, unknown>): string {
     field["label"] ? `label="${str(field["label"])}"` : "(no label found)",
     field["name"] ? `name="${str(field["name"])}"` : "",
     field["disabled"] === true ? "DISABLED" : "",
+    field["hidden"] === true ? "HIDDEN" : "",
     field["required"] === true ? "required" : "",
   ]
     .filter(Boolean)
@@ -255,19 +256,63 @@ function renderFields(raw: unknown, level = 2): string[] {
   return out;
 }
 
+/** 可点元素的「身份」（不含去向）：连续若干个身份相同的会被合并成一行。 */
+function clickableIdentity(r: Record<string, unknown>): string {
+  return (
+    `${str(r["tag"])} "${str(r["text"])}"` +
+    `${r["disabled"] === true ? " (DISABLED)" : ""}${r["hidden"] === true ? " (HIDDEN)" : ""}`
+  );
+}
+
+/** 合并阈值：连续这么多个同名可点元素才折叠（与 `FIELD_RUN_MIN` 同一个道理）。 */
+const CLICKABLE_RUN_MIN = 4;
+
+/**
+ * 一串同名可点元素 → 一行：`- 23 × div "新对话" — pick one with index`。
+ *
+ * 为什么（2026-10-14 agent 实测）：侧栏 20 多个「新对话」每次都全量铺开，占掉输出的大半，而信息量
+ * 是一个计数。去向**全都一样**才印出来；不一样就明说——23 个不同的 href 正是被折掉的那部分噪音，
+ * 要哪一个由 `index` 说（`browser_act` 的 text 多命中本来就按它挑）。
+ */
+function clickableRunLine(run: Record<string, unknown>[]): string {
+  const hrefs = new Set(run.map((r) => str(r["href"])));
+  const only = hrefs.size === 1 ? [...hrefs][0] : undefined;
+  const target = only ? ` → ${only}` : hrefs.size > 1 ? " (targets differ)" : "";
+  return `- ${run.length} × ${clickableIdentity(run[0]!)}${target} — pick one with index`;
+}
+
 function renderClickables(raw: unknown, level = 2): string[] {
-  const clickables = asArray(raw);
+  const clickables = asArray(raw)
+    .map(asRecord)
+    .filter((c): c is Record<string, unknown> => c !== null);
   if (!clickables.length) return [];
   const out = ["", `${"#".repeat(level)} Clickable elements (${clickables.length})`];
-  for (const c of clickables) {
-    const r = asRecord(c);
-    if (!r) continue;
-    const href = str(r["href"]);
-    out.push(
-      `- ${str(r["tag"])} "${str(r["text"])}"${href ? ` → ${href}` : ""}${r["disabled"] === true ? " (DISABLED)" : ""}`,
-    );
+  for (let i = 0; i < clickables.length; ) {
+    const id = clickableIdentity(clickables[i]!);
+    let j = i + 1;
+    while (j < clickables.length && clickableIdentity(clickables[j]!) === id) j++;
+    if (j - i >= CLICKABLE_RUN_MIN) out.push(clickableRunLine(clickables.slice(i, j)));
+    else {
+      for (let k = i; k < j; k++) {
+        const href = str(clickables[k]!["href"]);
+        out.push(`- ${clickableIdentity(clickables[k]!)}${href ? ` → ${href}` : ""}`);
+      }
+    }
+    i = j;
   }
   return out;
+}
+
+/**
+ * `scope` 生效时的那行说明：**这不是整页**。少了它，一份只含侧栏的结果会被当成"页面上只有这些"。
+ */
+function scopeNote(value: Record<string, unknown>): string | null {
+  const scope = asRecord(value["scope"]);
+  const selector = str(scope?.["selector"]);
+  if (!selector) return null;
+  const matched = Number(scope?.["matched"]);
+  const which = matched > 1 ? ` (${matched} elements matched; this is the first)` : "";
+  return `SCOPE: only the subtree of ${selector}${which} was read — the rest of the page is not in this result.`;
 }
 
 /**
@@ -450,6 +495,8 @@ export function formatRead(view: EvalView, frameOutcome?: FrameReadOutcome, opts
   if (value["truncated"] === true) {
     out.push("NOTE: content was truncated against the size caps — this is a partial view of the page.");
   }
+  const scoped = scopeNote(value);
+  if (scoped) out.push(scoped);
   const hiddenNote = hiddenSkippedNote(value);
   if (hiddenNote) out.push(hiddenNote);
 

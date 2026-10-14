@@ -12,6 +12,8 @@ import {
   RECORDER_SOURCE,
   RECORDER_CAP,
   RECORDER_TEXT_CAP,
+  RECORDER_FOLD_MIN,
+  RECORDER_FOLD_HEAD,
   buildRecorderReadScript,
   readRecorder,
 } from "./recorder.js";
@@ -233,13 +235,33 @@ describe("recorder：请求体（脱敏 + 截断）", () => {
 
   it("超长体如实标 reqCut 与原长；没有体就是 null", async () => {
     const win = armed();
-    const big = JSON.stringify({ data: "x".repeat(2000) });
+    // 很多个**不够长到被折叠**的值：折叠管不到，整体截断才出场。
+    const big = JSON.stringify(Array.from({ length: 40 }, (_, i) => ({ id: i, note: "x".repeat(50) })));
     await win.fetch("http://x/big", { method: "POST", body: big });
     await win.fetch("http://x/get");
     const [a, b] = win.__aideRec.reqs;
     expect(a.reqCut).toBe(true);
     expect(a.reqLen).toBe(big.length);
     expect(b.reqBody).toBeNull();
+  });
+
+  it("超长的值先折叠再截断：大字段后面的字段不被挤出窗口", async () => {
+    const win = armed();
+    const body = JSON.stringify({ image: "A".repeat(8682), nested: { uploadedUrl: "http://cdn/x.png" } });
+    await win.fetch("http://x/upload", { method: "POST", body });
+    await win.fetch("http://x/form", { method: "POST", body: "blob=" + "B".repeat(900) + "&id=7" });
+    const [json, form] = win.__aideRec.reqs;
+    expect(json.reqBody).toContain("\u2026<8682 chars>");
+    expect(json.reqBody).toContain('"uploadedUrl":"http://cdn/x.png"');
+    expect(json.reqCut).toBe(false);
+    expect(form.reqBody).toBe("blob=" + "B".repeat(RECORDER_FOLD_HEAD) + "\u2026<900 chars>&id=7");
+  });
+
+  it("不够长的值原样保留（折叠只动超长的）", async () => {
+    const win = armed();
+    const note = "n".repeat(RECORDER_FOLD_MIN);
+    await win.fetch("http://x/api", { method: "POST", body: JSON.stringify({ note }) });
+    expect(win.__aideRec.reqs[0].reqBody).toBe(JSON.stringify({ note }));
   });
 
   it("XHR send(body) 同样记录", () => {

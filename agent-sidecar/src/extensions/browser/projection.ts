@@ -44,6 +44,15 @@ export interface ProjectionOptions {
    * 缺省 false：隐藏的 popper 是噪音，但**计数会回报**，不会静默消失。
    */
   includeHidden?: boolean;
+  /**
+   * CSS 选择器：只投影它命中的**那棵子树**（缺省 = 整份文档）。
+   *
+   * 为什么是它（2026-10-14 三个 agent 会话独立提到 read 太啰嗦：外壳每次重印、侧栏长列表全量
+   * 铺开、整屏切换时差异等于全量）：读哪一块由调用方说，**不由我们猜**「主内容区」——猜错就是
+   * 静默丢内容。命中多个取第一个并**报数**；没命中 / 选择器非法 → 如实失败，不退回整页
+   * （退回会让调用方以为拿到的是那一块）。只作用于顶层文档，帧内不套用。
+   */
+  scope?: string;
 }
 
 /** 一次投影的产出上限（保护模型上下文；触顶时 `truncated: true`）。 */
@@ -71,6 +80,7 @@ export function buildProjectionScript(opts: ProjectionOptions = {}): string {
 
   var LIMITS = ${JSON.stringify(LIMITS)};
   var INCLUDE_HIDDEN = ${opts.includeHidden ? "true" : "false"};
+  var SCOPE = ${JSON.stringify(opts.scope ?? null)};
   var budget = LIMITS.nodes;
   var truncated = false;
 
@@ -88,6 +98,11 @@ ${CLICKABLE_JS}
   // ---- 标签关联（"这个框填什么"的唯一可靠答案；判据住在 fieldLabel.ts，与 fill 的字段查找共用） ----
 ${FIELD_LABEL_JS}
   function labelOf(el) { return cut(fieldLabelOf(el), LIMITS.text); }
+
+  /** 禁用：原生 disabled 之外，组件库的自绘控件只标 aria-disabled。 */
+  function isDisabled(el) {
+    return !!el.disabled || (el.getAttribute && el.getAttribute('aria-disabled') === 'true');
+  }
 
   // ---- 表格 ----
   function tableOf(t) {
@@ -119,7 +134,7 @@ ${FIELD_LABEL_JS}
       label: labelOf(el),
       value: null,
       options: null,
-      disabled: !!el.disabled,
+      disabled: isDisabled(el),
       required: !!el.required
     };
 
@@ -144,9 +159,9 @@ ${FIELD_LABEL_JS}
    * 老路：textContent（**含**隐藏内容），剥掉 script/style/noscript/template。
    * 只有两处用得上：include_hidden 打开时、以及拿不到 innerText 时的退路。
    */
-  function plainText(doc) {
+  function plainText(box) {
     try {
-      var clone = doc.body ? doc.body.cloneNode(true) : null;
+      var clone = box ? box.cloneNode(true) : null;
       if (!clone) return '';
       var junk = clone.querySelectorAll('script,style,noscript,template');
       for (var n = 0; n < junk.length; n++) {
@@ -161,26 +176,38 @@ ${FIELD_LABEL_JS}
    * 什么算可见交给浏览器自己判，就不可能与我们判得不一样）。
    *
    * ⚠️ 三条不许踩：
-   * 1. 必须对**原文档**的 doc.body 取（innerText 依赖元素在文档中且有布局）；
+   * 1. 必须对**原文档**里的节点（doc.body，或 scope 命中的那个元素）取（innerText 依赖元素在文档中且有布局）；
    *    游离的 cloneNode(true) 上取会**退化**成 textContent 语义 —— 那是个"看着改了、
    *    实际没过滤"的假修复。
    * 2. include_hidden 打开时走老路（textContent，含隐藏内容）——开关与 skeleton 同义。
    * 3. 拿不到 innerText（老运行时 / 无 body）时**如实标** textFiltered = false 再退回老路，
    *    不假装过滤过了。
    */
-  function projectText(doc) {
-    var full = plainText(doc);
+  function projectText(box) {
+    var full = plainText(box);
     if (INCLUDE_HIDDEN) return { text: cut(full, 20000), filtered: true };
     try {
-      if (doc.body && typeof doc.body.innerText === 'string') {
-        return { text: cut(doc.body.innerText, 20000), filtered: true };
+      if (box && typeof box.innerText === 'string') {
+        return { text: cut(box.innerText, 20000), filtered: true };
       }
     } catch (e) { /* 落到底下如实标未过滤 */ }
     return { text: cut(full, 20000), filtered: false };
   }
 
-  function project(doc) {
+  /** root 非空 = 只投影这棵子树（scope）；标题 / 地址 / readyState 仍是文档的。 */
+  function project(doc, root) {
     var out = {};
+    /** 子树内的查询。**root 自己也算**：scope 直接指着一张表时，那张表就是要读的东西。 */
+    function find(sel) {
+      var list = Array.prototype.slice.call((root || doc).querySelectorAll(sel));
+      if (root && root.matches && root.matches(sel)) list.unshift(root);
+      return list;
+    }
+    /** include_hidden 列出来的隐藏项要标出来——不标，"列了"与"看得见"在输出里长得一样。 */
+    function mark(o, el) {
+      if (INCLUDE_HIDDEN && !isRendered(el)) o.hidden = true;
+      return o;
+    }
     // 隐藏项计数**每份投影各算各的**（同源帧会递归投影，共用一份会串味）。
     var skipped = { tables: 0, fields: 0, clickables: 0, headings: 0 };
     /** 这个元素要不要因为"没在渲染"而跳过（默认跳，计数；include_hidden 时一律不跳）。 */
@@ -196,7 +223,7 @@ ${FIELD_LABEL_JS}
 
     // 大纲
     var hs = [];
-    var hn = doc.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    var hn = find('h1,h2,h3,h4,h5,h6');
     for (var i = 0; i < hn.length && hs.length < LIMITS.headings; i++) {
       if (hidden(hn[i], 'headings')) continue;
       hs.push({ level: Number(hn[i].tagName.charAt(1)), text: cut(hn[i].textContent, LIMITS.text) });
@@ -205,7 +232,7 @@ ${FIELD_LABEL_JS}
 
     // 表格
     out.tables = [];
-    var ts = doc.querySelectorAll('table');
+    var ts = find('table');
     for (var j = 0; j < ts.length; j++) {
       if (hidden(ts[j], 'tables')) continue;
       if (!spend(1)) break;
@@ -214,14 +241,14 @@ ${FIELD_LABEL_JS}
 
     // 表单控件
     out.fields = [];
-    var fs = doc.querySelectorAll('input,select,textarea');
+    var fs = find('input,select,textarea');
     for (var k = 0; k < fs.length; k++) {
       var el = fs[k];
       var t = (el.type || '').toLowerCase();
       if (t === 'hidden') continue;
       if (hidden(el, 'fields')) continue;
       if (!spend(1)) break;
-      out.fields.push(fieldOf(el));
+      out.fields.push(mark(fieldOf(el), el));
     }
 
     // 可点元素（判据见 clickable.ts）：**标记线索 ∪ 光标线索**，agent 找"点哪里"的输入
@@ -240,16 +267,16 @@ ${FIELD_LABEL_JS}
         cut(c.getAttribute && c.getAttribute('title'), LIMITS.text);
       if (!text) return;
       taken.push(c);
-      out.clickables.push({
+      out.clickables.push(mark({
         tag: c.tagName.toLowerCase(),
         text: text,
         href: c.getAttribute && c.getAttribute('href') ? cut(c.getAttribute('href'), 500) : null,
-        disabled: !!c.disabled
-      });
+        disabled: isDisabled(c)
+      }, c));
     }
 
     // ① 标记线索：便宜且精确，先跑
-    var cs = doc.querySelectorAll(CLICKABLE_MARKUP);
+    var cs = find(CLICKABLE_MARKUP);
     for (var m = 0; m < cs.length && out.clickables.length < LIMITS.clickables; m++) {
       collect(cs[m]);
     }
@@ -257,7 +284,7 @@ ${FIELD_LABEL_JS}
     // ② 光标线索：用 div/span 拼的按钮只在这一趟被认出来。逐元素 getComputedStyle 很贵，
     //    所以先剪枝（容器 / 没有名字的点它说不清点什么）、再限预算；预算耗尽**如实标 truncated**。
     var probes = LIMITS.styleProbes;
-    var all = doc.querySelectorAll('*');
+    var all = find('*');
     for (var q = 0; q < all.length && probes > 0 && out.clickables.length < LIMITS.clickables; q++) {
       var e = all[q];
       if (e.children && e.children.length > 2) continue;
@@ -275,13 +302,13 @@ ${FIELD_LABEL_JS}
     if (probes <= 0) truncated = true;
 
     // 正文文本（默认只取渲染中的内容——判据见 projectText 的注释）
-    var body = projectText(doc);
+    var body = projectText(root || doc.body);
     out.text = body.text;
     out.textFiltered = body.filtered;
 
     // iframe 清单：同源递归抽取，跨域**只报 src**（如实，不假装读到了）
     out.frames = [];
-    var ifr = doc.querySelectorAll('iframe');
+    var ifr = find('iframe');
     for (var p = 0; p < ifr.length && out.frames.length < LIMITS.frames; p++) {
       var f = ifr[p];
       // 用**解析后的绝对 URL**（f.src）而不是 getAttribute('src')：相对路径对调用方没用，
@@ -291,7 +318,7 @@ ${FIELD_LABEL_JS}
         var inner = f.contentDocument;
         if (inner && inner.body) {
           entry.sameOrigin = true;
-          if (!truncated) entry.content = project(inner);
+          if (!truncated) entry.content = project(inner, null);
         }
       } catch (e) {
         // 跨域：保持 sameOrigin=false
@@ -304,7 +331,20 @@ ${FIELD_LABEL_JS}
   }
 
   try {
-    var result = project(document);
+    var root = null;
+    var scope = null;
+    if (SCOPE) {
+      var hits;
+      try { hits = document.querySelectorAll(SCOPE); }
+      catch (e) { return { ok: false, error: 'invalid scope selector "' + SCOPE + '": ' + String((e && e.message) || e), truncated: false }; }
+      if (!hits.length) {
+        return { ok: false, error: 'scope "' + SCOPE + '" matched nothing on this page. Read without scope to see what is there.', truncated: false };
+      }
+      root = hits[0];
+      scope = { selector: SCOPE, matched: hits.length };
+    }
+    var result = project(document, root);
+    result.scope = scope;
     result.ok = true;
     result.truncated = truncated;
     return result;

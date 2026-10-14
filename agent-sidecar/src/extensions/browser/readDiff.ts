@@ -58,20 +58,23 @@ export function diffLines(prev: string, next: string): { removed: number; added:
 /** 底稿条数上限（Map 的插入序 = 最旧先淘汰）。 */
 const BASELINES_MAX = 32;
 
-/** 底稿：按 `view|hidden` 记最近一次全文渲染。 */
+/**
+ * 底稿：按 `view|hidden|scope` 记最近一次全文渲染。`scope` 进键的理由同 `include_hidden`：
+ * 两次读的不是同一块时，差异是「一块 vs 另一块」，不是「变了什么」。
+ */
 export class ReadBaselines {
   private readonly map = new Map<string, string>();
 
-  private static key(viewId: string, includeHidden: boolean): string {
-    return `${viewId}|${includeHidden ? "hidden" : "rendered"}`;
+  private static key(viewId: string, includeHidden: boolean, scope = ""): string {
+    return `${viewId}|${includeHidden ? "hidden" : "rendered"}|${scope}`;
   }
 
-  get(viewId: string, includeHidden: boolean): string | undefined {
-    return this.map.get(ReadBaselines.key(viewId, includeHidden));
+  get(viewId: string, includeHidden: boolean, scope = ""): string | undefined {
+    return this.map.get(ReadBaselines.key(viewId, includeHidden, scope));
   }
 
-  set(viewId: string, includeHidden: boolean, rendered: string): void {
-    const key = ReadBaselines.key(viewId, includeHidden);
+  set(viewId: string, includeHidden: boolean, rendered: string, scope = ""): void {
+    const key = ReadBaselines.key(viewId, includeHidden, scope);
     this.map.delete(key); // 重新插入 = 挪到最新
     this.map.set(key, rendered);
     while (this.map.size > BASELINES_MAX) {

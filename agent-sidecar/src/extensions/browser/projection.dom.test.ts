@@ -110,3 +110,109 @@ describe("投影脚本：真 DOM 上的运行行为", () => {
     expect(r.text).toContain("HIDDENMARK");
   });
 });
+
+/**
+ * 字段标签的**相邻文本**兜底（`fieldLabel.ts`）。jsdom 不做布局，字段一律"没有盒"，所以用
+ * `includeHidden` 把它们列出来——被测的是标签判定，不是可见性。
+ */
+describe("字段标签：相邻文本兜底", () => {
+  function labels(html: string): string[] {
+    dom.document.body.innerHTML = html;
+    return (project({ includeHidden: true }).fields as any[]).map((f) => f.label);
+  }
+
+  it("表单库的「标签 + 多层包装的控件」：没有 for 关联也认得出", () => {
+    expect(
+      labels(
+        '<div class="item"><span class="item-label">设备编号</span>' +
+          '<div class="content"><div class="input"><input value="SHJL001"></div></div></div>' +
+          '<div class="item"><span>备注</span><div><textarea></textarea></div></div>',
+      ),
+    ).toEqual(["设备编号", "备注"]);
+  });
+
+  it("勾选类控件：名字写在后面", () => {
+    expect(labels('<div><input type="checkbox"> 记住我</div>')).toEqual(["记住我"]);
+  });
+
+  it("容器里有第二个字段就不猜（那段文本说不清是谁的）", () => {
+    expect(labels("<div>起止日期 <input><input></div>")).toEqual(["", ""]);
+  });
+
+  it("过长的文本不是标签；标题不是标签；这两种都退回 placeholder", () => {
+    const para = "这是一段解释这个页面用途的说明文字，".repeat(4);
+    expect(labels(`<div><p>${para}</p><input placeholder="搜索"></div>`)).toEqual(["搜索"]);
+    expect(labels('<section><h2>用户管理</h2><div><input placeholder="搜索用户"></div></section>')).toEqual([
+      "搜索用户",
+    ]);
+  });
+
+  it("正式关联优先于相邻文本", () => {
+    expect(labels('<div>旁边的字 <input aria-label="真名"></div>')).toEqual(["真名"]);
+  });
+});
+
+/** `scope`：只投影一棵子树。jsdom 不做布局，所以同样用 `includeHidden` 把元素列出来。 */
+describe("scope：只读页面的一块", () => {
+  const PAGE =
+    '<nav><a href="/a">首页</a><a href="/b">设置</a></nav>' +
+    '<main><h2>设备</h2><table id="t"><tr><th>编号</th></tr><tr><td>SHJL001</td></tr></table>' +
+    '<button>保存</button></main>';
+
+  function scoped(scope: string): Record<string, any> {
+    dom.document.body.innerHTML = PAGE;
+    return new Function("return " + buildProjectionScript({ includeHidden: true, scope }))() as Record<string, any>;
+  }
+
+  it("只列子树里的东西，外壳不进结果，并回报 scope", () => {
+    const r = scoped("main");
+    expect(r.ok).toBe(true);
+    expect(r.scope).toEqual({ selector: "main", matched: 1 });
+    expect(r.clickables.map((c: any) => c.text)).toEqual(["保存"]);
+    expect(r.headings.map((h: any) => h.text)).toEqual(["设备"]);
+    expect(r.text).toContain("SHJL001");
+    expect(r.text).not.toContain("首页");
+  });
+
+  it("scope 直接指着一张表 → 那张表本身要在结果里", () => {
+    const r = scoped("#t");
+    expect(r.tables).toHaveLength(1);
+    expect(r.tables[0].rows).toEqual([["SHJL001"]]);
+  });
+
+  it("命中多个 → 取第一个并报数", () => {
+    const r = scoped("a");
+    expect(r.scope).toEqual({ selector: "a", matched: 2 });
+    expect(r.clickables.map((c: any) => c.text)).toEqual(["首页"]);
+  });
+
+  it("没命中 / 选择器非法 → 如实失败，不退回整页", () => {
+    const none = scoped(".nope");
+    expect(none.ok).toBe(false);
+    expect(none.error).toContain("matched nothing");
+    const bad = scoped("][");
+    expect(bad.ok).toBe(false);
+    expect(bad.error).toContain("invalid scope selector");
+  });
+
+  it("不给 scope 时照旧读整页，scope 为 null", () => {
+    dom.document.body.innerHTML = PAGE;
+    const r = project({ includeHidden: true });
+    expect(r.scope).toBeNull();
+    expect(r.clickables.map((c: any) => c.text)).toEqual(["首页", "设置", "保存"]);
+  });
+});
+
+describe("禁用与隐藏的标注", () => {
+  it("aria-disabled 也算禁用（组件库的自绘控件只标这个）", () => {
+    dom.document.body.innerHTML =
+      '<button aria-disabled="true">提交</button><button>取消</button><input aria-label="名称" aria-disabled="true">';
+    const r = project({ includeHidden: true });
+    expect(r.clickables.map((c: any) => [c.text, c.disabled])).toEqual([
+      ["提交", true],
+      ["取消", false],
+    ]);
+    expect(r.fields[0].disabled).toBe(true);
+  });
+});
+

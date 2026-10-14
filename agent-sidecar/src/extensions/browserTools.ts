@@ -131,6 +131,13 @@ export function buildBrowserReadTool(
     {
       view_id: viewIdArg,
       include_hidden: includeHiddenArg,
+      scope: z
+        .string()
+        .optional()
+        .describe(
+          "CSS selector: read only that element's subtree (e.g. 'main', '.dialog') instead of the whole page. " +
+            "Cuts repeated navigation / long sidebars. Fails if it matches nothing.",
+        ),
       full_text: z
         .boolean()
         .optional()
@@ -145,9 +152,11 @@ export function buildBrowserReadTool(
     },
     async (args) => {
       const includeHidden = args.include_hidden === true;
+      // 帧内不套用 scope（那是顶层文档里的选择器），所以它不进 `projection`。
       const projection = { includeHidden };
+      const scope = args.scope?.trim() || undefined;
       try {
-        const r = await runEval(buildProjectionScript(projection), { viewId: args.view_id }, emit);
+        const r = await runEval(buildProjectionScript({ ...projection, scope }), { viewId: args.view_id }, emit);
         // runEval 的失败文本已是面向模型的（异常/不可序列化/桥失败各自不同），不加工。
         if (!r.ok) return textResult(r.error);
         // 骨架里若含**读不到的** iframe，再走一趟 CDP 做帧级读取（见 frames.ts）。
@@ -160,8 +169,8 @@ export function buildBrowserReadTool(
         const key = r.viewId ?? args.view_id;
         if (!key) return textResult(full);
         const baseline = formatRead(view, frameOutcome, { fullText: true });
-        const prev = baselines.get(key, includeHidden);
-        baselines.set(key, includeHidden, baseline);
+        const prev = baselines.get(key, includeHidden, scope);
+        baselines.set(key, includeHidden, baseline, scope);
         return textResult(args.since_last === true ? renderSinceLast(prev, baseline, full) : full);
       } catch (e) {
         const detail = e instanceof Error ? e.message : String(e);
@@ -176,8 +185,9 @@ export function buildBrowserEvalTool(
 ) {
   return tool(
     "browser_eval",
-    "Run a JavaScript EXPRESSION in a view's page and return its JSON-serialised value. The escape " +
-      "hatch for what browser_read does not cover; return a small object, not the whole DOM. The page " +
+    "Run a JavaScript EXPRESSION in a view's page and return its JSON-serialised value. For what " +
+      "browser_read does not cover — notably framework state (a Vue / React store) that never reaches " +
+      "the DOM; return a small object, not the whole DOM. The page " +
       "carries the user's real logged-in session: never submit forms or perform writes on their behalf " +
       "without being asked.",
     {

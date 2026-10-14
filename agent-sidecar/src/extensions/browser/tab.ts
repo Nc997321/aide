@@ -96,7 +96,45 @@ function describeView(view: Record<string, unknown>): string {
 function renderNavigate(
   d: Record<string, unknown>,
   view: Record<string, unknown> | null,
-  observed?: { url?: string; error?: string },
+  observed?: Landing,
+): string {
+  return renderLanding(d, view, observed) + displayedNote(view);
+}
+
+/**
+ * 加载进度的一句话。**为什么要说**（2026-10-14 agent 实测）：navigate 回来时页面可能已经载完，
+ * 这时再 `browser_wait until:"load"` 只会得到「没有正在进行的加载」——白走一个来回。
+ * `readyState` 缺失（读不到）就不说，不编。
+ */
+function loadNote(ready: string | undefined): string {
+  switch (ready) {
+    case "complete":
+      return ` Load finished (readyState: complete) — no browser_wait until:"load" needed.`;
+    case "interactive":
+      return ` DOM parsed, subresources still loading (readyState: interactive).`;
+    case "loading":
+      return ` Still loading (readyState: loading) — browser_wait until:"load" to wait for it.`;
+    default:
+      return "";
+  }
+}
+
+/**
+ * 导航的是**用户正看着的那个视图**时的提醒：他眼前的页面被换掉了（2026-10-14 agent 实测自述：
+ * 「我这次直接把他停着的设置页导航走了」）。回包里没带 `displayed` 就不说。
+ */
+function displayedNote(view: Record<string, unknown> | null): string {
+  if (view?.["displayed"] !== true) return "";
+  return (
+    `\nNOTE: this view is DISPLAYED — the page the user was looking at just changed. ` +
+    `For browsing of your own, browser_tab action="open" creates a parked view that leaves theirs alone.`
+  );
+}
+
+function renderLanding(
+  d: Record<string, unknown>,
+  view: Record<string, unknown> | null,
+  observed?: Landing,
 ): string {
   const where = view ? describeView(view) : String(d["view_id"] ?? "?");
   const want = view ? str(asRecord(view["nav"])?.["url"]) : "";
@@ -110,7 +148,7 @@ function renderNavigate(
     );
   }
   if (observed.url === want) {
-    return `Navigated view ${where} — the document confirms it is at ${observed.url}.`;
+    return `Navigated view ${where} — the document confirms it is at ${observed.url}.${loadNote(observed.ready)}`;
   }
   return (
     `Requested ${want || "(unknown url)"} for view ${String(d["view_id"] ?? "?")}, but the document reports ` +
@@ -124,7 +162,7 @@ function renderNavigate(
 export function renderTabResult(
   action: TabAction,
   data: unknown,
-  observed?: { url?: string; error?: string },
+  observed?: Landing,
 ): string {
   const d = asRecord(data) ?? {};
   const view = asRecord(d["view"]);
@@ -172,6 +210,16 @@ export const NAV_SETTLE_MS = 250;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** 观测到的落点：地址 + 加载进度（`document.readyState`），或读不到的原因。 */
+export interface Landing {
+  url?: string;
+  ready?: string;
+  error?: string;
+}
+
+/** 落点探针：地址与加载进度**同一发**读回（分两发会读到两个时刻）。 */
+export const LANDING_PROBE = "({ url: location.href, ready: document.readyState })";
+
 /**
  * 读一次页面**实际**所在的位置。**永不抛**：失败折成 `{error}` 由渲染层如实带出。
  * `viewId` 用 navigate 回包里的**已解析 id**（不是调用方给的原始参数），多视图下才指得准。
@@ -179,11 +227,13 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 async function readLandingUrl(
   viewId: string | undefined,
   emit: (e: ChatEvent) => void,
-): Promise<{ url?: string; error?: string }> {
-  const r = await runEval("location.href", { viewId }, emit);
+): Promise<Landing> {
+  const r = await runEval(LANDING_PROBE, { viewId }, emit);
   if (!r.ok) return { error: r.error };
-  const url = typeof r.value === "string" ? r.value : undefined;
-  return url ? { url } : { error: "the page returned no location.href" };
+  const v = asRecord(r.value);
+  const url = typeof v?.["url"] === "string" ? v["url"] : undefined;
+  const ready = typeof v?.["ready"] === "string" ? v["ready"] : undefined;
+  return url ? { url, ready } : { error: "the page returned no location.href" };
 }
 
 /**
