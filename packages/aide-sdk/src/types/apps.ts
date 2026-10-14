@@ -30,3 +30,23 @@ export interface AppInfo {
   /** 清单有问题时的说明（此时其余字段不可信）。 */
   error: string | null;
 }
+
+/** 应用在工作区里起的一个进程。字段与 Host 的 `apps::process::ProcessInfo` 同形。 */
+export interface AppProcess {
+  runId: string;
+  appId: string;
+  /** 所属工作区的根路径。 */
+  workspace: string;
+  /** 给人看的命令行。 */
+  command: string;
+  /** 相对工作区根；空串 = 根。 */
+  cwd: string;
+  /** 毫秒时间戳。 */
+  startedAt: number;
+  running: boolean;
+  /** 退出码；还在跑、或被信号结束的是 `null`。 */
+  code: number | null;
+  /** 是被结束的（用户点了结束 / 应用被停用），不是自己跑完的。 */
+  killed: boolean;
+  endedAt: number | null;
+}

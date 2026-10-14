@@ -16,8 +16,43 @@ export interface BridgeHost {
   hasPermission(permission: string): boolean;
   /** 往选中会话的输入框里填一段文字。只填不发。 */
   fillComposer(text: string): void;
+  /** 在编辑器里打开面板所在工作区里的一个文件（路径相对工作区根），可带行号。 */
+  openFile(path: string, line?: number): Promise<void>;
+  /** 本窗口连着的 Host 是哪一种（窗口的属性，Host 自己不知道别人怎么连它）。 */
+  hostKind(): Promise<HostKind>;
   /** 交给 Host（`app_call`）：权限在那边按清单裁决。 */
   hostCall(method: string, params: unknown): Promise<unknown>;
+}
+
+export type HostKind = "local" | "wsl" | "ssh";
+
+/** 窗口 Host 的 key（`local` / `wsl:Debian` / `ssh:devbox`）→ 给应用看的种类。 */
+export function hostKindOf(key: string): HostKind {
+  return key.startsWith("wsl") ? "wsl" : key.startsWith("ssh") ? "ssh" : "local";
+}
+
+/** 应用给的工作区内相对路径：正斜杠、不许往上走、不许是绝对路径。与 Host 的 `safe_rel` 同一口径。 */
+function isSafeRelPath(path: string): boolean {
+  if (!path || path.length > 512 || path.startsWith("/") || /[\\:]/.test(path)) return false;
+  return path.split("/").every((seg) => seg !== "" && seg !== "." && seg !== "..");
+}
+
+/**
+ * 文件树监听报来的「这些目录变了」（绝对路径）→ 给应用的 `fs` 事件（相对工作区根）。
+ * 空数组 = 监听器说不清具体哪里变了，让应用全部重读；工作区之外的目录不给；
+ * 一个都不剩（变的都在别处）就不打扰应用。
+ */
+export function projectTreeChange(dirs: string[], root: string): { dirs: string[] } | { full: true } | null {
+  if (!root) return null;
+  if (dirs.length === 0) return { full: true };
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/\/+$/, "");
+  const base = norm(root);
+  const inside = new Set<string>();
+  for (const dir of dirs.map(norm)) {
+    if (dir === base) inside.add("");
+    else if (dir.startsWith(`${base}/`)) inside.add(dir.slice(base.length + 1));
+  }
+  return inside.size ? { dirs: [...inside] } : null;
 }
 
 export type BridgeReply =
@@ -103,6 +138,20 @@ async function dispatch(method: string, params: Record<string, unknown>, host: B
       if (!text.trim()) throw new Error("composer.fill 需要 text");
       host.fillComposer(text.slice(0, MAX_COMPOSER_CHARS));
       return null;
+    }
+    case "editor.open": {
+      if (!host.hasPermission("workspace:read")) throw new Error("应用没有申请权限「workspace:read」，不能调用 editor.open");
+      const path = typeof params.path === "string" ? params.path : "";
+      if (!isSafeRelPath(path)) throw new Error("editor.open 需要 path（工作区内的相对路径）");
+      const line = Number(params.line);
+      await host.openFile(path, Number.isInteger(line) && line > 0 ? line : undefined);
+      return null;
+    }
+    // Host 答它知道的；「这扇窗口怎么连着它」只有 GUI 知道，在这里补上
+    case "host.info":
+    case "workspace.info": {
+      const info = await host.hostCall(method, params);
+      return typeof info === "object" && info !== null ? { ...info, host: await host.hostKind() } : info;
     }
     default:
       return host.hostCall(method, params);

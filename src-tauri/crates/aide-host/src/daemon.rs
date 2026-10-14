@@ -164,6 +164,7 @@ pub async fn run() -> i32 {
     let _ = std::fs::remove_file(&pid_file);
     core.runtime.kill_runtime().await;
     core.lsp.kill_all().await;
+    aide_core::apps::shutdown(&core);
     let _ = tokio::task::spawn_blocking(move || aide_core::commands::watch::retarget(&core, None)).await;
     drop(lock);
     0

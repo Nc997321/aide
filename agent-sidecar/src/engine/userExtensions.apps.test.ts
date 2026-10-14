@@ -29,10 +29,14 @@ describe("loadAppMcpServers", () => {
     expect(loadAppMcpServers("/ws")).toEqual({});
   });
 
-  it("安装版应用挂给所有会话，配置原样透传", () => {
+  it("安装版应用挂给所有会话；后端从环境变量里知道这条会话的工作目录", () => {
     write(JSON.stringify([entry("app-db", null)]));
-    expect(loadAppMcpServers("/anywhere")).toEqual({ "app-db": entry("app-db", null).config });
-    expect(loadAppMcpServers(undefined)).toEqual({ "app-db": entry("app-db", null).config });
+    const config = entry("app-db", null).config;
+    expect(loadAppMcpServers("/anywhere")).toEqual({
+      "app-db": { ...config, env: { AIDE_APP_ID: "app-db", AIDE_WORKSPACE_ROOT: "/anywhere" } },
+    });
+    // 没有工作目录的会话：不编一个出来
+    expect(loadAppMcpServers(undefined)).toEqual({ "app-db": config });
   });
 
   it("开发态应用只挂给它那个工作区的会话", () => {

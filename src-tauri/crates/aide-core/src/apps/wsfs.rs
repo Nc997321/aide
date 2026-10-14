@@ -1,4 +1,4 @@
-//! `fs.*`：应用读写**当前工作区**里的文件。路径一律是工作区内的相对路径，
+//! `fs.*`：应用读写**面板所在工作区**里的文件。路径一律是工作区内的相对路径，
 //! 解析符号链接后必须仍在工作区内。
 
 use std::fs;
@@ -92,6 +92,73 @@ pub fn write(workspace: Option<&Path>, params: &Value) -> Result<Value, String> 
     Ok(Value::Null)
 }
 
+/// 工作区里的一个目录：`cwd` 省略或空 = 工作区根。返回真实路径和相对写法（`process.run` 的 cwd 用）。
+pub fn dir(workspace: Option<&Path>, cwd: Option<&str>) -> Result<(PathBuf, String), String> {
+    let root = root(workspace)?;
+    let (real, rel) = match cwd {
+        None | Some("") | Some(".") => (root.clone(), String::new()),
+        Some(path) => {
+            safe_rel(path)?;
+            (inside(&root, &root.join(path))?, path.to_string())
+        }
+    };
+    if !real.is_dir() {
+        return Err("cwd 不是目录".into());
+    }
+    Ok((real, rel))
+}
+
+pub fn stat(workspace: Option<&Path>, params: &Value) -> Result<Value, String> {
+    let root = root(workspace)?;
+    let meta = fs::metadata(inside(&root, &root.join(rel(params)?))?).map_err(|e| e.to_string())?;
+    let mtime = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64);
+    Ok(json!({ "isDir": meta.is_dir(), "size": meta.len(), "mtime": mtime }))
+}
+
+fn limit(params: &Value, default: usize, max: usize) -> usize {
+    params.get("limit").and_then(Value::as_u64).map_or(default, |n| (n as usize).clamp(1, max))
+}
+
+/// 按文件名找（文件树里点文件链接用的那一套：名字相等的在前，其次名字包含）。遵守 `.gitignore`、
+/// 跳过隐藏文件。结果是相对工作区根的路径。
+pub fn find(workspace: Option<&Path>, params: &Value) -> Result<Value, String> {
+    let root = root(workspace)?;
+    let name = params.get("name").and_then(Value::as_str).unwrap_or("").trim();
+    if name.is_empty() || name.len() > 256 || name.split(['/', '\\']).any(|seg| seg == "..") {
+        return Err("fs.find 需要 name（文件名，或带目录段的路径片段）".into());
+    }
+    let found = aide_workspace::fs_ops::find_files_by_name(
+        name.to_string(),
+        root.to_string_lossy().into_owned(),
+        Some(limit(params, 50, 500)),
+    )?;
+    let files: Vec<String> = found
+        .iter()
+        .filter_map(|full| Path::new(full).strip_prefix(&root).ok())
+        .map(|rel| rel.to_string_lossy().replace('\\', "/"))
+        .collect();
+    Ok(json!({ "files": files }))
+}
+
+/// 按内容搜（搜索面板用的那一套）。`mask` 是文件名掩码（`*.ts`），不是路径 glob。
+pub fn search(workspace: Option<&Path>, params: &Value) -> Result<Value, String> {
+    let root = root(workspace)?;
+    let query = params.get("query").and_then(Value::as_str).unwrap_or("");
+    if query.trim().is_empty() || query.len() > 1000 {
+        return Err("fs.search 需要 query".into());
+    }
+    let flag = |name: &str| params.get(name).and_then(Value::as_bool).unwrap_or(false);
+    let options = aide_workspace::search::SearchOptions {
+        use_regex: flag("regex"),
+        case_sensitive: flag("caseSensitive"),
+        whole_word: flag("wholeWord"),
+        file_mask: params.get("mask").and_then(Value::as_str).filter(|m| !m.is_empty()).map(str::to_string),
+        limit: Some(limit(params, 200, 2000)),
+    };
+    let found = aide_workspace::search::search_in_files_blocking(query, &root.to_string_lossy(), &options)?;
+    serde_json::to_value(found).map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,6 +189,39 @@ mod tests {
             .collect();
         assert_eq!(names, ["a.txt", "b.txt"]);
         assert_eq!(list(Some(&ws), &json!({})).unwrap()["entries"][0]["isDir"], true);
+    }
+
+    #[test]
+    fn finds_searches_and_stats_with_paths_relative_to_the_workspace() {
+        let (_, ws) = workspace();
+        fs::create_dir_all(ws.join("mod/deep")).unwrap();
+        fs::write(ws.join("mod/deep/a.txt"), "hello again\nTODO fix").unwrap();
+        let mut files: Vec<String> =
+            serde_json::from_value(find(Some(&ws), &json!({ "name": "a.txt" })).unwrap()["files"].clone()).unwrap();
+        files.sort();
+        assert_eq!(files, ["mod/deep/a.txt", "src/a.txt"]);
+
+        let hits = search(Some(&ws), &json!({ "query": "TODO", "mask": "*.txt" })).unwrap();
+        assert_eq!(hits["total"], 1);
+        assert_eq!(hits["files"][0]["file"], "mod/deep/a.txt");
+        assert_eq!(hits["files"][0]["matches"][0]["line"], 2);
+
+        let st = stat(Some(&ws), &json!({ "path": "src/a.txt" })).unwrap();
+        assert_eq!((st["isDir"].clone(), st["size"].clone()), (json!(false), json!(5)));
+        assert_eq!(stat(Some(&ws), &json!({ "path": "src" })).unwrap()["isDir"], true);
+        assert!(stat(Some(&ws), &json!({ "path": "../outside.txt" })).is_err());
+        assert!(find(Some(&ws), &json!({ "name": "../outside.txt" })).is_err());
+    }
+
+    #[test]
+    fn a_process_cwd_must_be_a_directory_inside_the_workspace() {
+        let (_, ws) = workspace();
+        assert_eq!(dir(Some(&ws), None).unwrap().1, "");
+        assert_eq!(dir(Some(&ws), Some("src")).unwrap(), (ws.canonicalize().unwrap().join("src"), "src".to_string()));
+        for bad in ["..", "/tmp", "src/a.txt", "nope"] {
+            assert!(dir(Some(&ws), Some(bad)).is_err(), "{bad}");
+        }
+        assert!(dir(None, None).is_err());
     }
 
     #[test]

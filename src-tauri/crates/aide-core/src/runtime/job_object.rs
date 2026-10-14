@@ -42,23 +42,32 @@ unsafe impl Send for KillOnCloseJob {}
 unsafe impl Sync for KillOnCloseJob {}
 
 impl KillOnCloseJob {
-    /// 新建 job 并把 `process`（sidecar 进程句柄）塞进去。
-    /// 任何一步失败都返回 Err（调用方降级：记警告、照常跑）。
-    pub fn assign(process: HANDLE) -> io::Result<Self> {
-        // SAFETY: 三个调用都是 kernel32 的稳定 API，参数按签名给出；job 句柄在任一步
-        // 失败时立即关闭（不留半成品），成功时移交给 Self 独占持有。
+    /// 新建一个空 job（之后用 [`add`](Self::add) 往里收进程）。
+    pub fn new() -> io::Result<Self> {
+        // SAFETY: kernel32 的稳定 API，参数按签名给出；打限制失败时立即关闭 job 句柄
+        // （不留半成品），成功时移交给 Self 独占持有。
         unsafe {
             let job = CreateJobObjectW(None, None).map_err(to_io)?;
             if let Err(e) = set_kill_on_close(job) {
                 let _ = CloseHandle(job);
                 return Err(e);
             }
-            if let Err(e) = AssignProcessToJobObject(job, process) {
-                let _ = CloseHandle(job);
-                return Err(to_io(e));
-            }
             Ok(Self(job))
         }
+    }
+
+    /// 把 `process` 收进这个 job；它之后起的子孙自动跟着进来。
+    pub fn add(&self, process: HANDLE) -> io::Result<()> {
+        // SAFETY: job 句柄由 Self 持有、此刻有效；`process` 由调用方保证是活的进程句柄。
+        unsafe { AssignProcessToJobObject(self.0, process).map_err(to_io) }
+    }
+
+    /// 新建 job 并把 `process`（sidecar 进程句柄）塞进去。
+    /// 任何一步失败都返回 Err（调用方降级：记警告、照常跑）。
+    pub fn assign(process: HANDLE) -> io::Result<Self> {
+        let job = Self::new()?;
+        job.add(process)?;
+        Ok(job)
     }
 }
 
@@ -88,4 +97,37 @@ impl Drop for KillOnCloseJob {
 
 fn to_io(e: windows::core::Error) -> io::Error {
     io::Error::new(io::ErrorKind::Other, e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::windows::io::AsRawHandle;
+    use std::os::windows::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// 放手即杀，且连子孙一起：`cmd` 起的 `waitfor` 不在我们手里，只能靠 job 收走。
+    /// （不用 `ping`：`apps::process` 的测试按全机 PING.EXE 的个数断言，并行跑会互相干扰。）
+    #[test]
+    fn dropping_the_job_ends_the_process_and_its_children() {
+        let mut child = Command::new("cmd")
+            .args(["/c", "waitfor /t 60 AideJobObjectTest"])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .creation_flags(0x08000000)
+            .spawn()
+            .unwrap();
+        let job = KillOnCloseJob::new().unwrap();
+        job.add(HANDLE(child.as_raw_handle() as _)).unwrap();
+        std::thread::sleep(Duration::from_millis(500));
+        assert!(child.try_wait().unwrap().is_none(), "还没放手就不该结束");
+
+        drop(job);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while child.try_wait().unwrap().is_none() {
+            assert!(Instant::now() < deadline, "job 关了，进程还活着");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }

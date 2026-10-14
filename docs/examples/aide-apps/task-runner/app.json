@@ -1,0 +1,8 @@
+{
+  "id": "task-runner",
+  "name": "任务面板",
+  "version": "0.1.0",
+  "icon": "ui/icon.svg",
+  "panel": { "entry": "ui/index.html", "placement": "right" },
+  "permissions": ["workspace:read", "process"]
+}

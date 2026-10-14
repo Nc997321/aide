@@ -66,7 +66,9 @@ export function loadAppMcp(cwd: string | undefined): { servers: Record<string, a
   for (const e of entries as { name?: unknown; workspace?: unknown; config?: unknown; readOnlyTools?: unknown }[]) {
     if (!e || typeof e.name !== "string" || !e.config || typeof e.config !== "object") continue;
     if (typeof e.workspace === "string" && (!cwd || normPath(e.workspace) !== normPath(cwd))) continue;
-    servers[e.name] = e.config;
+    // 会话里的这一份跟着会话的工作目录走（给界面用的那一份由 Host 按面板所在的工作区给）
+    const config = e.config as { env?: Record<string, string> };
+    servers[e.name] = cwd ? { ...config, env: { ...config.env, AIDE_WORKSPACE_ROOT: cwd } } : config;
     if (!RULE_NAME.test(e.name) || !Array.isArray(e.readOnlyTools)) continue;
     for (const tool of e.readOnlyTools) {
       if (typeof tool === "string" && RULE_NAME.test(tool)) allowRules.push(`mcp__${e.name}__${tool}`);

@@ -12,9 +12,13 @@
     if (e.source !== window.parent || !e.data || e.data.aideApp !== 1) return;
     const msg = e.data;
     if (msg.event) {
-      for (const fn of listeners.get(msg.event) || []) {
-        try { fn(msg.payload); } catch (err) { console.error(err); }
+      // 进程的动静：这里拿到的只是「有新的了」，换成正文再给应用
+      if (msg.event.startsWith("process:")) {
+        const runId = msg.event.slice("process:".length);
+        if (outputs.has(runId)) pull(runId);
+        return;
       }
+      emit(msg.event, msg.payload);
       return;
     }
     const waiter = pending.get(msg.id);
@@ -47,10 +51,57 @@
   }
   on("theme", applyTheme);
 
+  // 进程的输出：Host 的事件只报「有新输出」和最新序号，正文在这里按序号取回来，再交给应用。
+  // 一次只取一趟；取的途中又来了通知，取完再取。
+  const outputs = new Map(); // runId -> { seen, busy, again, done }
+  async function pull(runId) {
+    const st = outputs.get(runId);
+    if (!st || st.busy) { if (st) st.again = true; return; }
+    st.busy = true;
+    try {
+      for (;;) {
+        st.again = false;
+        const got = await call("process.attach", { runId, since: st.seen });
+        // 缓冲滚过去了（输出比面板取得快）：如实告诉应用中间丢了多少行
+        if (got.first > st.seen + 1) emit(`process:${runId}`, { type: "gap", lost: got.first - st.seen - 1 });
+        for (const line of got.lines) {
+          st.seen = line.seq;
+          emit(`process:${runId}`, { type: "output", data: line.text, stream: line.stream, seq: line.seq });
+        }
+        if (st.seen < got.head) continue;
+        if (!got.running && !st.done) {
+          st.done = true;
+          emit(`process:${runId}`, { type: "exit", code: got.code, killed: got.killed });
+          outputs.delete(runId);
+          return;
+        }
+        if (!st.again) return;
+      }
+    } catch (err) {
+      console.error(err);
+    } finally {
+      st.busy = false;
+    }
+  }
+  function emit(event, payload) {
+    for (const fn of listeners.get(event) || []) {
+      try { fn(payload); } catch (err) { console.error(err); }
+    }
+  }
+  // 开始跟一个进程的输出，从序号 `since` 之后（0 = 从缓冲里最早的开始）
+  function follow(runId, since) {
+    if (!outputs.has(runId)) outputs.set(runId, { seen: Number(since) || 0, busy: false, again: false, done: false });
+    return pull(runId);
+  }
+
   window.aide = {
     call,
     on,
+    // → { os, source, host: "local" | "wsl" | "ssh" }
     host: { info: () => call("host.info") },
+    // 面板所在的工作区（需要 workspace:read）。→ { name, root, trusted, host }；没有打开工作区 → null。
+    // 用户切去另一个工作区时面板会整页重载，所以启动时取一次就够
+    workspace: { info: () => call("workspace.info") },
     theme: { get: () => call("theme.get"), onChange: (fn) => on("theme", fn) },
     ui: {
       toast: (text) => call("ui.toast", { text: String(text) }),
@@ -74,7 +125,36 @@
       read: (path) => call("fs.read", { path }),
       list: (path) => call("fs.list", path ? { path } : {}),
       write: (path, text) => call("fs.write", { path, text }),
+      // → { isDir, size, mtime }
+      stat: (path) => call("fs.stat", { path }),
+      // 按文件名找（名字相等的在前，其次名字包含；遵守 .gitignore）。→ 相对路径数组
+      find: (name, opts) => call("fs.find", { name, ...(opts || {}) }).then((r) => r.files),
+      // 按内容搜。opts: { mask: "*.ts", regex, caseSensitive, wholeWord, limit }
+      // → { files: [{ file, matches: [{ line, column, lineText, matchStart, matchEnd }] }], total, truncated }
+      search: (query, opts) => call("fs.search", { query, ...(opts || {}) }),
+      // 工作区里的文件变了。fn 收到 { dirs: [相对目录…] } 或 { full: true }（说不清哪里变了，全部重读）。
+      // 粒度是目录：收到后自己重新 list / read
+      watch: (fn) => on("fs", fn),
     },
+    // 在工作区里运行命令（需要 process 权限；工作区必须受信任）。不经 shell：command 是可执行文件，
+    // args 是参数数组。进程归 Aide 管——面板关了、重载了它照跑，回来用 list + attach 续上
+    process: {
+      // → { runId, … }。之后用 aide.on(`process:${runId}`, fn) 收输出：
+      // { type: "output", data, stream, seq } | { type: "exit", code, killed } | { type: "gap", lost }
+      run: async (request) => {
+        const info = await call("process.run", request);
+        follow(info.runId, 0);
+        return info;
+      },
+      kill: (runId) => call("process.kill", { runId }),
+      // 本应用在当前工作区里的进程（含刚结束不久的）
+      list: () => call("process.list"),
+      // 面板重载后续上一个还在跑的进程：先 aide.on(`process:${runId}`, fn)，再 attach。
+      // since = 上次看到的 seq（不给就从缓冲里最早的一行开始）
+      attach: (runId, opts) => follow(runId, opts && opts.since),
+    },
+    // 在 Aide 的编辑器里打开工作区里的文件（需要 workspace:read）。line 从 1 起
+    editor: { open: (path, opts) => call("editor.open", { path, line: opts && opts.line }) },
     // 本应用后端（清单里的 server）的工具
     tools: {
       list: () => call("tools.list"),

@@ -4,6 +4,7 @@ import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
 import NotificationBell from "./NotificationBell.vue";
 import LspIndicator from "./LspIndicator.vue";
+import AppProcessIndicator from "./AppProcessIndicator.vue";
 import ProviderSwitcher from "./ProviderSwitcher.vue";
 import Icon from "../Icon.vue";
 import { isWindows } from "../../utils/platform";
@@ -341,6 +342,7 @@ function isRowRunning(cfg: RunConfig): boolean {
     <!-- Right: window controls -->
     <div class="titlebar-right">
       <NotificationBell />
+      <AppProcessIndicator :workspace-root="workspaceRoot" />
       <LspIndicator ref="lspIndicatorRef" :workspace-root="workspaceRoot" />
       <SidebarToggle
         side="right"
