@@ -643,6 +643,9 @@ const modelSuggestions = computed<string[]>(() => {
 <style scoped>
 .provider-settings {
   position: relative; /* AToast 锚定 */
+  /* 父级 .tab-providers 是 flex 行：不撑满的话宽度随内容缩，空状态会偏在左边 */
+  flex: 1;
+  min-width: 0;
   display: flex;
   height: 100%;
   gap: 0;
