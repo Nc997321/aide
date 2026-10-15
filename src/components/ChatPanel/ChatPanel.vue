@@ -675,7 +675,8 @@ function onOpenBgDock(taskId: string) {
       :elapsed-seconds="activityElapsed"
       @interrupt="emit('interrupt')"
     />
-    <div v-else-if="props.isBusy" class="chat-thinking">
+    <!-- 有待确认卡片时会话在等用户、不是在思考：不显示思考行 -->
+    <div v-else-if="props.isBusy && !displayedPermission" class="chat-thinking">
       <AppLogo :size="15" animated />
       <span class="chat-thinking-text">正在思考</span>
       <Transition name="thinking-tip" mode="out-in">
