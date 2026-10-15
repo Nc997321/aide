@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { LspNav, columnOf, findDeclaration, identifierAt, symbolName } from "./lspNav.js";
+import { LspNav, columnOf, findDeclaration, identifierAt, reasonOf, symbolName } from "./lspNav.js";
 import type { LspQueryResponse, LspTool } from "./lspClient.js";
 import type { OutlineNode } from "./lspFormat.js";
 
@@ -200,5 +200,29 @@ describe("lsp_symbols / lsp_outline", () => {
     const text = await n.outline({ file: "src/lsp/mod.rs" });
     expect(text).toContain("Structure of src/lsp/mod.rs");
     expect(text).toContain("  method get  L3-6");
+  });
+});
+
+describe("reasonOf：文本兜底的原因如实", () => {
+  it("indexing + error（按名查询未确认）交出真实原因，不说 still indexing", () => {
+    const r = reasonOf({
+      ok: false,
+      status: "indexing",
+      error: "`StageInfo` was not found by name search — java: its server refused the query: x",
+    } as LspQueryResponse);
+    expect(r).not.toMatch(/still indexing/);
+    expect(r).toContain("java: its server refused the query");
+  });
+
+  it("真在建索引（无 error）仍说 still indexing", () => {
+    expect(reasonOf({ ok: false, status: "indexing" } as LspQueryResponse)).toBe("it is still indexing");
+  });
+});
+
+describe("工作区 LSP 关闭（disabled）", () => {
+  it("文本兜底的原因如实说「没开」，不说 still indexing", () => {
+    const r = reasonOf({ ok: false, status: "disabled" } as LspQueryResponse);
+    expect(r).toMatch(/turned off/);
+    expect(r).not.toMatch(/indexing/);
   });
 });

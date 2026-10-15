@@ -52,7 +52,34 @@ pub enum Action {
         status_type: serde_json::Value,
         message: String,
     },
+    /// 标准 `$/progress`（work done progress）：`begin`/`report` 带百分比与说明，`end` = 这段结束。
+    /// 只做显示（状态板进度），不参与就绪判定。
+    Progress {
+        percent: Option<u8>,
+        message: Option<String>,
+        done: bool,
+    },
     Ignore,
+}
+
+/// `$/progress` 的 `value`：`{kind: begin|report|end, title?, message?, percentage?}`。
+/// 说明文字取 `title` 与 `message` 拼起来（rust-analyzer：title=`Indexing`、message=`12/345 (core)`）。
+fn progress_action(params: &serde_json::Value) -> Action {
+    let v = params.get("value").unwrap_or(&serde_json::Value::Null);
+    let kind = v.get("kind").and_then(|k| k.as_str()).unwrap_or("");
+    if kind == "end" {
+        return Action::Progress { percent: None, message: None, done: true };
+    }
+    let title = v.get("title").and_then(|t| t.as_str()).unwrap_or("");
+    let msg = v.get("message").and_then(|t| t.as_str()).unwrap_or("");
+    let text = match (title.is_empty(), msg.is_empty()) {
+        (true, true) => None,
+        (false, true) => Some(title.to_string()),
+        (true, false) => Some(msg.to_string()),
+        (false, false) => Some(format!("{title} {msg}")),
+    };
+    let percent = v.get("percentage").and_then(|p| p.as_u64()).map(|p| p.min(100) as u8);
+    Action::Progress { percent, message: text, done: false }
 }
 
 // ── dispatch（纯函数）──
@@ -124,6 +151,7 @@ pub fn dispatch(msg: &serde_json::Value) -> Action {
                     message,
                 }
             }
+            "$/progress" => progress_action(&params),
             _ => Action::Ignore,
         };
     }
@@ -225,6 +253,26 @@ mod tests {
         assert_eq!(a.next(), 1);
         assert_eq!(a.next(), 2);
         assert_eq!(a.next(), 3);
+    }
+
+    #[test]
+    fn dispatch_progress() {
+        let begin = json!({"method":"$/progress","params":{"token":"t","value":{"kind":"begin","title":"Indexing","percentage":0}}});
+        match dispatch(&begin) {
+            Action::Progress { percent, message, done } => {
+                assert_eq!(percent, Some(0));
+                assert_eq!(message.as_deref(), Some("Indexing"));
+                assert!(!done);
+            }
+            other => panic!("expected Progress, got {other:?}"),
+        }
+        let report = json!({"method":"$/progress","params":{"token":"t","value":{"kind":"report","message":"12/345 (core)","percentage":250}}});
+        match dispatch(&report) {
+            Action::Progress { percent, .. } => assert_eq!(percent, Some(100), "越界截到 100"),
+            other => panic!("expected Progress, got {other:?}"),
+        }
+        let end = json!({"method":"$/progress","params":{"token":"t","value":{"kind":"end"}}});
+        assert!(matches!(dispatch(&end), Action::Progress { done: true, .. }));
     }
 
     #[test]

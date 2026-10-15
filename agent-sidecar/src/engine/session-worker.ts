@@ -42,7 +42,7 @@ import { thinkingDisabledFor } from "./thinkingPolicy.js";
 import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
-import { cancelAllLspQueries, queryLsp } from "../extensions/lspClient.js";
+import { cancelAllLspQueries, syncLspWarmth } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
@@ -165,8 +165,6 @@ export class SessionWorker {
   private providerDriftPending = false;
   private turnActive = false;
   private stopped = false;
-  /** 本会话是否已触发过语言服务器预热（只触发一次，见 startLoop）。 */
-  private lspWarmed = false;
 
   // ---- 会话自动命名（规则清洗首条用户消息作标题，见 titleGenerator.ts） ----
   /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
@@ -678,6 +676,15 @@ export class SessionWorker {
     if (cmd.output_style !== undefined) this.outputStyle = normalizeOutputStyle(cmd.output_style);
     // 首条 send 携带的策略快照在 query 起来前落地——PreToolUse hook 首次评估就能用。
     if (cmd.permission_policy) this.applyPermissionPolicy(cmd.permission_policy);
+    // 语言服务器预热：**每条 send** 按本工作区开关同步（会话开始 / 中途打开 / 休眠后再用都覆盖），
+    // 冷启动（实测 46–73s）落在模型思考期间，而不是 agent 第一次真查询时。fire-and-forget。
+    // 开关缺省（btw / 自动化等不下发的通道）按开处理：Host 的 ensure_server 才是把关处。
+    syncLspWarmth(
+      cmd.cwd ?? this.cwd ?? "",
+      cmd.lsp_enabled !== false,
+      (cmd.lsp_languages ?? []).length > 0,
+      (e) => this.emit(e),
+    );
 
     if (this.stopped) return;
 
@@ -793,15 +800,6 @@ export class SessionWorker {
           // 已经落进共享队列了——上一轮若异常终止，它的孤儿迭代器此刻还挂在
           // resolveNext 上，会把那条消息 shift 走（详见 retireIterators 注释）。
           this.queue.retireIterators();
-          // 会话早期预热语言服务器（只做一次）：冷启动实测 46–73s，等到 agent 真要用
-          // LSP 时早已就绪——否则第一次真查询会撞上主进程 probe_ready 的 30s 预算而只能
-          // 拿到 indexing，整条链白建。fire-and-forget：预热失败不影响对话，后续查询
-          // 按实际状态返回 indexing / no_server。
-          // 排在 retireIterators 之后：它有「必须在任何 await 之前」的不变式。
-          if (!this.lspWarmed && lspLanguages.length > 0) {
-            this.lspWarmed = true;
-            void queryLsp("warm", {}, cwd ?? this.cwd ?? "", (e) => this.emit(e));
-          }
           // 本条 query 的思考值：**唯一推导点**（thinkingPolicy）。下面还有 await
           //（prepareQueryContext），而档位被每条 send 刷新——算一次落定，env 与 SDK
           // 选项消费同一个值，不让它们在装配窗口里劈叉。

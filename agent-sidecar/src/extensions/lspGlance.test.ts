@@ -4,6 +4,8 @@ import {
   identifiersFromBash,
   identifiersFromGrepTool,
   identifiersInPattern,
+  intentInPattern,
+  searchesOf,
   looksLikeCodeSymbol,
   makeLspGlanceHook,
 } from "./lspGlance.js";
@@ -212,5 +214,130 @@ describe("grep 顺带作答", () => {
     const { h, calls } = hook(() => ({ ok: false, status: "indexing" }));
     await run(h, input("Grep", { pattern: "aaaA|bbbB|cccC|dddD|eeeE" }));
     expect(new Set(calls.map((c) => c.split(":")[1]))).toEqual(new Set(["aaaA", "bbbB", "cccC"]));
+  });
+});
+
+describe("按 grep 写法判断意图", () => {
+  it.each([
+    ["fn run_jump", "run_jump", "definition"],
+    ["fn\\s+run_jump", "run_jump", "definition"],
+    ["(fn|def) run_jump\\b", "run_jump", "definition"],
+    ["class MediaService", "MediaService", "definition"],
+    ["export function useInlineMention", "useInlineMention", "definition"],
+    ["run_jump\\(", "run_jump", "usage"],
+    ["run_jump(", "run_jump", "usage"],
+    ["\\.getUserInfo\\(", "getUserInfo", "usage"],
+    ["LspManager::ensure_server", "ensure_server", "usage"],
+    ["run_jump", "run_jump", "bare"],
+    ["fn run_jump|run_jump\\(", "run_jump", "bare"],
+  ])("%s → %s 是 %s", (pattern, name, intent) => {
+    expect(intentInPattern(pattern, name)).toBe(intent);
+  });
+
+  it("同一名字在不同模式里意图冲突 → 不确定", () => {
+    const s = searchesOf(input("Bash", { command: "rg 'fn run_jump' src && rg 'run_jump\\(' src" }));
+    expect(s).toEqual([{ name: "run_jump", intent: "bare" }]);
+  });
+});
+
+describe("grep 顺带作答：按意图附全量", () => {
+  const FILE = Array.from({ length: 120 }, (_, i) => `line ${i + 1}`).join("\n");
+  function full(script: (tool: LspTool, args: Record<string, unknown>) => LspQueryResponse) {
+    const notes: Array<{ id: string; items: unknown[] }> = [];
+    const h = makeLspGlanceHook({
+      cwd: "/proj",
+      isWarm: () => true,
+      read: async () => FILE,
+      query: async (tool, args) => script(tool, args),
+      emitNote: (id, items) => notes.push({ id, items }),
+    });
+    return { h, notes };
+  }
+  const outline = {
+    ok: true,
+    status: "ready",
+    symbols: [{ name: "run_jump", kind: 12, line: 10, column: 4, start_line: 10, end_line: 90, depth: 0 }],
+  };
+
+  it("找定义：摘要后附函数体，最多 40 行并给续读指令；广播 definition 项", async () => {
+    const { h, notes } = full((tool) =>
+      tool === "symbols"
+        ? { ok: true, status: "ready", results: [{ symbol: { file: "/proj/src/a.rs", line: 10, column: 4 } }] }
+        : tool === "outline"
+          ? outline
+          : { ok: true, status: "ready", results: [] },
+    );
+    const out = await run(h, input("Grep", { pattern: "fn run_jump" }));
+    const ctx: string = out.hookSpecificOutput.additionalContext;
+    expect(ctx).toContain("- `run_jump`: function defined at src/a.rs:10, lines 10-90");
+    expect(ctx).toContain("10\tline 10");
+    expect(ctx).toContain("49\tline 49");
+    expect(ctx).not.toContain("50\tline 50");
+    expect(ctx).toMatch(/41 more lines — Read src\/a\.rs with offset=50/);
+    expect(notes).toEqual([
+      { id: "t1", items: [{ kind: "definition", name: "run_jump", file: "src/a.rs", line: 10, symbolKind: "function", endLine: 90 }] },
+    ]);
+  });
+
+  it("找用法：附引用列表（所在函数 + 行文本），最多 15 条；广播 references 项", async () => {
+    const refs = Array.from({ length: 20 }, (_, i) => ({ symbol: { file: "/proj/src/b.rs", line: i + 1, column: 1 } }));
+    const { h, notes } = full((tool) =>
+      tool === "symbols"
+        ? { ok: true, status: "ready", results: [{ symbol: { file: "/proj/src/a.rs", line: 10, column: 4 } }] }
+        : tool === "outline"
+          ? outline
+          : { ok: true, status: "ready", results: refs },
+    );
+    const out = await run(h, input("Grep", { pattern: "run_jump\\(" }));
+    const ctx: string = out.hookSpecificOutput.additionalContext;
+    expect(ctx).toContain("20 real references in 1 file");
+    expect(ctx).toContain("  src/b.rs\n    1:1");
+    expect(ctx).toContain("…(5 more — lsp_references");
+    const item = (notes[0].items as Array<Record<string, unknown>>)[0];
+    expect(item.kind).toBe("references");
+    expect(item.total).toBe(20);
+    expect((item.shown as unknown[]).length).toBe(15);
+  });
+
+  it("裸名字：只给一行摘要；广播 summary 项", async () => {
+    const { h, notes } = full((tool) =>
+      tool === "symbols"
+        ? { ok: true, status: "ready", results: [{ symbol: { file: "/proj/src/a.rs", line: 10, column: 4 } }] }
+        : tool === "outline"
+          ? outline
+          : { ok: true, status: "ready", results: [] },
+    );
+    const out = await run(h, input("Grep", { pattern: "run_jump" }));
+    expect(out.hookSpecificOutput.additionalContext).not.toContain("10\tline 10");
+    expect((notes[0].items as Array<{ kind: string }>)[0].kind).toBe("summary");
+  });
+
+  it("多个名字只给第一个意图明确的附全量，其余一行摘要", async () => {
+    const { h } = full((tool, args) =>
+      tool === "symbols"
+        ? { ok: true, status: "ready", results: [{ symbol: { file: `/proj/src/${String(args.name)}.rs`, line: 10, column: 4 } }] }
+        : tool === "outline"
+          ? { ok: true, status: "ready", symbols: [{ ...outline.symbols[0], name: String(args.file).split("/").pop()!.replace(".rs", "") }] }
+          : { ok: true, status: "ready", results: [] },
+    );
+    const out = await run(h, input("Grep", { pattern: "fn run_jump|fn ask_language" }));
+    const ctx: string = out.hookSpecificOutput.additionalContext;
+    expect(ctx.match(/\tline 10/g)?.length).toBe(1);
+  });
+
+  it("文件读不到：退回摘要，不附残缺的函数体", async () => {
+    const h = makeLspGlanceHook({
+      cwd: "/proj",
+      isWarm: () => true,
+      read: async () => null,
+      query: async (tool) =>
+        tool === "symbols"
+          ? { ok: true, status: "ready", results: [{ symbol: { file: "/proj/src/a.rs", line: 10, column: 4 } }] }
+          : tool === "outline"
+            ? outline
+            : { ok: true, status: "ready", results: [] },
+    });
+    const out = await run(h, input("Grep", { pattern: "fn run_jump" }));
+    expect(out.hookSpecificOutput.additionalContext).not.toContain("could not be read");
   });
 });

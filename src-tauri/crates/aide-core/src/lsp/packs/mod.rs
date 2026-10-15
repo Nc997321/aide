@@ -10,6 +10,7 @@ pub mod archive;
 pub mod catalog;
 pub mod fetch;
 pub mod install;
+pub mod jvm;
 pub mod node;
 
 use std::collections::HashSet;
@@ -58,6 +59,9 @@ pub enum Launch {
     Node { script: String },
     Binary { path: String },
     External { path: String },
+    /// `java <jvm_args> -jar <jar>`（JVM 系语言服务器）。`jar` 相对安装目录；`jvm_args` 里的 `{dir}`
+    /// 启动时换成安装目录。java 每次启动时现找版本 ≥ `min_java` 的（见 `jvm::find_java`）。
+    Jar { jar: String, jvm_args: Vec<String>, min_java: u32 },
 }
 
 pub fn read_manifest(id: &str) -> Option<Manifest> {
@@ -65,18 +69,20 @@ pub fn read_manifest(id: &str) -> Option<Manifest> {
     serde_json::from_slice(&body).ok()
 }
 
-/// 某语言已装语言包的启动命令 `(program, args)`（语言特有参数如 `--stdio` 由 profile 另加）。
-/// 没装、或装了但启动物已经不在（node 被卸了、工具链被删了）= None，查找链继续往下走。
-pub fn launch_for(lang: LanguageId, resources: &dyn HostResources) -> Option<(String, Vec<String>)> {
+/// 某语言已装语言包的启动来源（语言特有参数如 `--stdio` 由 profile 另加）。
+/// 没装、或装了但启动物已经不在（node 被卸了、工具链被删了、JDK 版本不够）= None，查找链继续往下走。
+pub fn launch_for(lang: LanguageId, resources: &dyn HostResources) -> Option<crate::lsp::registry::ServerSource> {
+    use crate::lsp::registry::{JvmParts, ServerSource};
     let spec = catalog::for_lang(lang)?;
     let manifest = read_manifest(spec.id)?;
     let dir = packs_root().join(spec.id);
+    let pack = |program: String, args: Vec<String>| ServerSource::Pack { program, args, jvm: None };
     match manifest.launch {
         Launch::Node { script } => {
             let script = dir.join(script);
             let node = node::find(resources)?;
             script.is_file().then(|| {
-                (
+                pack(
                     node.to_string_lossy().into_owned(),
                     vec![dunce::simplified(&script).to_string_lossy().into_owned()],
                 )
@@ -84,9 +90,28 @@ pub fn launch_for(lang: LanguageId, resources: &dyn HostResources) -> Option<(St
         }
         Launch::Binary { path } => {
             let p = dir.join(path);
-            p.is_file().then(|| (dunce::simplified(&p).to_string_lossy().into_owned(), vec![]))
+            p.is_file().then(|| pack(dunce::simplified(&p).to_string_lossy().into_owned(), vec![]))
         }
-        Launch::External { path } => PathBuf::from(&path).is_file().then_some((path, vec![])),
+        Launch::External { path } => PathBuf::from(&path).is_file().then(|| pack(path, vec![])),
+        Launch::Jar { jar, jvm_args, min_java } => {
+            let jar = dir.join(jar);
+            if !jar.is_file() {
+                return None;
+            }
+            let Some((java, _)) = jvm::find_java(min_java) else {
+                tracing::warn!(lang = lang.id_str(), min_java, "[lsp-packs] 语言包已装，但本机没有可用的 JDK");
+                return None;
+            };
+            let dir_s = dunce::simplified(&dir).to_string_lossy().replace('\\', "/");
+            Some(ServerSource::Pack {
+                program: java.to_string_lossy().into_owned(),
+                args: vec![],
+                jvm: Some(JvmParts {
+                    jvm_args: jvm_args.iter().map(|a| a.replace("{dir}", &dir_s)).collect(),
+                    jar: dunce::simplified(&jar).to_string_lossy().into_owned(),
+                }),
+            })
+        }
     }
 }
 
@@ -132,6 +157,7 @@ pub struct InstalledView {
 
 fn method_of(spec: &PackSpec) -> &'static str {
     match &spec.recipe {
+        Recipe::JvmArchive(_) => "从 Eclipse 官方下载（约 50 MB，断点续传，校验 sha256）；用本机 JDK 运行，不另装 JDK",
         Recipe::Npm { .. } => "从 npm 下载（官方源 / 国内镜像），校验 sha512；用本机 Node.js 运行，没有就自动下载一份",
         Recipe::Binary { toolchain: Some(_), .. } => "有 rustup 时安装官方组件，否则从 GitHub Releases 下载",
         Recipe::Binary { toolchain: None, .. } => "从 GitHub Releases 下载",
@@ -192,7 +218,23 @@ async fn lsp_pack_install(core: Arc<Core>, a: PackIdArgs) -> Result<PackView, St
     }
     stop_servers(&core, spec).await;
     let resources = Arc::clone(&core.resources);
-    let result = tokio::task::spawn_blocking(move || install::install(spec, resources.as_ref()))
+    let emitter = Arc::clone(&core);
+    let result = tokio::task::spawn_blocking(move || {
+        // 下载进度广播给所有前门（插件市场卡片 / 语言环境面板 / 发送前确认都能显示）；~4 次/秒
+        let last = std::sync::Mutex::new(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        let progress = |received: u64, total: Option<u64>| {
+            let Ok(mut t) = last.lock() else { return };
+            if t.elapsed() < std::time::Duration::from_millis(250) && total != Some(received) {
+                return;
+            }
+            *t = std::time::Instant::now();
+            emitter.emit(
+                "lsp-pack-progress",
+                serde_json::json!({ "id": spec.id, "received": received, "total": total }),
+            );
+        };
+        install::install_with_progress(spec, resources.as_ref(), &progress)
+    })
         .await
         .map_err(|e| e.to_string())
         .and_then(|r| r);
@@ -269,8 +311,9 @@ mod tests {
             let m = install::install(spec, &res).unwrap_or_else(|e| panic!("{} 安装失败：{e}", spec.id));
             eprintln!("installed {} {} via {}", spec.id, m.version, m.source);
             let lang = spec.langs[0];
-            let (program, args) = launch_for(lang, &res).unwrap_or_else(|| panic!("{} 装完却解析不到启动命令", spec.id));
-            let (program, args) = crate::lsp::registry::to_command(lang, &crate::lsp::registry::ServerSource::Pack { program, args }, None);
+            let src = launch_for(lang, &res).unwrap_or_else(|| panic!("{} 装完却解析不到启动命令", spec.id));
+            let (program, args) = crate::lsp::registry::to_command(lang, &src, None);
+            let args = crate::lsp::registry::reshape_for_jvm(&src, args);
             let mut child = std::process::Command::new(&program)
                 .args(&args)
                 .stdin(std::process::Stdio::piped())

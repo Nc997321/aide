@@ -1,9 +1,10 @@
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex as TokioMutex;
 
 use crate::lsp::detector::LanguageId;
+use crate::lsp::status_board::{Phase, StatusBoard};
 use crate::lsp::docs::{DocOrigin, OpenDocs};
 use crate::lsp::registry::{self, ServerSource};
 use crate::lsp::rpc::{dispatch, Action, Router};
@@ -15,6 +16,8 @@ use crate::lsp::ignore_dirs::ALWAYS_IGNORE_DIRS;
 #[derive(Debug, Clone)]
 pub enum EnsureError {
     ServerNotFound,
+    /// 工作区 LSP 开关关着：不起进程（见 `WorkspaceLspConfig::enabled`）。
+    Disabled,
     SpawnFailed(String),
     HandshakeFailed(String),
 }
@@ -98,10 +101,31 @@ pub struct ServerHandle {
     /// implementationProvider / documentSymbolProvider 等，决定是否启用 gutter 标记等
     /// 可选能力。None = 未握手成功。
     pub capabilities: Arc<TokioMutex<Option<serde_json::Value>>>,
+    /// 最后一次被用到（unix ms）：请求、打开 / 编辑文档时刷新。空闲休眠只看它，与会话无关——
+    /// 同工作区多个会话与编辑器共用这一台 server，谁用都算。
+    pub last_used: AtomicU64,
     _child: Option<Arc<TokioMutex<tokio::process::Child>>>,
 }
 
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
 impl ServerHandle {
+    /// 语言服务器进程号（内存采样用）。测试里的 mock server 没有子进程 → None。
+    pub async fn pid(&self) -> Option<u32> {
+        let child = self._child.as_ref()?;
+        child.lock().await.id()
+    }
+
+    /// 记一次使用（空闲休眠的计时从这里重新开始）。
+    pub fn touch(&self) {
+        self.last_used.store(now_ms(), Ordering::Relaxed);
+    }
+
     pub fn is_alive(&self) -> bool {
         !self.dead.load(Ordering::Relaxed) && self.initialized.load(Ordering::Relaxed)
     }
@@ -120,6 +144,7 @@ impl ServerHandle {
         text: String,
         origin: DocOrigin,
     ) -> Result<(), String> {
+        self.touch();
         let notif = {
             let mut docs = self.docs.lock().await;
             match doc_action(docs.origin_of(uri), origin) {
@@ -155,6 +180,7 @@ impl ServerHandle {
         if !self.ready.load(Ordering::Relaxed) {
             return Ok(RequestOutcome::NotReady);
         }
+        self.touch();
         let (msg, id, tx, rx) = self.router.next_request(method, params);
         self.transport.table.lock().await.insert(id, tx);
         self.transport.send(&msg).await.map_err(|e| e.to_string())?;
@@ -176,6 +202,17 @@ pub struct LspManager {
     spawn_lock: TokioMutex<()>,
     /// 起不来的 (工作区, 语言) → 何时失败 + 当时的错误。冷却期内直接回同一个错，不再 spawn。
     failures: TokioMutex<HashMap<(String, LanguageId), (std::time::Instant, EnsureError)>>,
+    /// 空闲巡检任务已起（第一台 server 拉起时启动，见 `idle::spawn_reaper`）。
+    reaper_started: AtomicBool,
+}
+
+/// 状态板上「失败」的说明文字。
+fn ensure_error_text(e: &EnsureError) -> String {
+    match e {
+        EnsureError::ServerNotFound => "language server not installed".into(),
+        EnsureError::Disabled => "turned off for this workspace".into(),
+        EnsureError::SpawnFailed(m) | EnsureError::HandshakeFailed(m) => m.clone(),
+    }
 }
 
 /// 一台 server 起失败后多久内不再重试。
@@ -192,7 +229,19 @@ impl LspManager {
             handles: TokioMutex::new(HashMap::new()),
             spawn_lock: TokioMutex::new(()),
             failures: TokioMutex::new(HashMap::new()),
+            reaper_started: AtomicBool::new(false),
         }
+    }
+
+    /// 活着的 server（空闲巡检用）。
+    pub async fn alive_handles(&self) -> Vec<((String, LanguageId), Arc<ServerHandle>)> {
+        self.handles
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, h)| h.is_alive())
+            .map(|(k, h)| (k.clone(), Arc::clone(h)))
+            .collect()
     }
 
     /// 幂等：已 alive 直接返；dead → 重拉。全链有界：拿锁 30s 超时（持锁者
@@ -209,6 +258,14 @@ impl LspManager {
         // 拿已有句柄不该跟别的语言的 spawn 抢）。
         if let Some(h) = self.get(workspace, lang).await {
             return Ok(h);
+        }
+        // 开关门：**所有**拉起 server 的入口（编辑器 ensure / didOpen、agent 查询、预热）都走到
+        // 这里，「关 = 不起进程」由这一处保证。放在快路径之后：活着的 server 不为它多读一次
+        // state（关闭时 workspace_set_lsp_enabled 已先停机，快路径命中不了已关工作区）。
+        let board = &core.lsp_board;
+        if !crate::commands::workspace::lsp_switch_on(workspace) {
+            board.enter(workspace, lang, Phase::Disabled, None);
+            return Err(EnsureError::Disabled);
         }
         if let Some(e) = self.recent_failure(&key).await {
             return Err(e);
@@ -233,15 +290,31 @@ impl LspManager {
         // dead 或不存在 → spawn 新的（覆盖 > 捆绑 > PATH；Host 进程跑在用户登录环境里）。
         let src = match registry::resolve(lang, settings, core.resources.as_ref()) {
             Some(src) => src,
-            None => return Err(EnsureError::ServerNotFound),
+            None => {
+                board.enter(workspace, lang, Phase::Missing, None);
+                return Err(EnsureError::ServerNotFound);
+            }
         };
+        board.enter(workspace, lang, Phase::Starting, None);
         match spawn_and_init(workspace, lang, &src, core, settings).await {
             Ok(handle) => {
                 self.failures.lock().await.remove(&key);
                 self.handles.lock().await.insert(key, Arc::clone(&handle));
+                if !self.reaper_started.swap(true, Ordering::Relaxed) {
+                    crate::lsp::idle::spawn_reaper(
+                        Arc::clone(&core.lsp),
+                        Arc::clone(&core.lsp_board),
+                        Arc::clone(&core.settings),
+                    );
+                }
+                // 握手完：server 自报「工程已加载」的（jdtls）先进 Loading，其余直接 Indexing。
+                // 两者都**不是**就绪——就绪只认 agent_query::start_warm 的实测探针。
+                let phase = if handle.ready.load(Ordering::Relaxed) { Phase::Indexing } else { Phase::Loading };
+                board.enter(workspace, lang, phase, None);
                 Ok(handle)
             }
             Err(e) => {
+                board.enter(workspace, lang, Phase::Failed, Some(ensure_error_text(&e)));
                 self.failures
                     .lock()
                     .await
@@ -311,9 +384,7 @@ impl LspManager {
         }
     }
 
-    /// 预留：按语言单独回收 server（`kill_workspace` 的细粒度版）。v1 仅用
-    /// `kill_workspace`（关区即杀），per-lang 回收待「禁用某语言 LSP」类开关接入。
-    #[allow(dead_code)]
+    /// 按（工作区, 语言）回收一台 server（空闲休眠用；`kill_workspace` 的细粒度版）。
     pub async fn kill_server(&self, workspace: &str, lang: LanguageId) {
         let removed = self
             .handles
@@ -452,11 +523,12 @@ async fn spawn_and_init(
         dead: Arc::clone(&dead),
         stopping,
         capabilities: Arc::new(TokioMutex::new(None)),
+        last_used: AtomicU64::new(now_ms()),
         _child: child,
     });
 
     // —— reader 任务 ——
-    start_reader(handle.clone(), lang, workspace.to_string(), core.events());
+    start_reader(handle.clone(), lang, workspace.to_string(), core.events(), Arc::clone(&core.lsp_board));
 
     // —— initialize 握手 ——
     if let Err(e) = init_handshake(&handle, workspace, lang, &exclude_globs).await {
@@ -565,6 +637,8 @@ async fn spawn_real(
     // profile 额外参数（需 app/resource_dir 的语言用，默认空；Java 注入 lombok javaagent）
     let ctx = registry::LaunchCtx { resources: core.resources.as_ref(), src };
     args.extend(crate::lsp::profiles::profile(lang).extra_args(&ctx));
+    // JVM 系语言包：把 JVM 参数挪到 -jar 之前（非 JVM 来源原样）
+    let args = registry::reshape_for_jvm(src, args);
     // Bundled：拼完整资源路径 + dunce 剥前缀
     let program_path = match src {
         ServerSource::Bundled { subdir, binary } => {
@@ -713,6 +787,7 @@ fn start_reader(
     lang: LanguageId,
     workspace: String,
     events: Arc<dyn crate::EventSink>,
+    board: Arc<StatusBoard>,
 ) {
     use tokio::io::{AsyncReadExt, BufReader};
 
@@ -782,12 +857,27 @@ fn start_reader(
                         // 仅 Java（handles_status=true）消费：认 ServiceReady 置功能就绪。
                         // 其余语言不发 language/status，即使发也按 profile 默认忽略。
                         let p = crate::lsp::profiles::profile(lang);
+                        if p.handles_status() {
+                            // 进度只做显示（`50% Starting Java Language Server - Project 'po-api'`）
+                            let pct = crate::lsp::status_board::percent_in(&message);
+                            board.progress(&workspace, lang, pct, (!message.is_empty()).then(|| message.clone()));
+                        }
                         if p.handles_status() && p.is_ready_status(&status_type, &message) {
                             handle.ready.store(true, Ordering::Relaxed);
+                            board.loaded(&workspace, lang);
+                            board.progress(&workspace, lang, None, None);
                             events.emit(
                                 "lsp-server-ready",
                                 serde_json::json!({"workspaceRoot": workspace, "lang": lang.id_str()}),
                             );
+                        }
+                    }
+                    Action::Progress { percent, message, done } => {
+                        // 标准 `$/progress`（rust-analyzer 等）：语言无关，只做显示。
+                        if done {
+                            board.progress(&workspace, lang, None, None);
+                        } else {
+                            board.progress(&workspace, lang, percent, message);
                         }
                     }
                     Action::Ignore => {}
@@ -799,7 +889,14 @@ fn start_reader(
         table.lock().await.reject_all();
         dead.store(true, Ordering::Relaxed);
         if !stopping.load(Ordering::Relaxed) {
+            board.enter(&workspace, lang, Phase::Failed, Some("the language server exited".into()));
             events.emit("lsp-server-dead", serde_json::Value::Null);
+        } else if board
+            .get(&workspace, lang)
+            .is_some_and(|st| !matches!(st.phase, Phase::Disabled | Phase::Sleeping))
+        {
+            // 主动停（关开关 / 休眠 / 换语言包 / 退出）：关开关、休眠两条路已置好阶段，别被这里覆盖成 Off。
+            board.enter(&workspace, lang, Phase::Off, None);
         }
     });
 }
@@ -983,6 +1080,20 @@ async fn init_handshake(
 pub(crate) mod tests {
     use super::*;
 
+    /// 开关关着（从没打开过的工作区默认即关）→ 拒绝拉起，不 spawn、不进失败冷却。
+    #[tokio::test]
+    async fn ensure_server_refuses_when_switch_off() {
+        let core = crate::test_core(Arc::new(crate::NullSink));
+        let settings = crate::app_settings::public_settings(&core.settings).unwrap();
+        let ws = std::env::temp_dir().join("aide-lsp-switch-off-never-enabled-xyz");
+        let ws = ws.to_string_lossy();
+        let mgr = LspManager::new();
+        let r = mgr.ensure_server(&ws, LanguageId::Rust, &core, &settings).await;
+        assert!(matches!(r, Err(EnsureError::Disabled)), "got {:?}", r.err());
+        assert!(mgr.get(&ws, LanguageId::Rust).await.is_none());
+        assert!(mgr.failures.lock().await.is_empty(), "关闭不是失败，不该进冷却");
+    }
+
     /// 键名写错 server 不会报错，只会悄悄回扁平列表——只有测试能拦。
     #[test]
     fn document_symbol_capability_uses_the_spec_key() {
@@ -1152,6 +1263,7 @@ pub(crate) mod tests {
             dead: Arc::new(AtomicBool::new(false)),
             stopping: Arc::new(AtomicBool::new(false)),
             capabilities: Arc::new(TokioMutex::new(None)),
+            last_used: AtomicU64::new(now_ms()),
             _child: None,
         })
     }
@@ -1369,7 +1481,8 @@ pub(crate) mod tests {
             h.clone(),
             LanguageId::Rust,
             "/w".into(),
-            events,
+            events.clone(),
+            Arc::new(StatusBoard::new(events)),
         );
         // 主动关停：shutdown_handle 先置 stopping，mock 答 shutdown 后退出 → EOF。
         // 注意：不能用 wait_reader_eof 等收尾——shutdown_handle 自己也置 dead，
@@ -1400,7 +1513,8 @@ pub(crate) mod tests {
             h.clone(),
             LanguageId::Rust,
             "/w".into(),
-            events,
+            events.clone(),
+            Arc::new(StatusBoard::new(events)),
         );
         // 异常死亡：die mock 读到一帧即退出（无任何关停意图）→ EOF
         h.transport

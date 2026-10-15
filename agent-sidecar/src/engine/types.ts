@@ -176,6 +176,9 @@ export type ChatEvent =
   | { type: "thinking_delta"; delta: string }
   | { type: "tool_use_start"; id: string; name: string; input: unknown; model?: string; modelLabel?: string }
   | { type: "tool_result"; id: string; content: string; is_error: boolean }
+  // grep 顺带作答附了什么（lspGlance hook）：对话里该 Grep / Bash 行下方出「LSP 补充」标记。
+  // 与 hook 给模型的 additionalContext 同源；广播给所有客户端（多端一致性）。
+  | { type: "lsp_glance"; tool_use_id: string; items: LspGlanceItem[] }
   | { type: "subagent_start"; id: string; agentName: string; description: string; prompt?: string; model?: string; modelLabel?: string }
   // 子代理内部逐字流式增量——语义对齐主线程的 text_delta（stream_event 的 text_delta）。
   // thinking 主线程目前不转发，但这条子代理专属通道独立开放，不受此限制（v2）。
@@ -530,6 +533,9 @@ export type SidecarCommand =
       /** 该工作区配得上 LSP 的语言（主进程 lsp_languages_for_path 算好下发）。
        *  空数组 = 不挂 aide-lsp 工具（见 extensions/lspTools.ts 的四档闸门）。 */
       lsp_languages?: string[];
+      /** 本工作区的 LSP 开关（Host `lsp_switch_on`）。false = 用户关了：不预热、就绪作废，
+       *  工具仍挂载、查询由 Host 回 `disabled` 后走文本兜底。省略 = 按开处理（Host 仍把关）。 */
+      lsp_enabled?: boolean;
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
       // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;
@@ -601,4 +607,25 @@ export type SidecarCommand =
       ok: boolean;
       data?: unknown;
       error?: string;
+    };
+
+/** grep 顺带作答的一项（给界面看的结构；路径已相对化）。
+ *  ⚠️ 与 packages/aide-sdk/src/types/chat.ts 的同名类型**必须同形**（lspGlanceParity.test.ts 对账）。 */
+export type LspGlanceItem =
+  | {
+      kind: "summary";
+      name: string;
+      /** 定义处（同名多义时是候选；候选太多时为空、只有 ambiguous 个数）。kind 为空串 = 没取到种类。 */
+      defs: Array<{ file: string; line: number; kind: string; endLine?: number }>;
+      refCount?: number;
+      refFiles?: number;
+      /** 同名多义的个数。 */
+      ambiguous?: number;
+    }
+  | { kind: "definition"; name: string; file: string; line: number; symbolKind: string; endLine?: number }
+  | {
+      kind: "references";
+      name: string;
+      total: number;
+      shown: Array<{ file: string; line: number; enclosing: string | null }>;
     };

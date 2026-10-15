@@ -21,6 +21,8 @@ pub mod types;
 pub mod vue_plugin;
 pub mod workspace_access;
 pub mod workspace_langs;
+pub mod status_board;
+pub mod idle;
 pub mod workspace_symbol;
 
 pub static COMMANDS: &[HostCommand] = &[
@@ -43,6 +45,8 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("lsp_document_symbol", lsp_document_symbol),
     command!("lsp_capabilities", lsp_capabilities),
     command!("lsp_shutdown_workspace", lsp_shutdown_workspace),
+    command!("lsp_session_preflight", lsp_session_preflight),
+    command!("lsp_status", lsp_status),
 ];
 
 #[cfg(test)]
@@ -176,13 +180,18 @@ async fn lsp_ensure_server(
         .ensure_server(&workspace_root, lang_id, &app, &settings)
         .await
     {
-        Ok(h) => Ok(EnsureOutcome {
-            ok: true,
-            // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
-            ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
-            kind: None,
-            error: None,
-        }),
+        Ok(h) => {
+            // 编辑器拉起的 server 同样由 Host 做就绪实测（单飞；已就绪则立即返回）——
+            // 否则只用编辑器、不开会话的用户，状态板永远停在「索引中」。
+            crate::lsp::agent_query::start_warm(&core, &workspace_root, lang_id);
+            Ok(EnsureOutcome {
+                ok: true,
+                // Java 索引期 ready=false（握手成功但 jdtls 还没 ServiceReady）；其余 true。
+                ready: h.ready.load(std::sync::atomic::Ordering::Relaxed),
+                kind: None,
+                error: None,
+            })
+        }
         Err(e) => Ok(ensure_err_to_outcome(e)),
     }
 }
@@ -195,6 +204,12 @@ pub(crate) fn ensure_err_to_outcome(e: EnsureError) -> EnsureOutcome {
             ok: false,
             ready: false,
             kind: Some("server_not_found"),
+            error: None,
+        },
+        EnsureError::Disabled => EnsureOutcome {
+            ok: false,
+            ready: false,
+            kind: Some("disabled"),
             error: None,
         },
         EnsureError::HandshakeFailed(msg) => EnsureOutcome {
@@ -280,6 +295,7 @@ async fn lsp_did_open(core: Arc<Core>, a: LspDidOpenArgs) -> Result<(), String> 
         Ok(h) => h,
         Err(_) => return Ok(()),
     };
+    crate::lsp::agent_query::start_warm(&core, &workspace_root, lang_id);
     // §5.4 排除集跳过
     if crate::lsp::manager::is_excluded(&file_path, &h.exclude_globs) {
         return Ok(());
@@ -330,6 +346,7 @@ async fn lsp_did_change(core: Arc<Core>, a: LspDidChangeArgs) -> Result<(), Stri
             return Ok(()); // doc not open (no preceding did_open) — skip, don't panic
         }
     }
+    h.touch();
     let v = h.docs.lock().await.change(&uri, text.clone());
     let _ = version; // Full 同步：用 docs 内部 version
                      // 帧形状与 agent 路径共用（见 manager::did_change_notif）。
@@ -1077,12 +1094,73 @@ async fn lsp_shutdown_workspace(
 ) -> Result<(), String> {
     let LspShutdownWorkspaceArgs { workspace_root } = a;
     let state = core.lsp.clone();
+    core.lsp_board.stop_workspace(&workspace_root, crate::lsp::status_board::Phase::Off);
     state.0.write().await.kill_workspace(&workspace_root).await;
     core.emit(
         "lsp-diagnostics",
         serde_json::json!({"workspaceRoot":workspace_root,"clear":true}),
     );
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspSessionPreflightArgs {
+    workspace_root: String,
+}
+
+/// 会话启动前：这个工作区要不要问用户「开不开语言服务器」。按**会话自持的工作区**判定
+/// （调用方传会话的 wsPath，不是窗口活动工作区）。探测与 send 下发给 sidecar 的语言同口径
+/// （detector + registry::resolve），远程工作区在目标机上探测。
+async fn lsp_session_preflight(
+    core: Arc<Core>,
+    a: LspSessionPreflightArgs,
+) -> Result<crate::lsp::workspace_langs::LspPreflight, String> {
+    use crate::lsp::workspace_langs::{decide_preflight, preflight_lang, LspPreflight};
+    let LspSessionPreflightArgs { workspace_root } = a;
+    let root = workspace_root.clone();
+    let (trusted, cfg) = tokio::task::spawn_blocking(move || {
+        let trusted = crate::commands::workspace::is_path_trusted(&root);
+        let cfg = crate::commands::workspace::lsp_workspace_config(&crate::commands::workspace::path_to_key(&root));
+        (trusted, cfg)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    // 已决定 / 未信任不必探测（探测要遍历目录）。
+    if !trusted || cfg.lsp_decided() {
+        return Ok(decide_preflight(trusted, cfg.lsp_decided(), cfg.enabled, vec![]));
+    }
+    let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
+    let detected = access.detect_languages(&workspace_root).await;
+    if detected.is_empty() {
+        return Ok(LspPreflight::Nothing);
+    }
+    let settings = crate::app_settings::public_settings(&core.settings).map_err(|e| e.to_string())?;
+    let langs = detected.into_iter().map(|l| preflight_lang(&core, &settings, l)).collect();
+    Ok(decide_preflight(true, false, false, langs))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LspStatusArgs {
+    workspace_root: String,
+}
+
+/// 某工作区各语言的状态板快照（前端打开「语言环境」面板 / 切工作区时回种；之后靠 `lsp-status` 事件）。
+async fn lsp_status(core: Arc<Core>, a: LspStatusArgs) -> Result<Vec<serde_json::Value>, String> {
+    Ok(core
+        .lsp_board
+        .snapshot(&a.workspace_root)
+        .into_iter()
+        .map(|(lang, st)| {
+            let mut v = serde_json::to_value(st).unwrap_or(serde_json::Value::Null);
+            if let serde_json::Value::Object(o) = &mut v {
+                o.insert("workspaceRoot".into(), a.workspace_root.clone().into());
+                o.insert("lang".into(), lang.id_str().into());
+            }
+            v
+        })
+        .collect())
 }
 
 // ── helpers ──

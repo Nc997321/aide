@@ -522,3 +522,122 @@ describe("ChatPanel — 待确认时收起输入框", () => {
     wrapper.unmount();
   });
 });
+
+describe("ChatPanel — 新会话发送前问语言服务器", () => {
+  type Api = Record<string, ReturnType<typeof vi.fn>>;
+  async function setup(preflight: unknown) {
+    // useLsp 是模块级单例：上个用例「不开启」记下的已决定工作区会让提示按设计不显示
+    (await import("@/composables/useLsp")).useLsp().__resetForTest();
+    (await import("./lspSendGate")).pendingLspAsk.value = null;
+    const api = (await import("@aide/sdk/api")).api as unknown as Api;
+    api.lspSessionPreflight = vi.fn(async () => preflight);
+    api.workspaceSetLspEnabled = vi.fn(async () => undefined);
+    api.lspShutdownWorkspace = vi.fn(async () => undefined);
+    // 前面用例改过共享桩（模型漂移）：复位成「无漂移」，免得已有会话发送时先弹模型变更确认
+    api.sessionIdentityDrift = vi.fn(async () => ({ providerDrift: false, modelDrift: false, lastProvider: null, lastModel: null }));
+    // 包一层再返回：api 是 Proxy，任何键（含 then）都给函数，直接 return 会被当成 thenable 挂死
+    return { api };
+  }
+  const ASK = { kind: "ask", langs: [{ lang: "java", installed: true }] };
+  async function typeAndSend(wrapper: VueWrapper) {
+    await wrapper.find("textarea").setValue("hello");
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    await flush();
+    await flush();
+  }
+  const prompt = (wrapper: VueWrapper) => wrapper.findComponent({ name: "LspSendPrompt" });
+
+  it("工程模式新会话：消息照发（不阻塞），输入框上方出提示；「开启」= 写开关(true)，不再重复发送", async () => {
+    const { api } = await setup(ASK);
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "C:/w/po-api" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    expect(api.lspSessionPreflight).toHaveBeenCalledWith("C:/w/po-api");
+    expect(wrapper.emitted("send")?.[0]?.[0]).toBe("hello");
+    expect(prompt(wrapper).exists()).toBe(true);
+    expect(prompt(wrapper).text()).toContain("检测到 Java 项目");
+    expect(prompt(wrapper).text()).not.toContain("GB");
+    expect(wrapper.findComponent({ name: "PermissionDialog" }).props("permission")).toBeNull();
+    prompt(wrapper).vm.$emit("enable");
+    await flush();
+    await flush();
+    expect(api.workspaceSetLspEnabled).toHaveBeenCalledWith("C:/w/po-api", true);
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    expect(prompt(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it("「不开启」= 写开关(false)；「×」= 不记录、提示消失", async () => {
+    const { api } = await setup(ASK);
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "/w" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    prompt(wrapper).vm.$emit("skip");
+    await flush();
+    await flush();
+    expect(api.workspaceSetLspEnabled).toHaveBeenCalledWith("/w", false);
+    expect(prompt(wrapper).exists()).toBe(false);
+    wrapper.unmount();
+
+    const again = await setup(ASK);
+    const w2 = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "/w2" }) });
+    await flush();
+    await typeAndSend(w2);
+    prompt(w2).vm.$emit("dismiss");
+    await flush();
+    expect(again.api.workspaceSetLspEnabled).not.toHaveBeenCalled();
+    expect(prompt(w2).exists()).toBe(false);
+    w2.unmount();
+  });
+
+  it("询问记在工作区上：会话号变了（拿到正式 id / 面板重建）还在；换到别的工作区不显示、换回来还在", async () => {
+    await setup(ASK);
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "C:\\w\\po-api" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    await wrapper.setProps({ sessionId: "real-1" });
+    await flush();
+    expect(prompt(wrapper).exists()).toBe(true);
+    // 路径写法不同（分隔符 / 盘符大小写）仍是同一个工作区
+    await wrapper.setProps({ workspacePath: "c:/w/po-api" });
+    await flush();
+    expect(prompt(wrapper).exists()).toBe(true);
+    await wrapper.setProps({ workspacePath: "/other" });
+    await flush();
+    expect(prompt(wrapper).exists()).toBe(false);
+    await wrapper.setProps({ workspacePath: "c:/w/po-api" });
+    await flush();
+    expect(prompt(wrapper).exists()).toBe(true);
+    wrapper.unmount();
+    // 面板重建（新挂载）也还在
+    const again = mount(ChatPanel, { props: baseProps({ sessionId: "real-1", mode: "project", workspacePath: "C:/w/po-api" }) });
+    await flush();
+    expect(prompt(again).exists()).toBe(true);
+    again.unmount();
+  });
+
+  it("日常模式、已有会话、Host 说不用问：都不弹，直接发", async () => {
+    let { api } = await setup(ASK);
+    let wrapper = mount(ChatPanel, { props: baseProps({ mode: "daily", workspacePath: "/daily" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    expect(api.lspSessionPreflight).not.toHaveBeenCalled();
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    wrapper.unmount();
+
+    ({ api } = await setup(ASK));
+    wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", mode: "project", workspacePath: "/w" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    expect(api.lspSessionPreflight).not.toHaveBeenCalled();
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    wrapper.unmount();
+
+    ({ api } = await setup({ kind: "decided", enabled: false }));
+    wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "/w" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});

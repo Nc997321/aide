@@ -26,6 +26,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("workspace_set_lsp_enabled", workspace_set_lsp_enabled),
     command!("workspace_set_lsp_excludes", workspace_set_lsp_excludes),
     command!("workspace_get_lsp_excludes", workspace_get_lsp_excludes),
+    command!("workspace_get_lsp_switch", workspace_get_lsp_switch),
 ];
 
 
@@ -210,10 +211,29 @@ pub fn clear_active_in_config(config: &mut serde_json::Value) {
 /// 单工作区的 LSP 配置（存 state JSON，按 workspace key 索引）。
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
 pub struct WorkspaceLspConfig {
+    /// 本工作区开不开语言服务器——编辑器、agent 工具、顺带作答、预热**共用这一个开关**，
+    /// 关 = 不起进程（`LspManager::ensure_server` 拒 spawn）。
     #[serde(default)]
     pub enabled: bool,
+    /// 用户对开关做过选择（`set_lsp_enabled` 任一次写入即 true）。会话启动前据此决定要不要询问。
+    /// 旧记录没有该字段 → false：存量 `enabled=false` 分不清「关过」还是「保存排除目录时顺带
+    /// 写进去的默认值」，一律按没问过；`enabled=true` 的视同已决定（见 [`lsp_decided`]）。
+    #[serde(default)]
+    pub decided: bool,
     #[serde(default)]
     pub exclude_dirs: Vec<String>,
+}
+
+impl WorkspaceLspConfig {
+    /// 是否已决定（不必再问）：显式选过，或存量里已开着。
+    pub fn lsp_decided(&self) -> bool {
+        self.decided || self.enabled
+    }
+}
+
+/// 该工作区根的 LSP 开关是否打开（按 `path_to_key` 归一，与 `workspace_set_lsp_enabled` 同口径）。
+pub fn lsp_switch_on(workspace_root: &str) -> bool {
+    lsp_workspace_config(&path_to_key(workspace_root)).enabled
 }
 
 /// 读某工作区的 LSP 配置（不存在 → 默认：关闭、无排除）。
@@ -242,6 +262,7 @@ pub fn set_lsp_enabled(key: &str, enabled: bool) -> Result<(), String> {
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
         cfg.enabled = enabled;
+        cfg.decided = true;
         obj.insert(
             key.to_string(),
             serde_json::to_value(&cfg).map_err(|e| e.to_string())?,
@@ -612,14 +633,51 @@ pub struct WorkspaceSetLspEnabledArgs {
     enabled: bool,
 }
 
-async fn workspace_set_lsp_enabled(_core: Arc<Core>, a: WorkspaceSetLspEnabledArgs) -> Result<(), String> {
+async fn workspace_set_lsp_enabled(core: Arc<Core>, a: WorkspaceSetLspEnabledArgs) -> Result<(), String> {
     let WorkspaceSetLspEnabledArgs { workspace_root, enabled } = a;
     // 信任门：未信任工作区拒开 LSP（LSP 跑外部二进制 + 索引工作区，本就该走信任门）
     if enabled && !is_path_trusted(&workspace_root) {
         return Err("untrusted workspace".into());
     }
     let key = path_to_key(&workspace_root);
-    set_lsp_enabled(&key, enabled)
+    set_lsp_enabled(&key, enabled)?;
+    // 关闭 = 不起进程：停掉该工作区全部 server 在 Host 这一处做（询问卡片、标题栏、手机
+    // 任一前门关闭都生效），不靠前端记得先调 lsp_shutdown_workspace。开关已先落盘，
+    // 停机后任何漏网请求都会被 ensure_server 的开关门拒掉，不会再拉起来。
+    if !enabled {
+        // 先取消进行中的就绪探测、状态置 Disabled，再停机——反过来的话，导入到一半被关、
+        // 探测随后完成，会把状态写回就绪（见 status_board::stop_workspace）。
+        core.lsp_board.stop_workspace(&workspace_root, crate::lsp::status_board::Phase::Disabled);
+        core.lsp.0.write().await.kill_workspace(&workspace_root).await;
+        core.emit(
+            "lsp-diagnostics",
+            serde_json::json!({"workspaceRoot": workspace_root, "clear": true}),
+        );
+    }
+    // 开关是会话可见状态：所有前门（标题栏、编辑器、sidecar、其他客户端）都从这里同步。
+    core.emit(
+        "lsp-switch-changed",
+        serde_json::json!({"workspaceRoot": workspace_root, "enabled": enabled}),
+    );
+    // 打开 = 立刻在后台把该工作区的语言服务器拉起来做就绪探测，不等下一条消息或打开文件：
+    // 发送前询问是不阻塞的（消息已经发出去了），用户这时点「开启」，这一轮里 agent 的 LSP 查询
+    // 就能接上这次预热（标题栏手动打开同理）。单飞，已在跑 / 已就绪则什么也不做。
+    if enabled {
+        let core = Arc::clone(&core);
+        tokio::spawn(async move {
+            let root = workspace_root.clone();
+            let probe_core = Arc::clone(&core);
+            let langs = tokio::task::spawn_blocking(move || {
+                crate::lsp::workspace_langs::lsp_languages_for_path(&probe_core, &root)
+            })
+            .await
+            .unwrap_or_default();
+            for lang in langs.iter().filter_map(|l| crate::lsp::detector::lang_from_id_str(l)) {
+                crate::lsp::agent_query::start_warm(&core, &workspace_root, lang);
+            }
+        });
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -652,6 +710,27 @@ async fn workspace_get_lsp_excludes(_core: Arc<Core>, a: WorkspaceGetLspExcludes
     let WorkspaceGetLspExcludesArgs { workspace_root } = a;
     let key = path_to_key(&workspace_root);
     Ok(lsp_workspace_config(&key).exclude_dirs)
+}
+
+/// 读某工作区的 LSP 开关（权威值在 Host state）。前端开关缓存从这里回种——它以前只在
+/// 本次运行里点开关时写入，重启后一律显示「关」而 Host 存的可能是「开」。
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceGetLspSwitchArgs {
+    workspace_root: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LspSwitchView {
+    pub enabled: bool,
+    /// 已决定（不必再询问），见 [`WorkspaceLspConfig::lsp_decided`]。
+    pub decided: bool,
+}
+
+async fn workspace_get_lsp_switch(_core: Arc<Core>, a: WorkspaceGetLspSwitchArgs) -> Result<LspSwitchView, String> {
+    let WorkspaceGetLspSwitchArgs { workspace_root } = a;
+    let cfg = lsp_workspace_config(&path_to_key(&workspace_root));
+    Ok(LspSwitchView { enabled: cfg.enabled, decided: cfg.lsp_decided() })
 }
 
 /// 编码 key → 真实路径（`path_to_key` 的逆，旧数据回退用）。编码把分隔符与 `:` 都变成 `-`，
@@ -887,7 +966,18 @@ mod tests {
     fn lsp_workspace_config_defaults_when_absent() {
         let cfg = lsp_workspace_config("aide_test_nonexistent_key_xyz");
         assert!(!cfg.enabled);
+        assert!(!cfg.lsp_decided());
         assert!(cfg.exclude_dirs.is_empty());
+    }
+
+    #[test]
+    fn legacy_lsp_record_decided_semantics() {
+        // 旧记录没有 decided：开着的视同已决定；关着的（可能只是存排除目录顺带写的）按没问过。
+        let on: WorkspaceLspConfig = serde_json::from_value(serde_json::json!({"enabled": true})).unwrap();
+        let off: WorkspaceLspConfig =
+            serde_json::from_value(serde_json::json!({"enabled": false, "exclude_dirs": ["x"]})).unwrap();
+        assert!(on.lsp_decided());
+        assert!(!off.lsp_decided());
     }
 
     #[test]
@@ -896,6 +986,7 @@ mod tests {
         set_lsp_enabled(key, true).unwrap();
         let cfg = lsp_workspace_config(key);
         assert!(cfg.enabled);
+        assert!(cfg.decided, "写过开关即视为已决定");
         // 清理
         set_lsp_enabled(key, false).unwrap();
     }

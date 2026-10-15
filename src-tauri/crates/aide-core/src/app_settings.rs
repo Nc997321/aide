@@ -77,7 +77,13 @@ pub struct LspSettings {
     /// key = language id（"rust"/"typescript"/...），值 = 显式覆盖。
     #[serde(default)]
     pub servers: std::collections::HashMap<String, ServerOverride>,
+    /// 语言服务器空闲多少分钟后休眠（停进程、开关不变、用到即唤醒）。缺省 30；0 = 永不休眠。
+    #[serde(default, rename = "idleSleepMinutes", skip_serializing_if = "Option::is_none")]
+    pub idle_sleep_minutes: Option<u32>,
 }
+
+/// 空闲休眠的缺省分钟数（见 `LspSettings::idle_sleep_minutes`）。
+pub const DEFAULT_LSP_IDLE_SLEEP_MINUTES: u32 = 30;
 
 /// Vim 键位映射条目（VSCodeVim 风格）：一个「按键（或键序列）→ 目标」。
 /// 目标以 ":" 开头 = 内置 ex 命令（:w/:wq/:q/:q!，单键生效），否则 = vim 键

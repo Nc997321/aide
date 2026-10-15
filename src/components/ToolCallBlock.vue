@@ -2,6 +2,7 @@
 import { ref, computed, watch } from "vue";
 import type { ToolCallBlock, BgTask } from "@/types/chat";
 import BashOutputBlock from "./BashOutputBlock.vue";
+import LspGlanceNote from "./LspGlanceNote.vue";
 import StaticDiff from "./fileviewer/StaticDiff.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
@@ -224,6 +225,8 @@ const readRange = computed(() =>
         <span v-if="peek.rest > 0" class="ti-peek-more">还有 {{ peek.rest }} 行</span>
       </div>
     </div>
+    <!-- grep 顺带作答这次附了什么（lsp_glance 事件）：收起成一枚药丸，点开看定义 / 引用 -->
+    <LspGlanceNote v-if="block.lspGlance?.length" :items="block.lspGlance" :workspace-path="workspacePath" />
     <div v-if="expanded" class="ti-body">
       <BashOutputBlock v-if="isBash && block.result && !block.truncated" :content="block.result" :is-error="block.isError ?? false" />
       <div

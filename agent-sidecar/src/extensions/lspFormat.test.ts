@@ -60,6 +60,18 @@ describe("「空 ≠ 没有」红线", () => {
     expect(notAnsweredText("indexing", "x")).not.toMatch(/Detail:/);
   });
 
+  it("disabled 说明是用户关的、不是「没有」", () => {
+    const t = notAnsweredText("disabled", "get");
+    expect(t).toMatch(/turned off/);
+    expect(t).not.toMatch(/^No /);
+  });
+
+  it("indexing 带明细 = 按名查询没能确认，不再声称「还在建索引」", () => {
+    const detail = "`x` was not found by name search — java: no symbol of that name was found";
+    expect(notAnsweredText("indexing", "x", detail)).not.toMatch(/building its index/);
+    expect(notAnsweredText("indexing", "x")).toMatch(/building its index/);
+  });
+
   /// 文本兜底带着坐标，但它不是引用：必须大写标注未验证（徽章侧 lspRelay 也靠这个词认它）。
   it("文本兜底明确标 UNVERIFIED，且空兜底也不说「没有」", () => {
     const text = textFallbackText("run_jump", "it is still indexing", [

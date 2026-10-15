@@ -41,6 +41,97 @@ pub fn get(url: &str) -> Result<Vec<u8>, String> {
     Ok(buf)
 }
 
+/// 大文件下载到 `dest`：**断点续传 + 自动重试 + 进度回调**，下完校验 sha256（十六进制）。
+///
+/// 为什么不用 [`get`]：jdtls 约 50MB，官方源国内直连实测 ~12KB/s 且会中途断开（2026-10-14：
+/// 26.8MB 时 `server closed abruptly`）。一次性下载断了就得从头来；这里断了从已有字节续上
+///（`Range: bytes=N-`），源不支持续传（回 200）就从头写。连续失败 [`RESUME_ATTEMPTS`] 次才放弃，
+/// `dest` 留着，下次安装接着下。
+///
+/// `progress(已下字节, 总字节)`：调用方自己节流。
+pub fn download_resumable(
+    url: &str,
+    dest: &std::path::Path,
+    expected_sha256_hex: &str,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<(), String> {
+    use std::io::Write;
+    let mut last_err: String;
+    for attempt in 0..RESUME_ATTEMPTS {
+        if attempt > 0 {
+            std::thread::sleep(Duration::from_secs(2 * attempt as u64));
+        }
+        let have = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
+        let mut req = agent().get(url);
+        if have > 0 {
+            req = req.set("Range", &format!("bytes={have}-"));
+        }
+        let resp = match req.call() {
+            Ok(r) => r,
+            // 416：已经下完了（上次断在校验之前）
+            Err(ureq::Error::Status(416, _)) if have > 0 => break,
+            Err(ureq::Error::Status(code, _)) => return Err(format!("{}：HTTP {code}", host_of(url))),
+            Err(ureq::Error::Transport(t)) => {
+                last_err = t.to_string();
+                tracing::warn!(url, attempt, error = %last_err, "[lsp-packs] download interrupted, retrying");
+                continue;
+            }
+        };
+        let resumed = resp.status() == 206;
+        let base = if resumed { have } else { 0 };
+        let total = resp
+            .header("Content-Length")
+            .and_then(|v| v.parse::<u64>().ok())
+            .map(|n| n + base);
+        if total.is_some_and(|t| t > MAX_BYTES) {
+            return Err("文件超过 200MB 上限".into());
+        }
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .append(resumed)
+            .truncate(!resumed)
+            .open(dest)
+            .map_err(|e| format!("写 {} 失败：{e}", dest.display()))?;
+        let mut reader = resp.into_reader();
+        let mut got = base;
+        let mut buf = vec![0u8; 64 * 1024];
+        let outcome = loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break Ok(()),
+                Ok(n) => {
+                    file.write_all(&buf[..n]).map_err(|e| format!("写入失败：{e}"))?;
+                    got += n as u64;
+                    progress(got, total);
+                }
+                Err(e) => break Err(e.to_string()),
+            }
+        };
+        match outcome {
+            Ok(()) if total.is_none_or(|t| got >= t) => break,
+            Ok(()) => last_err = format!("连接提前结束（{got}/{} 字节）", total.unwrap_or(0)),
+            Err(e) => last_err = e,
+        }
+        tracing::warn!(url, attempt, got, error = %last_err, "[lsp-packs] download interrupted, resuming");
+        if attempt + 1 == RESUME_ATTEMPTS {
+            return Err(format!(
+                "下载 {} 多次中断（{last_err}）。已下载的部分会保留，重试安装会接着下；网络受限时请在设置里配置代理。",
+                host_of(url)
+            ));
+        }
+    }
+    let bytes = std::fs::read(dest).map_err(|e| format!("读取下载文件失败：{e}"))?;
+    if let Err(e) = verify_sha256_hex(&bytes, expected_sha256_hex) {
+        // 校验不过的文件不能留着让下次「续传」：删掉从头来
+        let _ = std::fs::remove_file(dest);
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// 断点续传的最大尝试次数（含第一次）。
+const RESUME_ATTEMPTS: usize = 12;
+
 /// 按顺序尝试多个地址，第一个成功的为准；全失败时列出每个地址的原因。
 pub fn get_first(urls: &[String]) -> Result<Vec<u8>, String> {
     let mut errors = Vec::new();

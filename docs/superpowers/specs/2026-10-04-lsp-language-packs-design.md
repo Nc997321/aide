@@ -46,3 +46,12 @@ agent 的 LSP 工具读同一张注册表，语言包装好后 agent 的代码�
 
 - 单测：目录约束、下载校验、解压防越界、原子替换、查找链优先级、启动命令拼接、前端状态与卡片。
 - 真机端到端（`packs::tests::e2e_install_and_handshake_every_pack`，`--ignored`）：WSL 上三个语言包真装、真起、真握手；另以 `PATH=/usr/bin:/bin` 跑一遍覆盖「没有 node → 下载 node」与「没有 rustup → GitHub 发行包」两条路径。
+
+## 补记（2026-10-15）：JVM 系语言包 · Java
+
+- **新配方 `Recipe::JvmArchive`**：tar.gz（钉版本 + sha256）+ 本机 JDK 运行 `java <jvm_args> -jar <launcher>`。jdtls 特有的东西（launcher jar 名、`-Declipse.application` 等、各平台共享配置区）全是 `catalog.rs` 里的数据；安装器与查找链只认「JVM 压缩包」这种形态，不认语言。启动方式 `Launch::Jar`，`{dir}` 启动时换成安装目录。
+- **JDK 不下载**（`packs/jvm.rs`）：找本机版本够的——JAVA_HOME → PATH → `~/.jdks` / `Program Files\Java` 等常见目录；读 `release` 文件判版本，PATH 上的 shim 才退回 `java -version`。安装前先查，没有就直接说「需要 JDK 21+」，不白下 50MB。运行时与工程 JDK 是两回事：jdtls 跑在 21 上照样分析 Java 8 工程（po-api 实测）。
+- **版本钉 jdtls 1.58.0**：之后的快照要求 Java 25 才能启动（JDK 21 上 OSGi 报 `osgi.ee=JavaSE 25`）。不走官方 `bin/jdtls(.bat)`：它要 Python（Windows 上常是应用商店占位），`.bat` 末尾还有 `pause`。参数与其 `jdtls.py` 一致；平台 config 目录作**只读共享配置区**，多实例并发不写安装目录。
+- **profile 的 `--jvm-arg=X` 约定**（原本给 jdtls 的 Python 启动脚本用）在 JVM 语言包下由 `registry::reshape_for_jvm` 挪到 `-jar` 之前——`profiles/java.rs` 不用为语言包改一行（堆、lombok、元数据重定向照旧）。
+- **下载**：只用官方源（国内没有可用镜像：USTC 1.58 是 404，清华 / 阿里没有 jdtls）。`fetch::download_resumable`：断点续传（`Range`，源回 200 就从头写）、连续 12 次失败才放弃且保留半截文件、下完校验 sha256、不过即删。进度经 `lsp-pack-progress` 广播（~4 次/秒），插件市场卡片与「语言环境」面板显示「安装中… 37%（19 / 51 MB）」。
+- 真机（宿主机，临时用户目录）：预置 40MB 半截 → 续传到 100% → 校验通过 → 9.3s 装完；preflight 从「可装」变「已装」；开启后 10s ServiceReady、37.9s 按名就绪，`MediaService` 命中。

@@ -54,7 +54,7 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
     purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）", alwaysMounted: true,
     build: (ctx) => makeMemoryEventsHook(ctx.env, ctx.cwd) },
   { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$",
-    purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数（语言服务器热了才附，不改工具结果）", alwaysMounted: false,
+    purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数，写法是找定义 / 找用法时再附函数体 / 引用列表（语言服务器热了才附，不改工具结果；附了什么广播 lsp_glance）", alwaysMounted: false,
     build: (ctx) => {
       if (!ctx.lsp?.mounted || !ctx.cwd) return null;
       const { emit } = ctx.lsp;
@@ -63,6 +63,7 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
         cwd,
         isWarm: () => isLspWarm(cwd),
         query: (tool, args, timeoutMs) => queryLsp(tool, args, cwd, emit, { timeoutMs }),
+        emitNote: (toolUseId, items) => emit({ type: "lsp_glance", tool_use_id: toolUseId, items }),
       });
     } },
   { id: "stopEffort", event: "Stop", matcher: "",

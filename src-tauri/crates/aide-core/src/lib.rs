@@ -67,6 +67,9 @@ pub struct Core {
     pub pty: pty::ShellManager,
     /// 语言服务器（按 工作区 × 语言 各一台）。
     pub lsp: Arc<lsp::LspState>,
+    /// 语言服务器状态板（每个工作区 × 语言唯一一份，变化即广播 `lsp-status`）。不放进
+    /// `LspState` 的锁里：查询等待就绪、前端读状态都不该排在 ensure（最长 30s）的写锁后面。
+    pub lsp_board: Arc<lsp::status_board::StatusBoard>,
     /// agent runtime（sidecar 进程、会话路由与存活表、事件泵）。
     pub runtime: runtime::AgentRuntimeManager,
     /// 自动化任务调度（常驻 tick；运行与蒸馏写 `runtime`）。`start` 后才调度。
@@ -98,6 +101,7 @@ impl Core {
         let events: Arc<dyn EventSink> = Arc::new(bus::Tee { bus: Arc::clone(&bus), inner: events });
         Arc::new(Self {
             lsp: Arc::new(lsp::LspState::new()),
+            lsp_board: Arc::new(lsp::status_board::StatusBoard::new(Arc::clone(&events))),
             runtime: runtime::AgentRuntimeManager::new(),
             automation: Arc::new(automation::AutomationService::new()),
             resources,

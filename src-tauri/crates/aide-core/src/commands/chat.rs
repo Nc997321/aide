@@ -419,6 +419,9 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
     // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
     cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
+    // 本工作区的 LSP 开关：sidecar 据此决定预热 / 作废就绪记录（工具照挂，关时 Host 回 disabled）。
+    // 把关仍在 ensure_server——这里只是让 sidecar 少发注定被拒的预热。
+    cmd["lsp_enabled"] = json!(crate::commands::workspace::lsp_switch_on(&cwd_str));
 
     // Attach the permission policy snapshot so the sidecar's PreToolUse hook can
     // enforce it on the first query. Best-effort: if the snapshot build fails the

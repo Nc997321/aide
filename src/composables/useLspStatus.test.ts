@@ -188,3 +188,80 @@ describe("useLspStatus", () => {
   // 且 ready 事件切态已覆盖核心，手测覆盖：开 Java 工作区观察「索引中…」→「就绪 ✓」、
   // 关 LSP/杀 server 验证不卡「索引中」。
 });
+describe("useLspStatus：Host 状态板为准", () => {
+  const board = vi.hoisted(() => ({ cb: null as ((ev: { payload: unknown }) => void) | null }));
+  beforeEach(async () => {
+    invoke.mockReset();
+    board.cb = null;
+    const { listen } = await import("@tauri-apps/api/event");
+    vi.mocked(listen).mockImplementation(async (event: string, cb: (ev: { payload: unknown }) => void) => {
+      if (event === "lsp-status") board.cb = cb;
+      return () => {};
+    });
+  });
+
+  it("握手成功不等于就绪：状态板没实测通过前显示索引中，并带进度与阶段", async () => {
+    const since = Date.now() - 12_000;
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return ["java"];
+      if (cmd === "lsp_ensure_server") return { ok: true, ready: true };
+      if (cmd === "lsp_status")
+        return [{ workspaceRoot: "/ws", lang: "java", phase: "loading", nav: false, symbols: "unknown", progress: 50, message: "Starting Java Language Server", since }];
+      return undefined;
+    });
+    const { langs } = useLspStatus(() => "/ws", ref(true));
+    await vi.waitFor(() => expect(langs.value[0]?.status).toBe("indexing"));
+    expect(langs.value[0].note).toMatch(/^加载工程 · 50% Starting Java Language Server · 已 1\d 秒$/);
+  });
+
+  it("lsp-status 推进到 ready 才显示就绪；跳转可用、按名未好时如实说", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return ["java"];
+      if (cmd === "lsp_ensure_server") return { ok: true, ready: false };
+      if (cmd === "lsp_status") return [];
+      return undefined;
+    });
+    const { langs } = useLspStatus(() => "C:\\ws", ref(true));
+    await vi.waitFor(() => expect(board.cb).not.toBeNull());
+    const base = { workspaceRoot: "c:/ws", lang: "java", since: Date.now(), symbols: "unknown" };
+    board.cb!({ payload: { ...base, phase: "indexing", nav: true } });
+    await vi.waitFor(() => expect(langs.value[0].note).toMatch(/^跳转可用，按名查询索引中/));
+    board.cb!({ payload: { ...base, phase: "ready", nav: true, symbols: "ready" } });
+    await vi.waitFor(() => expect(langs.value[0]).toEqual({ lang: "java", status: "ok" }));
+  });
+
+  it("别的工作区的状态不串进来", async () => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return ["java"];
+      if (cmd === "lsp_ensure_server") return { ok: true, ready: false };
+      return [];
+    });
+    const { langs } = useLspStatus(() => "/ws", ref(true));
+    await vi.waitFor(() => expect(board.cb).not.toBeNull());
+    board.cb!({ payload: { workspaceRoot: "/other", lang: "java", phase: "ready", nav: true, symbols: "ready", since: 0 } });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(langs.value[0].status).toBe("indexing");
+  });
+});
+
+describe("boardNote：休眠与倒计时", () => {
+  const base = { workspaceRoot: "/ws", lang: "java", nav: true, symbols: "ready" as const, since: 0 };
+  it("就绪：剩余分钟向上取整；不足一分钟说即将休眠", async () => {
+    const { boardNote } = await import("./useLspStatus");
+    expect(boardNote({ ...base, phase: "ready", sleepAt: 32 * 60_000 - 1 }, 0)).toBe("32 分钟后休眠");
+    expect(boardNote({ ...base, phase: "ready", sleepAt: 30_000 }, 0)).toBe("即将休眠");
+  });
+  it("编辑器开着文件：不休眠；已休眠：用到时自动唤醒", async () => {
+    const { boardNote } = await import("./useLspStatus");
+    expect(boardNote({ ...base, phase: "ready", keptBy: "editor" }, 0)).toBe("编辑器开着该语言的文件 · 不休眠");
+    expect(boardNote({ ...base, phase: "sleeping" }, 0)).toBe("空闲休眠中，用到时自动唤醒");
+  });
+});
+
+describe("内存读数", () => {
+  it("formatMemory：GB 一位小数、MB 取整", async () => {
+    const { formatMemory } = await import("./useLspStatus");
+    expect(formatMemory(1.34 * 1024 ** 3)).toBe("1.3 GB");
+    expect(formatMemory(512 * 1024 ** 2)).toBe("512 MB");
+  });
+});

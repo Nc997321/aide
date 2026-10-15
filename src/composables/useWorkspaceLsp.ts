@@ -7,8 +7,14 @@ import { useNotifications } from "./useNotifications";
  *  workspaceRoot 用 getter 传入——工作区切换时 enabled/excludes 自动刷新
  * （标题栏 LSP 面板常驻，不同于设置面板每次打开重建）。 */
 export function useWorkspaceLsp(getWorkspaceRoot: () => string) {
-  const { enableLsp, disableLsp, isLspOn } = useLsp();
+  const { enableLsp, disableLsp, isLspOn, refreshLspSwitch, lspEnabledWorkspaces } = useLsp();
   const enabled: Ref<boolean> = ref(isLspOn(getWorkspaceRoot()));
+  // 权威值在 Host：挂载与切工作区时回种；之后任何一端改开关（会话里的询问卡片、其他客户端）
+  // 都经 lsp-switch-changed 进共享缓存，这里跟着缓存走。
+  void refreshLspSwitch(getWorkspaceRoot());
+  watch(lspEnabledWorkspaces, () => {
+    enabled.value = isLspOn(getWorkspaceRoot());
+  });
   const excludes = ref<string[]>([]);
   const excludesDirty = ref(false);
 
@@ -24,6 +30,7 @@ export function useWorkspaceLsp(getWorkspaceRoot: () => string) {
   // 工作区切换：enabled 重算 + 排除目录重载（excludesDirty 作废）。
   watch(getWorkspaceRoot, () => {
     enabled.value = isLspOn(getWorkspaceRoot());
+    void refreshLspSwitch(getWorkspaceRoot());
     excludesDirty.value = false;
     void refreshExcludes();
   });

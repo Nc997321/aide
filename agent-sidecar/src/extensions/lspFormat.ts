@@ -138,13 +138,14 @@ export function definitionText(
   lines: string[] | null,
   node: OutlineNode | null,
   container: string | null,
+  maxLines: number = MAX_BODY_LINES,
 ): string {
   const what = node ? `${kindWord(node.kind)} ${container ? `${container}.` : ""}${node.name}` : "definition";
   const head = `${what} — ${rel}:${loc.line}:${loc.column}`;
   if (!lines) return `${head}\n(file could not be read)`;
   const from = node ? Math.min(node.start_line, loc.line) : Math.max(1, loc.line - 3);
   const end = node ? node.end_line : Math.min(lines.length, loc.line + 25);
-  const to = Math.min(end, from + MAX_BODY_LINES - 1);
+  const to = Math.min(end, from + maxLines - 1);
   const more =
     to < end
       ? `\n…(${end - to} more lines — Read ${rel} with offset=${to + 1} to continue)`
@@ -216,12 +217,18 @@ export function notAnsweredText(status: string, what: string, detail?: string): 
   const d = detail?.trim() ? ` Detail: ${detail.trim()}` : "";
   switch (status) {
     case "indexing":
-      return `The query${subject} was not answered — the language server is still building its index. An empty result does NOT mean the symbol is unused; nobody looked yet.${d} Use Grep for now and say the result is unverified.`;
+      // 带 detail = 按名查询没能确认（不是在建索引，见 lspNav.reasonOf），别再说「索引没好」。
+      if (d) {
+        return `The query${subject} was not answered with certainty.${d} An empty result does NOT mean the symbol is unused. Use Grep and say the result is unverified.`;
+      }
+      return `The query${subject} was not answered — the language server is still building its index. An empty result does NOT mean the symbol is unused; nobody looked yet. Use Grep for now and say the result is unverified.`;
     case "no_symbol":
       // 句式：**不许用 "No ..." 开头**——那是 ready 形态（「已确认的否定」）的专属句式。
       return `Name search found nothing${subject}. That is not a confirmed negative — check the spelling, and cross-check with Grep before relying on the absence.${d}`;
     case "no_server":
       return `There is no language server for this file type, so the query${subject} was not answered. Use Grep.${d}`;
+    case "disabled":
+      return `The language server is turned off for this workspace (the user's choice — it can be turned on in Aide's 语言环境 panel), so the query${subject} was not answered. Use Grep and say the result is unverified; do not ask the user to turn it on unless precise navigation is really needed.`;
     case "untrusted":
       return `This workspace is not trusted, so LSP is disabled and the query${subject} was not answered. Use Grep.`;
     case "timeout":

@@ -104,7 +104,35 @@ pub enum ServerSource {
     Explicit { program: String, args: Vec<String> },
     /// 插件市场装的语言包（`lsp::packs`）：program + 前置参数（npm 系是 `node <script>`）。
     /// 语言特有参数（`--stdio` 等）仍由 profile 追加，与 Which 同一套。
-    Pack { program: String, args: Vec<String> },
+    Pack { program: String, args: Vec<String>, jvm: Option<JvmParts> },
+}
+
+/// JVM 系语言包的启动拆分：program 是 `java`，这里是 `-jar` 之前的 JVM 参数与 jar 本身。
+/// profile 产出的参数里 `--jvm-arg=X` 归到 JVM 一侧（与 jdtls 官方启动脚本同一约定），其余在 jar 之后。
+#[derive(Debug, Clone, PartialEq)]
+pub struct JvmParts {
+    pub jvm_args: Vec<String>,
+    pub jar: String,
+}
+
+/// 按 [`JvmParts`] 重排完整参数：`<语言包 JVM 参数> <profile 的 --jvm-arg=…> -jar <jar> <其余参数>`。
+/// 非 JVM 来源原样返回。纯函数。
+pub fn reshape_for_jvm(src: &ServerSource, args: Vec<String>) -> Vec<String> {
+    let ServerSource::Pack { jvm: Some(j), .. } = src else {
+        return args;
+    };
+    let mut out = j.jvm_args.clone();
+    let mut app = Vec::new();
+    for a in args {
+        match a.strip_prefix("--jvm-arg=") {
+            Some(x) => out.push(x.to_string()),
+            None => app.push(a),
+        }
+    }
+    out.push("-jar".into());
+    out.push(j.jar.clone());
+    out.extend(app);
+    out
 }
 
 /// spawn 时 profile 可注入的额外启动参数上下文（IO 已就绪：resources 拿随包 lsp 目录、
@@ -144,8 +172,7 @@ pub fn resolve(
     resources: &dyn crate::resources::HostResources,
 ) -> Option<ServerSource> {
     let override_cfg = settings.lsp.servers.get(lang.id_str());
-    let pack = crate::lsp::packs::launch_for(lang, resources)
-        .map(|(program, args)| ServerSource::Pack { program, args });
+    let pack = crate::lsp::packs::launch_for(lang, resources);
     let bundled = bundled_source(lang, resources);
     let which = which_source(lang);
     pick_source(override_cfg, pack, bundled, which)
@@ -215,7 +242,7 @@ pub fn to_command(
             (format!("lsp/{subdir}/{binary}"), p.launch_args(data_dir))
         }
         ServerSource::Which { binary } => (binary.clone(), p.launch_args(data_dir)),
-        ServerSource::Pack { program, args } => {
+        ServerSource::Pack { program, args, .. } => {
             let mut full = args.clone();
             full.extend(p.launch_args(data_dir));
             (program.clone(), full)
@@ -231,6 +258,28 @@ pub fn to_command(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// JVM 语言包：profile 的 `--jvm-arg=` 挪到 -jar 之前，其余（-data …）在 jar 之后；非 JVM 原样。
+    #[test]
+    fn reshape_moves_jvm_args_before_jar() {
+        let src = ServerSource::Pack {
+            program: "/jdk/bin/java".into(),
+            args: vec![],
+            jvm: Some(JvmParts { jvm_args: vec!["-Dosgi.x=1".into()], jar: "/p/launcher.jar".into() }),
+        };
+        let profile_args = vec![
+            "-data".to_string(),
+            "/d".into(),
+            "--jvm-arg=-Xmx2G".into(),
+            "--jvm-arg=-javaagent:/l/lombok.jar".into(),
+        ];
+        assert_eq!(
+            reshape_for_jvm(&src, profile_args.clone()),
+            vec!["-Dosgi.x=1", "-Xmx2G", "-javaagent:/l/lombok.jar", "-jar", "/p/launcher.jar", "-data", "/d"]
+        );
+        let plain = ServerSource::Pack { program: "node".into(), args: vec![], jvm: None };
+        assert_eq!(reshape_for_jvm(&plain, profile_args.clone()), profile_args);
+    }
     use crate::app_settings::{LspSettings, ServerOverride};
     use std::collections::HashMap;
 
@@ -244,7 +293,7 @@ mod tests {
             },
         );
         AppSettings {
-            lsp: LspSettings { servers },
+            lsp: LspSettings { servers, ..Default::default() },
             ..Default::default()
         }
     }
@@ -300,7 +349,7 @@ mod tests {
             },
         );
         let settings = AppSettings {
-            lsp: LspSettings { servers },
+            lsp: LspSettings { servers, ..Default::default() },
             ..Default::default()
         };
         let picked = pick_source(settings.lsp.servers.get("rust"), None, None, None);
@@ -388,7 +437,7 @@ mod tests {
 
     #[test]
     fn pack_beats_bundled_and_path_but_not_user_override() {
-        let pack = || Some(ServerSource::Pack { program: "/h/.aide/node".into(), args: vec!["/h/.aide/lsp/packs/typescript/cli.mjs".into()] });
+        let pack = || Some(ServerSource::Pack { program: "/h/.aide/node".into(), args: vec!["/h/.aide/lsp/packs/typescript/cli.mjs".into()], jvm: None });
         let which = || Some(ServerSource::Which { binary: "/mnt/c/windows-tls".into() });
         let bundled = || Some(ServerSource::Bundled { subdir: "typescript".into(), binary: "tls".into() });
         assert!(matches!(pick_source(None, pack(), bundled(), which()), Some(ServerSource::Pack { .. })));
@@ -401,12 +450,12 @@ mod tests {
 
     #[test]
     fn to_command_pack_keeps_prefix_args_then_profile_args() {
-        let src = ServerSource::Pack { program: "/n/node".into(), args: vec!["/p/cli.mjs".into()] };
+        let src = ServerSource::Pack { program: "/n/node".into(), args: vec!["/p/cli.mjs".into()], jvm: None };
         let (prog, args) = to_command(LanguageId::TypeScript, &src, None);
         assert_eq!(prog, "/n/node");
         assert_eq!(args, vec!["/p/cli.mjs".to_string(), "--stdio".to_string()]);
         // rust-analyzer 不收 --stdio（profile 决定），语言包来源同样遵守
-        let ra = ServerSource::Pack { program: "/p/rust-analyzer".into(), args: vec![] };
+        let ra = ServerSource::Pack { program: "/p/rust-analyzer".into(), args: vec![], jvm: None };
         let (_, args) = to_command(LanguageId::Rust, &ra, None);
         assert!(args.is_empty(), "{args:?}");
     }
@@ -423,7 +472,7 @@ mod tests {
             },
         );
         let settings = AppSettings {
-            lsp: LspSettings { servers },
+            lsp: LspSettings { servers, ..Default::default() },
             ..Default::default()
         };
         let bundled = Some(ServerSource::Bundled {

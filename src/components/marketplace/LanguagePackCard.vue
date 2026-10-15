@@ -14,7 +14,7 @@ const props = defineProps<{
   inUse?: boolean;
 }>();
 
-const { busy, errors, install, uninstall } = useLanguagePacks();
+const { busy, errors, install, uninstall, progressText } = useLanguagePacks();
 
 const state = computed(() => busy.value[props.pack.id] ?? (props.pack.installing ? "install" : null));
 const iconText = computed(() => installGuideFor(props.pack.langs[0] ?? "")?.shortName ?? props.pack.name.slice(0, 2));
@@ -22,7 +22,7 @@ const langNames = computed(() =>
   props.pack.langs.map((l) => installGuideFor(l)?.displayName ?? l).join(" · "),
 );
 const statusText = computed(() => {
-  if (state.value === "install") return props.pack.installed ? "更新中…" : "安装中…";
+  if (state.value === "install") return (props.pack.installed ? "更新中…" : "安装中…") + progressText(props.pack.id);
   if (state.value === "uninstall") return "卸载中…";
   const inst = props.pack.installed;
   if (!inst) return "未安装";

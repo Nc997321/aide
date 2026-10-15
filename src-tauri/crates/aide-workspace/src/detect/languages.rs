@@ -171,15 +171,31 @@ pub fn is_skip_dir(name: &str) -> bool {
 /// 有界遍历：把目录树里的**源文件**交给 `visit`（路径 / 小写扩展名 / 服务归属）；
 /// `visit` 返回 `false` 提前收工。
 ///
-/// **边界只有这一份**：深度 ≤4、跳过重目录与点目录、测试文件不算。靶子搜索、代表文件
-/// 排名、语言计数都走它——纪律写在注释里而实现有两份，等于没有（`find_probe_target` 与
+/// **边界只有这一份**：跳过重目录与点目录、测试文件不算；深度两档（见下）。靶子搜索、代表
+/// 文件排名、语言计数都走它——纪律写在注释里而实现有两份，等于没有（`find_probe_target` 与
 /// `count_and_first` 曾经各写一遍）。
+///
+/// 深度两档：语言**计数**（挂在每条 send 与按名查询上）≤ [`COUNT_DEPTH`]；**找靶子 / 代表文件**
+/// ≤ [`TARGET_DEPTH`]。曾经共用 4 层：Maven / Gradle 的 Java 源码天然在
+/// `src/main/java/<包路径>/` 下（po-api 最浅的 `.java` 在第 7 层），于是 Java 工程永远找不到
+/// 代表文件，就绪探针一次都没跑过（2026-10-15 真机）。计数不受影响：Java 靠 `pom.xml` 标记认出。
 ///
 /// 测试文件不当靶子**也不计数**：工程配置十有八九把它们排除在外（本仓库 `tsconfig.json`
 /// 的 exclude 排 `src/**/*.test.ts`），递一个不属于任何工程的孤文件 = 工程没加载
 /// （真机上栽过两次）。
-fn walk_sources(root: &Path, mut visit: impl FnMut(&Path, &str, LanguageId) -> bool) {
-    const MAX_DEPTH: usize = 4;
+const COUNT_DEPTH: usize = 4;
+const TARGET_DEPTH: usize = 12;
+
+fn walk_sources(root: &Path, visit: impl FnMut(&Path, &str, LanguageId) -> bool) {
+    walk_sources_to(root, COUNT_DEPTH, visit)
+}
+
+/// 找靶子 / 代表文件用的深遍历。只在「找到第一个就停」或有计数上限的调用方用。
+fn walk_targets(root: &Path, visit: impl FnMut(&Path, &str, LanguageId) -> bool) {
+    walk_sources_to(root, TARGET_DEPTH, visit)
+}
+
+fn walk_sources_to(root: &Path, max_depth: usize, mut visit: impl FnMut(&Path, &str, LanguageId) -> bool) {
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     while let Some((dir, depth)) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -189,7 +205,7 @@ fn walk_sources(root: &Path, mut visit: impl FnMut(&Path, &str, LanguageId) -> b
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
             if path.is_dir() {
-                if depth < MAX_DEPTH && !is_skip_dir(&name) {
+                if depth < max_depth && !is_skip_dir(&name) {
                     stack.push((path, depth + 1));
                 }
                 continue;
@@ -277,7 +293,7 @@ fn count_and_first(dir: &Path, lang: LanguageId) -> (usize, Option<std::path::Pa
     const COUNT_CAP: usize = 5_000;
     let mut count = 0usize;
     let mut first: Option<std::path::PathBuf> = None;
-    walk_sources(dir, |path, ext, l| {
+    walk_targets(dir, |path, ext, l| {
         if l != lang || !is_probe_target(ext, lang) {
             return true;
         }
@@ -379,7 +395,7 @@ pub fn lang_from_id_str(s: &str) -> Option<LanguageId> {
 /// 放进 `spawn_blocking`。
 fn find_probe_target(root: &Path, lang: LanguageId) -> Option<std::path::PathBuf> {
     let mut found = None;
-    walk_sources(root, |path, ext, l| {
+    walk_targets(root, |path, ext, l| {
         if l == lang && is_probe_target(ext, lang) {
             found = Some(path.to_path_buf());
             return false;
@@ -598,6 +614,19 @@ mod tests {
     /// 代表文件要**按顶层目录摊开**，且重目录不当代表。
     /// 本仓库实测：只递根层的 `vite.config.ts`（属于只含它一个文件的 `tsconfig.node.json`），
     /// `src/` 里的符号按名**永远**查不到（20s 重试也没用）。
+    #[test]
+    fn representative_sources_reach_maven_package_depth() {
+        // Maven 标准布局：源码在 src/main/java/<包路径>/ 下，比语言计数的 4 层深得多
+        let d = tmp_dir("maven");
+        let pkg = d.join("src/main/java/net/acebridge/java/api/core");
+        fs::create_dir_all(&pkg).unwrap();
+        fs::write(pkg.join("MediaService.java"), "class MediaService {}").unwrap();
+        fs::write(d.join("pom.xml"), "<project/>").unwrap();
+        let got = representative_sources(&d, LanguageId::Java, 1);
+        assert!(got.first().is_some_and(|p| p.ends_with("MediaService.java")), "{got:?}");
+        assert!(find_probe_target(&d, LanguageId::Java).is_some());
+    }
+
     #[test]
     fn representative_sources_spread_across_top_level_dirs() {
         let d = tmp_dir("reps");

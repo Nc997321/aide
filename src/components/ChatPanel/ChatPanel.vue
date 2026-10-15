@@ -14,6 +14,10 @@ import SubagentDock from "../SubagentDock.vue";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
+import { applyLspChoice, lspLangsToAsk, pendingLspAsk } from "./lspSendGate";
+import LspSendPrompt from "./LspSendPrompt.vue";
+import { sameRoot, useLsp } from "@/composables/useLsp";
+import type { PreflightLang } from "@aide/sdk/types/lspPacks";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
 import UsageTipText from "./UsageTipText.vue";
@@ -323,6 +327,38 @@ async function onPermissionRespond(
   emit("respond-permission", { id, approved, answers, nextMode, reason }, sessionRules);
 }
 
+/** 新会话发出首条消息时的语言服务器询问（输入框上方那条，LspSendPrompt）。**不阻塞发送**：
+ *  消息照发，这条留着等用户选。询问记在工作区上（`pendingLspAsk`，见 lspSendGate.ts）：本面板是工程
+ *  模式且同一工作区就显示；不理它 / 点 × = 不记录，下次新会话还会问。 */
+const lspAsk = pendingLspAsk;
+const lspAskBusy = ref(false);
+const lspState = useLsp();
+const showLspAsk = computed(() => {
+  const ask = lspAsk.value;
+  return (
+    !!ask &&
+    props.mode === "project" &&
+    !!props.workspacePath &&
+    sameRoot(props.workspacePath, ask.workspaceRoot) &&
+    // 别的会话 / 客户端已经替这个工作区选了（lsp-switch-changed）：不再显示
+    !lspState.isLspDecided(ask.workspaceRoot)
+  );
+});
+
+async function resolveLspAsk(choice: "enable" | "skip" | "dismiss") {
+  const ask = lspAsk.value;
+  if (!ask || lspAskBusy.value) return;
+  if (choice !== "dismiss") {
+    lspAskBusy.value = true;
+    try {
+      await applyLspChoice(ask.workspaceRoot, ask.langs, choice === "enable");
+    } finally {
+      lspAskBusy.value = false;
+    }
+  }
+  lspAsk.value = null;
+}
+
 /** 发送坐实信号：门控通过/确认后递增，ChatInputBox 据此清空输入（取消确认不递增，
  *  输入保留——与旧实现「取消时内容回退对话框」语义一致）。 */
 const sendConfirmedNonce = ref(0);
@@ -348,6 +384,15 @@ async function onSendRequest(prompt: string, opts: SendOptions & { effectiveProv
       };
       return;
     }
+  }
+  // 新会话（工程模式）即将启动：这个工作区还没决定开不开语言服务器 → 先问，问完再发。
+  // 只在这一刻问——打开 / 浏览已有会话不问；日常模式不问（日常目录不是工程）。
+  if ((!sidForGate || isPendingSession(sidForGate)) && props.mode === "project" && props.workspacePath) {
+    const ws = props.workspacePath;
+    const langs = await lspLangsToAsk(ws);
+    if (props.sessionId !== sidForGate) return; // 等回执期间切走了
+    // 不阻塞：这条照发，提示条留在输入框上方等用户选（选了「开启」Host 立刻在后台预热）。
+    if (langs) pendingLspAsk.value = { workspaceRoot: ws, langs };
   }
   // 空白面板（sid 为空）：没有会话可落盘，spawn 时由 useChatSession.sendMessage
   // 拿到 tempId 后坐实（见 store.spawnProviderOf / finalizeSpawn）。
@@ -709,7 +754,18 @@ function onOpenBgDock(taskId: string) {
       @rollback-text-consumed="emit('rollback-text-consumed')"
       @hero-model-name="heroModelName = $event"
       @permission-mode-changed="permissionMode = $event"
-    />
+    >
+      <template #above-box>
+        <LspSendPrompt
+          v-if="showLspAsk && lspAsk"
+          :langs="lspAsk.langs"
+          :busy="lspAskBusy"
+          @enable="resolveLspAsk('enable')"
+          @skip="resolveLspAsk('skip')"
+          @dismiss="resolveLspAsk('dismiss')"
+        />
+      </template>
+    </ChatInputBox>
     <BtwDrawer
       :visible="btwDrawerVisible"
       @close="closeBtw"

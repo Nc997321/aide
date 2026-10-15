@@ -25,6 +25,8 @@ pub enum AgentLspStatus {
     NoServer,
     /// 工作区未信任，拒拉 server。
     Untrusted,
+    /// 工作区 LSP 开关关着（用户选择），不起 server。与 `NoServer` 区分：装着，只是没开。
+    Disabled,
     Timeout,
     Gone,
     Error,
@@ -38,6 +40,7 @@ impl AgentLspStatus {
             Self::NoSymbol => "no_symbol",
             Self::NoServer => "no_server",
             Self::Untrusted => "untrusted",
+            Self::Disabled => "disabled",
             Self::Timeout => "timeout",
             Self::Gone => "gone",
             Self::Error => "error",
@@ -57,6 +60,7 @@ impl AgentLspStatus {
         match o.kind {
             Some("server_not_found") => Self::NoServer,
             Some("untrusted") => Self::Untrusted,
+            Some("disabled") => Self::Disabled,
             _ => Self::Error,
         }
     }
@@ -78,15 +82,24 @@ mod tests {
 
     #[test]
     fn status_words_are_frozen() {
-        // 这八个词是 C1b 文案表的键，改一个就得同步改 sidecar。
+        // 这九个词是 C1b 文案表的键，改一个就得同步改 sidecar。
         assert_eq!(AgentLspStatus::Ready.as_str(), "ready");
         assert_eq!(AgentLspStatus::Indexing.as_str(), "indexing");
         assert_eq!(AgentLspStatus::NoSymbol.as_str(), "no_symbol");
         assert_eq!(AgentLspStatus::NoServer.as_str(), "no_server");
         assert_eq!(AgentLspStatus::Untrusted.as_str(), "untrusted");
+        assert_eq!(AgentLspStatus::Disabled.as_str(), "disabled");
         assert_eq!(AgentLspStatus::Timeout.as_str(), "timeout");
         assert_eq!(AgentLspStatus::Gone.as_str(), "gone");
         assert_eq!(AgentLspStatus::Error.as_str(), "error");
+    }
+
+    #[test]
+    fn ensure_disabled_maps_to_disabled() {
+        assert_eq!(
+            AgentLspStatus::from_ensure(&ensure(false, false, Some("disabled"))),
+            AgentLspStatus::Disabled
+        );
     }
 
     #[test]

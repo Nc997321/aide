@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useWorkspaceLsp } from "../../composables/useWorkspaceLsp";
-import { useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
+import { formatMemory, useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
 import { useWorkspaceJdk } from "../../composables/useWorkspaceJdk";
 import { useSettings } from "../../composables/useSettings";
 import { installGuideFor } from "../../lspInstallGuide";
@@ -71,13 +71,13 @@ onUnmounted(() => {
 
 // ── 徽章内容 ──
 const STATUS_MARK: Record<LspServerStatus, string> = {
-  ok: "✓", missing: "✗", failed: "!", idle: "", indexing: "⟳",
+  ok: "✓", missing: "✗", failed: "!", idle: "", indexing: "⟳", sleeping: "◌",
 };
 const STATUS_TEXT: Record<LspServerStatus, string> = {
-  ok: "就绪", missing: "未安装", failed: "启动失败", idle: "待探测", indexing: "索引中…",
+  ok: "就绪", missing: "未安装", failed: "启动失败", idle: "待探测", indexing: "索引中…", sleeping: "已休眠",
 };
 const STATUS_CLASS: Record<LspServerStatus, string> = {
-  ok: "st-ok", missing: "st-miss", failed: "st-err", idle: "st-idle", indexing: "st-index",
+  ok: "st-ok", missing: "st-miss", failed: "st-err", idle: "st-idle", indexing: "st-index", sleeping: "st-idle",
 };
 
 const MAX_BADGE_SEGS = 4;
@@ -214,7 +214,9 @@ async function saveOverride(lang: string) {
     delete servers[lang];
   }
   try {
-    await api.setSettings({ lsp: { servers } });
+    // setSettings 按顶层键整个替换：先读回 lsp 的其余字段（如 idleSleepMinutes）一并写，别冲掉
+    const current = (await api.getSettings()).lsp ?? {};
+    await api.setSettings({ lsp: { ...current, servers } });
     savedOverrides.value = servers;
     // 覆盖改了 server 启动方式 → 重拉该工作区 server（disable→enable）
     if (lsp.enabled.value) {
@@ -414,6 +416,11 @@ defineExpose({ openPanel });
               <span class="lang-name">{{ row.name }}</span>
               <span class="lang-server">{{ row.server }}</span>
               <span class="lang-status" :class="row.status">{{ STATUS_TEXT[row.status] }}</span>
+              <span
+                v-if="row.memory"
+                class="lang-mem"
+                v-tooltip="'语言服务器实际占用的内存（约 30 秒刷新一次）'"
+              >{{ formatMemory(row.memory) }}</span>
             </div>
 
             <!-- 有对应语言包且没装：一键安装（与插件市场「语言服务器」同一份状态） -->
@@ -423,7 +430,7 @@ defineExpose({ openPanel });
                 :disabled="!!packs.busy.value[row.pack.id] || row.pack.installing"
                 @click="packs.install(row.pack.id)"
               >
-                {{ packs.busy.value[row.pack.id] || row.pack.installing ? "安装中…" : `一键安装 ${row.pack.name} 语言包` }}
+                {{ packs.busy.value[row.pack.id] || row.pack.installing ? `安装中…${packs.progressText(row.pack.id)}` : `一键安装 ${row.pack.name} 语言包` }}
               </button>
               <span class="pack-hint">装到当前窗口连着的机器，或在下方手动指定路径</span>
               <div v-if="packs.errors.value[row.pack.id]" class="err-hint">{{ packs.errors.value[row.pack.id] }}</div>
@@ -690,6 +697,7 @@ defineExpose({ openPanel });
 .lang-status.err { color: var(--aide-danger); }
 .lang-status.indexing { color: var(--aide-accent); }
 /* indexing 诚实兜底文案：对齐到 lang-name 下方（29px = 14px 行内边距 + 6px 点 + 9px 间距） */
+.lang-mem { flex-shrink: 0; font-size: 10px; color: var(--aide-text-muted); font-variant-numeric: tabular-nums; }
 .lang-note-row { padding: 0 14px 6px 29px; font-size: 10px; color: var(--aide-text-muted); line-height: 1.4; }
 
 /* ── 内联 override 行（取代 install-box note + 底部服务器覆盖区） ── */

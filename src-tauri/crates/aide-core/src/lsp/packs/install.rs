@@ -8,17 +8,26 @@ use std::process::Command;
 use crate::mirrors::NPM_REGISTRIES;
 use crate::resources::HostResources;
 
-use super::catalog::{platform_key, NpmPackage, PackSpec, Recipe, Release, Toolchain};
-use super::{archive, fetch, node, Launch, Manifest};
+use super::catalog::{platform_key, JvmArchive, NpmPackage, PackSpec, Recipe, Release, Toolchain};
+use super::{archive, fetch, jvm, node, Launch, Manifest};
 
 pub fn install(spec: &PackSpec, resources: &dyn HostResources) -> Result<Manifest, String> {
+    install_with_progress(spec, resources, &|_, _| {})
+}
+
+/// 同 [`install`]，大文件下载时回报进度 `(已下字节, 总字节)`。
+pub fn install_with_progress(
+    spec: &PackSpec,
+    resources: &dyn HostResources,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<Manifest, String> {
     let root = super::packs_root();
     std::fs::create_dir_all(&root).map_err(|e| format!("创建 {} 失败：{e}", root.display()))?;
     let staging = root.join(format!(".{}.staging-{}", spec.id, std::process::id()));
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("创建临时目录失败：{e}"))?;
 
-    let result = build(spec, resources, &staging).and_then(|(source, launch)| {
+    let result = build(spec, resources, &staging, progress).and_then(|(source, launch)| {
         let manifest = Manifest {
             id: spec.id.to_string(),
             version: spec.version.to_string(),
@@ -50,8 +59,14 @@ fn commit(staging: &Path, target: &Path) -> Result<(), String> {
 }
 
 /// 返回 (安装来源说明, 启动方式)。
-fn build(spec: &PackSpec, resources: &dyn HostResources, staging: &Path) -> Result<(String, Launch), String> {
+fn build(
+    spec: &PackSpec,
+    resources: &dyn HostResources,
+    staging: &Path,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<(String, Launch), String> {
     match &spec.recipe {
+        Recipe::JvmArchive(a) => install_jvm_archive(spec, a, staging, progress),
         Recipe::Npm { packages, script } => {
             // 先确认能跑：没有 node 就先装 node，免得包装好了却起不来
             node::ensure(resources)?;
@@ -80,6 +95,44 @@ fn build(spec: &PackSpec, resources: &dyn HostResources, staging: &Path) -> Resu
             Ok(("GitHub Releases".into(), Launch::Binary { path: rel }))
         }
     }
+}
+
+/// JVM 系语言服务器：先确认本机有够版本的 JDK（没有就不下 50MB 白装），断点续传下压缩包、
+/// 校验 sha256、解进临时目录。
+fn install_jvm_archive(
+    spec: &PackSpec,
+    a: &JvmArchive,
+    staging: &Path,
+    progress: &dyn Fn(u64, Option<u64>),
+) -> Result<(String, Launch), String> {
+    let (_, java_major) = jvm::find_java(a.min_java).ok_or_else(|| {
+        format!(
+            "运行 {} 语言服务器需要 JDK {}+（工程本身用 Java 8 也可以）。本机没找到：请安装 JDK {}，或把 JAVA_HOME 指向它。",
+            spec.name, a.min_java, a.min_java
+        )
+    })?;
+    // 下载文件放在 staging 之外：安装失败 staging 会被删，而半截的下载要留着下次续传
+    let part = super::packs_root().join(format!(".{}-{}.download", spec.id, spec.version));
+    fetch::download_resumable(a.url, &part, a.sha256, progress)?;
+    let bytes = std::fs::read(&part).map_err(|e| format!("读取下载文件失败：{e}"))?;
+    archive::untar_gz(&bytes, staging, None)?;
+    drop(bytes);
+    let _ = std::fs::remove_file(&part);
+    if !staging.join(a.launcher).is_file() {
+        return Err(format!("安装包里缺启动 jar {}", a.launcher));
+    }
+    let key = platform_key();
+    let mut jvm_args: Vec<String> = a.jvm_args.iter().map(|s| s.to_string()).collect();
+    let platform = a
+        .platform_jvm_args
+        .iter()
+        .find(|(k, _)| *k == key)
+        .ok_or_else(|| format!("{} 没有适用于 {key} 的配置", spec.name))?;
+    jvm_args.extend(platform.1.iter().map(|s| s.to_string()));
+    Ok((
+        format!("Eclipse 官方下载（本机 JDK {java_major}）"),
+        Launch::Jar { jar: a.launcher.to_string(), jvm_args, min_java: a.min_java },
+    ))
 }
 
 fn install_npm_package(pkg: &NpmPackage, staging: &Path) -> Result<(), String> {

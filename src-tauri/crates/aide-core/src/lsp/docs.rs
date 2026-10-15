@@ -42,6 +42,11 @@ impl OpenDocs {
     }
 
     /// 该文档的来源。未打开 → `None`（调用方据此决定要不要放行它的诊断）。
+    /// 是否有编辑器打开着的文档（空闲休眠据此不停：用户开着文件随时会跳转）。
+    pub fn has_editor_docs(&self) -> bool {
+        self.0.values().any(|d| d.origin == DocOrigin::Editor)
+    }
+
     pub fn origin_of(&self, uri: &str) -> Option<DocOrigin> {
         self.0.get(uri).map(|e| e.origin)
     }

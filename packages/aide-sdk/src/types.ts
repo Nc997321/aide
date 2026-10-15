@@ -175,7 +175,11 @@ export interface AppSettings {
   /** 侧栏会话列表样式（卡片/行式），默认 "card"。纯 UI 皮肤，设置「主题样式」tab 切换。 */
   sessionListStyle?: SessionListStyle;
   /** 全局 LSP 设置：按语言 id 覆盖 server 二进制路径（对应后端 LspSettings）。 */
-  lsp?: { servers: Record<string, LspServerOverride> };
+  lsp?: {
+    servers: Record<string, LspServerOverride>;
+    /** 语言服务器空闲多少分钟后休眠（停进程、开关不变、用到即唤醒）。缺省 30；0 = 永不休眠。 */
+    idleSleepMinutes?: number;
+  };
   /** 代码编辑器设置（缩进等）。后续编辑器相关设置归入此类。固定 Tab 字符缩进。 */
   editor: EditorSettings;
   /** 手机网关（Aide Link）设置：远程会话默认权限模式（中继地址是产品内置的，不在设置里）。 */

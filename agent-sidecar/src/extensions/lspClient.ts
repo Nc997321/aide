@@ -52,7 +52,13 @@ export const LSP_QUERY_TIMEOUT_MS = 120_000;
 
 /** 哪些工作区根的语言服务器**已经答过一次 ready**。grep 顺带作答的快路径只在这里开
  *  （lspGlance.ts）：冷窗口里给每次 grep 加几秒等待，是把 agent 推离 grep 之外的代价。 */
-const readyRoots = new Set<string>();
+const readyRoots = new Map<string, number>();
+/** 就绪记录多久之后，下一条 send 再确认一次（Host 侧对仍就绪的 server 是快路径）。
+ *  为什么要复查：Host 会把空闲的 server 休眠（默认 30 分钟，见 aide-core lsp/idle.rs），
+ *  sidecar 收不到 Host 事件；不复查的话休眠后的下一条 send 不预热，冷启动又落回 agent 头上。 */
+export const REWARM_AFTER_MS = 5 * 60_000;
+/** 正在预热的工作区根（单飞：每条 send 都会检查要不要预热，同一根同时只跑一发）。 */
+const warmingRoots = new Set<string>();
 
 export function isLspWarm(workspaceRoot: string): boolean {
   return readyRoots.has(workspaceRoot);
@@ -100,8 +106,34 @@ export function resolveLspResult(cmd: {
   // 逐键抄写就是每加一个工具漏一次（outline 的 `symbols` 就是这么丢过的形状）。
   const { cmd: _cmd, request_id: _id, ...payload } = cmd;
   const status = cmd.status ?? (cmd.ok ? "ready" : "error");
-  if (status === "ready") readyRoots.add(p.root);
+  if (status === "ready") readyRoots.set(p.root, Date.now());
+  // 开关关了：Host 拒起 server。就绪记录作废，grep 顺带作答不再去敲它（会话中途被关的情形）。
+  if (status === "disabled") readyRoots.delete(p.root);
   p.resolve({ ...(payload as Partial<LspQueryResponse>), ok: cmd.ok, status });
+}
+
+/**
+ * 每条 send 调一次：按本工作区的 LSP 开关（Host 随 send 下发）同步预热状态。
+ * - 开着、尚未就绪、没有进行中的预热 → fire-and-forget 发一发 `warm`。覆盖会话开始、
+ *   中途打开开关、空闲休眠后再次使用三种情形；Host 侧对已就绪的 server 是快路径，重复发无害。
+ * - 关着 → 就绪记录作废（不发任何查询：Host 也会拒起 server）。
+ */
+export function syncLspWarmth(
+  workspaceRoot: string,
+  enabled: boolean,
+  hasLanguages: boolean,
+  emit: (e: ChatEvent) => void,
+): void {
+  if (!workspaceRoot) return;
+  if (!enabled) {
+    readyRoots.delete(workspaceRoot);
+    return;
+  }
+  if (!hasLanguages || warmingRoots.has(workspaceRoot)) return;
+  const readyAt = readyRoots.get(workspaceRoot);
+  if (readyAt !== undefined && Date.now() - readyAt < REWARM_AFTER_MS) return;
+  warmingRoots.add(workspaceRoot);
+  void queryLsp("warm", {}, workspaceRoot, emit).finally(() => warmingRoots.delete(workspaceRoot));
 }
 
 /** 会话停止/中断时清掉本进程内所有挂起查询（request_id 全局唯一，无需按会话分）。 */
@@ -116,4 +148,5 @@ export function cancelAllLspQueries(reason: string): void {
 /** 测试用：重置就绪记录。 */
 export function _resetLspWarmForTest(): void {
   readyRoots.clear();
+  warmingRoots.clear();
 }

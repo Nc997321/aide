@@ -59,7 +59,7 @@ export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
   { id: "kbMemoryGuard", event: "PreToolUse", matcher: "^(Write|Edit|MultiEdit|NotebookEdit)$", purpose: "知识库圈选改写那一轮不写记忆（拦 Write/Edit 落在 memory 目录；本轮用户消息不带圈选即恢复；条件挂）" },
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$", purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）" },
-  { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$", purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数（语言服务器热了才附，不改工具结果；条件挂）" },
+  { id: "lspGlance", event: "PostToolUse", matcher: "^(Grep|Bash)$", purpose: "grep 顺带作答：搜代码标识符时附上语言服务器的定义位置与真实引用数，写法是找定义 / 找用法时再附函数体 / 引用列表（语言服务器热了才附，不改工具结果；附了什么在对话里显示「LSP 补充」；条件挂）" },
   { id: "stopEffort", event: "Stop", matcher: "—", purpose: "读本轮 effort 盖到 message_stop" },
   { id: "modelSwitchGuard", event: "PreModelSwitch", matcher: "—", purpose: "模型切换成本确认（缓存热+大体量才问，条件挂，支线不挂）" },
   { id: "modelSwitchCommitted", event: "PostModelSwitch", matcher: "—", purpose: "模型切换坐实上报（前端落盘依据，条件挂，支线不挂）" },

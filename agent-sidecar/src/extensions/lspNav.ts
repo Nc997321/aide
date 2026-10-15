@@ -144,6 +144,15 @@ export class LspNav {
     return rows.join("\n");
   }
 
+  /** 定义块（头行 + 函数体，最多 `maxLines` 行）。文件读不到时返回 null（grep 顺带作答据此不附）。 */
+  async definitionBlockOf(l: Loc, name: string | undefined, maxLines?: number): Promise<string | null> {
+    const [lines, nodes] = await Promise.all([this.lines(l.file), this.outlineOf(l.file)]);
+    if (!lines) return null;
+    const node = nodes ? declaredAt(nodes, l.line, name) ?? declaredAt(nodes, l.line) : null;
+    const container = node && nodes ? containerOf(nodes, node) : null;
+    return definitionText(this.rel(l.file), l, lines, node, container, maxLines);
+  }
+
   private async definitionBlock(l: Loc, name: string | undefined): Promise<string> {
     const [lines, nodes] = await Promise.all([this.lines(l.file), this.outlineOf(l.file)]);
     const node = nodes ? declaredAt(nodes, l.line, name) ?? declaredAt(nodes, l.line) : null;
@@ -151,7 +160,12 @@ export class LspNav {
     return definitionText(this.rel(l.file), l, lines, node, container);
   }
 
-  private async groupRefs(locs: Loc[]): Promise<Array<{ rel: string; refs: RefLine[] }>> {
+  /** 引用按文件分组，每条带行文本与所在函数（前 `enclosingFiles` 个文件取结构标所在函数）。 */
+  groupRefsOf(locs: Loc[], enclosingFiles?: number): Promise<Array<{ rel: string; refs: RefLine[] }>> {
+    return this.groupRefs(locs, enclosingFiles);
+  }
+
+  private async groupRefs(locs: Loc[], enclosingFiles = MAX_ENCLOSING_FILES): Promise<Array<{ rel: string; refs: RefLine[] }>> {
     const byFile = new Map<string, Loc[]>();
     for (const l of locs) byFile.set(l.file, [...(byFile.get(l.file) ?? []), l]);
     const files = [...byFile.keys()];
@@ -159,7 +173,7 @@ export class LspNav {
       files.map(async (file, i) => {
         const [lines, nodes] = await Promise.all([
           this.lines(file),
-          i < MAX_ENCLOSING_FILES ? this.outlineOf(file) : Promise.resolve(null),
+          i < enclosingFiles ? this.outlineOf(file) : Promise.resolve(null),
         ]);
         const refs = byFile
           .get(file)!
@@ -393,10 +407,20 @@ function kindOf(node: OutlineNode): string {
   return words[node.kind] ?? (node.detail ? node.detail.split(/\s/)[0] : "symbol");
 }
 
-function reasonOf(resp: LspQueryResponse): string {
+/** 用户关了本工作区的语言服务器：如实说「没开」（不是「在建索引」也不是「没有」），并告诉模型怎么开。 */
+const LSP_OFF_REASON =
+  "the language server is turned off for this workspace — the user can turn it on in Aide's 语言环境 panel";
+
+export function reasonOf(resp: LspQueryResponse): string {
   if (resp.timedOut || resp.status === "timeout") return "it did not finish within the time budget";
+  // `indexing` 带 error = Rust 侧按名查询「没能确认」（agent_query.rs 的 unverified_outcome：
+  // 状态借用 indexing 表示「不是确认的否定」，逐语言的真实原因在 error 里）。真在建索引时
+  // 不带 error。丢掉 error 一律说「still indexing」就是撒谎——outline 刚答上、下一发却说
+  // 索引没好（2026-10-14 真机：Java 工程按名查 `StageInfo`）。
+  if (resp.status === "indexing" && resp.error?.trim()) return `name search could not confirm it: ${resp.error.trim()}`;
   if (resp.status === "indexing") return "it is still indexing";
   if (resp.status === "no_server") return "no language server for this code";
+  if (resp.status === "disabled") return LSP_OFF_REASON;
   return `status: ${resp.status}${resp.error ? ` — ${resp.error}` : ""}`;
 }
 

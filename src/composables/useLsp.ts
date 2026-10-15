@@ -24,6 +24,51 @@ let listening = false;
 let unlistenDiag: (() => void) | null = null;
 let unlistenDead: (() => void) | null = null;
 let unlistenShowMsg: (() => void) | null = null;
+/** 已对开关做过选择的工作区（会话前询问卡片据此消失）。来源：Host 回种的 decided，或任一端改开关的事件。 */
+const lspDecidedWorkspaces = ref<Set<string>>(new Set());
+let switchListening = false;
+let unlistenSwitch: (() => void) | null = null;
+
+/** 工作区根比较：分隔符与 Windows 盘符大小写差异不算不同（事件里的根来自 Host，
+ *  可能是会话 cwd 的拼法，与 UI 持有的根字符串不完全一致）。 */
+export function sameRoot(a: string, b: string): boolean {
+  const norm = (p: string) => {
+    const s = p.replace(/\\/g, "/").replace(/\/+$/, "");
+    return /^[A-Za-z]:\//.test(s) ? s.toLowerCase() : s;
+  };
+  return norm(a) === norm(b);
+}
+
+function markDecided(workspaceRoot: string) {
+  for (const r of lspDecidedWorkspaces.value) if (sameRoot(r, workspaceRoot)) return;
+  lspDecidedWorkspaces.value = new Set(lspDecidedWorkspaces.value).add(workspaceRoot);
+}
+
+/** 按 Host 的权威值更新本端缓存（事件 / 回种共用）。 */
+function applySwitch(workspaceRoot: string, enabled: boolean) {
+  const next = new Set<string>();
+  for (const r of lspEnabledWorkspaces.value) if (!sameRoot(r, workspaceRoot)) next.add(r);
+  if (enabled) next.add(workspaceRoot);
+  lspEnabledWorkspaces.value = next;
+  const prefix = `${workspaceRoot}:`;
+  const caps = new Map<string, LspCapabilities>();
+  for (const [k, v] of capabilities.value) if (!k.startsWith(prefix)) caps.set(k, v);
+  capabilities.value = caps;
+}
+
+/** 开关变更事件：询问卡片、标题栏、其他客户端任一处改了开关，Host 广播 `lsp-switch-changed`，
+ *  本端缓存（标题栏开关、编辑器是否接 LSP）随之同步。 */
+async function ensureSwitchListening() {
+  if (switchListening) return;
+  switchListening = true;
+  unlistenSwitch = await listen<{ workspaceRoot: string; enabled: boolean }>("lsp-switch-changed", (ev) => {
+    const p = ev.payload;
+    applySwitch(p.workspaceRoot, p.enabled);
+    // 任何一端写过开关 = 已决定（Host 的 set_lsp_enabled 同时落 decided）。
+    markDecided(p.workspaceRoot);
+    if (p.enabled) void ensureListening();
+  });
+}
 
 async function ensureListening() {
   if (listening) return;
@@ -92,7 +137,9 @@ function mapDiag(d: any): LspDiagnostic {
 export function useLsp() {
   async function enableLsp(workspaceRoot: string) {
     if (!workspaceRoot) return;
+    await ensureSwitchListening();
     await api.workspaceSetLspEnabled(workspaceRoot, true);
+    markDecided(workspaceRoot);
     lspEnabledWorkspaces.value = new Set(lspEnabledWorkspaces.value).add(workspaceRoot);
     clearCapabilitiesForWorkspace(workspaceRoot);
     await ensureListening();
@@ -102,6 +149,7 @@ export function useLsp() {
     if (!workspaceRoot) return;
     await api.lspShutdownWorkspace(workspaceRoot);
     await api.workspaceSetLspEnabled(workspaceRoot, false);
+    markDecided(workspaceRoot);
     const next = new Set(lspEnabledWorkspaces.value);
     next.delete(workspaceRoot);
     lspEnabledWorkspaces.value = next;
@@ -110,7 +158,27 @@ export function useLsp() {
   }
 
   function isLspOn(workspaceRoot: string): boolean {
-    return lspEnabledWorkspaces.value.has(workspaceRoot);
+    if (!workspaceRoot) return false;
+    for (const r of lspEnabledWorkspaces.value) if (sameRoot(r, workspaceRoot)) return true;
+    return false;
+  }
+
+  function isLspDecided(workspaceRoot: string): boolean {
+    for (const r of lspDecidedWorkspaces.value) if (sameRoot(r, workspaceRoot)) return true;
+    return false;
+  }
+
+  /** 从 Host 回种某工作区的开关（权威值在 Host state；本端缓存以前只在本次运行点开关时写入，
+   *  重启后一律显示「关」）。标题栏挂载 / 切工作区时调。 */
+  async function refreshLspSwitch(workspaceRoot: string): Promise<{ enabled: boolean; decided: boolean } | null> {
+    if (!workspaceRoot) return null;
+    await ensureSwitchListening();
+    const sw = await api.workspaceGetLspSwitch(workspaceRoot).catch(() => null);
+    if (!sw) return null;
+    applySwitch(workspaceRoot, sw.enabled);
+    if (sw.decided) markDecided(workspaceRoot);
+    if (sw.enabled) await ensureListening();
+    return sw;
   }
 
   function diagnosticsFor(filePath: string): LspDiagnostic[] {
@@ -147,6 +215,7 @@ export function useLsp() {
 
   function __resetForTest() {
     lspEnabledWorkspaces.value = new Set();
+    lspDecidedWorkspaces.value = new Set();
     diagnostics.value = new Map();
     capabilities.value = new Map();
     listening = false;
@@ -156,13 +225,16 @@ export function useLsp() {
     unlistenDiag = null;
     unlistenDead = null;
     unlistenShowMsg = null;
+    switchListening = false;
+    unlistenSwitch?.();
+    unlistenSwitch = null;
   }
 
   return {
     lspEnabledWorkspaces,
     diagnostics,
     capabilities,
-    enableLsp, disableLsp, isLspOn, diagnosticsFor, clearDiagnostics, getCapabilities, clearCapabilitiesForWorkspace,
+    enableLsp, disableLsp, isLspOn, isLspDecided, refreshLspSwitch, diagnosticsFor, clearDiagnostics, getCapabilities, clearCapabilitiesForWorkspace,
     __resetForTest,
   };
 }

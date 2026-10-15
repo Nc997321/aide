@@ -38,7 +38,31 @@ export interface ToolCallBlock {
    *  **两条构建路径都要带**（events.ts 的 display 映射 / transcriptMapping.ts 的
    *  历史回看），漏一条就会"实时是目录卡、重开变成文件卡"。 */
   isDir?: boolean;
+  /** grep 顺带作答附了什么（sidecar 广播的 `lsp_glance` 事件）：Grep / Bash 行下方的「LSP 补充」标记。
+   *  只来自实时事件（含断线回放）；从磁盘重开的历史会话没有这份结构。 */
+  lspGlance?: LspGlanceItem[];
 }
+
+/** grep 顺带作答的一项（给界面看的结构；路径已相对化）。
+ *  ⚠️ 与 agent-sidecar/src/engine/types.ts 的同名类型**必须同形**（lspGlanceParity.test.ts 对账）。 */
+export type LspGlanceItem =
+  | {
+      kind: "summary";
+      name: string;
+      /** 定义处（同名多义时是候选；候选太多时为空、只有 ambiguous 个数）。kind 为空串 = 没取到种类。 */
+      defs: Array<{ file: string; line: number; kind: string; endLine?: number }>;
+      refCount?: number;
+      refFiles?: number;
+      /** 同名多义的个数。 */
+      ambiguous?: number;
+    }
+  | { kind: "definition"; name: string; file: string; line: number; symbolKind: string; endLine?: number }
+  | {
+      kind: "references";
+      name: string;
+      total: number;
+      shown: Array<{ file: string; line: number; enclosing: string | null }>;
+    };
 
 export interface ImageBlock {
   type: "image";

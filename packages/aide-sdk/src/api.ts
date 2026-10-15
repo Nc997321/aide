@@ -17,6 +17,7 @@ import type {
 } from "./types";
 import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
+import type { LspBoardStatus, LspPreflight } from "./types/lspPacks";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
 export interface SendMessageParams {
@@ -876,6 +877,18 @@ export const api = {
   },
   workspaceGetLspExcludes(workspaceRoot: string): Promise<string[]> {
     return getTransport().invoke("workspace_get_lsp_excludes", { workspaceRoot });
+  },
+  /** 某工作区各语言的 Host 状态板快照（之后靠 `lsp-status` 事件）。旧 Host 没有这条命令会 reject。 */
+  lspStatus(workspaceRoot: string): Promise<LspBoardStatus[]> {
+    return getTransport().invoke("lsp_status", { workspaceRoot });
+  },
+  /** 会话启动前：这个工作区要不要问用户「开不开语言服务器」（按会话自持的工作区判定）。 */
+  lspSessionPreflight(workspaceRoot: string): Promise<LspPreflight> {
+    return getTransport().invoke("lsp_session_preflight", { workspaceRoot });
+  },
+  /** 工作区 LSP 开关的权威值（Host state）：`decided` = 用户做过选择，不必再询问。 */
+  workspaceGetLspSwitch(workspaceRoot: string): Promise<{ enabled: boolean; decided: boolean }> {
+    return getTransport().invoke("workspace_get_lsp_switch", { workspaceRoot });
   },
 
   // 工作区信任（Trusted Workspace）— 路径入参，Rust 内部点号归一。

@@ -1437,6 +1437,8 @@ const { actions: quickActions } = useQuickActions();
       @select="pickedScene = $event"
       @example="fillSceneExample"
     />
+    <!-- 紧贴输入框上方、与它同宽的提示位（如新会话发送前的语言服务器询问） -->
+    <slot name="above-box" />
     <div
       class="chat-input-box"
       :class="{ 'btw-mode': btwMode, 'session-running': isBusy }"

@@ -14,6 +14,7 @@ import type {
   ChatMessage,
   ContentBlock,
   ContextCompactionState,
+  LspGlanceItem,
   ModelOption,
   PermissionModeOption,
   SubagentBlock,
@@ -378,6 +379,14 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         block.isPending = false;
         unregisterToolCall(sid, toolId);
       }
+      break;
+    }
+    case "lsp_glance": {
+      // grep 顺带作答附了什么：挂到对应的 Grep / Bash 工具块上。hook 跑在工具执行之后、
+      // 结果交给模型之前，事件可能先于或后于 tool_result 到达——注册表找不到就在消息里找。
+      const toolId = e["tool_use_id"] as string;
+      const block = lookupToolCall(sid, toolId) ?? findToolBlock(store.messages, toolId);
+      if (block) block.lspGlance = e["items"] as LspGlanceItem[];
       break;
     }
     case "permission_request": {
@@ -923,4 +932,14 @@ export function handleChatEvent(e: Record<string, unknown>): void {
 
   // P0-3：事件驱动增长（push + 就地 +=）后检查淘汰阈值（节流，单点覆盖全部 case）
   maybeEvict(sid, store);
+}
+
+/** 从最近的消息往前找某个工具块（注册表已注销——tool_result 先到——时的兜底）。 */
+function findToolBlock(messages: ChatMessage[], toolId: string): ToolCallBlock | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    for (const b of messages[i].blocks) {
+      if (b.type === "tool_call" && b.id === toolId) return b;
+    }
+  }
+  return undefined;
 }

@@ -3,6 +3,13 @@ import type { LanguagePack } from "@aide/sdk/types/lspPacks";
 
 const api = vi.hoisted(() => ({ list: vi.fn(), install: vi.fn(), uninstall: vi.fn() }));
 vi.mock("@aide/sdk/api/lspPacks", () => ({ lspPacksApi: api }));
+const events = vi.hoisted(() => ({ progress: null as ((ev: { payload: unknown }) => void) | null }));
+vi.mock("@/api", () => ({
+  listen: vi.fn(async (name: string, cb: (ev: { payload: unknown }) => void) => {
+    if (name === "lsp-pack-progress") events.progress = cb;
+    return () => {};
+  }),
+}));
 
 import { __resetLanguagePacksForTest, useLanguagePacks } from "./useLanguagePacks";
 
@@ -96,5 +103,20 @@ describe("useLanguagePacks", () => {
     await lp.refresh();
     expect(await lp.uninstall("typescript")).toBe(true);
     expect(lp.packs.value[0]!.installed).toBeNull();
+  });
+});
+
+describe("useLanguagePacks 下载进度", () => {
+  it("安装中显示百分比与 MB；装完清掉", async () => {
+    let finish: (v: LanguagePack) => void = () => {};
+    api.install.mockImplementation(() => new Promise((r) => (finish = r)));
+    const lp = useLanguagePacks();
+    const done = lp.install("java");
+    await vi.waitFor(() => expect(events.progress).not.toBeNull());
+    events.progress!({ payload: { id: "java", received: 19 * 1048576, total: 51 * 1048576 } });
+    expect(lp.progressText("java")).toBe(" 37%（19 / 51 MB）");
+    finish(pack({ id: "java", langs: ["java"] }));
+    await done;
+    expect(lp.progressText("java")).toBe("");
   });
 });

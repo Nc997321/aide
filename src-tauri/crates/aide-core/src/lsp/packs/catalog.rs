@@ -36,6 +36,25 @@ pub enum Recipe {
         toolchain: Option<Toolchain>,
         release: Release,
     },
+    /// JVM 系语言服务器（jdtls 等）：下一个 tar.gz（钉版本 + sha256），用本机 JDK 跑
+    /// `java <jvm_args> -jar <launcher> <app_args>`。JDK 不下载（见 `jvm.rs`）。
+    JvmArchive(JvmArchive),
+}
+
+pub struct JvmArchive {
+    pub url: &'static str,
+    /// 压缩包的 sha256（十六进制）——钉死，源被篡改 / 损坏即拒装。
+    pub sha256: &'static str,
+    /// 下载大小（字节，给人看的）。
+    pub size: u64,
+    /// 运行它需要的最低 Java 主版本（与「工程用哪个 JDK 编译」无关）。
+    pub min_java: u32,
+    /// 启动 jar，相对安装目录。
+    pub launcher: &'static str,
+    /// 放在 `-jar` 之前的 JVM 参数。
+    pub jvm_args: &'static [&'static str],
+    /// 按平台（[`platform_key`]）追加的 JVM 参数；`{dir}` 换成安装目录。
+    pub platform_jvm_args: &'static [(&'static str, &'static [&'static str])],
 }
 
 pub struct NpmPackage {
@@ -132,6 +151,51 @@ pub static CATALOG: &[PackSpec] = &[
                 ],
             },
         },
+    },
+    PackSpec {
+        id: "java",
+        name: "Java",
+        server: "Eclipse JDT Language Server",
+        summary: "为 .java 提供跳转、引用、调用层级、悬停类型与诊断，支持 Maven / Gradle 工程与 Lombok。运行需要本机 JDK 21+（工程本身用 Java 8 也可以）。",
+        langs: &[LanguageId::Java],
+        version: "1.58.0",
+        // 版本钉死在 1.58：之后的快照要求 Java 25 才能启动（2026-10-14 实测：JDK 21 上 OSGi
+        // 报 osgi.ee=JavaSE 25、1.7s 退出）。1.58 在 JDK 21 上对 po-api（Java 8 工程）实测可用。
+        recipe: Recipe::JvmArchive(JvmArchive {
+            url: "https://download.eclipse.org/jdtls/milestones/1.58.0/jdt-language-server-1.58.0-202604151538.tar.gz",
+            sha256: "2a5bbe55ec91b4325392050dc422cead3220a2459b3766be35e1fff45b4a50d9",
+            size: 51_487_479,
+            min_java: 21,
+            launcher: "plugins/org.eclipse.equinox.launcher_1.7.100.v20251111-0406.jar",
+            // 与 jdtls 官方 Python 启动脚本（bin/jdtls.py）一致；不走那个脚本：它要 Python，
+            // Windows 上的 python 常是应用商店占位，脚本末尾还有 pause 会卡住进程。
+            // 平台 config 目录作**只读共享配置区**（不传 -configuration）：多个 jdtls 实例并发时
+            // 不去写同一个安装目录。
+            jvm_args: &[
+                "-Declipse.application=org.eclipse.jdt.ls.core.id1",
+                "-Dosgi.bundles.defaultStartLevel=4",
+                "-Declipse.product=org.eclipse.jdt.ls.core.product",
+                "-Dosgi.checkConfiguration=true",
+                "-Dosgi.sharedConfiguration.area.readOnly=true",
+                "-Dosgi.configuration.cascaded=true",
+                // JDK 24+ 解析 XML（pom）的实体上限；旧 JDK 上只是无害的系统属性
+                "-Djdk.xml.maxGeneralEntitySizeLimit=0",
+                "-Djdk.xml.totalEntitySizeLimit=0",
+                "--add-modules=ALL-SYSTEM",
+                "--add-opens",
+                "java.base/java.util=ALL-UNNAMED",
+                "--add-opens",
+                "java.base/java.lang=ALL-UNNAMED",
+            ],
+            platform_jvm_args: &[
+                ("windows-x64", &["-Dosgi.sharedConfiguration.area={dir}/config_win"]),
+                ("windows-arm64", &["-Dosgi.sharedConfiguration.area={dir}/config_win"]),
+                ("linux-x64", &["-Dosgi.sharedConfiguration.area={dir}/config_linux"]),
+                ("linux-arm64", &["-Dosgi.sharedConfiguration.area={dir}/config_linux_arm"]),
+                ("darwin-x64", &["-Dosgi.sharedConfiguration.area={dir}/config_mac"]),
+                ("darwin-arm64", &["-Dosgi.sharedConfiguration.area={dir}/config_mac_arm"]),
+            ],
+        }),
     },
 ];
 

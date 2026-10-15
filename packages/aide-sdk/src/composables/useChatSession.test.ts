@@ -110,6 +110,29 @@ describe("useChatSession per-session store", () => {
     expect(tool?.isPending).toBe(false);
   });
 
+  it("lsp_glance 挂到对应工具块上：先于或后于 tool_result 到达都认", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await chat.sendMessage("q");
+    const items = [{ kind: "summary", name: "run_jump", defs: [{ file: "src/a.rs", line: 10, kind: "function" }], refCount: 2, refFiles: 1 }];
+
+    emit({ type: "tool_use_start", id: "g1", name: "Grep", input: { pattern: "run_jump" }, session_id: "uuid-a" });
+    emit({ type: "lsp_glance", tool_use_id: "g1", items, session_id: "uuid-a" });
+    emit({ type: "tool_result", id: "g1", content: "src/a.rs:10", is_error: false, session_id: "uuid-a" });
+    emit({ type: "tool_use_start", id: "g2", name: "Grep", input: { pattern: "fn run_jump" }, session_id: "uuid-a" });
+    emit({ type: "tool_result", id: "g2", content: "src/a.rs:10", is_error: false, session_id: "uuid-a" });
+    emit({ type: "lsp_glance", tool_use_id: "g2", items, session_id: "uuid-a" });
+    await flush();
+
+    const tools = chat.messages.value.flatMap((m) => m.blocks).filter((b) => b.type === "tool_call") as Array<{
+      id: string;
+      lspGlance?: unknown;
+    }>;
+    expect(tools.find((t) => t.id === "g1")?.lspGlance).toEqual(items);
+    expect(tools.find((t) => t.id === "g2")?.lspGlance).toEqual(items);
+  });
+
   it("tool_result 回填触发响应式——卡片不停在「等待结果…」（挂起表存原始对象回归）", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

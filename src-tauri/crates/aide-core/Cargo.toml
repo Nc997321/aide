@@ -7,6 +7,8 @@ description = "Aide Host core: the command table and host state behind every fro
 # 与 aide-host 同一约束：不依赖任何系统 C 库（aide-host 以 musl 静态链接嵌入本 crate）；
 # crate 自带的 C/汇编静态编入可以。新增依赖前先确认这一点。
 [dependencies]
+# 语言服务器进程树内存采样（「语言环境」面板显示占用）：Linux 读 /proc、Windows 走系统 API，不需要额外系统库
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 aide-workspace = { path = "../aide-workspace" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

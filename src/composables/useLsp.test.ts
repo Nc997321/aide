@@ -84,3 +84,36 @@ describe("useLsp", () => {
     expect(diagnostics.value.size).toBe(0);
   });
 });
+
+describe("useLsp 开关与 Host 同步", () => {
+  beforeEach(() => useLsp().__resetForTest());
+
+  it("refreshLspSwitch 按 Host 权威值回种（重启后不再一律显示关）", async () => {
+    const { invoke } = await import("@tauri-apps/api/core");
+    vi.mocked(invoke).mockImplementation(async (cmd: string) =>
+      cmd === "workspace_get_lsp_switch" ? { enabled: true, decided: true } : undefined,
+    );
+    const { refreshLspSwitch, isLspOn } = useLsp();
+    const sw = await refreshLspSwitch("C:\\Users\\me\\po-api");
+    expect(sw).toEqual({ enabled: true, decided: true });
+    expect(isLspOn("C:\\Users\\me\\po-api")).toBe(true);
+    // 分隔符 / 盘符大小写不同的同一个根也认
+    expect(isLspOn("c:/Users/me/po-api/")).toBe(true);
+    vi.mocked(invoke).mockImplementation(async () => undefined);
+  });
+
+  it("lsp-switch-changed 事件同步缓存（会话里的询问卡片 / 其他客户端改了开关）", async () => {
+    const { listen } = await import("@tauri-apps/api/event");
+    const handlers = new Map<string, (ev: { payload: unknown }) => void>();
+    vi.mocked(listen).mockImplementation(async (name: string, cb: any) => {
+      handlers.set(name, cb);
+      return () => {};
+    });
+    const { refreshLspSwitch, isLspOn } = useLsp();
+    await refreshLspSwitch("/ws");
+    handlers.get("lsp-switch-changed")!({ payload: { workspaceRoot: "/ws", enabled: true } });
+    expect(isLspOn("/ws")).toBe(true);
+    handlers.get("lsp-switch-changed")!({ payload: { workspaceRoot: "/ws", enabled: false } });
+    expect(isLspOn("/ws")).toBe(false);
+  });
+});

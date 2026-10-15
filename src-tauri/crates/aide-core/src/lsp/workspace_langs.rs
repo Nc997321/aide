@@ -27,6 +27,66 @@ pub fn lsp_languages_for_path(core: &crate::Core, workspace_root: &str) -> Vec<S
 }
 
 
+/// 会话前询问的判定结果（`lsp_session_preflight`）。判定全在代码里，模型不参与。
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LspPreflight {
+    /// 未信任：不问（信任门在前，开关开了也不会起 server）。
+    Untrusted,
+    /// 用户选过（或存量已开）：照做，不问。
+    Decided { enabled: bool },
+    /// 探到的语言里没有一个装着、也没有一个能装：问了也没用。
+    Nothing,
+    /// 该问：列出可开的语言。
+    Ask { langs: Vec<PreflightLang> },
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct PreflightLang {
+    pub lang: String,
+    /// 语言服务器已可解析（用户覆盖 / 语言包 / 捆绑 / PATH 任一）。
+    pub installed: bool,
+    /// 未安装但语言包目录里有：可「安装并开启」。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pack_id: Option<&'static str>,
+}
+
+/// 纯判定（IO 由调用方做完传进来，便于单测）。
+pub fn decide_preflight(trusted: bool, decided: bool, enabled: bool, langs: Vec<PreflightLang>) -> LspPreflight {
+    if !trusted {
+        return LspPreflight::Untrusted;
+    }
+    if decided {
+        return LspPreflight::Decided { enabled };
+    }
+    let langs: Vec<_> = langs.into_iter().filter(|l| l.installed || l.pack_id.is_some()).collect();
+    if langs.is_empty() {
+        LspPreflight::Nothing
+    } else {
+        LspPreflight::Ask { langs }
+    }
+}
+
+/// 某语言在询问提示上的一项：装没装、能不能装。
+pub fn preflight_lang(
+    core: &crate::Core,
+    settings: &crate::app_settings::AppSettings,
+    lang: crate::lsp::detector::LanguageId,
+) -> PreflightLang {
+    let installed = crate::lsp::registry::resolve(lang, settings, core.resources.as_ref()).is_some();
+    let pack_id = if installed {
+        None
+    } else {
+        crate::lsp::packs::catalog::CATALOG.iter().find(|p| p.langs.contains(&lang)).map(|p| p.id)
+    };
+    PreflightLang {
+        lang: lang.id_str().to_string(),
+        installed,
+        pack_id,
+    }
+}
+
 /// 纯路径判定部分：该根探测到哪些语言。与 core 无关，故可单测。
 fn lsp_language_ids_of(workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
     crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root))
@@ -36,6 +96,36 @@ fn lsp_language_ids_of(workspace_root: &str) -> Vec<crate::lsp::detector::Langua
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pl(lang: &str, installed: bool, pack: Option<&'static str>) -> PreflightLang {
+        PreflightLang { lang: lang.into(), installed, pack_id: pack }
+    }
+
+    #[test]
+    fn preflight_untrusted_and_decided_never_ask() {
+        assert_eq!(decide_preflight(false, false, false, vec![pl("java", true, None)]), LspPreflight::Untrusted);
+        assert_eq!(
+            decide_preflight(true, true, false, vec![pl("java", true, None)]),
+            LspPreflight::Decided { enabled: false }
+        );
+    }
+
+    #[test]
+    fn preflight_asks_only_for_usable_languages() {
+        // 没装也没语言包的语言（如 Java 目前不在语言包目录）不进卡片
+        let got = decide_preflight(
+            true,
+            false,
+            false,
+            vec![pl("java", false, None), pl("rust", false, Some("rust")), pl("typescript", true, None)],
+        );
+        assert_eq!(
+            got,
+            LspPreflight::Ask { langs: vec![pl("rust", false, Some("rust")), pl("typescript", true, None)] }
+        );
+        assert_eq!(decide_preflight(true, false, false, vec![pl("java", false, None)]), LspPreflight::Nothing);
+        assert_eq!(decide_preflight(true, false, false, vec![]), LspPreflight::Nothing);
+    }
 
     /// 不存在的路径不该 panic，也不该假装有语言。这条离开 Core 也能验，
     /// 故把纯路径部分拆成 `lsp_language_ids_of`。

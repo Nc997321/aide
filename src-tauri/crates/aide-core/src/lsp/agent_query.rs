@@ -13,6 +13,7 @@ use crate::lsp::jump;
 use crate::lsp::manager::{RequestOutcome, ServerHandle};
 use crate::lsp::workspace_access::WorkspaceAccess;
 use crate::lsp::workspace_symbol::SymbolCandidate;
+use crate::lsp::status_board::{StatusBoard, SymbolsCap};
 use crate::lsp::LspState;
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -129,7 +130,7 @@ const PROBE_BUDGET: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// agent 语义查询入口。
 pub async fn run_agent_query(
-    core: &crate::Core,
+    core: &Arc<crate::Core>,
     tool: &str,
     args: &Value,
     workspace_root: &str,
@@ -157,7 +158,7 @@ pub async fn run_agent_query(
     // （曾经跟查询共用下面那个「第一个可用语言就 break」的循环——结果只热了一种语言，
     // 另一种的第一次真查询照样撞冷启动。）
     if tool == "warm" {
-        return warm_all(access, state, core, workspace_root, &langs).await;
+        return warm_all(core, workspace_root, &langs).await;
     }
     let mut warmed = AgentLspStatus::NoServer;
     for lang_id in &langs {
@@ -224,6 +225,9 @@ pub async fn run_agent_query(
                 Ok(SymbolLookup::Unverified { silent }) => {
                     return unverified_outcome(symbol_query_name(name), &silent)
                 }
+                Err(s @ AgentLspStatus::Disabled) => {
+                    return fail(s, "the language server is turned off for this workspace")
+                }
                 Err(s) => return fail(s, "symbol lookup failed"),
             }
         }
@@ -231,39 +235,24 @@ pub async fn run_agent_query(
     run_jump(access, state, tool, &pos, workspace_root, budget(args, PROBE_BUDGET)).await
 }
 
-/// 预热：并发地把每种语言拉起来、递一个代表文件（把工程加载出来）、探到就绪。
+/// 预热：每种语言**启动或接上**就绪探测（`start_warm`，单飞），在预算内等结果。
 ///
-/// 返回 `ready` = 至少一种语言的语义层可用（sidecar 据此打开「grep 顺带给语义答案」的
-/// 快路径）；逐语言明细在 `languages` 里。**锁只圈住取句柄**：探测可能花掉几十秒，
-/// 曾经整段持锁，预热期间编辑器的所有 LSP 请求都被挡住。
+/// 返回 `ready` = 至少一种语言的跳转能力实测可用（sidecar 据此打开「grep 顺带作答」的快路径）；
+/// 逐语言明细在 `languages` 里。探测本身是 Host 的后台任务：sidecar 这一发等超时了，探测照样
+/// 跑完、照样写状态板，下一发直接拿结果。
 async fn warm_all(
-    access: &WorkspaceAccess,
-    state: &LspState,
-    core: &crate::Core,
+    core: &Arc<crate::Core>,
     workspace_root: &str,
     langs: &[crate::lsp::detector::LanguageId],
 ) -> AgentQueryOutcome {
     let one = |lang_id: crate::lsp::detector::LanguageId| async move {
-        let status = match crate::lsp::ensure_lang(core, workspace_root, lang_id).await {
-            Ok(o) => AgentLspStatus::from_ensure(&o),
-            Err(_) => AgentLspStatus::Error,
+        let mut rx = start_warm(core, workspace_root, lang_id);
+        let got = tokio::time::timeout(WARM_PROBE_BUDGET, rx.wait_for(|v| v.is_some())).await;
+        let status = match got {
+            Ok(Ok(v)) => v.unwrap_or(AgentLspStatus::Indexing),
+            _ => AgentLspStatus::Indexing,
         };
-        if !matches!(status, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
-            return (lang_id, status);
-        }
-        let handle = {
-            let mgr = state.0.read().await;
-            mgr.get(workspace_root, lang_id).await
-        };
-        let Some(h) = handle else {
-            return (lang_id, AgentLspStatus::Gone);
-        };
-        prime_project(access, &h, workspace_root, lang_id).await;
-        let Some(probe_file) = first_source_file(access, workspace_root, lang_id).await else {
-            return (lang_id, AgentLspStatus::Indexing);
-        };
-        let ready = probe_ready(access, &h, &probe_file, workspace_root, WARM_PROBE_BUDGET).await;
-        (lang_id, if ready { AgentLspStatus::Ready } else { AgentLspStatus::Indexing })
+        (lang_id, status)
     };
     let results = futures_util::future::join_all(langs.iter().map(|l| one(*l))).await;
     let any_ready = results.iter().any(|(_, s)| *s == AgentLspStatus::Ready);
@@ -271,13 +260,116 @@ async fn warm_all(
         .iter()
         .map(|(l, s)| json!({ "lang": l.id_str(), "status": s.as_str() }))
         .collect();
+    // 整体状态：有一种可用即 ready；全被关 / 全没装时如实交出（sidecar 据 disabled 作废就绪记录）。
+    let overall = if any_ready {
+        AgentLspStatus::Ready
+    } else if !results.is_empty() && results.iter().all(|(_, s)| *s == AgentLspStatus::Disabled) {
+        AgentLspStatus::Disabled
+    } else {
+        AgentLspStatus::Indexing
+    };
     json!({
         "ok": any_ready,
-        "status": if any_ready { AgentLspStatus::Ready } else { AgentLspStatus::Indexing }.as_str(),
+        "status": overall.as_str(),
         "count": 0,
         "results": [],
         "languages": languages,
     })
+}
+
+/// 启动（或接上进行中的）某语言的就绪探测——**单飞**，Host 自持。
+///
+/// 谁调：sidecar 预热（每条 send）、编辑器拉起 server（`lsp_ensure_server` / `lsp_did_open`）。
+/// 按名查询**不**调它：查询只接上进行中的探测（见 `ask_language`），否则探测一直没过时，
+/// 每一发查询都会新开一轮、各自等满预算。
+///
+/// 已实测就绪（跳转 + 按名都过）→ 直接给结果，不再探。状态板随 server 退出 / 关停复位，
+/// 所以这里不会拿着死 server 的旧结论。
+pub fn start_warm(
+    core: &Arc<crate::Core>,
+    workspace_root: &str,
+    lang: crate::lsp::detector::LanguageId,
+) -> tokio::sync::watch::Receiver<Option<AgentLspStatus>> {
+    let board = &core.lsp_board;
+    if board.nav_ready(workspace_root, lang) && board.symbols_ready(workspace_root, lang) {
+        let (_tx, rx) = tokio::sync::watch::channel(Some(AgentLspStatus::Ready));
+        return rx;
+    }
+    board.begin_warm(workspace_root, lang, |tx| {
+        let core = Arc::clone(core);
+        let ws = workspace_root.to_string();
+        tokio::spawn(async move {
+            let status = warm_one(&core, &ws, lang).await;
+            let _ = tx.send(Some(status));
+        })
+        .abort_handle()
+    })
+}
+
+/// 一种语言的就绪探测：拉起 → 递代表文件 → 跳转探针 → 按名探针。两个能力位都写状态板。
+async fn warm_one(core: &Arc<crate::Core>, ws: &str, lang: crate::lsp::detector::LanguageId) -> AgentLspStatus {
+    let status = match crate::lsp::ensure_lang(core, ws, lang).await {
+        Ok(o) => AgentLspStatus::from_ensure(&o),
+        Err(_) => AgentLspStatus::Error,
+    };
+    if !matches!(status, AgentLspStatus::Ready | AgentLspStatus::Indexing) {
+        return status;
+    }
+    let handle = {
+        let mgr = core.lsp.0.read().await;
+        mgr.get(ws, lang).await
+    };
+    let Some(h) = handle else {
+        return AgentLspStatus::Gone;
+    };
+    let access = WorkspaceAccess::of(ws);
+    prime_project(&access, &h, ws, lang).await;
+    let Some(probe_file) = first_source_file(&access, ws, lang).await else {
+        return AgentLspStatus::Indexing;
+    };
+    let board = &core.lsp_board;
+    let nav = probe_ready(&access, &h, &probe_file, ws, WARM_PROBE_BUDGET).await;
+    board.set_nav(ws, lang, nav);
+    if !nav {
+        return AgentLspStatus::Indexing;
+    }
+    // 按名查询能力：实测「一个确定存在的名字能按名查到」。实测（po-api，jdtls 1.58）
+    // ServiceReady 之后第一次 workspace/symbol 要 25s——这一下在这里吃掉，不留给 agent。
+    let caps = h.capabilities.lock().await.clone();
+    if caps.as_ref().is_some_and(|c| !crate::lsp::manager::declares_workspace_symbol(c)) {
+        board.set_symbols(ws, lang, SymbolsCap::Unsupported);
+    } else if let Some(name) = probe_symbol_name(&h, ws, &probe_file).await {
+        let deadline = std::time::Instant::now() + WARM_PROBE_BUDGET;
+        if matches!(search_symbol(&h, lang, &name, deadline, RETRY_INTERVAL).await, Ok(ref hits) if !hits.is_empty()) {
+            board.set_symbols(ws, lang, SymbolsCap::Ready);
+        } else {
+            tracing::info!(ws, lang = lang.id_str(), name, "lsp warm: 按名探针在预算内没命中，按名查询仍未确认");
+        }
+    }
+    AgentLspStatus::Ready
+}
+
+/// 按名探针的靶子：探测文件结构里第一个「像声明的」名字（类 / 接口 / 枚举 / 结构 / 函数 / 方法）。
+/// 跳转探针已证明这个文件的结构拿得到，所以名字一定真实存在于工程里。
+async fn probe_symbol_name(h: &Arc<ServerHandle>, ws: &str, file: &str) -> Option<String> {
+    let uri = crate::lsp::protocol::resolve_file_uri(ws, file);
+    let resp = h
+        .request(
+            "textDocument/documentSymbol",
+            json!({ "textDocument": { "uri": uri } }),
+            crate::lsp::manager::REQUEST_TIMEOUT,
+        )
+        .await;
+    let Ok(RequestOutcome::Ok(v)) = resp else { return None };
+    // SymbolKind：Class 5、Method 6、Enum 10、Interface 11、Function 12、Struct 23
+    crate::lsp::agent_nav::parse_outline(&v)
+        .into_iter()
+        .find(|n| {
+            matches!(n.kind, 5 | 6 | 10 | 11 | 12 | 23)
+                && n.name.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+                && n.name.chars().all(|c| c.is_alphanumeric() || c == '_')
+        })
+        .map(|n| n.name)
 }
 
 /// 预热的就绪探测预算：比查询路径宽——没人在等它，而冷启动实测 46–73s。
@@ -357,6 +449,8 @@ async fn consult_language(
     match status {
         // 未信任是工作区级的：整条路径都不该答（上层文案说「去信任工作区」）。
         AgentLspStatus::Untrusted => Err(AgentLspStatus::Untrusted),
+        // 用户关了本工作区的开关：同样是工作区级，整条按名路径都不该答（sidecar 走文本兜底）。
+        AgentLspStatus::Disabled => Err(AgentLspStatus::Disabled),
         AgentLspStatus::NoServer => Ok(Consulted::OutOfScope),
         // 装了却起不来（spawn/handshake 失败，如本机那个必崩的 vue-language-server）：
         // **它没答上**，这个语言的名字查询从此不可信。
@@ -365,7 +459,7 @@ async fn consult_language(
         )),
         // ready 与 indexing 都值得问：索引还没好的 server 也可能直接命中。
         AgentLspStatus::Ready | AgentLspStatus::Indexing => {
-            ask_language(access, state, workspace_root, lang_id, name, deadline).await
+            ask_language(access, state, &core.lsp_board, workspace_root, lang_id, name, deadline).await
         }
         AgentLspStatus::NoSymbol | AgentLspStatus::Timeout | AgentLspStatus::Gone => Ok(
             Consulted::Silent("its language server is not usable".into()),
@@ -407,6 +501,7 @@ fn names_the_symbol(candidate: &str, query: &str) -> bool {
 async fn ask_language(
     access: &WorkspaceAccess,
     state: &LspState,
+    board: &StatusBoard,
     workspace_root: &str,
     lang_id: crate::lsp::detector::LanguageId,
     name: &str,
@@ -429,6 +524,12 @@ async fn ask_language(
         if !crate::lsp::manager::declares_workspace_symbol(&caps) {
             return Ok(Consulted::Silent("does not implement symbol search".into()));
         }
+    }
+    // 按名索引还没实测可用、且正有一轮就绪探测在跑 → **接上它**，在本次预算内等，而不是另发
+    // 一条注定撞冷启动的查询（实测 jdtls 首查 25s > 按名预算 20s，必落「未确认」）。
+    // 等不到就如实说「符号索引仍在建立、已等 N 秒」——这时说「在建索引」是真话。
+    if let Some(why) = await_symbol_index(board, workspace_root, lang_id, deadline).await {
+        return Ok(Consulted::Silent(why));
     }
     prime_project(access, &h, workspace_root, lang_id).await;
     // 两段式：先快问一次；没命中就**按文本递文件**（名字出现在哪，就把那里的工程加载出来）
@@ -455,7 +556,11 @@ async fn ask_language(
         }
     };
     match answer {
-        Ok(hits) if !hits.is_empty() => Ok(Consulted::Hits(refine_candidates(access, hits, name).await)),
+        Ok(hits) if !hits.is_empty() => {
+            // 真查到了 = 按名索引实测可用（探针没赶上 / 没跑过时，这里补上状态）。
+            board.set_symbols(workspace_root, lang_id, SymbolsCap::Ready);
+            Ok(Consulted::Hits(refine_candidates(access, hits, name).await))
+        }
         // 空到底：**也不许说「没有」**——证明不了符号索引覆盖了整个工作区（就绪探针探的是
         // 「已递过的那个文件」，工程没加载它照样过，见 `SymbolLookup` 的实测记录）。
         Ok(_) => Ok(Consulted::Silent(
@@ -465,6 +570,31 @@ async fn ask_language(
         )),
         Err(why) => Ok(Consulted::Silent(why)),
     }
+}
+
+/// 按名索引还没实测可用、且正有一轮就绪探测在跑 → 在 `deadline` 内等它。
+/// 返回 `Some(原因)` = 等到预算用完索引仍没好（调用方如实交出「在建、已等 N 秒」）；
+/// `None` = 可以去查了（已就绪 / 探测结束 / 根本没有进行中的探测）。
+async fn await_symbol_index(
+    board: &StatusBoard,
+    workspace_root: &str,
+    lang_id: crate::lsp::detector::LanguageId,
+    deadline: std::time::Instant,
+) -> Option<String> {
+    if board.symbols_ready(workspace_root, lang_id) {
+        return None;
+    }
+    let mut rx = board.warm_in_flight(workspace_root, lang_id)?;
+    let started = std::time::Instant::now();
+    let left = deadline.saturating_duration_since(started);
+    let _ = tokio::time::timeout(left, rx.wait_for(|v| v.is_some())).await;
+    if board.symbols_ready(workspace_root, lang_id) || std::time::Instant::now() < deadline {
+        return None;
+    }
+    Some(format!(
+        "its symbol index is still being built (waited {}s for it)",
+        started.elapsed().as_secs()
+    ))
 }
 
 /// 按名查询 + **空结果重试**。返回 Err 时附「没答上」的原因（进模型看到的文案）。
@@ -1059,6 +1189,85 @@ mod tests {
         let h = make_handle(transport, true);
         start_test_reader(h.clone());
         h
+    }
+
+    fn test_board() -> StatusBoard {
+        StatusBoard::new(Arc::new(crate::NullSink))
+    }
+
+    /// 探测在跑、预算内把按名索引探通 → 不报「在建」，放行去查。
+    #[tokio::test]
+    async fn symbol_query_joins_in_flight_warm() {
+        let board = test_board();
+        let ws = "/w";
+        let lang = crate::lsp::detector::LanguageId::Java;
+        board.enter(ws, lang, crate::lsp::status_board::Phase::Indexing, None);
+        let tx_slot = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot = tx_slot.clone();
+        board.begin_warm(ws, lang, move |tx| {
+            *slot.lock().unwrap() = Some(tx);
+            tokio::spawn(std::future::pending::<()>()).abort_handle()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let waiter = await_symbol_index(&board, ws, lang, deadline);
+        let finisher = async {
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            board.set_symbols(ws, lang, SymbolsCap::Ready);
+            let tx = tx_slot.lock().unwrap().take().unwrap();
+            let _ = tx.send(Some(AgentLspStatus::Ready));
+        };
+        let (why, _) = tokio::join!(waiter, finisher);
+        assert_eq!(why, None);
+    }
+
+    /// 探测在跑、预算用完索引仍没好 → 如实说「在建、已等 N 秒」（不是空、不是「没有」）。
+    #[tokio::test]
+    async fn symbol_query_reports_index_still_building() {
+        let board = test_board();
+        let lang = crate::lsp::detector::LanguageId::Java;
+        let held = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let slot = held.clone();
+        // 发送端由「探测任务」持有（这里由测试替它拿着）：探测一直没结束
+        board.begin_warm("/w", lang, move |tx| {
+            *slot.lock().unwrap() = Some(tx);
+            tokio::spawn(std::future::pending::<()>()).abort_handle()
+        });
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(80);
+        let why = await_symbol_index(&board, "/w", lang, deadline).await;
+        assert!(why.is_some_and(|w| w.contains("still being built")));
+    }
+
+    /// 没有进行中的探测：不等、不新开（否则探测一直没过时每发查询都等满预算）。
+    #[tokio::test]
+    async fn symbol_query_without_warm_does_not_wait() {
+        let board = test_board();
+        let started = std::time::Instant::now();
+        let why = await_symbol_index(
+            &board,
+            "/w",
+            crate::lsp::detector::LanguageId::Java,
+            started + std::time::Duration::from_secs(10),
+        )
+        .await;
+        assert_eq!(why, None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
+
+    /// 按名探针的靶子取结构里第一个「像声明的」名字，跳过 package / 字段 / 非标识符。
+    #[tokio::test]
+    async fn probe_symbol_name_picks_first_declaration() {
+        let h = scripted_handle(
+            vec![],
+            json!([
+                { "name": "com.zkxn.growth", "kind": 4,
+                  "range": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 9 } },
+                  "selectionRange": { "start": { "line": 0, "character": 0 }, "end": { "line": 0, "character": 9 } } },
+                { "name": "MediaService", "kind": 5,
+                  "range": { "start": { "line": 15, "character": 0 }, "end": { "line": 90, "character": 1 } },
+                  "selectionRange": { "start": { "line": 15, "character": 13 }, "end": { "line": 15, "character": 25 } } }
+            ]),
+        );
+        assert_eq!(probe_symbol_name(&h, "/w", "/w/src/MediaService.java").await.as_deref(), Some("MediaService"));
     }
 
     /// **空结果要重试。** 复刻真机窗口：tsserver 的工程还在加载时 `workspace/symbol` 回
