@@ -26,7 +26,7 @@ describe("buildCliEnv", () => {
     const env = buildCliEnv({
       processEnv: { CLAUDE_CONFIG_DIR: "/global" } as NodeJS.ProcessEnv,
       envOverrides: { CLAUDE_CONFIG_DIR: "/from-override" },
-      automationSessionDir: "/scoped/session-1",
+      configDirOverride: "/scoped/session-1",
       thinkingDisabled: false,
     });
     expect(env.CLAUDE_CONFIG_DIR).toBe("/scoped/session-1");
@@ -34,7 +34,7 @@ describe("buildCliEnv", () => {
     const env2 = buildCliEnv({
       processEnv: {} as NodeJS.ProcessEnv,
       envOverrides: { CLAUDE_CONFIG_DIR: "/from-override" },
-      automationSessionDir: "",
+      configDirOverride: "",
       thinkingDisabled: false,
     });
     expect(env2.CLAUDE_CONFIG_DIR).toBe("/from-override");

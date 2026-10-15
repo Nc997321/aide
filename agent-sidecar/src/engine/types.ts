@@ -510,6 +510,11 @@ export type SidecarCommand =
       // 解耦——session_id 用于 SessionManager 路由，resume_session_id 用于 SDK resume。
       // 省略=全新会话不 resume。btw 用 fork_from + forkSession，不带这个。
       resume_session_id?: string;
+      // 会话转录所在的配置根（子进程 CLAUDE_CONFIG_DIR）：Rust 发现该会话的转录在
+      // 作用域隔离根（scopes/<kind>/<id>/claude，如自动化运行）时下发——resume 必须在
+      // 同一个根里找转录，否则 CLI 报「No conversation found」。省略 = 全局根。
+      // 与 automation.session_dir 的区别：这里只决定写盘位置，不带无人值守的权限语义。
+      config_dir?: string;
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;

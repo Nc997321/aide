@@ -124,6 +124,40 @@ pub fn find_session_jsonl_globally(id: &str) -> Vec<PathBuf> {
     find_session_jsonl_across_roots(&session_config_roots(), id)
 }
 
+/// 转录落在**作用域**配置根（`scopes/<kind>/<id>/claude`）里的会话。
+#[derive(Debug, Clone, PartialEq)]
+pub struct ScopedTranscript {
+    /// 作用域配置根：回复这条会话时子进程的 `CLAUDE_CONFIG_DIR` 必须指向它，
+    /// 否则 CLI 在全局根里 resume，报「No conversation found」（2026-10-15）。
+    pub config_root: PathBuf,
+    pub jsonl: PathBuf,
+}
+
+/// 多根定位核心：按根的顺序找第一处命中；命中全局根（`roots[0]`）或没找到 → None。
+fn scoped_transcript_in(roots: &[PathBuf], id: &str) -> Option<ScopedTranscript> {
+    roots.iter().enumerate().find_map(|(i, root)| {
+        let jsonl = find_session_jsonl_in(&root.join("projects"), id).into_iter().next()?;
+        Some((i > 0).then(|| ScopedTranscript { config_root: root.clone(), jsonl }))
+    })?
+}
+
+/// 会话的转录是否在作用域配置根里（自动化运行等宿主内部流程的产物）。
+/// 判据是**转录在哪**，不是标签——写侧把它放哪，续写就得回哪。
+pub fn find_scoped_transcript(id: &str) -> Option<ScopedTranscript> {
+    scoped_transcript_in(&session_config_roots(), id)
+}
+
+/// 转录里记录的工作目录：取第一条带 `cwd` 的记录（CLI 每条消息都写，开头几条
+/// 是 queue-operation，没有）。读不到 → None。
+pub fn transcript_cwd(jsonl: &std::path::Path) -> Option<String> {
+    use std::io::{BufRead, BufReader};
+    let file = fs::File::open(jsonl).ok()?;
+    BufReader::new(file).lines().map_while(Result::ok).take(50).find_map(|line| {
+        let v: serde_json::Value = serde_json::from_str(&line).ok()?;
+        v.get("cwd")?.as_str().filter(|s| !s.is_empty()).map(str::to_string)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +194,34 @@ mod tests {
         let hits = find_session_jsonl_across_roots(&roots, id);
         assert_eq!(hits.len(), 1);
         assert!(hits[0].starts_with(&base.join("scopes")));
+
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    /// 回复自动化会话（2026-10-15）：转录在作用域根 → 给出那个根；在全局根 → None
+    /// （普通会话照旧跟随全局，不下发覆盖）。
+    #[test]
+    fn scoped_transcript_only_for_non_global_roots() {
+        let base = std::env::temp_dir().join("aide_mod_test_scoped_transcript");
+        let _ = fs::remove_dir_all(&base);
+        let global_proj = base.join("claude").join("projects").join("C--ws");
+        fs::create_dir_all(&global_proj).unwrap();
+        fs::write(global_proj.join("global-id.jsonl"), b"{}").unwrap();
+        let scoped_root = base.join("scopes").join("automation").join("aut_x").join("claude");
+        let scoped_proj = scoped_root.join("projects").join("C--task");
+        fs::create_dir_all(&scoped_proj).unwrap();
+        fs::write(
+            scoped_proj.join("scoped-id.jsonl"),
+            "{\"type\":\"queue-operation\"}\n{\"type\":\"user\",\"cwd\":\"C:\\\\task\"}\n",
+        )
+        .unwrap();
+
+        let roots = session_config_roots_in(&base);
+        assert_eq!(scoped_transcript_in(&roots, "global-id"), None);
+        assert_eq!(scoped_transcript_in(&roots, "missing-id"), None);
+        let hit = scoped_transcript_in(&roots, "scoped-id").expect("作用域根里的转录");
+        assert_eq!(hit.config_root, scoped_root);
+        assert_eq!(transcript_cwd(&hit.jsonl).as_deref(), Some("C:\\task"));
 
         let _ = fs::remove_dir_all(&base);
     }

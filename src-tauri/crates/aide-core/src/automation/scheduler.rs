@@ -345,6 +345,15 @@ impl AutomationService {
         }
     }
 
+    /// 运行的工作目录：任务工作区；没有则以任务目录为 cwd（scratch home）。
+    /// 运行、蒸馏、会话档案的 wsPath 共用这一处——档案记的必须就是运行时的 cwd，
+    /// 否则在运行会话里回复时 CLI 按 `projects/<cwd 编码>/` 找不到转录。
+    fn run_cwd(task: &AutomationTask) -> String {
+        task.workspace_path
+            .clone()
+            .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string())
+    }
+
     /// 外壳的路径政策读：cwd → trusted。state 读属外壳，
     /// 纯函数 builder 只消费结果——两个 builder 共用，保证对同一 cwd 判断一致。
     fn path_policy(cwd: &str) -> PathPolicy {
@@ -543,10 +552,7 @@ impl AutomationService {
         let run_id = super::new_id("run");
         let session_id = run_id.clone(); // 1:1 映射，调试友好
         let (prompt, mode) = Self::assemble_prompt(&task);
-        let cwd = task
-            .workspace_path
-            .clone()
-            .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
+        let cwd = Self::run_cwd(&task);
         // 政策读在这里（外壳）算好，纯函数 builder 只管拼装。
         let policy = Self::path_policy(&cwd);
 
@@ -590,6 +596,8 @@ impl AutomationService {
                     "createdAt": crate::commands::recent::now_ms(),
                     "nameSource": "automation",
                     "tags": ["automation", task_id_owned],
+                    // 会话自持的工作区归属：在运行会话里回复时 send 的 cwd 取它
+                    "wsPath": cwd_for_dir,
                     "model": task_for_write.model,
                     "effort": task_for_write.effort,
                 });
@@ -921,6 +929,7 @@ impl AutomationService {
             "createdAt": crate::commands::recent::now_ms(),
             "nameSource": "automation",
             "tags": ["automation", task_id],
+            "wsPath": Self::run_cwd(&task),
             "model": task.model,
             "effort": task.effort,
         });
@@ -1116,10 +1125,7 @@ impl AutomationService {
         run: RunRecord,
     ) -> Result<(), String> {
         let distill_sid = Self::distill_session_id(&run.run_id);
-        let cwd = task
-            .workspace_path
-            .clone()
-            .unwrap_or_else(|| super::task_dir(&task.id).to_string_lossy().to_string());
+        let cwd = Self::run_cwd(&task);
         let core = self.core().ok_or("AutomationService 未启动")?;
         let provider_env = Self::provider_env(&core, &task.provider_id).await?;
         let cmd =

@@ -418,7 +418,7 @@ fn lock_meta_write() -> MutexGuard<'static, ()> {
 /// 各自做一遍 read-modify-write，两个字段并发写会互相覆盖。收敛到这里之后：
 ///  - 多字段合并写入天然原子（同一份 Value 上改完一次落盘）；
 ///  - 并发调用由 `META_WRITE_LOCK` 串行化（2026-09-08 讨论稿留的"只改这一处"）。
-fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(), String> {
+pub(crate) fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) -> Result<(), String> {
     let _guard = lock_meta_write();
     let dir = our_sessions_dir();
     fs::create_dir_all(&dir).map_err(|e| format!("Failed to create sessions dir: {}", e))?;

@@ -319,6 +319,10 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     let settings_service = core.settings.clone();
     // lsp_languages_for_path 需要资源端口解析捆绑 server（registry::resolve）。
     let app = core.clone();
+    // 转录在作用域隔离根的会话（自动化运行）：续写必须回到那个根，见 adopt_scoped_session。
+    // 须在 session_cwd 之前——它可能先给存量会话补上 wsPath。
+    let sid_for_scope = session_id.clone();
+    let scoped_config_root = blocking(move || Ok(adopt_scoped_session(&sid_for_scope))).await?;
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     // 工作目录必须真在：不在时 sidecar 起 claude 会 ENOENT，SDK 把它误报成「二进制与 libc 不匹配」
     // ——用户拿到一条完全错误的线索（2026-09-30 真机）。如实说是哪个目录不在。
@@ -329,10 +333,14 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     let cwd_str = cwd.to_string_lossy().to_string();
 
     // 显式注册：会话 cwd 在发送前幂等落账进工作区注册表（新装首聊回落 home
-    // 的隐式工作区由此照常出现在侧栏；automation 走 scopes 不经此路径）。
+    // 的隐式工作区由此照常出现在侧栏）。作用域隔离的会话不登记：它的 cwd 可能是
+    // 任务目录（~/.aide/automations/<id>/），登记了侧栏就多出一个工作区——隔离
+    // 存在的意义就是不进侧栏（2026-09-07）。判据与配置根同源（转录在哪），不列名单。
     // 登记失败不阻塞发送——它是落账不是门禁。
-    if let Err(e) = crate::commands::workspace::ensure_workspace_registered(&cwd) {
-        tracing::warn!(?e, cwd = %cwd.display(), "send_message: register workspace failed");
+    if scoped_config_root.is_none() {
+        if let Err(e) = crate::commands::workspace::ensure_workspace_registered(&cwd) {
+            tracing::warn!(?e, cwd = %cwd.display(), "send_message: register workspace failed");
+        }
     }
 
     let active =
@@ -414,6 +422,9 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
     // 项目 .aide/claude/skills/ / 项目 .mcp.json（见 session-worker.ts startLoop）。
     cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd_str));
+    if let Some(root) = &scoped_config_root {
+        cmd["config_dir"] = json!(root.to_string_lossy());
+    }
     // 该工作区配得上 LSP 的语言：空数组则 sidecar 不挂 aide-lsp 工具
     // （挂载条件与 trusted 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
@@ -691,6 +702,31 @@ fn recorded_root(session_id: &str) -> Option<PathBuf> {
     // 「目录还在吗」走 Host 口径（远程工作区无法同步 stat，按存在处理——否则会静默回落
     // 活动工作区，2026-09-18 事故的同一形态）；本机再排除「是个文件」。
     (crate::workspace::present(&p) && !p.is_file()).then_some(p)
+}
+
+/// 转录在作用域配置根里的会话（自动化运行等）→ 返回那个根，sidecar 据此把子进程
+/// `CLAUDE_CONFIG_DIR` 指过去：CLI 只在自己的配置根里 resume，在全局根找不到就报
+/// 「No conversation found」（2026-10-15：自动化会话里回复必挂）。普通会话 → None。
+///
+/// 顺手给**存量**自动化会话补归属：运行时建档没写 wsPath 的那批，cwd 会回落活动
+/// 工作区，CLI 又按 `projects/<cwd 编码>/` 找转录，照样找不到。补写来源是转录自己
+/// 记的 cwd（运行时的真实工作目录），写进档案后走正常的「档案 wsPath」一级——
+/// cwd 来源仍是三级，不另开一路。
+fn adopt_scoped_session(session_id: &str) -> Option<PathBuf> {
+    let scoped = crate::session_store::find_scoped_transcript(session_id)?;
+    if crate::session_store::our_session_workspace(session_id).path.is_none() {
+        if let Some(cwd) = crate::session_store::transcript_cwd(&scoped.jsonl) {
+            use crate::commands::session::{write_session_meta_blocking, MetaField, SessionMetaPatch};
+            let patch = SessionMetaPatch {
+                ws_path: MetaField::Set { value: cwd },
+                ..Default::default()
+            };
+            if let Err(e) = write_session_meta_blocking(session_id, &patch) {
+                tracing::warn!(session_id, ?e, "send_message: 补写作用域会话归属失败");
+            }
+        }
+    }
+    Some(scoped.config_root)
 }
 
 /// 会话工作目录：显式 workspace_root → 档案 wsPath → 当前活动工作区。

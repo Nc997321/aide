@@ -196,6 +196,8 @@ export class SessionWorker {
   // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
+  /** send.config_dir：本会话转录所在的作用域配置根（见 subprocessConfigDir）。 */
+  private sessionConfigDir?: string;
 
   // ---- 工作目录 ----
   private cwd?: string;
@@ -704,6 +706,10 @@ export class SessionWorker {
     // 自动化运行（调度器发起的无人值守会话）：存配置，白名单裁决在
     // makePolicyHook / makeCanUseToolCallback 里读它。转录落盘（不动
     // persistSession）；resume_session_id（蒸馏轮）走下方既有通道。
+    // 会话转录在作用域隔离根（如在自动化运行的会话里回复）：之后每次建 query 都
+    // 指向它——resume 才找得到转录，后续轮次也续写在同一份转录里。
+    if (cmd.config_dir) this.sessionConfigDir = cmd.config_dir;
+
     if (cmd.automation) {
       this.automationConfig = buildAutomationConfig(cmd.automation);
       // 蒸馏轮 fork：resume 运行会话的上下文但写成新 SDK 会话——worker re-key
@@ -812,7 +818,7 @@ export class SessionWorker {
           const cliEnv = buildCliEnv({
             processEnv: process.env,
             envOverrides: this.envOverrides,
-            automationSessionDir: this.automationConfig?.sessionDir,
+            configDirOverride: this.automationConfig?.sessionDir || this.sessionConfigDir,
             thinkingDisabled,
           });
 
@@ -1057,11 +1063,11 @@ export class SessionWorker {
 
   // ---- 图片 400 回滚 ----
 
-  /** 子进程实际生效的配置根（CLAUDE_CONFIG_DIR）：automation 下发了 session_dir
-   *  就用它——注册条目（sessions/<pid>.json）与转录 jsonl 都写在它下面，
+  /** 子进程实际生效的配置根（CLAUDE_CONFIG_DIR）：automation 下发了 session_dir、
+   *  或 send 带了 config_dir（回复作用域隔离的会话，如自动化运行）就用它——注册条目（sessions/<pid>.json）与转录 jsonl 都写在它下面，
    *  收尾清理/路径解析必须与启动时一致；否则跟随 sidecar 全局。 */
   private subprocessConfigDir(): string | undefined {
-    return this.automationConfig?.sessionDir || process.env.CLAUDE_CONFIG_DIR;
+    return this.automationConfig?.sessionDir || this.sessionConfigDir || process.env.CLAUDE_CONFIG_DIR;
   }
 
   /** 强杀兜底的定位信息：会话 id（= 注册条目里的 sessionId）+ 子进程配置根。

@@ -13,8 +13,9 @@ export interface CliEnvParams {
   processEnv: NodeJS.ProcessEnv;
   /** per-session provider 连接参数覆盖（send.env 通道，见 applySendRuntimeConfig）。 */
   envOverrides: Record<string, string>;
-  /** automation.session_dir（协议一等字段）：非空时 CLAUDE_CONFIG_DIR 指向隔离配置根。 */
-  automationSessionDir?: string | undefined;
+  /** 子进程配置根覆盖：automation.session_dir 或 send.config_dir（协议一等字段）。
+   *  非空时 CLAUDE_CONFIG_DIR 指向隔离配置根。 */
+  configDirOverride?: string | undefined;
   /** 本条 query 是否关思考。**唯一推导点**是 thinkingPolicy.thinkingDisabledFor，
    *  同一值也喂给 queryOptions 的 thinking 选项——两处各推一遍会劈叉。 */
   thinkingDisabled: boolean;
@@ -39,14 +40,14 @@ export function sessionEnvOf(
 /** 构造传给 claude CLI 子进程的显式 env。 */
 export function buildCliEnv(p: CliEnvParams): Record<string, string | undefined> {
   const cliEnv = sessionEnvOf(p.processEnv, p.envOverrides);
-  // 会话目录：协议一等字段（automation.session_dir）优先于透传/env。
+  // 会话目录：协议一等字段（automation.session_dir / send.config_dir）优先于透传/env。
   // automation 任务的子进程 CLAUDE_CONFIG_DIR 指向作用域隔离配置根，
   // 转录落 <sessionDir>/projects/<cwd 编码>/，不进全局 projects
   //（list_workspaces 全量扫描那里，混进去即侧栏污染，2026-09-07）。
   // 注意指令加载(loadAideInstructions)仍读全局——指令是用户全局配置，
   // 隔离的只是子进程自己的写盘位置。
-  if (p.automationSessionDir) {
-    cliEnv.CLAUDE_CONFIG_DIR = p.automationSessionDir;
+  if (p.configDirOverride) {
+    cliEnv.CLAUDE_CONFIG_DIR = p.configDirOverride;
   }
   // {...process.env} 的扩散和 envOverrides 都可能带进 CLAUDE_CODE_EFFORT_LEVEL
   // （用户全局 env / Rust provider 注入），必须在最后显式删除。

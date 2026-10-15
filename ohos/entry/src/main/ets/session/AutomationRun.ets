@@ -9,8 +9,11 @@
  *    （与聊天历史同一映射——分页与首载同形）；@Monitor('am.runView') 驱动：
  *    openRun / closeRun / refreshRunView（刷新按钮只调 refreshRunView，记录
  *    对象被换新 → Monitor 重载整页）
- *  - 协议缺口如实呈现：自动化会话目录暂不在远程 load_messages 扫描范围，
- *    空结果给说明文案（桌面端补齐后此屏点亮）；拉取失败错误卡 + 重试
+ *  - 拉取失败错误卡 + 重试；空结果给说明文案
+ *  - 「继续对话」（头部，已结束且有会话的运行）：转进普通聊天续聊——收起自动化
+ *    浮层与抽屉，chatModel.open(sessionId)。发送走既有通道（workspaceRoot=null、
+ *    resumeId=sid）：Host 按会话档案定 cwd、按转录所在的作用域配置根续写，
+ *    手机端不需要知道隔离目录（2026-10-15）
  *  - 渲染复用件：ThinkingCard（历史思考收起卡）/ MarkdownText（静态）/
  *    toolSummary；user 气泡 accent 右尾 4、AI 卡左尾 4（原型 tr-user/tr-ai）；
  *    原型「✦ 已注入执行手册」角标是假数据（真实转录无此块），略
@@ -27,6 +30,8 @@ import { MarkdownText } from './chat/MarkdownText';
 import { toolSummary } from './chat/ChatWire';
 import { api } from '../sdk/api';
 import { LoadMessagesResult, RunRecord } from '../sdk/types';
+import { chatModel } from './ChatModel';
+import { drawerState, toastModel } from './ChatDrawer';
 
 @ComponentV2
 export struct AutomationRun {
@@ -109,6 +114,19 @@ export struct AutomationRun {
   private taskName(): string {
     const t = this.am.selectedTask();
     return t !== null ? t.name : '运行详情';
+  }
+
+  /** 运行中的会话还被调度器驱动，不接续聊；skipped 没有会话。 */
+  private canContinue(r: RunRecord): boolean {
+    return r.status !== 'running' && r.sessionId !== '';
+  }
+
+  private continueChat(r: RunRecord): void {
+    const name: string = `${this.taskName()} · ${shortTime(r.startedAt)}`;
+    chatModel.open(r.sessionId, name);
+    this.am.resetViews();
+    drawerState.close();
+    toastModel.show(`已切换到「${name}」`, 'ok');
   }
 
   private cachePct(r: RunRecord): number {
@@ -237,6 +255,18 @@ export struct AutomationRun {
       .layoutWeight(1)
       .alignItems(HorizontalAlign.Start)
 
+      if (this.canContinue(r)) {
+        Text('继续对话')
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.accent'))
+          .padding({ left: 9, right: 9, top: 4, bottom: 4 })
+          .borderRadius(99)
+          .backgroundColor($r('app.color.accent_weak'))
+          .onClick(() => {
+            this.continueChat(r);
+          })
+      }
       this.statusBadge(r.status)
     }
     .width('100%')
@@ -429,8 +459,7 @@ export struct AutomationRun {
         .fontSize(13)
         .fontWeight(FontWeight.Bold)
         .fontColor($r('app.color.text_primary'))
-      Text('自动化会话目录暂不在远程 load_messages 的扫描范围（协议缺口），' +
-        '或该运行尚未产生消息；桌面端补齐后此屏点亮')
+      Text('该运行尚未产生消息，或转录已被清理')
         .fontSize(12)
         .fontColor($r('app.color.text_secondary'))
         .lineHeight(19)

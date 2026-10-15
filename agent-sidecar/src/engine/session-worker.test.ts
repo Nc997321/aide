@@ -326,6 +326,30 @@ describe("SessionWorker — automation session_dir（会话目录隔离）", () 
     expect((worker as any).subprocessConfigDir()).toBe(process.env.CLAUDE_CONFIG_DIR);
     worker.stop();
   });
+
+  // 回归（2026-10-15）：在自动化运行的会话里回复 → CLI 在全局根 resume，报
+  // 「No conversation found」。普通 send 带 config_dir 时子进程须指向它，且后续不带
+  // 该字段的 send 不能把它抹掉（query 重建时还要用），也不能带上自动化的权限语义。
+  it("普通 send 的 config_dir：子进程配置根跟随它，且不变成自动化会话", () => {
+    const emptyQuery = (() => (async function* () {})()) as any;
+    const { worker } = makeWorker();
+    (worker as any).queryFn = emptyQuery;
+    const scoped = "C:\\Users\\h\\.aide\\scopes\\automation\\aut_t\\claude";
+    worker.handleCommand({
+      cmd: "send",
+      session_id: "sdk-sid-1",
+      prompt: "接着说",
+      cwd: "C:/Users/h/.aide/automations/aut_t",
+      env: {},
+      resume_session_id: "sdk-sid-1",
+      config_dir: scoped,
+    } as any);
+    expect((worker as any).subprocessConfigDir()).toBe(scoped);
+    expect((worker as any).automationConfig).toBeUndefined();
+    worker.handleCommand({ cmd: "send", session_id: "sdk-sid-1", prompt: "再来", cwd: "C:/x", env: {} } as any);
+    expect((worker as any).subprocessConfigDir()).toBe(scoped);
+    worker.stop();
+  });
 });
 
 describe("SessionWorker — 一次性会话回合结束自毁（automation）", () => {
