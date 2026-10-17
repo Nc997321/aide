@@ -247,6 +247,29 @@ export function usePaneLayout() {
     layout.focusedGroupId = res.newGroup.id;
   }
 
+  /**
+   * 子会话「打开」：放在父会话旁边并排看（子会话设计 §8.5-4）。
+   * - 已在任何组打开 → 聚焦过去（全局唯一）；
+   * - 已经分过屏 → 开进聚焦组之外的那一组（几个子会话叠成 tab，不越分越碎）；
+   * - 否则在聚焦组右侧分屏。
+   */
+  function openSessionBeside(sessionId: string) {
+    const existing = findTabBySession(layout.root, sessionId);
+    if (existing) {
+      activateTab(existing.group, existing.tab.id);
+      return;
+    }
+    const other = listGroups(layout.root).find((g) => g.id !== layout.focusedGroupId);
+    if (other) {
+      const tab = createTab(sessionId);
+      other.tabs.push(tab);
+      if (!isStarted(sessionId)) other.previewTabId = tab.id;
+      activateTab(other, tab.id);
+      return;
+    }
+    openSessionInSplit(sessionId, "horizontal");
+  }
+
   /** tab 右键/快捷键「拆分」：激活 tab 移入新组（组内只剩 1 个 tab 时新组给空白面板）。 */
   function splitFocusedGroup(direction: Direction, groupId?: string) {
     // 空根组（欢迎态）上没有可拆的内容
@@ -480,6 +503,7 @@ export function usePaneLayout() {
     setChatMode,
     openSessionInNewTab,
     openSessionInSplit,
+    openSessionBeside,
     splitFocusedGroup,
     closeTab,
     closeActiveTab,

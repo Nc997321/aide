@@ -7,6 +7,17 @@
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
 
 /** 头行摘要：把 input 写成人读的一句，而不是原始 JSON。 */
+/** 头行工具名：内置子会话工具显示中文动作名（原始 MCP 名对用户没有意义），其余原样。 */
+const TOOL_DISPLAY_NAMES: Record<string, string> = {
+  "mcp__aide-sessions__session_spawn": "派出子会话",
+  "mcp__aide-sessions__session_message": "追加指令",
+  "mcp__aide-sessions__session_children": "查看子会话",
+};
+
+export function toolDisplayName(name: string): string {
+  return TOOL_DISPLAY_NAMES[name] ?? name;
+}
+
 export function summarizeToolInput(name: string, input: unknown): string {
   const record = (input ?? {}) as Record<string, unknown>;
   if (name === "Bash") return String(record.command ?? "");
@@ -32,6 +43,11 @@ export function summarizeToolInput(name: string, input: unknown): string {
   if (name === "Agent" || name === "Task") return str(record.description);
   if (name === "Skill") return str(record.skill);
   if (name === "TodoWrite") return todoSummary(record.todos);
+  // 子会话工具（aide-sessions）：派发看标题（缺省取任务首行），追加指令看正文
+  if (name === "mcp__aide-sessions__session_spawn") {
+    return str(record.title) || (str(record.task).split("\n").find((l) => l.trim()) ?? "").trim();
+  }
+  if (name === "mcp__aide-sessions__session_message") return str(record.text);
   // 其余工具（MCP 等参数形态不定）：头行只留工具名，原始 JSON 没人读。
   return "";
 }

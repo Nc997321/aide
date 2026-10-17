@@ -3,15 +3,17 @@ import { computed } from "vue";
 import type { BgTask, SubagentBlock } from "@/types/chat";
 import SubagentDock from "../SubagentDock.vue";
 import BgTaskDock from "../BgTaskDock.vue";
+import SubsessionPanel from "../subsession/SubsessionPanel.vue";
 import { toggleBgDock, toggleSubagentDock } from "@/composables/useChatSession";
+import { toggleSubsessionDrawer, useSubsessions } from "@/composables/useSubsessions";
 import type { ActivityTab } from "./activityChips";
 
 /**
- * 活动抽屉（2026-10-16 会话组成重排）：原先子代理 dock 与后台任务 dock 各自的展开面板
- * 合成一个，按 tab 切换。面板内容是两个 dock 组件（2026-10-16 起它们只剩面板，状态条由活动带接管）。
+ * 活动抽屉（2026-10-16 会话组成重排）：子会话 / 子代理 / 后台任务三块面板合成一个，按 tab 切换。
+ * 子代理与后台任务的面板是两个 dock 组件（它们只剩面板，状态条由活动带接管）。
  *
- * 开合状态仍是 store 里的两个字段（bgDockOpen / subagentDockOpen，带各自的清理语义）；
- * store 保证同一时刻最多一个为 true，所以「开着哪个 tab」直接由它们推出。
+ * 开合状态：子代理 / 后台任务仍是 store 里的两个字段（带各自的清理语义，store 保证互斥）；
+ * 子会话 tab 的开合在 useSubsessions（按父会话记）。三者互斥由 openActivityTab 统一收口。
  */
 const props = defineProps<{
   sessionId: string | null;
@@ -21,6 +23,8 @@ const props = defineProps<{
   bgTasks: BgTask[];
   bgOpen: boolean;
   bgSelectedId: string | null;
+  /** 子会话 tab 是否开着（useSubsessions.drawerOpen[sessionId]） */
+  subsessionOpen: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -29,31 +33,58 @@ const emit = defineEmits<{
 }>();
 
 const tab = computed<ActivityTab | null>(() =>
-  props.subagentOpen ? "subagent" : props.bgOpen ? "bg" : null,
+  props.subsessionOpen ? "subsession" : props.subagentOpen ? "subagent" : props.bgOpen ? "bg" : null,
 );
+
+const subs = useSubsessions();
+const subsessionCount = computed(() => subs.childrenOfSession(props.sessionId).length);
 
 const subagentRunning = computed(() => props.subagents.filter((s) => s.isPending).length);
 const bgRunning = computed(() => props.bgTasks.filter((t) => t.status === "running").length);
 
-/** 切 tab：已开着的不动；没开的打开（store 会先关掉另一个）。 */
 function openTab(next: ActivityTab) {
-  const sid = props.sessionId;
-  if (!sid || tab.value === next) return;
-  if (next === "subagent") toggleSubagentDock(sid);
-  else toggleBgDock(sid);
+  if (!props.sessionId || tab.value === next) return;
+  openActivityTab(props.sessionId, next, props);
 }
 
 function close() {
-  const sid = props.sessionId;
-  if (!sid) return;
-  if (props.subagentOpen) toggleSubagentDock(sid);
-  if (props.bgOpen) toggleBgDock(sid);
+  if (props.sessionId) openActivityTab(props.sessionId, null, props);
+}
+</script>
+
+<script lang="ts">
+/**
+ * 活动抽屉开到哪个 tab（null = 收起）。三个 tab 互斥：先按各自语义关掉其余的
+ * （子代理 / 后台任务的关闭带清理），再开目标。活动带的 chip 与抽屉的 tab 头都走这里。
+ */
+export function openActivityTab(
+  sid: string,
+  next: "subsession" | "subagent" | "bg" | null,
+  open: { subagentOpen: boolean; bgOpen: boolean; subsessionOpen: boolean },
+): void {
+  if (next !== "subagent" && open.subagentOpen) toggleSubagentDock(sid);
+  if (next !== "bg" && open.bgOpen) toggleBgDock(sid);
+  if (next !== "subsession" && open.subsessionOpen) toggleSubsessionDrawer(sid, false);
+  if (next === "subagent" && !open.subagentOpen) toggleSubagentDock(sid);
+  if (next === "bg" && !open.bgOpen) toggleBgDock(sid);
+  if (next === "subsession" && !open.subsessionOpen) toggleSubsessionDrawer(sid, true);
 }
 </script>
 
 <template>
   <section v-if="tab" class="adrawer" aria-label="活动面板">
     <div class="adrawer-head" role="tablist">
+      <button
+        v-if="subsessionCount > 0 || tab === 'subsession'"
+        type="button"
+        role="tab"
+        class="adrawer-tab"
+        :class="{ 'adrawer-tab--on': tab === 'subsession' }"
+        :aria-selected="tab === 'subsession'"
+        @click="openTab('subsession')"
+      >
+        子会话<span v-if="subsessionCount" class="adrawer-n">{{ subsessionCount }}</span>
+      </button>
       <button
         type="button"
         role="tab"
@@ -78,8 +109,9 @@ function close() {
       <button type="button" class="adrawer-close" @click="close">收起</button>
     </div>
     <div class="adrawer-body">
+      <SubsessionPanel v-if="tab === 'subsession' && sessionId" :parent-id="sessionId" />
       <SubagentDock
-        v-if="tab === 'subagent'"
+        v-else-if="tab === 'subagent'"
         :session-id="sessionId"
         :subagents="subagents"
         :open="subagentOpen"

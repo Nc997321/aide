@@ -41,13 +41,16 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard};
 
 use crate::paths::{claude_projects_dir, claude_sessions_dir, our_sessions_dir};
-use crate::session_store::{our_session_is_hidden, our_session_name};
+use crate::session_store::{our_session_is_hidden, our_session_name, our_session_parent};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Session {
     pub id: String,
     pub name: String,
     pub timestamp: u64,
+    /// 子会话的父会话 id（档案 `parentId`）；不是子会话时缺席。侧栏据此把子会话挂在父会话下。
+    #[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
 }
 
 
@@ -124,10 +127,12 @@ fn scan_project_jsonl_sessions(
 
         let display_name = our_session_name(&session_id).unwrap_or(name);
 
+        let parent_id = our_session_parent(&session_id);
         sessions.push(Session {
             id: session_id,
             name: display_name,
             timestamp,
+            parent_id,
         });
     }
     Ok(())
@@ -200,6 +205,7 @@ fn list_sessions_blocking(
                         id: session_id.to_string(),
                         name: display_name,
                         timestamp: started_at,
+                        parent_id: our_session_parent(session_id),
                     });
                 }
             }
@@ -235,7 +241,7 @@ async fn create_session(_core: Arc<Core>, a: CreateSessionArgs) -> Result<Sessio
 /// 建档案走**合并写**（`write_session_created`）：同一条会话在 finalize 那一刻
 /// 还有别的写者（`settleOnSend` 的 provider、工作区归属），盲写整文件会把对方
 /// 刚落的键抹掉。
-fn create_session_blocking(id: String, name: String) -> Result<Session, String> {
+pub(crate) fn create_session_blocking(id: String, name: String) -> Result<Session, String> {
     let timestamp = crate::commands::recent::now_ms();
     let path = our_sessions_dir().join(format!("{}.json", id));
     write_session_created(&path, &id, &name, timestamp)?;
@@ -243,6 +249,7 @@ fn create_session_blocking(id: String, name: String) -> Result<Session, String> 
         id,
         name,
         timestamp,
+        parent_id: None,
     })
 }
 
@@ -387,6 +394,8 @@ pub(crate) struct SessionMetaPatch {
     /// 工作区编码 key：与 ws_path 成对落盘（侧栏分组 / 布局快照 / 最近访问
     /// 都按 key 索引，缺 key 的条目会被静默丢弃）。
     pub ws_key: MetaField,
+    /// 子会话的父会话 id（Host 派发子会话时写；删父会话但保留子会话时 Clear）。
+    pub parent_id: MetaField,
 }
 
 fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
@@ -438,6 +447,7 @@ pub(crate) fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) ->
     apply_field(&mut v, "effort", &patch.effort);
     apply_field(&mut v, "wsPath", &patch.ws_path);
     apply_field(&mut v, "wsKey", &patch.ws_key);
+    apply_field(&mut v, "parentId", &patch.parent_id);
 
     fs::write(
         &path,
@@ -546,10 +556,18 @@ pub struct SetSessionMetaArgs {
     /// 缺省 = keep（远程端只写其中一个字段时其余原样保留）。
     #[serde(default)]
     effort: MetaField,
+    /// 父会话归属：只接受 Clear（删父会话但保留子会话 = 子会话升为顶层）。设成别的会话
+    /// 是 Host 派发子会话时的事，客户端写 Set 一律忽略——父子关系决定回报投给谁。
+    #[serde(default)]
+    parent_id: MetaField,
 }
 
 async fn set_session_meta(_core: Arc<Core>, a: SetSessionMetaArgs) -> Result<(), String> {
-    let SetSessionMetaArgs { id, provider, model, effort } = a;
+    let SetSessionMetaArgs { id, provider, model, effort, parent_id } = a;
+    let parent_id = match parent_id {
+        MetaField::Clear => MetaField::Clear,
+        _ => MetaField::Keep,
+    };
     tokio::task::spawn_blocking(move || {
         write_session_meta_blocking(
             &id,
@@ -557,6 +575,7 @@ async fn set_session_meta(_core: Arc<Core>, a: SetSessionMetaArgs) -> Result<(),
                 provider,
                 model,
                 effort,
+                parent_id,
                 ..Default::default()
             },
         )
@@ -844,6 +863,7 @@ fn list_sessions_for_workspace_blocking(ws_key: String) -> Result<Vec<Session>, 
                         id: session_id.to_string(),
                         name: display_name,
                         timestamp: started_at,
+                        parent_id: our_session_parent(session_id),
                     });
                 }
             }
@@ -960,7 +980,7 @@ mod tests {
         super::auto_rename_session(crate::test_core(std::sync::Arc::new(crate::NullSink)), AutoRenameSessionArgs { id, name }).await
     }
     async fn set_session_meta(id: String, provider: MetaField, model: MetaField, effort: MetaField) -> Result<(), String> {
-        super::set_session_meta(crate::test_core(std::sync::Arc::new(crate::NullSink)), SetSessionMetaArgs { id, provider, model, effort }).await
+        super::set_session_meta(crate::test_core(std::sync::Arc::new(crate::NullSink)), SetSessionMetaArgs { id, provider, model, effort, parent_id: MetaField::Keep }).await
     }
     async fn set_session_workspace(id: String, ws_path: MetaField, ws_key: MetaField) -> Result<(), String> {
         super::set_session_workspace(crate::test_core(std::sync::Arc::new(crate::NullSink)), SetSessionWorkspaceArgs { id, ws_path, ws_key }).await

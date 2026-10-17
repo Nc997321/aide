@@ -18,9 +18,10 @@ export interface ConnectorOption {
   caution: boolean;
 }
 
-/** 自动化里不提供的内置连接器：scheduler 刻意不下发 LSP 语言（见 build_send_command
- *  的 lsp_languages 注释），aide-lsp 的挂载闸门恒不通过——勾了也不会挂，不列出来骗人。 */
-const UNAVAILABLE = new Set(["aide-lsp"]);
+/** 自动化里不提供的内置连接器，勾了也不会挂，不列出来骗人：
+ *  - aide-lsp：scheduler 刻意不下发 LSP 语言（见 build_send_command 的 lsp_languages 注释），挂载闸门恒不通过；
+ *  - aide-sessions：无人值守的运行里不派子会话（派出去的子会话没人批它的权限，见 extensions/subsessions.ts 闸门）。 */
+const UNAVAILABLE = new Set(["aide-lsp", "aide-sessions"]);
 
 const NOTES: Record<string, { note: string; caution?: boolean }> = {
   "aide-docs": { note: "读写 docx / pdf 文档" },

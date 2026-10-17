@@ -146,7 +146,14 @@ export type ContentBlock =
   | SubagentBlock
   | ActionBlock
   | PageRefBlock
-  | KbRefBlock;
+  | KbRefBlock
+  | SubsessionReportBlock
+  | SubsessionInstructionBlock;
+
+/** 子会话回报（Host 投给父会话的那条消息里的一块）：渲染成系统卡片，不是用户气泡。 */
+export type SubsessionReportBlock = { type: "subsession_report" } & SubsessionReport;
+/** 父会话派给子会话的任务 / 追加指令：子会话里渲染成「来自父会话」气泡。 */
+export type SubsessionInstructionBlock = { type: "subsession_instruction" } & SubsessionInstruction;
 
 export interface TurnUsage {
   inputTokens: number;
@@ -455,7 +462,42 @@ export type UserMessageBlock =
    *  这里只描述「有什么」。不认识该块的客户端跳过它，整条消息不消失。 */
   | ({ type: "pageref" } & PageRef)
   /** 知识库选区：用户圈定的一段文档源文 + 意见。语义是授权（只许改这一段）。 */
-  | ({ type: "kbref" } & KbRef);
+  | ({ type: "kbref" } & KbRef)
+  /** 子会话回报（Host 投给父会话）：渲染成系统卡片，不是用户气泡。 */
+  | ({ type: "subsession_report" } & SubsessionReport)
+  /** 父会话派给子会话的任务 / 追加指令：子会话里渲染成「来自父会话」气泡。 */
+  | ({ type: "subsession_instruction" } & SubsessionInstruction);
+
+/** 子会话回报（docs/superpowers/specs/2026-10-16-subsessions-design.md）。
+ *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `subsession_report` 块**必须同形**。 */
+export interface SubsessionReport {
+  childId: string;
+  title: string;
+  /** done / error / interrupted */
+  status: string;
+  text: string;
+  /** 这一轮由谁触发：task（派发时的任务）/ parent（父会话追加指令）/ user（用户在子会话里插话） */
+  origin: string;
+  truncated?: boolean;
+}
+
+/** `list_subsessions` 的一行：子会话 + Host 侧运行态 + 最近回报首行。 */
+export interface SubsessionListItem {
+  id: string;
+  title: string;
+  status: "running" | "waiting_approval" | "idle";
+  last_report?: string | null;
+}
+
+/** 父会话派给子会话的任务 / 追加指令。
+ *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `subsession_instruction` 块**必须同形**。 */
+export interface SubsessionInstruction {
+  parentId: string;
+  parentTitle: string;
+  text: string;
+  /** task（派发）/ followup（追加指令） */
+  kind: string;
+}
 
 export interface PermissionRequest {
   id: string;
@@ -487,6 +529,8 @@ export interface SessionMetaPatch {
   provider?: MetaField;
   model?: MetaField;
   effort?: MetaField;
+  /** 只接受 clear：删父会话但保留子会话时，子会话升为顶层（Host 忽略 set）。 */
+  parentId?: MetaField;
 }
 
 /**

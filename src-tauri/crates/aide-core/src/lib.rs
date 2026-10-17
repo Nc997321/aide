@@ -30,6 +30,7 @@ pub mod runtime;
 pub mod session_store;
 pub mod settings;
 pub mod skills;
+pub mod subsession;
 pub mod workspace;
 
 use std::sync::Arc;
@@ -86,6 +87,8 @@ pub struct Core {
     pub claude_login: claude_login::ClaudeLogin,
     /// Host 的事件总线：全部事件在这里编号、留底、按订阅投给前门 / 网关（见 `bus.rs`）。
     pub bus: Arc<bus::Bus>,
+    /// 子会话（父会话派活、子会话回报）：派发 / 回报投递 / 防乒乓的运行态（见 `subsession.rs`）。
+    pub subsessions: Arc<subsession::SubsessionService>,
     events: Arc<dyn EventSink>,
 }
 
@@ -113,6 +116,7 @@ impl Core {
             apps: Arc::new(apps::servers::ServerPool::default()),
             app_procs: Arc::new(apps::process::ProcessPool::default()),
             claude_login: claude_login::ClaudeLogin::default(),
+            subsessions: Arc::new(subsession::SubsessionService::new()),
             bus,
             events,
         })

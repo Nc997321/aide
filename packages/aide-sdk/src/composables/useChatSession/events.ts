@@ -24,6 +24,7 @@ import type {
   ThinkingBlock,
   ToolCallBlock,
   UserMessageBlock,
+  SubsessionReport,
 } from "../../types/chat";
 import { useBtwSession } from "../useBtwSession";
 import {
@@ -37,6 +38,13 @@ import { useProviders } from "../useProviders";
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useSessionState, markSessionUntracked } from "../useSessionState";
+import {
+  SUBSESSION_ROUTING_PREFIX,
+  noteSubsessionPaused,
+  noteSubsessionReports,
+  noteSubsessionResumed,
+  noteSubsessionStarted,
+} from "../useSubsessions";
 import {
   sessionState,
   stores,
@@ -205,6 +213,11 @@ function blocksFromDisplay(
         // 知识库选区卡片：缺关键字段的畸形块跳过（整条消息不因一个坏块消失）。
         case "kbref":
           return b.selectionId && b.documentId ? { ...b } : null;
+        // 子会话回报 / 父会话派来的任务（Host 投递）：缺关键字段跳过。
+        case "subsession_report":
+          return b.childId ? { ...b } : null;
+        case "subsession_instruction":
+          return typeof b.text === "string" ? { ...b } : null;
         default:
           return null;
       }
@@ -279,6 +292,16 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         // 右上角"活跃会话"因此出现一个点进去空白的会话。realId 的 running 由
         // finalizeSession 负责，本分支直接结束。
         void finalizeSession(sid, sdkSid);
+        break;
+      }
+      if (sdkSid && sdkSid !== sid && sid.startsWith(SUBSESSION_ROUTING_PREFIX)) {
+        // 子会话（Host 派发，路由键 subsess_*）：与本端发起的新会话一样是「改名」，不是下面那种
+        // 无人认领的后台会话——store 过户到真实 id、状态照常跟踪（侧栏流光 / 活动带 / 作答槽都看它）。
+        aliasMap.set(sid, sdkSid);
+        if (stores[sid] && !stores[sdkSid]) stores[sdkSid] = stores[sid];
+        delete stores[sid];
+        removeSessionState(sid);
+        setSessionState(sdkSid, "running");
         break;
       }
       if (sdkSid && sdkSid !== sid) {
@@ -812,15 +835,19 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // finishStreaming 收尾上一条 assistant：无论谁发的，气泡都必须插在上一条
       // assistant 之后，否则流式续写会误把新回合内容接进上一条消息里。
       finishStreaming(store);
+      const userBlocks = blocksFromDisplay(
+        e["display"] as UserMessageBlock[] | undefined,
+        e["text"] as string,
+      );
       store.messages.push({
         id: crypto.randomUUID(),
         role: "user",
-        blocks: blocksFromDisplay(
-          e["display"] as UserMessageBlock[] | undefined,
-          e["text"] as string,
-        ),
+        blocks: userBlocks,
         timestamp: Date.now(),
       });
+      // 子会话回报（Host 投给本会话）：记下各子会话的最近回报，活动抽屉显示首行
+      const reports = userBlocks.filter((b): b is ContentBlock & SubsessionReport => b.type === "subsession_report");
+      if (reports.length) noteSubsessionReports(sid, reports);
       maybeEvict(sid, store);
       // 远程客户端（手机/PWA）发的消息不经过本地 prepareSend，忙碌态必须在这里
       // 补——否则桌面端看着消息出现，按钮区却仍显示"发送"、没有停止按钮。
@@ -912,6 +939,25 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         timestamp: Date.now(),
       });
       setSessionState(sid, "stopped");
+      break;
+    }
+    // ── 子会话（Host 广播，session_id = 父会话）──
+    case "subsession_started": {
+      const child = e["childId"] as string;
+      const title = (e["title"] as string) || "子会话";
+      if (child) {
+        noteSubsessionStarted(sid, child, title, e["task"] as string | undefined);
+        // 名字的权威在 Host 档案（Host 派发时已落盘）；这里只是让侧栏立刻显示，不再回写。
+        useSessionNames().setName(child, title);
+      }
+      break;
+    }
+    case "subsession_paused": {
+      noteSubsessionPaused(sid, Number(e["pending"] ?? 0));
+      break;
+    }
+    case "subsession_resumed": {
+      noteSubsessionResumed(sid);
       break;
     }
     case "workspace_attached": {

@@ -15,6 +15,7 @@ import { filterMcpServers, type AutomationConfig } from "../../desktop/automatio
 import { loadAideInstructions } from "../instructions.js";
 import { loadLspHint } from "../lspHint.js";
 import { crossMemoryMcpRegistration } from "../crossMemory.js";
+import { subsessionMcpRegistration, type SubsessionContext } from "../../extensions/subsessions.js";
 
 export interface QueryContextDeps {
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
@@ -37,6 +38,10 @@ export interface QueryContextDeps {
    *  知识库工具据此把写入限制在圈选范围内。 */
   kbScopes?: KbScopeStore;
   automationConfig: AutomationConfig | undefined;
+  /** 本会话是子会话（Host 派发时下发 subsession_parent）：不挂子会话工具（深度 1）。 */
+  isSubsession?: boolean;
+  /** 子会话工具读取的父会话现状（权限模式 / 模型 / 档位，子会话沿用）。缺省 = 不挂子会话工具。 */
+  subsessionContext?: () => SubsessionContext;
   /** builtinHooks 的会话适配器（worker 建闭包桥接 private 成员：
    *  policy/stopEffort/modelSwitchGuard）。 */
   session: HookBuildContext["session"];
@@ -83,6 +88,14 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     env: deps.processEnv,
   };
   const lspMcp = lspMcpRegistration({ cwd: deps.cwd, emit: deps.emit, ...lspGate });
+  // 子会话（派活 / 追加指令 / 列子会话）：走 request_id 桥回 Host 建会话。子会话自己、
+  // 自动化运行、不受信任的工作区不挂（见 subsessions.ts 闸门）。
+  const subsessionMcp = deps.subsessionContext
+    ? subsessionMcpRegistration(
+        { isChild: !!deps.isSubsession, automation: !!deps.automationConfig, trusted: deps.trusted, env: deps.processEnv },
+        { emit: deps.emit, context: deps.subsessionContext },
+      )
+    : null;
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
   // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，追加到 preset system prompt。
@@ -129,6 +142,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
       ...(memoryMcp ?? {}),
       ...(browserMcp ?? {}),
       ...(lspMcp ?? {}),
+      ...(subsessionMcp ?? {}),
     },
     userMcp,
   );

@@ -1,4 +1,13 @@
-import type { ChatMessage, KbRefBlock, TextBlock, ThinkingBlock, ToolCallBlock } from "../../types/chat";
+import type {
+  ChatMessage,
+  KbRefBlock,
+  SubsessionInstructionBlock,
+  SubsessionReportBlock,
+  TextBlock,
+  ThinkingBlock,
+  ToolCallBlock,
+} from "../../types/chat";
+import { parseInstructionPrompt, parseReportPrompt } from "../../utils/subsessionText";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
 import { splitMentionSections } from "../../utils/fileMentions";
 import { splitKbRefSections } from "../../utils/kbRefs";
@@ -37,7 +46,7 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
 function historyBlockToContentBlocks(
   block: HistoryBlock,
   isUser: boolean,
-): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock)[] {
+): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock | SubsessionReportBlock | SubsessionInstructionBlock)[] {
   if (block.type === "tool_call") {
     return [{
       type: "tool_call",
@@ -55,6 +64,12 @@ function historyBlockToContentBlocks(
     return block.text ? [{ type: "thinking", text: block.text }] : [];
   }
   if (!isUser) return [{ type: "text", text: block.text }];
+  // 子会话回报 / 父会话派来的任务（Host 投递的消息）：按 Host 的固定格式拆回卡片，
+  // 与实时路径（display 的 subsession_* 块）同形。
+  const reports = parseReportPrompt(block.text);
+  if (reports) return reports.map((r) => ({ type: "subsession_report" as const, ...r }));
+  const instruction = parseInstructionPrompt(block.text);
+  if (instruction) return [{ type: "subsession_instruction" as const, ...instruction }];
   // 知识库选区段先拆（它在文本末尾，格式与引用段互不干扰）：拆回「原文 + 选区卡片」，与直发路径
   // （buildUserDisplay 的 kbref 块）同形。`display` 不落盘，重开历史只能靠这份文本还原。
   const kb = splitKbRefSections(block.text);

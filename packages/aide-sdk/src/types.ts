@@ -2,6 +2,8 @@ export interface Session {
   id: string;
   name: string;
   timestamp: number;
+  /** 子会话的父会话 id（Host 档案 `parentId`）；不是子会话时缺席。 */
+  parentId?: string;
 }
 
 export interface WorkspaceInfo {

@@ -3,6 +3,7 @@ import { computed, ref } from "vue";
 import { timeAgo } from "../utils/time";
 import { useSessionNames } from "../composables/useSessionNames";
 import { useSessionState } from "../composables/useSessionState";
+import { useSidebarNesting } from "../composables/useSidebarNesting";
 import type { Session } from "../types";
 import SidebarSectionHead from "./SidebarSectionHead.vue";
 
@@ -37,18 +38,22 @@ const emit = defineEmits<{
 const { dotTone } = useSessionState();
 const sessionNames = useSessionNames();
 
+// 子会话挂在父会话下（与项目分区同一套，见 useSidebarNesting）；计数与折叠按顶层会话算。
+const nesting = useSidebarNesting(() => props.activeSessionId);
+const topSessions = computed(() => nesting.topLevel(props.sessions));
+
 const showAll = ref(false);
-const overLimit = computed(() => props.limit != null && props.sessions.length > props.limit);
+const overLimit = computed(() => props.limit != null && topSessions.value.length > props.limit);
 const visibleSessions = computed(() =>
-  overLimit.value && !showAll.value ? props.sessions.slice(0, props.limit) : props.sessions,
+  overLimit.value && !showAll.value ? topSessions.value.slice(0, props.limit) : topSessions.value,
 );
-const hiddenCount = computed(() => props.sessions.length - visibleSessions.value.length);
+const hiddenCount = computed(() => topSessions.value.length - visibleSessions.value.length);
 </script>
 
 <template>
   <SidebarSectionHead
     label="日常"
-    :count="sessions.length || undefined"
+    :count="topSessions.length || undefined"
     :expanded="!collapsed"
     @toggle="emit('toggle')"
     @menu="(e: MouseEvent) => emit('menu', e)"
@@ -70,19 +75,27 @@ const hiddenCount = computed(() => props.sessions.length - visibleSessions.value
     </div>
     <div v-else class="session-anim-group">
       <div
-        v-for="s in visibleSessions"
+        v-for="s in nesting.rows(visibleSessions)"
         :key="s.id"
         class="session-row"
-        :class="[{ on: activeSessionId === s.id }, `tone-${dotTone(s.id)}`]"
+        :class="[{ on: activeSessionId === s.id, 'session-row--child': s.child }, `tone-${s.child ? dotTone(s.id) : nesting.rowTone(s.id)}`]"
         @click="emit('select', s.id)"
         @contextmenu.prevent="emit('contextmenu', { event: $event, sid: s.id })"
       >
         <div class="session-row-r1">
           <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
+          <button
+            v-if="!s.child && nesting.childBadge(s.id)"
+            type="button"
+            class="session-kids"
+            :aria-expanded="nesting.isExpanded(s.id)"
+            v-tooltip="nesting.isExpanded(s.id) ? '收起子会话（在跑 / 总数）' : '展开子会话（在跑 / 总数）'"
+            @click.stop="nesting.toggle(s.id)"
+          >{{ nesting.childBadge(s.id) }}</button>
           <!-- 右槽位与项目树的会话行一字对齐：时间 ⇄ ⋯ hover 互换（同一份
                .session-slot / .row-dots 规则，见 SidebarLeft 的非 scoped 样式块） -->
           <span class="session-slot" @click.stop>
-            <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+            <span v-if="!s.child" class="session-time">{{ timeAgo(s.timestamp) }}</span>
             <button
               class="row-dots"
               v-tooltip="'更多操作'"

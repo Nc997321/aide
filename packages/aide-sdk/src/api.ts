@@ -15,7 +15,7 @@ import type {
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
   CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
 } from "./types";
-import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift } from "./types/chat";
+import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift, SubsessionListItem } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
 import type { LspBoardStatus, LspPreflight } from "./types/lspPacks";
 
@@ -201,6 +201,7 @@ export const api = {
       provider: patch.provider ?? { op: "keep" },
       model: patch.model ?? { op: "keep" },
       effort: patch.effort ?? { op: "keep" },
+      parentId: patch.parentId ?? { op: "keep" },
     });
   },
   sessionModel(id: string): Promise<string | null> {
@@ -587,6 +588,10 @@ export const api = {
   },
   listSessionsForWorkspace(wsKey: string): Promise<Session[]> {
     return getTransport().invoke("list_sessions_for_workspace", { wsKey });
+  },
+  /** 父会话的子会话列表 + 运行态（running / waiting_approval / idle）+ 最近回报首行。 */
+  listSubsessions(parentId: string): Promise<SubsessionListItem[]> {
+    return getTransport().invoke("list_subsessions", { parentId });
   },
   loadMessages(
     sessionId: string,

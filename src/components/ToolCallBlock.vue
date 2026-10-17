@@ -9,7 +9,7 @@ import { isChangeTool } from "@/utils/blockSegments";
 import { estimateDiffHeight } from "@/utils/diffHeight";
 import { buildDiffRows, peekDiffWindow } from "@/utils/diffRows";
 import { diffNotice } from "@/utils/diffNotice";
-import { previewToolResult, summarizeToolInput } from "@/utils/toolSummary";
+import { previewToolResult, summarizeToolInput, toolDisplayName } from "@/utils/toolSummary";
 import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
 import { parseToolDenial } from "@aide/sdk/utils/toolDenial";
@@ -172,7 +172,7 @@ const readRange = computed(() =>
           block.isPending ? 'ti-dot--run' : denial ? 'ti-dot--deny' : block.isError ? 'ti-dot--err' : '',
         ]"
       ></span>
-      <span class="ti-name">{{ block.name }}</span>
+      <span class="ti-name">{{ toolDisplayName(block.name) }}</span>
       <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
            省略号落在路径头部、文件名始终可见 -->
       <span

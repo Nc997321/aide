@@ -11,7 +11,7 @@ import type { ActivityChip, ActivityTab } from "./activityChips";
 /**
  * 活动带（2026-10-16 会话组成重排）：一行装下「此刻在进行中的东西」——
  * 左：活动状态（压缩中 / 正在思考 + 计时 + 轮换提示）；中：每类后台活一个 chip
- * （子代理 / 后台任务，点开活动抽屉的对应 tab）；右：中断。
+ * （子会话 / 子代理 / 后台任务，点开活动抽屉的对应 tab）；右：中断。
  *
  * 取代原来竖着堆的三条（思考行、子代理状态条、后台任务条）。没有任何内容时整条不渲染、
  * 不占高度。「有待确认卡片时不显示正在思考」由调用方算进 thinking（会话在等用户，不是在想）。
@@ -66,6 +66,7 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
         <span>{{ chip.label }}</span>
         <span v-if="chip.running !== null" class="astrip-chip-n">{{ chip.running }}</span>
         <span v-else class="astrip-chip-state">{{ chip.tone === "err" ? "有失败" : "已完成" }}</span>
+        <span v-if="chip.note" class="astrip-chip-note">{{ chip.note }}</span>
       </button>
     </div>
 
@@ -189,6 +190,17 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
 .astrip-chip--err .astrip-chip-dot {
   background: var(--aide-danger);
 }
+.astrip-chip--attn {
+  border-color: color-mix(in srgb, var(--aide-warning) 45%, var(--aide-border));
+}
+.astrip-chip--attn .astrip-chip-dot {
+  background: var(--aide-warning);
+  animation: astrip-pulse 1.4s infinite;
+}
+.astrip-chip-note {
+  font-size: 11px;
+  color: var(--aide-warning);
+}
 
 @keyframes astrip-pulse {
   0%, 100% { opacity: 1; }
@@ -220,7 +232,8 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
     background-clip: initial;
     -webkit-text-fill-color: initial;
   }
-  .astrip-chip--run .astrip-chip-dot {
+  .astrip-chip--run .astrip-chip-dot,
+  .astrip-chip--attn .astrip-chip-dot {
     animation: none;
   }
   .astrip-tip-enter-active,

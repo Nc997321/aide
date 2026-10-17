@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { previewToolResult, summarizeToolInput } from "./toolSummary";
+import { previewToolResult, summarizeToolInput, toolDisplayName } from "./toolSummary";
 
 describe("summarizeToolInput", () => {
   it("Bash 取命令、文件类取路径", () => {
@@ -46,6 +46,15 @@ describe("summarizeToolInput", () => {
     expect(summarizeToolInput("WebFetch", {})).toBe("");
     expect(summarizeToolInput("Grep", {})).toBe("");
     expect(summarizeToolInput("Bash", undefined)).toBe("");
+  });
+});
+
+describe("子会话工具", () => {
+  it("派发显示标题，缺省取任务首行；工具名显示中文动作", () => {
+    expect(summarizeToolInput("mcp__aide-sessions__session_spawn", { task: "\n给 pyright 加条目\n细节", title: "" })).toBe("给 pyright 加条目");
+    expect(summarizeToolInput("mcp__aide-sessions__session_spawn", { task: "x", title: "gopls" })).toBe("gopls");
+    expect(toolDisplayName("mcp__aide-sessions__session_spawn")).toBe("派出子会话");
+    expect(toolDisplayName("Bash")).toBe("Bash");
   });
 });
 

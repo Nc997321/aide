@@ -60,6 +60,14 @@ describe("UserMessageBlock 两份定义同形", () => {
     expect(sidecarBlock("pageref")).toEqual(sdkInterface("PageRef"));
   });
 
+  it("subsession_report：字段（含可选性）一致", () => {
+    expect(sidecarBlock("subsession_report")).toEqual(sdkInterface("SubsessionReport"));
+  });
+
+  it("subsession_instruction：字段（含可选性）一致", () => {
+    expect(sidecarBlock("subsession_instruction")).toEqual(sdkInterface("SubsessionInstruction"));
+  });
+
   it("mention：字段一致（抽取器自检：对一个老块也成立）", () => {
     const sdkAt = sdkSrc.indexOf('{ type: "mention"');
     const sdk = topLevelFields(braceBody(sdkSrc, sdkAt));

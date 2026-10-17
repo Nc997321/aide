@@ -28,6 +28,43 @@ pub fn our_session_name(session_id: &str) -> Option<String> {
     None
 }
 
+/// 子会话的父会话 id：`~/.aide/sessions/<id>.json` 的 `parentId` 字段（子会话派发时由 Host
+/// 写入，见 `subsession.rs`）。父子关系是子会话的**自持属性**，父会话档案不存子会话列表；
+/// 空串视为未记。没有 = 不是子会话。
+pub fn our_session_parent(session_id: &str) -> Option<String> {
+    let path = our_sessions_dir().join(format!("{}.json", session_id));
+    let content = fs::read_to_string(&path).ok()?;
+    let v = serde_json::from_str::<serde_json::Value>(&content).ok()?;
+    v.get("parentId")
+        .and_then(|p| p.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+}
+
+/// 档案里记着 `parentId == parent` 的全部会话（父会话的子会话列表）。扫整个档案目录——
+/// 父会话档案不存子会话列表（不造第二份来源），子会话数量级是个位数，目录扫一遍便宜。
+pub fn our_session_children(parent: &str) -> Vec<(String, String)> {
+    let Ok(rd) = fs::read_dir(our_sessions_dir()) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for entry in rd.flatten() {
+        let path = entry.path();
+        if path.extension().map(|e| e != "json").unwrap_or(true) {
+            continue;
+        }
+        let Ok(content) = fs::read_to_string(&path) else { continue };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+        if v.get("parentId").and_then(|p| p.as_str()) != Some(parent) {
+            continue;
+        }
+        let Some(id) = v.get("id").and_then(|i| i.as_str()) else { continue };
+        let name = v.get("name").and_then(|n| n.as_str()).unwrap_or(id).to_string();
+        out.push((id.to_string(), name));
+    }
+    out
+}
+
 /// 会话绑定的供应商 id 权威源：`~/.aide/sessions/<id>.json` 的 `provider` 字段
 /// （set_session_provider / 前端 stampProvider 写）。空串视为未记（filter）。
 /// 「会话属于哪个供应商」的 Rust 侧解析（send_message 按会话 provider 构造 env）

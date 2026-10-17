@@ -12,6 +12,7 @@ import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
+import SubsessionReportCard from "./subsession/SubsessionReportCard.vue";
 import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
@@ -66,6 +67,27 @@ const isActionChip = computed(
     props.message.blocks.length === 1 &&
     props.message.blocks[0].type === "action",
 );
+/** Host 代子会话投递的消息（子会话设计 §8.5-3）：角色是 user（模型那边就是一条用户消息），
+ *  但**不是用户说的话**——回报渲染成左侧系统卡片、派来的任务渲染成「来自父会话」气泡，
+ *  都不套铜底用户气泡。 */
+const subsessionKind = computed<"report" | "instruction" | null>(() => {
+  if (!isUser.value || props.message.blocks.length === 0) return null;
+  if (props.message.blocks.every((b) => b.type === "subsession_report")) return "report";
+  if (props.message.blocks.every((b) => b.type === "subsession_instruction")) return "instruction";
+  return null;
+});
+
+const rowClass = computed(() =>
+  isUser.value && !subsessionKind.value ? "msg-row--user" : "msg-row--assistant",
+);
+
+const wrapClass = computed(() => {
+  if (subsessionKind.value === "report") return "msg-turn msg-subsession-reports";
+  if (subsessionKind.value === "instruction") return "msg-bubble msg-bubble--parent";
+  if (isActionChip.value) return "msg-action-wrap";
+  return isUser.value ? "msg-bubble msg-bubble--user" : "msg-turn";
+});
+
 const { openResolved } = useFileResolver();
 
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
@@ -115,10 +137,10 @@ function handleTextClick(e: MouseEvent) {
   <!-- data-msg-id：变更面板「定位」按它找气泡（useChatScroll 的 findMessageEl，
        量位置与加高亮脉冲都走它）。测高只认 data-row-id，加这个不会多付测量成本。 -->
   <div
-    :class="['msg-row', isUser ? 'msg-row--user' : 'msg-row--assistant']"
+    :class="['msg-row', rowClass]"
     :data-msg-id="message.id"
   >
-    <div :class="isActionChip ? 'msg-action-wrap' : (isUser ? 'msg-bubble msg-bubble--user' : 'msg-turn')">
+    <div :class="wrapClass">
       <template v-for="seg in segments" :key="seg.index">
         <!-- 工具组段：没进胶囊的逐条平铺成工具行，不套折叠壳。消息尾的那条是「当前
              这一步」（seg.currentId），带结果预览；后面一有别的块它就让位。 -->
@@ -218,6 +240,14 @@ function handleTextClick(e: MouseEvent) {
         <!-- 用户在知识库文档 / 网页里圈选的一处（+ 意见）：折叠卡片，点开看被圈的原文 -->
         <KbRefCard v-else-if="seg.block.type === 'kbref'" :block="seg.block" />
         <PageRefCard v-else-if="seg.block.type === 'pageref'" :block="seg.block" />
+        <!-- 子会话回报（父会话里）/ 父会话派来的任务（子会话里）：Host 投递，不是用户说的话 -->
+        <SubsessionReportCard v-else-if="seg.block.type === 'subsession_report'" :block="seg.block" />
+        <template v-else-if="seg.block.type === 'subsession_instruction'">
+          <div class="msg-parent-head">
+            来自父会话{{ seg.block.parentTitle ? `「${seg.block.parentTitle}」` : "" }} · {{ seg.block.kind === "task" ? "任务" : "追加指令" }}
+          </div>
+          <div class="msg-text" v-html="renderMarkdown(seg.block.text)" @click="handleTextClick"></div>
+        </template>
       </template>
       <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span
@@ -264,6 +294,27 @@ function handleTextClick(e: MouseEvent) {
   border-radius: var(--aide-radius-lg) var(--aide-radius-lg) var(--aide-radius-lg) 5px;
   color: var(--aide-text-primary);
   box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
+}
+
+/* 父会话派来的任务 / 追加指令（子会话里）：左对齐、info 色描边、左上角收尖——
+ * 一眼与用户自己说的话（右侧铜底气泡）分开。 */
+.msg-bubble--parent {
+  max-width: 90%;
+  background: color-mix(in srgb, var(--aide-info) 7%, var(--aide-bg-base));
+  border: 1px solid color-mix(in srgb, var(--aide-info) 30%, var(--aide-border));
+  border-radius: 5px var(--aide-radius-lg) var(--aide-radius-lg) var(--aide-radius-lg);
+  color: var(--aide-text-primary);
+}
+.msg-parent-head {
+  margin-bottom: 4px;
+  font-size: 11.5px;
+  color: var(--aide-info);
+}
+/* 子会话回报（父会话里）：系统卡片一列，满宽 */
+.msg-subsession-reports {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* 动作胶囊（压缩/清空上下文等）：区别于普通用户气泡——半透明 accent 底 + accent

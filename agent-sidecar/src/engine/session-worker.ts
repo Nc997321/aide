@@ -196,6 +196,8 @@ export class SessionWorker {
   // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
+  /** 本会话是子会话时的父会话 id（Host 派发子会话的 send 带 subsession_parent）。 */
+  private subsessionParent?: string;
   /** send.config_dir：本会话转录所在的作用域配置根（见 subprocessConfigDir）。 */
   private sessionConfigDir?: string;
 
@@ -709,6 +711,8 @@ export class SessionWorker {
     // 会话转录在作用域隔离根（如在自动化运行的会话里回复）：之后每次建 query 都
     // 指向它——resume 才找得到转录，后续轮次也续写在同一份转录里。
     if (cmd.config_dir) this.sessionConfigDir = cmd.config_dir;
+    // 子会话：父会话 id（深度 1 闸门 + message_stop 带 result 给 Host 组回报）
+    if (cmd.subsession_parent) this.subsessionParent = cmd.subsession_parent;
 
     if (cmd.automation) {
       this.automationConfig = buildAutomationConfig(cmd.automation);
@@ -841,6 +845,12 @@ export class SessionWorker {
             emit: (e) => this.emit(e),
             kbScopes: this.kbScopes,
             automationConfig: this.automationConfig,
+            isSubsession: !!this.subsessionParent,
+            subsessionContext: () => ({
+              permissionMode: this.permModes.current,
+              model: this.currentModel,
+              effort: this.currentEffort,
+            }),
             session: {
               makePolicyHook: (hookCwd) => this.policy.makeHook(hookCwd),
               makeStopEffortHook: () => this.makeStopEffortHook(),
@@ -1024,6 +1034,7 @@ export class SessionWorker {
       // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
       // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
       showThinking: this.thinkingEnabled,
+      includeResult: !!this.subsessionParent,
     };
   }
 

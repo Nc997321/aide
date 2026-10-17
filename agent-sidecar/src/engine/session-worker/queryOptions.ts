@@ -4,6 +4,7 @@
 // 对象化沿 mapper.ts MapperDeps 先例（宽装配函数的注入形状）。
 import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import { LSP_ALLOW_RULE } from "../../extensions/lspTools.js";
+import { SUBSESSION_ALLOW_RULES } from "../../extensions/subsessions.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { MEMORY_READ_RULES } from "../crossMemory.js";
@@ -109,6 +110,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       // 跨工作区记忆只读，同样是工具级规则。
       ...MEMORY_READ_RULES,
       ...BROWSER_ALLOW_RULES,
+      // 子会话派活与 Agent / Task 同一口径免确认（子会话里的工具照样按它自己的权限模式确认）。
+      ...SUBSESSION_ALLOW_RULES,
       // 侧栏应用后端里的只读工具（安装版、自己标了 readOnlyHint 的）；其余工具走权限确认。
       ...p.runtime.ctx.appAllowRules,
     ],

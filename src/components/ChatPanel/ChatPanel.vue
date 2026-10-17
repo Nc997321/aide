@@ -8,7 +8,13 @@ import TaskListPanel from "../TaskListPanel.vue";
 import PermissionDialog from "../PermissionDialog.vue";
 import ActivityStrip from "../activity/ActivityStrip.vue";
 import ActivityDrawer from "../activity/ActivityDrawer.vue";
-import { bgTaskChip, subagentChip, type ActivityChip, type ActivityTab } from "../activity/activityChips";
+import { bgTaskChip, subagentChip, subsessionChip, type ActivityChip, type ActivityTab, type ChildActivity } from "../activity/activityChips";
+import { openActivityTab } from "../activity/ActivityDrawer.vue";
+import SubsessionWaitCard from "../subsession/SubsessionWaitCard.vue";
+import { useSubsessions } from "@/composables/useSubsessions";
+import { useSessionState } from "@/composables/useSessionState";
+import { useSessionNames } from "@/composables/useSessionNames";
+import { usePaneLayout } from "@/composables/usePaneLayout";
 import { pickAnswer } from "./answerSlot";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
@@ -40,7 +46,6 @@ import { provideSessionIdentityView, sessionIdentityStore, buildConfirmDecision,
 import {
   isPendingSession,
   toggleBgDock,
-  toggleSubagentDock,
   loadOlderPage,
   hasMoreOlder,
   messagesOf,
@@ -436,28 +441,50 @@ const inputStow = computed<"off" | "unless-draft" | "always">(() =>
   sendConfirm.value ? "always" : props.permission ? "unless-draft" : "off",
 );
 
-/** 作答槽仲裁：权限队列（含发送前确认）优先，其次语言服务器询问；一次只出一张。 */
+// ── 子会话（本会话派出去的；子会话设计 §8.5）──
+const subs = useSubsessions();
+const { state: sessionActivity } = useSessionState();
+const children = computed(() => subs.childrenOfSession(props.sessionId));
+const childActivity = (id: string): ChildActivity => (sessionActivity[id] as ChildActivity | undefined) ?? "waiting";
+/** 在等权限批准的子会话（作答槽出引导卡；批在子会话里）。 */
+const waitingChildren = computed(() => children.value.filter((c) => childActivity(c.id) === "attention"));
+const subsessionOpen = computed(() => (props.sessionId ? !!subs.drawerOpen[props.sessionId] : false));
+/** 本会话是子会话：父会话 id 与名字（头条面包屑）。 */
+const parentId = computed(() => subs.parentIdOf(props.sessionId));
+const sessionNames = useSessionNames();
+const parentTitle = computed(() => (parentId.value ? sessionNames.names[parentId.value] || "父会话" : ""));
+/** 自动回报被暂停（防乒乓）：null = 没暂停；数字 = 攒着的回报条数。 */
+const pausedCount = computed(() => {
+  const n = props.sessionId ? subs.paused[props.sessionId] : undefined;
+  return n === undefined ? null : n;
+});
+const { openSession } = usePaneLayout();
+
+/** 作答槽仲裁：本会话权限队列（含发送前确认）> 子会话等批准 > 语言服务器询问；一次只出一张。 */
 const answer = computed(() =>
   pickAnswer({
     permission: !!displayedPermission.value,
     permissionCount: sendConfirm.value ? 1 : (props.permissionQueueCount ?? (props.permission ? 1 : 0)),
     lsp: showLspAsk.value,
+    subsessionWaiting: waitingChildren.value.length,
   }),
 );
 
 /** 活动带的 chip：每类后台活一个，点开活动抽屉对应 tab。 */
 const activityChips = computed<ActivityChip[]>(() =>
   [
+    subsessionChip(children.value, childActivity, subsessionOpen.value),
     subagentChip(props.subagents ?? [], props.subagentDockOpen),
     bgTaskChip(props.bgTasks ?? [], props.bgDockOpen),
   ].filter((c): c is ActivityChip => c !== null),
 );
 
-/** chip 点击：开对应 tab；已开着就收起（store 保证两个 tab 互斥）。 */
+/** chip 点击：开对应 tab；已开着就收起（三个 tab 互斥，见 openActivityTab）。 */
 function onToggleActivity(tab: ActivityTab) {
   if (!props.sessionId) return;
-  if (tab === "subagent") toggleSubagentDock(props.sessionId);
-  else toggleBgDock(props.sessionId);
+  const open = { subagentOpen: props.subagentDockOpen, bgOpen: props.bgDockOpen, subsessionOpen: subsessionOpen.value };
+  const isOpen = tab === "subagent" ? open.subagentOpen : tab === "bg" ? open.bgOpen : open.subsessionOpen;
+  openActivityTab(props.sessionId, isOpen ? null : tab, open);
 }
 const heroLeaving = ref(false); // 首条消息淡入用的一次性 class
 
@@ -614,9 +641,20 @@ function onOpenBgDock(taskId: string) {
 
 <template>
   <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
-    <!-- 会话头条：待办摘要一行，清单浮层下拉（不挤压消息区） -->
-    <div v-if="props.tasks && props.tasks.length > 0" class="chat-col chat-head">
-      <TaskListPanel :tasks="props.tasks" />
+    <!-- 会话头条：子会话面包屑 / 自动回报暂停提示 / 待办摘要（清单浮层下拉，不挤压消息区） -->
+    <div v-if="parentId || pausedCount !== null || (props.tasks && props.tasks.length > 0)" class="chat-col chat-head">
+      <div v-if="parentId" class="chat-crumb">
+        <button type="button" class="chat-crumb-link" @click="openSession(parentId)">
+          <Icon name="arrow-up-left" :size="12" :stroke-width="1.8" />{{ parentTitle }}
+        </button>
+        <span class="chat-crumb-sep" aria-hidden="true"></span>
+        <span class="chat-crumb-note">子会话 · 每轮结束会回报给父会话</span>
+      </div>
+      <div v-if="pausedCount !== null" class="chat-paused">
+        已暂停子会话自动回报（连续多次没有你的输入）<template v-if="pausedCount"> · {{ pausedCount }} 条待投递</template>
+        · 发任意一条消息即恢复
+      </div>
+      <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
     </div>
 
     <!-- 滚动区 wrapper：接手 .chat-messages 的 flex 占位，并作为「回到底部」
@@ -684,8 +722,13 @@ function onOpenBgDock(taskId: string) {
         :current-mode="permissionMode"
         @respond="onPermissionRespond"
       />
+      <SubsessionWaitCard
+        v-if="answer.kind === 'subsession' && waitingChildren.length"
+        :child="waitingChildren[0]"
+        :others="answer.total - 1"
+      />
       <LspSendPrompt
-        v-if="answer.kind === 'lsp' && lspAsk"
+        v-else-if="answer.kind === 'lsp' && lspAsk"
         :langs="lspAsk.langs"
         :busy="lspAskBusy"
         @enable="resolveLspAsk('enable')"
@@ -708,6 +751,7 @@ function onOpenBgDock(taskId: string) {
         :bg-tasks="bgTasks ?? []"
         :bg-open="bgDockOpen"
         :bg-selected-id="bgDockSelectedId ?? null"
+        :subsession-open="subsessionOpen"
         @update:subagent-selected-id="(id: string) => emit('update:subagentDockSelectedId', id)"
         @update:bg-selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
       />
@@ -937,6 +981,56 @@ function onOpenBgDock(taskId: string) {
 
 .chat-head {
   flex: none;
+}
+
+/* 子会话面包屑：点击回父会话（已打开就聚焦过去） */
+.chat-crumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--aide-border-subtle);
+}
+.chat-crumb-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--aide-info);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-crumb-link:hover {
+  text-decoration: underline;
+}
+.chat-crumb-sep {
+  flex: none;
+  width: 1px;
+  height: 12px;
+  background: var(--aide-border-strong);
+}
+.chat-crumb-note {
+  flex: none;
+  color: var(--aide-text-muted);
+}
+
+/* 自动回报被暂停（防乒乓）：一行提示，发消息即恢复 */
+.chat-paused {
+  margin: 6px 12px 0;
+  padding: 6px 10px;
+  border-radius: var(--aide-radius-sm);
+  background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
+  color: var(--aide-warning);
+  font-size: 12px;
 }
 
 .chat-bottom {

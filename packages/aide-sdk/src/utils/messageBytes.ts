@@ -47,6 +47,10 @@ export function estimateBlockBytes(block: ContentBlock): number {
       return (block.html.length + block.text.length + block.comment.length) * 2;
     case "kbref":
       return (block.text.length + block.comment.length) * 2;
+    // 子会话回报 / 父会话任务：载荷是正文
+    case "subsession_report":
+    case "subsession_instruction":
+      return block.text.length * 2;
   }
 }
 

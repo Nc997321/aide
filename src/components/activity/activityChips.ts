@@ -7,9 +7,10 @@ import type { BgTask, SubagentBlock } from "@/types/chat";
  * 读数口径沿用两个 dock 状态条：有运行中的 → 运行中个数；全部结束 → 完成 / 失败。
  * 列表为空 → 没有 chip（状态条当年也是「有东西或面板开着才出现」）。
  */
-export type ActivityTab = "subagent" | "bg";
+export type ActivityTab = "subsession" | "subagent" | "bg";
 
-export type ChipTone = "run" | "done" | "err";
+/** attn = 有子会话在等你批准（黄，压过运行中的绿） */
+export type ChipTone = "run" | "done" | "err" | "attn";
 
 export interface ActivityChip {
   tab: ActivityTab;
@@ -20,6 +21,37 @@ export interface ActivityChip {
   /** 悬停说明：运行中那几个的名字 */
   title: string;
   open: boolean;
+  /** 附注（子会话：「N 待批准」） */
+  note?: string;
+}
+
+/** 子会话的活跃度（与侧栏同一份 useSessionState）：attention = 在等权限批准。 */
+export type ChildActivity = "running" | "attention" | "waiting" | "stopped";
+
+/**
+ * 子会话 chip：运行中 = 在跑 + 在等批准；等批准的单独注明（作答槽另有引导卡）。
+ * 没有子会话 → 没有 chip。全部空闲时显示「已完成」，点开看回报。
+ */
+export function subsessionChip(
+  children: readonly { id: string; title: string }[],
+  activityOf: (id: string) => ChildActivity,
+  open: boolean,
+): ActivityChip | null {
+  if (children.length === 0 && !open) return null;
+  const running = children.filter((c) => {
+    const a = activityOf(c.id);
+    return a === "running" || a === "attention";
+  });
+  const waiting = children.filter((c) => activityOf(c.id) === "attention");
+  return {
+    tab: "subsession",
+    label: "子会话",
+    running: running.length > 0 ? running.length : null,
+    tone: waiting.length > 0 ? "attn" : running.length > 0 ? "run" : "done",
+    title: namesTitle(running.map((c) => c.title)),
+    open,
+    ...(waiting.length > 0 ? { note: `${waiting.length} 待批准` } : {}),
+  };
 }
 
 /** 名字列表 → 悬停说明（第一个 + 余量）。 */

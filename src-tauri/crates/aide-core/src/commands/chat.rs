@@ -267,39 +267,56 @@ async fn lsp_languages_for_send(core: &std::sync::Arc<crate::Core>, workspace_ro
     .unwrap_or_default()
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SendMessageArgs {
-    session_id: String,
-    prompt: String,
+    pub(crate) session_id: String,
+    pub(crate) prompt: String,
     #[serde(default)]
-    images: Option<Vec<serde_json::Value>>,
+    pub(crate) images: Option<Vec<serde_json::Value>>,
     /// 发起方附带的渲染描述（见 SendOptions.display）；None = 按纯文本气泡渲染。
     #[serde(default)]
-    display: Option<serde_json::Value>,
+    pub(crate) display: Option<serde_json::Value>,
     #[serde(default)]
-    resume_id: Option<String>,
+    pub(crate) resume_id: Option<String>,
     #[serde(default)]
-    initial_model: Option<String>,
+    pub(crate) initial_model: Option<String>,
     #[serde(default)]
-    initial_effort: Option<String>,
+    pub(crate) initial_effort: Option<String>,
     #[serde(default)]
-    permission_mode: Option<String>,
+    pub(crate) permission_mode: Option<String>,
     #[serde(default)]
-    jump_queue: Option<bool>,
+    pub(crate) jump_queue: Option<bool>,
     #[serde(default)]
-    workspace_root: Option<String>,
+    pub(crate) workspace_root: Option<String>,
     /// @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
     /// workspace/attach.rs 裁定（只认已注册工作区）。缺席/空 = 不动会话账本。
     #[serde(default)]
-    additional_dirs: Option<Vec<String>>,
+    pub(crate) additional_dirs: Option<Vec<String>>,
     /// 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
     /// None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
     #[serde(default)]
-    provider: Option<String>,
+    pub(crate) provider: Option<String>,
 }
 
+/// 用户（任一客户端）发消息的命令入口。Host 内部发的（子会话派发 / 回报）走 `dispatch_send`，
+/// 不经这里——这里多做的一件事就是告诉子会话服务「这条是人发的」（防乒乓计数清零、
+/// 子会话本轮由用户触发，见 subsession.rs）。
 async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String> {
+    core.subsessions.note_user_send(&a.session_id);
+    dispatch_send(core, a, SendExtra::default()).await
+}
+
+/// Host 内部发送附带的、客户端不能填的字段。
+#[derive(Default)]
+pub(crate) struct SendExtra {
+    /// 本条发给子会话：父会话 id（sidecar 据此不挂子会话工具、收轮带 result）。
+    pub subsession_parent: Option<String>,
+}
+
+/// 发送管线本体（cwd / provider / 权限快照 / 工具闸门装配）。用户发消息与 Host 内部发送
+/// （子会话）共用这一条，**不许另起平行管线**。
+pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: SendExtra) -> Result<(), String> {
     let SendMessageArgs {
         session_id,
         prompt,
@@ -444,6 +461,10 @@ async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String>
     .await
     {
         cmd["permission_policy"] = json!(snapshot);
+    }
+
+    if let Some(parent) = extra.subsession_parent {
+        cmd["subsession_parent"] = json!(parent);
     }
 
     // Register/refresh the session's workspace route so future permission-rule

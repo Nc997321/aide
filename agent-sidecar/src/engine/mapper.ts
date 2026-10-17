@@ -351,6 +351,9 @@ export interface MapperDeps {
   /** 思考展示开关（「设置→通用」下发，见 emitSubagentBlocks 的 showThinking）：
    *  关闭时剥掉主线程 thinking_delta 流与 assistant thinking 整块。缺省 true 兼容旧调用。 */
   showThinking?: boolean;
+  /** 本会话是子会话（父会话派来的活）：成功收轮的 message_stop 带上 SDK 的 `result`
+   *  （本轮最终回复全文），Host 据此组回报投给父会话。普通会话不带——每轮多发一份全文没有读者。 */
+  includeResult?: boolean;
 }
 
 /**
@@ -790,6 +793,7 @@ function mapResultMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDe
     stop_reason: msg.subtype === "success" ? "end_turn" : msg.subtype,
     total_cost_usd: msg.total_cost_usd ?? null,
     usage,
+    ...(deps.includeResult && typeof msg.result === "string" ? { result: msg.result } : {}),
   });
 }
 

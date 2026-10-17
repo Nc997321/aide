@@ -229,6 +229,11 @@ export function messagesOf(sid: string): readonly ChatMessage[] {
   return stores[sid]?.messages ?? [];
 }
 
+/** 按会话取待办清单只读视图（子会话面板显示子会话的进度）。会话不存在返回空数组。 */
+export function tasksOf(sid: string): readonly TaskItem[] {
+  return stores[sid]?.tasks ?? [];
+}
+
 /** 取某会话最近派发的用户提问（无则空串）。 */
 export function getLastDispatchedPrompt(sid: string): string {
   return lastDispatchedPrompt[sid] ?? "";

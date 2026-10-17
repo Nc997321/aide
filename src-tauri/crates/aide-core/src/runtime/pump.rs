@@ -61,6 +61,13 @@ pub fn start(p: Pump) {
                         });
                         continue;
                     }
+                    // 子会话请求（派发 / 追加指令 / 列子会话）：Host 就地执行（建会话要走发送管线），
+                    // 结果经 stdin 回 `subsession_result`，**不转发 Vue**。见 subsession.rs。
+                    if let Some(q) = crate::subsession::parse_query(&event) {
+                        let svc = Arc::clone(&core.subsessions);
+                        tokio::spawn(svc.handle(core.clone(), stdin_for_agent.clone(), q));
+                        continue;
+                    }
                     // 宿主认领的工具查询（内嵌浏览器——GUI 能力，见 ports::AgentHooks）：
                     // Rust ↔ Runtime 的内部 request/response，**不转发 Vue**。
                     if let Some(hooks) = core.runtime.hooks() {
@@ -96,6 +103,8 @@ pub fn start(p: Pump) {
                     // 自动化运行终态观测：非活跃会话/非终态事件立即返回，
                     // 终态落盘在内部 spawn 出去做，不堵事件泵。
                     core.automation.observe_chat_event(&event);
+                    // 子会话运行态（谁在跑 / 在等批准）与回报投递：判定只做内存操作，投递 spawn 出去。
+                    core.subsessions.observe(&core, &event);
                     // 后台任务注册表：远程快照源（list_bg_tasks RPC）。桌面常驻
                     // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
                     // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。

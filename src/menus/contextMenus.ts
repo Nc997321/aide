@@ -5,6 +5,7 @@ import { useFileClipboard } from "../composables/useFileClipboard";
 import { usePaneLayout } from "../composables/usePaneLayout";
 import { useMentionInserter } from "../composables/useMentionInserter";
 import { api } from "../api";
+import { forgetSubsession, useSubsessions } from "../composables/useSubsessions";
 
 function sep(): MenuItem {
   return { label: "", separator: true };
@@ -228,13 +229,27 @@ export function sessionMenuItems(
       label: "删除",
       danger: true,
       action: async () => {
-        const ok = await modal.confirm(
-          "删除会话",
-          "此操作将同时删除 Claude 原生的对话记录（.jsonl），无法通过 --resume 恢复。确定删除？",
-          "删除",
-          true,
-        );
-        if (!ok) return;
+        // 有子会话：问连同子会话一起删，还是保留（保留 = 子会话升为顶层，档案里的 parentId 清掉，
+        // 不留悬空的父子关系——子会话设计 §8.5-7）
+        const children = [...useSubsessions().childrenOfSession(id)];
+        let withChildren = false;
+        if (children.length) {
+          const pick = await modal.choice(
+            "删除会话",
+            `这个会话派出过 ${children.length} 个子会话。连同子会话一起删除？对话记录（.jsonl）会一并删除，无法通过 --resume 恢复。`,
+            { confirmLabel: `连同 ${children.length} 个子会话删除`, altLabel: "只删这个，保留子会话", danger: true },
+          );
+          if (pick === "cancel") return;
+          withChildren = pick === "confirm";
+        } else {
+          const ok = await modal.confirm(
+            "删除会话",
+            "此操作将同时删除 Claude 原生的对话记录（.jsonl），无法通过 --resume 恢复。确定删除？",
+            "删除",
+            true,
+          );
+          if (!ok) return;
+        }
         // 乐观移除：确认后先把卡片从列表里拿掉（离场动画即刻开始），
         // 后台再真正删除；失败由 onDeleteFailed 回滚列表 + 报错。
         onOptimisticRemove();
@@ -247,6 +262,18 @@ export function sessionMenuItems(
           return;
         }
         void pane.closeSessionTab(id); // 分屏里开着的 tab 一并关掉（fire-and-forget）
+        for (const c of children) {
+          forgetSubsession(c.id);
+          if (withChildren) {
+            await api.stopChatSession(c.id).catch(() => {});
+            await api.deleteSession(c.id).catch((e: unknown) => console.warn("[删除子会话] 失败:", c.id, e));
+            void pane.closeSessionTab(c.id);
+          } else {
+            await api
+              .setSessionMeta(c.id, { parentId: { op: "clear" } })
+              .catch((e: unknown) => console.warn("[子会话升为顶层] 失败:", c.id, e));
+          }
+        }
       },
     },
   ];

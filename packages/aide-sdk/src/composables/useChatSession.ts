@@ -729,7 +729,7 @@ export async function canSendOrPrompt(): Promise<boolean> {
 export { toggleBgDock, toggleSubagentDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
 export { __setEvictThresholdsForTest };
 export { loadOlderPage, hasMoreOlder, resetPaginationForRevert };
-export { messagesOf } from "./useChatSession/state";
+export { messagesOf, tasksOf } from "./useChatSession/state";
 export { liveMessageCount } from "./useChatSession/recycle";
 
 /** 远程重连后整页重载：清消息 + 分页状态后重新 hydrate。

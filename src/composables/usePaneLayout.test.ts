@@ -102,6 +102,25 @@ describe("全局唯一", () => {
     expect(groups().flatMap((g) => g.tabs).filter((t) => t.sessionId === "s1")).toHaveLength(1);
   });
 
+  it("openSessionBeside：首个子会话向右分屏；再开一个叠进右组，不越分越碎；已打开只聚焦", () => {
+    const pl = usePaneLayout();
+    pl.openSession("parent");
+    started.add("parent");
+    pl.promoteTab("parent");
+    started.add("c1");
+    started.add("c2");
+    pl.openSessionBeside("c1");
+    expect(groups()).toHaveLength(2);
+    expect(groups()[1].tabs.map((t) => t.sessionId)).toEqual(["c1"]);
+    pl.openSession("parent"); // 回到父会话那组
+    pl.openSessionBeside("c2");
+    expect(groups()).toHaveLength(2);
+    expect(groups()[1].tabs.map((t) => t.sessionId)).toEqual(["c1", "c2"]);
+    pl.openSessionBeside("c1");
+    expect(pl.activeSessionId.value).toBe("c1");
+    expect(groups()).toHaveLength(2);
+  });
+
   it("openSessionInNewTab：未启动会话也开固定 tab，不占预览位；已打开则只聚焦", () => {
     const pl = usePaneLayout();
     pl.openSession("preview");

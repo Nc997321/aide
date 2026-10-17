@@ -7,6 +7,8 @@ import { useUpdate } from "../composables/useUpdate";
 import { useRecent } from "../composables/useRecent";
 import { useRightPanel } from "../composables/useRightPanel";
 import { useSessionNames } from "../composables/useSessionNames";
+import { seedFromSessions } from "../composables/useSubsessions";
+import { useSidebarNesting } from "../composables/useSidebarNesting";
 import { useSessionWorkspaces } from "../composables/useSessionWorkspaces";
 import { sessionMenuItems, sessionSectionMenuItems, workspaceMenuItems } from "../menus/contextMenus";
 import { useWorkspaces } from "../composables/useWorkspaces";
@@ -139,12 +141,15 @@ const filteredWorkspaces = computed(() => {
 });
 
 // Sessions for a specific workspace (for template use, respects search filter)
+// 子会话不在顶层出现：挂在父会话行下（见 useSidebarNesting）。搜索时平铺全部命中。
 function wsSessions(wsKey: string): Session[] {
   const list = sessionsByWorkspace.value[wsKey] ?? [];
   const q = searchQuery.value.trim().toLowerCase();
-  if (!q) return list;
-  return list.filter((s) => s.name.toLowerCase().includes(q));
+  if (q) return list.filter((s) => (sessionNames.names[s.id] || s.name).toLowerCase().includes(q));
+  return nesting.topLevel(list);
 }
+
+const nesting = useSidebarNesting(() => props.activeSessionId ?? "");
 
 // ── 会话折叠（VS Code 式）：每个工作区默认只露前 N 条，其余收进
 // 「另外 N 个」展开行；搜索时展示全部命中，折叠只作用于默认视图。
@@ -270,8 +275,10 @@ const sessionNames = useSessionNames();
 const sessionWs = useSessionWorkspaces();
 const { state: sessionState, dotTone } = useSessionState();
 
-/** 把某工作区的一批会话记入归属注册表（tab 后缀标识 / sidecar cwd 依赖它）。 */
+/** 把某工作区的一批会话记入归属注册表（tab 后缀标识 / sidecar cwd 依赖它），
+ *  顺带回种子会话的父子关系（Session.parentId，见 useSubsessions）。 */
 function registerSessionWs(list: Session[], wsKey: string) {
+  seedFromSessions(list);
   const wsPath = workspaces.value.find((w) => w.key === wsKey)?.name ?? "";
   if (!wsPath) return;
   sessionWs.setMany(list, { wsKey, wsPath });
@@ -719,17 +726,25 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
                    绿=running / 蓝=waiting（回复完成待输入）/ 黄=attention（权限等待）/
                    红=warning / 橙=stalled，dead 无流光；右槽位 时间⇄⋯ 与右键同一份菜单 -->
               <div
-                v-for="s in visibleSessions(ws.key)"
+                v-for="s in nesting.rows(visibleSessions(ws.key), !!searchQuery.trim())"
                 :key="s.id"
                 class="session-row"
-                :class="[{ on: props.activeSessionId === s.id }, `tone-${dotTone(s.id)}`]"
+                :class="[{ on: props.activeSessionId === s.id, 'session-row--child': s.child }, `tone-${s.child ? dotTone(s.id) : nesting.rowTone(s.id)}`]"
                 @click="selectSessionFromWorkspace(ws.key, s.id)"
                 @contextmenu.prevent="onSessionContextMenu($event, ws.key, s.id)"
               >
                 <div class="session-row-r1">
                   <span class="session-name">{{ sessionNames.names[s.id] || s.name }}</span>
+                  <button
+                    v-if="!s.child && nesting.childBadge(s.id)"
+                    type="button"
+                    class="session-kids"
+                    :aria-expanded="nesting.isExpanded(s.id)"
+                    v-tooltip="nesting.isExpanded(s.id) ? '收起子会话（在跑 / 总数）' : '展开子会话（在跑 / 总数）'"
+                    @click.stop="nesting.toggle(s.id)"
+                  >{{ nesting.childBadge(s.id) }}</button>
                   <span class="session-slot" @click.stop>
-                    <span class="session-time">{{ timeAgo(s.timestamp) }}</span>
+                    <span v-if="!s.child" class="session-time">{{ timeAgo(s.timestamp) }}</span>
                     <button class="row-dots" v-tooltip="'更多操作'" @click="onSessionContextMenu($event, ws.key, s.id)">
                       <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
                     </button>
@@ -1028,6 +1043,49 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 }
 
 /* 会话行右槽位元信息 = 时间（无底色 flat 形态；流内撑开槽位，hover 时让给 ⋯） */
+/* 子会话行：缩进挂在父会话下，左侧一道虚线引导，比父行矮一档 */
+.session-row--child {
+  margin-left: 22px;
+  padding-top: 7px;
+  padding-bottom: 7px;
+  font-size: 12px;
+}
+.session-row--child::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  border-left: 1px dashed var(--aide-border-strong);
+}
+.session-style-card .session-row--child {
+  background: var(--aide-bg-base);
+  box-shadow: none;
+}
+
+/* 父会话行的子会话徽标「在跑/总数」：点击开合子会话 */
+.session-kids {
+  flex: none;
+  margin-left: 6px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--aide-surface-default);
+  color: var(--aide-text-secondary);
+  font-family: var(--aide-font-mono);
+  font-size: 10.5px;
+  line-height: 18px;
+  cursor: pointer;
+}
+.session-kids:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-primary);
+}
+.tone-attention .session-kids {
+  background: color-mix(in srgb, var(--aide-warning) 16%, transparent);
+  color: var(--aide-warning);
+}
+
 .session-time {
   padding: 2px;
   font-size: 10.5px;

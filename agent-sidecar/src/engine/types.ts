@@ -122,6 +122,29 @@ export type UserMessageBlock =
       /** 这篇文档关联的工作区根目录（本 Host 上的路径）：本轮可经 read_memory 参考它们的记忆。
        *  只读，不授予那些工作区的任何文件访问。缺省 = 没有关联项目。 */
       linked?: string[];
+    }
+  // 子会话回报（Host 投给父会话，见 aide-core subsession.rs）：sidecar 不解释，原样随 user_message 回灌。
+  // 与 aide-sdk/src/types/chat.ts 的 `SubsessionReport` **必须同形**。设计：
+  // docs/superpowers/specs/2026-10-16-subsessions-design.md
+  | {
+      type: "subsession_report";
+      childId: string;
+      title: string;
+      /** done / error / interrupted */
+      status: string;
+      text: string;
+      /** 这一轮由谁触发：task（派发时的任务）/ parent（父会话追加指令）/ user（用户在子会话里插话） */
+      origin: string;
+      truncated?: boolean;
+    }
+  // 父会话派给子会话的任务 / 追加指令（Host 投给子会话）。与 aide-sdk 的 `SubsessionInstruction` **必须同形**。
+  | {
+      type: "subsession_instruction";
+      parentId: string;
+      parentTitle: string;
+      text: string;
+      /** task（派发）/ followup（追加指令） */
+      kind: string;
     };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与
@@ -228,7 +251,8 @@ export type ChatEvent =
   | { type: "permission_cancelled"; id: string }
   // effort：本轮实际生效的思考深度（sidecar 从回合结束信号里读到的权威值，
   // 可能含 provider 侧的静默降级）。可选字段——provider 没有 effort 概念就不带。
-  | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null; effort?: string }
+  // result：仅子会话（send.subsession_parent）成功收轮时带——本轮最终回复全文，Host 组回报用。
+  | { type: "message_stop"; stop_reason: string; total_cost_usd: number | null; usage: TurnUsage | null; effort?: string; result?: string }
   // effort 切换的回执/同步广播——用户显式 set_effort 后由 sidecar 发出。成功带新值；
   // 失败（provider 驳回）带回滚后的旧值 + error。query 未起时本地落账也发（无 error）。
   | { type: "effort_changed"; effort: string; error?: string }
@@ -345,6 +369,18 @@ export type ChatEvent =
       response?: string;
       error?: string;
       synthetic?: boolean;
+    }
+  // Rust reader 拦截的子会话请求（派发 / 追加指令 / 列子会话；不转发 Vue；响应走
+  // subsession_result 命令）。session_id 由 SessionManager 注入 = 父会话。
+  // 权威定义在 extensions/subsessions.ts（engine 不 import extensions，此处重复是分层方向）。
+  | {
+      type: "subsession_query";
+      request_id: string;
+      op: "spawn" | "message" | "children";
+      args: Record<string, unknown>;
+      permission_mode: string;
+      model: string;
+      effort: string;
     }
   // Rust reader 拦截的 agent LSP 查询（不转发 Vue；响应走 lsp_result 命令）。
   // 查询本体在主进程就地执行（LspManager 就在那里）
@@ -541,6 +577,9 @@ export type SidecarCommand =
       /** 本工作区的 LSP 开关（Host `lsp_switch_on`）。false = 用户关了：不预热、就绪作废，
        *  工具仍挂载、查询由 Host 回 `disabled` 后走文本兜底。省略 = 按开处理（Host 仍把关）。 */
       lsp_enabled?: boolean;
+      // 本会话是子会话：父会话 id（Host 派发时带）。据此不挂子会话工具（深度 1），
+      // message_stop 带 result 供 Host 组回报。
+      subsession_parent?: string;
       // 权限策略快照：Rust 在每次设置变更后推送，sidecar 在 PreToolUse 时
       // 用它做本地策略评估。省略 = 沿用上次快照或空策略（无匹配 → hook 不表态）。
       permission_policy?: PermissionPolicySnapshot;
@@ -585,6 +624,14 @@ export type SidecarCommand =
       session_id: string;
       question: string;
       history?: BtwHistoryRound[];
+    }
+  // 子会话请求的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
+  | {
+      cmd: "subsession_result";
+      request_id: string;
+      ok: boolean;
+      data?: Record<string, unknown>;
+      error?: string;
     }
   // LSP 查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // `status` 是八态状态词（见 lspFormat 的 LSP_STATUS_WORDS，与 Rust 侧

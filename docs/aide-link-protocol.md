@@ -336,6 +336,37 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 桌面、手机共享同一会话：**UI 状态只认事件通道，不认本地乐观更新**。用户气泡只在收到 `user_message` 事件时渲染；
 权限请求只认 `permission_request` / `permission_cancelled` 事件；等等——细则见仓库 `CLAUDE.md`「命令 / 事件双通道契约」。
 
+### 8.1 子会话（2026-10-16 新增，协议向后兼容）
+
+会话里的 agent 可以派出**子会话**：一等会话（独立转录），挂在父会话下，每结束一轮就把结果回报给父会话。
+设计见 `docs/superpowers/specs/2026-10-16-subsessions-design.md`。手机端怎么展示由手机端决定；不认识的都可以忽略，
+不影响原有功能。
+
+**新增的 `chat-event` 类型**（`session_id` 都是**父会话**）：
+
+| `type` | 字段 | 含义 |
+|---|---|---|
+| `subsession_started` | `childId`, `title`, `task` | 派出了一个子会话（已定名、档案已落盘，`childId` 是真实会话 id） |
+| `subsession_paused` | `pending`, `limit` | 连续 `limit` 次自动回报没有任何用户输入，暂停投递（攒着 `pending` 条）；用户在父会话发任意一条消息即恢复 |
+| `subsession_resumed` | — | 暂停解除 |
+
+**子会话自己的事件**与普通会话完全相同。注意它在 `session_init` 之前的路由键形如 `subsess_<id>`（不是客户端发起的
+临时 id）：收到 `session_init{session_id: "subsess_…", sdk_session_id}` 时按「改名」处理，把之前收到的事件归到
+`sdk_session_id` 名下。
+
+**`user_message.display` 新增两种块**（Host 代发的消息，不是用户说的话）：
+
+- `{type:"subsession_report", childId, title, status, text, origin, truncated?}`：子会话回报，出现在父会话里。
+  `status` ∈ `done` / `error` / `interrupted`；`origin` ∈ `task`（执行派发的任务）/ `parent`（回应父会话追加指令）/
+  `user`（用户在子会话里插话触发）。建议渲染成系统卡片而不是用户气泡。
+- `{type:"subsession_instruction", parentId, parentTitle, text, kind}`：父会话派来的任务（`kind: "task"`）或追加指令
+  （`kind: "followup"`），出现在子会话里。
+
+不认识这两种块的客户端按 `user_message.text` 渲染即可（它是带前言的完整文本）。
+
+**`list_sessions` / `list_sessions_for_workspace` 的会话条目**新增可选字段 `parentId`：有 = 这是某个会话的子会话。
+子会话的权限请求照常在子会话里批（`permission_response` 发给子会话 id）。
+
 ## 9. 重连与续传
 
 客户端保存每台 Host 的 `{device_id, Host 公钥, 自己的密钥对, relay, epoch, lastSeq}`（`lastSeq` = 收到的最大 `event.seq`）。断线后：

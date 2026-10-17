@@ -24,6 +24,7 @@ import { useSessionState } from "./useSessionState";
 import { useSessionProviders } from "./useSessionProviders";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { useSessionNames } from "./useSessionNames";
+import { useSubsessions, __resetSubsessionsForTest } from "./useSubsessions";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
@@ -2273,5 +2274,64 @@ describe("子代理 dock — 派发列表与开合（2026-09-28）", () => {
     await flush();
 
     expect(chat.subagents.value).toHaveLength(SUBAGENTS_CAP + 1);
+  });
+});
+
+describe("子会话事件（2026-10-16）", () => {
+  beforeEach(() => {
+    __resetForTest();
+    __resetSubsessionsForTest();
+    invokeMock.mockClear();
+    invokeMock.mockResolvedValue(undefined);
+    const { state, removeSessionState } = useSessionState();
+    for (const k of Object.keys(state)) removeSessionState(k);
+  });
+
+  /** 事件监听在首次 useChatSession 时挂上 */
+  async function listening() {
+    useChatSession(ref<string | null>(null));
+    await flush();
+  }
+
+  it("子会话路由键的 session_init 是改名：store 过户到真实 id，状态照常跟踪（不当成无人认领的后台会话）", async () => {
+    await listening();
+    emit({ type: "user_message", text: "任务", session_id: "subsess_x1" });
+    emit({ type: "session_init", session_id: "subsess_x1", sdk_session_id: "child-real" });
+    await flush();
+    const child = useChatSession(ref<string | null>("child-real"));
+    await flush();
+    expect(child.messages.value.map((m) => m.role)).toEqual(["user"]);
+    expect(useSessionState().state["child-real"]).toBe("running");
+    expect(useSessionState().state["subsess_x1"]).toBeUndefined();
+  });
+
+  it("subsession_started 登记父子关系与名字；回报消息渲染成回报块并记下最近回报", async () => {
+    await listening();
+    emit({ type: "subsession_started", session_id: "parent", childId: "c1", title: "gopls 条目", task: "做 X" });
+    await flush();
+    expect(useSubsessions().childrenOfSession("parent")).toEqual([{ id: "c1", title: "gopls 条目", task: "做 X" }]);
+    expect(useSessionNames().names["c1"]).toBe("gopls 条目");
+
+    emit({
+      type: "user_message",
+      text: "[子会话回报] …",
+      session_id: "parent",
+      display: [{ type: "subsession_report", childId: "c1", title: "gopls 条目", status: "done", text: "41 passed\n细节", origin: "task" }],
+    });
+    await flush();
+    const parent = useChatSession(ref<string | null>("parent"));
+    await flush();
+    expect(parent.messages.value[0].blocks[0]).toMatchObject({ type: "subsession_report", childId: "c1" });
+    expect(useSubsessions().childrenOfSession("parent")[0].lastReport).toEqual({ status: "done", firstLine: "41 passed" });
+  });
+
+  it("自动回报暂停 / 恢复", async () => {
+    await listening();
+    emit({ type: "subsession_paused", session_id: "parent", pending: 2 });
+    await flush();
+    expect(useSubsessions().paused["parent"]).toBe(2);
+    emit({ type: "subsession_resumed", session_id: "parent" });
+    await flush();
+    expect(useSubsessions().paused["parent"]).toBeUndefined();
   });
 });

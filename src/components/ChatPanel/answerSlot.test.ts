@@ -14,6 +14,11 @@ describe("pickAnswer — 作答槽一次一张卡", () => {
     expect(pickAnswer({ permission: false, permissionCount: 0, lsp: true })).toEqual({ kind: "lsp", total: 1 });
   });
 
+  it("子会话等批准：排在本会话权限之后、LSP 询问之前，每个算一条", () => {
+    expect(pickAnswer({ permission: true, permissionCount: 1, lsp: true, subsessionWaiting: 2 })).toEqual({ kind: "permission", total: 4 });
+    expect(pickAnswer({ permission: false, permissionCount: 0, lsp: true, subsessionWaiting: 2 })).toEqual({ kind: "subsession", total: 3 });
+  });
+
   it("有显示中的权限但计数缺失时至少算 1", () => {
     expect(pickAnswer({ permission: true, permissionCount: 0, lsp: false })).toEqual({ kind: "permission", total: 1 });
   });
