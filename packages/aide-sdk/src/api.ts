@@ -593,6 +593,17 @@ export const api = {
   listSubsessions(parentId: string): Promise<SubsessionListItem[]> {
     return getTransport().invoke("list_subsessions", { parentId });
   },
+  /** 用户在父会话里手动派一个子会话（与 agent 的 session_spawn 同一条路、同样的限额）。
+   *  等子会话定名、档案落盘、`subsession_started` 广播之后才返回；不传模型档位则沿用父会话档案。 */
+  spawnSubsession(args: {
+    parentId: string;
+    task: string;
+    model?: string | null;
+    effort?: string | null;
+    permissionMode?: string | null;
+  }): Promise<{ child_id: string; title: string }> {
+    return getTransport().invoke("spawn_subsession", args);
+  },
   loadMessages(
     sessionId: string,
     offsetBytes?: number | null,

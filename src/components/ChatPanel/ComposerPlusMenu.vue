@@ -5,12 +5,17 @@
  *
  * 只发事件，动作由 ChatInputBox 落实（文件走既有的暂存 / 附件管线，@ 与 / 走既有补全）。
  * 「顺便问一下」在发送按钮的悬停列表里、上下文与用量在环形图上，这里不重复（2026-10-17）。
+ * 「新建子会话」只在能派的会话里出现（分隔线下），满额时置灰并写明原因。
  */
-import { ref } from "vue";
+import { computed, ref } from "vue";
+import Icon from "../Icon.vue";
 import ComposerPopover from "./ComposerPopover.vue";
 import type { PlusAction } from "./composerPlus";
 
+const props = defineProps<{ subsession?: { running: number; max: number } | null }>();
 const emit = defineEmits<{ pick: [action: PlusAction] }>();
+
+const subFull = computed(() => !!props.subsession && props.subsession.running >= props.subsession.max);
 
 const open = ref(false);
 const triggerRef = ref<HTMLElement | null>(null);
@@ -52,6 +57,22 @@ function pick(action: PlusAction) {
         <span class="cplus-label">命令与技能</span>
         <span class="cplus-key">/</span>
       </button>
+      <template v-if="subsession">
+        <div class="cplus-sep" role="separator" />
+        <button
+          type="button"
+          role="menuitem"
+          class="cplus-item"
+          :class="{ 'cplus-item--off': subFull }"
+          :aria-disabled="subFull"
+          v-tooltip="subFull ? `已有 ${subsession.running} 个子会话在跑，等其中一个回报后再派` : ''"
+          @click="!subFull && pick('subsession')"
+        >
+          <Icon name="subsession" :size="15" :stroke-width="1.5" class="cplus-accent" />
+          <span class="cplus-label">新建子会话</span>
+          <span class="cplus-key">{{ subFull ? `${subsession.running}/${subsession.max} 已满` : `在跑 ${subsession.running}/${subsession.max}` }}</span>
+        </button>
+      </template>
     </div>
   </ComposerPopover>
 </template>
@@ -108,5 +129,22 @@ function pick(action: PlusAction) {
 .cplus-key {
   font-size: 11px;
   color: var(--aide-text-muted);
+}
+.cplus-sep {
+  height: 1px;
+  margin: 4px 8px;
+  background: var(--aide-border);
+}
+.cplus-item .cplus-accent {
+  color: var(--aide-accent);
+}
+.cplus-item--off,
+.cplus-item--off:hover {
+  background: none;
+  color: var(--aide-text-muted);
+  cursor: default;
+}
+.cplus-item--off .cplus-accent {
+  color: inherit;
 }
 </style>

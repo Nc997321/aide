@@ -86,6 +86,8 @@ const props = defineProps<{
   sendConfirmedNonce: number;
   /** 父层要求收起（有待确认弹窗）：unless-draft = 有草稿就不收；always = 照收。 */
   stow?: "off" | "unless-draft" | "always";
+  /** ＋ 菜单的「新建子会话」：null / 缺省 = 本会话不能派（子会话 / 还没定名），不显示 */
+  subsession?: { running: number; max: number } | null;
 }>();
 
 const emit = defineEmits<{
@@ -106,10 +108,33 @@ const emit = defineEmits<{
   /** 权限模式变化（用户切换/侧边同步/会话切换）——ChatPanel 的 PermissionDialog
    *  current-mode 展示用（「进入自动模式」按钮的显隐判定）。 */
   "permission-mode-changed": [mode: string];
+  /** ＋ 菜单「新建子会话」：浮窗由 ChatPanel 开（与消息里选中「派给子会话」同一张） */
+  "new-subsession": [];
 }>();
 
 const rootEl = ref<HTMLElement | null>(null);
-defineExpose({ rootEl });
+defineExpose({ rootEl, insertQuote, spawnDefaults });
+
+/** 消息里选中「引用」：引用块接在已有内容后面（空一行），光标停在它下面等用户接着写。 */
+function insertQuote(quote: string) {
+  const head = inputText.value.replace(/\s+$/, "");
+  inputText.value = head ? `${head}\n\n${quote}\n\n` : `${quote}\n\n`;
+  nextTick(() => {
+    const ta = textareaEl.value;
+    if (!ta) return;
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  });
+}
+
+/** 手动派子会话沿用父会话输入框此刻的选择（与发消息带的同一组值）。 */
+function spawnDefaults(): { model?: string; effort?: string; permissionMode?: string } {
+  return {
+    model: selectedModel.value || undefined,
+    effort: selectedEffort.value || undefined,
+    permissionMode: selectedPermissionMode.value || undefined,
+  };
+}
 
 // 收起态：弹窗在时空着的输入框是噪音，让位给弹窗。有草稿则留着（弹窗到达那一刻定夺，
 // 之后删空也不半路消失），直到这条发出去；发送前确认（always）的「草稿」就是待确认的
@@ -1177,6 +1202,9 @@ function onPlusAction(action: PlusAction) {
     case "slash":
       insertTrigger("/");
       return;
+    case "subsession":
+      emit("new-subsession");
+      return;
   }
 }
 
@@ -1572,7 +1600,7 @@ const { actions: quickActions } = useQuickActions();
       <!-- 单行输入（2026-10-16）：[＋] 文本 [发送] 一行横排（模型 / 权限 / 用量在下方状态行），
            文本随内容撑高（useAutoGrow），两侧控件贴底（align-items:flex-end）。 -->
       <div class="composer-row">
-        <ComposerPlusMenu @pick="onPlusAction" />
+        <ComposerPlusMenu :subsession="props.subsession ?? null" @pick="onPlusAction" />
         <input
           ref="filePickerEl"
           type="file"

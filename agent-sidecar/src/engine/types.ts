@@ -145,6 +145,8 @@ export type UserMessageBlock =
       text: string;
       /** task（派发）/ followup（追加指令） */
       kind: string;
+      /** 谁派的：agent（父会话 agent 的 session_spawn）/ user（用户手动派）；缺省按 agent */
+      by?: string;
     };
 
 /** 占用来源明细的元素形状（见 context_usage 事件的说明）。与

@@ -244,7 +244,7 @@ function handleTextClick(e: MouseEvent) {
         <SubsessionReportCard v-else-if="seg.block.type === 'subsession_report'" :block="seg.block" />
         <template v-else-if="seg.block.type === 'subsession_instruction'">
           <div class="msg-parent-head">
-            来自父会话{{ seg.block.parentTitle ? `「${seg.block.parentTitle}」` : "" }} · {{ seg.block.kind === "task" ? "任务" : "追加指令" }}
+            {{ seg.block.by === "user" ? "你从父会话" : "来自父会话" }}{{ seg.block.parentTitle ? `「${seg.block.parentTitle}」` : "" }} · {{ seg.block.kind === "task" ? (seg.block.by === "user" ? "派来的任务" : "任务") : "追加指令" }}
           </div>
           <div class="msg-text" v-html="renderMarkdown(seg.block.text)" @click="handleTextClick"></div>
         </template>

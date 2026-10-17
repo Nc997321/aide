@@ -13,6 +13,8 @@ import type { SubsessionListItem, SubsessionReport } from "../types/chat";
  */
 /** 子会话路由键前缀（Host `subsession.rs` 的 ROUTING_PREFIX + "_"）：它的 session_init 是改名。 */
 export const SUBSESSION_ROUTING_PREFIX = "subsess_";
+/** 每个父会话同时在跑的子会话上限（Host `subsession.rs` 的 MAX_RUNNING_CHILDREN；判定在 Host，这里只做提前提示）。 */
+export const SUBSESSION_MAX_RUNNING = 4;
 
 export interface SubsessionEntry {
   id: string;

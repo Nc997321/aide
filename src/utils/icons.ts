@@ -86,6 +86,10 @@ export const GLYPHS: Record<string, string> = {
   folder: '<path d="M2.5 12.5V4.3h4l1.3 1.7h5.7v6.5z"/>',
   sidebar: '<rect x="2.5" y="3" width="11" height="10" rx="1.6"/><path d="M6.5 3v10"/>',
   plus: '<path d="M8 3.5v9M3.5 8h9"/>',
+  /** 子会话：主干上分出一枝（派出去的活） */
+  subsession: '<circle cx="4.5" cy="3.5" r="1.3"/><circle cx="4.5" cy="12.5" r="1.3"/><circle cx="11.5" cy="8" r="1.3"/><path d="M4.5 4.8v6.4M4.5 5.5c0 1.8 1.2 2.5 3 2.5h2.7"/>',
+  /** 引用：几行文字 + 一个指向输入框的小箭头 */
+  quote: '<path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h4.5"/><path d="M11 10l2.5 1.5L11 13"/>',
   more: '<circle cx="4" cy="8" r="0.9" class="f"/><circle cx="8" cy="8" r="0.9" class="f"/><circle cx="12" cy="8" r="0.9" class="f"/>',
   // 折叠箭头。默认朝右（折叠态），展开时用 CSS 转 90° 指向下——
   // 一个字形两种状态，省掉两个几乎一样的路径

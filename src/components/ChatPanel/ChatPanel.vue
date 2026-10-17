@@ -11,7 +11,13 @@ import ActivityDrawer from "../activity/ActivityDrawer.vue";
 import { bgTaskChip, subagentChip, subsessionChip, type ActivityChip, type ActivityTab, type ChildActivity } from "../activity/activityChips";
 import { openActivityTab } from "../activity/ActivityDrawer.vue";
 import SubsessionWaitCard from "../subsession/SubsessionWaitCard.vue";
-import { useSubsessions } from "@/composables/useSubsessions";
+import SubsessionComposer from "../subsession/SubsessionComposer.vue";
+import { quoteMarkdown } from "../subsession/composeTask";
+import FloatingCard from "../FloatingCard.vue";
+import { anchorOf, type AnchorRect } from "../floatingCard";
+import MessageSelectionBar from "./MessageSelectionBar.vue";
+import { readMessageSelection, rectVisibleIn, selectionEndRect, selectionRect, type MessageSelection } from "./messageSelection";
+import { SUBSESSION_MAX_RUNNING, useSubsessions } from "@/composables/useSubsessions";
 import { useSessionState } from "@/composables/useSessionState";
 import { useSessionNames } from "@/composables/useSessionNames";
 import { usePaneLayout } from "@/composables/usePaneLayout";
@@ -433,7 +439,11 @@ const heroModelName = ref("");
 // 时 tab 栏出现造成的位移也一并被这次 FLIP 覆盖）。只在翻转瞬间量两次 rect、
 // 只动 transform，不碰滚动区——本项目有 O(n²) 渲染/强布局前科，此处保持零负担。
 // 输入盒根元素（.chat-input-area）经 ChatInputBox 的 defineExpose({ rootEl }) 暴露。
-const inputBoxRef = ref<{ rootEl: HTMLElement | null } | null>(null);
+const inputBoxRef = ref<{
+  rootEl: HTMLElement | null;
+  insertQuote: (quote: string) => void;
+  spawnDefaults: () => { model?: string; effort?: string; permissionMode?: string };
+} | null>(null);
 
 // 待确认时收起输入框：此刻唯一要做的事是回应弹窗，输入框只是噪音，腾出的高度归弹窗。
 // 真实权限请求：有草稿就不收（人家正写着）；发送前确认：输入框里的就是待确认的那条，照收。
@@ -632,6 +642,87 @@ function closeBtw() {
 
 
 
+// ── 手动派子会话 + 消息里选中文字的小浮条（子会话设计 §11）──
+// 能派 = 已定名的顶层会话（子会话不能再派：深度 1；还没发过第一条的没有父会话可挂）。
+// 限额以 Host 为准，这里的计数只为提前置灰、写明原因。
+const runningChildren = computed(
+  () => children.value.filter((c) => ["running", "attention"].includes(childActivity(c.id))).length,
+);
+const canSpawn = computed(
+  () => !!props.sessionId && !isPendingSession(props.sessionId) && !parentId.value && !isHero.value,
+);
+const spawnFullReason = computed(() =>
+  runningChildren.value >= SUBSESSION_MAX_RUNNING ? `已有 ${runningChildren.value} 个子会话在跑，等其中一个回报后再派` : null,
+);
+const plusSubsession = computed(() =>
+  canSpawn.value ? { running: runningChildren.value, max: SUBSESSION_MAX_RUNNING } : null,
+);
+
+const msgSel = ref<MessageSelection | null>(null);
+const msgSelRect = ref<AnchorRect | null>(null);
+function placeSelectionBar() {
+  const s = msgSel.value;
+  const box = scrollEl.value?.getBoundingClientRect();
+  const r = s ? selectionEndRect(s.range) : null;
+  msgSelRect.value = r && box && rectVisibleIn(r, box) ? r : null;
+}
+function refreshSelection() {
+  if (composer.value) return;
+  msgSel.value = readMessageSelection(contentEl.value ?? null, window.getSelection());
+  placeSelectionBar();
+}
+/** 鼠标抬起 / 键盘扩选之后再读（等浏览器把选区落定）。 */
+function onMessagesPointerUp() {
+  setTimeout(refreshSelection, 0);
+}
+function onSelectionChange() {
+  // 只管「选区没了」：出现由抬起鼠标那一刻判定，免得拖选途中浮条跟着闪
+  if (msgSel.value && window.getSelection()?.isCollapsed) {
+    msgSel.value = null;
+    msgSelRect.value = null;
+  }
+}
+function onMessagesScroll() {
+  onScroll();
+  if (msgSel.value) placeSelectionBar();
+}
+onMounted(() => document.addEventListener("selectionchange", onSelectionChange));
+onUnmounted(() => document.removeEventListener("selectionchange", onSelectionChange));
+watch(() => props.sessionId, () => {
+  msgSel.value = null;
+  msgSelRect.value = null;
+  composer.value = null;
+});
+
+function quoteSelection() {
+  const s = msgSel.value;
+  if (!s) return;
+  inputBoxRef.value?.insertQuote(quoteMarkdown(s.text));
+  msgSel.value = null;
+  msgSelRect.value = null;
+}
+
+/** 派活浮窗：一个会话面板同时只开一张；两个入口只差有没有原文、贴在哪里。 */
+const composer = ref<{ quote?: string; prefer: "below" | "above"; anchor: () => AnchorRect | null } | null>(null);
+const composerDirty = ref(false);
+function spawnFromSelection() {
+  const s = msgSel.value;
+  if (!s || !canSpawn.value) return;
+  const range = s.range;
+  composer.value = { quote: s.text, prefer: "below", anchor: () => selectionRect(range) };
+  composerDirty.value = false;
+  msgSelRect.value = null;
+  msgSel.value = null;
+}
+function spawnFromPlus() {
+  if (!canSpawn.value) return;
+  composer.value = { prefer: "above", anchor: () => anchorOf(inputBoxRef.value?.rootEl?.getBoundingClientRect()) };
+  composerDirty.value = false;
+}
+function closeComposer() {
+  composer.value = null;
+}
+
 
 /** 工具卡片「后台运行中」徽章：打开 dock 并选中对应任务（toggleBgDock 已开时只切选中）。 */
 function onOpenBgDock(taskId: string) {
@@ -661,7 +752,13 @@ function onOpenBgDock(taskId: string) {
          悬浮按钮的定位锚点——按钮若直接放进滚动容器会随内容一起滚走；
          相对 chat-panel 绝对定位又无法自适应输入框/权限区的高度变化 -->
     <div class="chat-scroll-wrap">
-      <div ref="scrollEl" class="chat-messages" @scroll.passive="onScroll">
+      <div
+        ref="scrollEl"
+        class="chat-messages"
+        @scroll.passive="onMessagesScroll"
+        @mouseup="onMessagesPointerUp"
+        @keyup.shift="onMessagesPointerUp"
+      >
       <div v-if="props.messages.length === 0" class="chat-empty">
         开始新对话
       </div>
@@ -813,8 +910,35 @@ function onOpenBgDock(taskId: string) {
         @rollback-text-consumed="emit('rollback-text-consumed')"
         @hero-model-name="heroModelName = $event"
         @permission-mode-changed="permissionMode = $event"
+        :subsession="plusSubsession"
+        @new-subsession="spawnFromPlus"
       />
     </div>
+    <MessageSelectionBar
+      v-if="msgSelRect && !composer"
+      :rect="msgSelRect"
+      :spawn="canSpawn ? { disabledReason: spawnFullReason } : null"
+      @quote="quoteSelection"
+      @spawn="spawnFromSelection"
+    />
+    <FloatingCard
+      :open="!!composer && canSpawn"
+      :anchor="composer?.anchor ?? (() => null)"
+      :prefer="composer?.prefer"
+      :label="composer?.quote ? '派给子会话' : '新建子会话'"
+      :close-on-outside="!composerDirty"
+      @close="closeComposer"
+    >
+      <SubsessionComposer
+        v-if="composer && props.sessionId"
+        :parent-id="props.sessionId"
+        :quote="composer.quote"
+        :running="runningChildren"
+        :defaults="() => inputBoxRef?.spawnDefaults() ?? {}"
+        @dirty="composerDirty = $event"
+        @close="closeComposer"
+      />
+    </FloatingCard>
     <BtwDrawer
       :visible="btwDrawerVisible"
       @close="closeBtw"

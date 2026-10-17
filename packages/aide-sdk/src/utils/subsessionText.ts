@@ -11,7 +11,8 @@ import type { SubsessionInstruction, SubsessionReport } from "../types/chat";
  */
 
 const REPORT_HEAD = "[子会话回报]";
-const TASK_HEAD = /^\[来自父会话「([^」]*)」派发的子会话任务\]\n/;
+/** agent 派的「[来自父会话「X」派发的…]」与用户手动派的「[用户从父会话「X」派发的…]」 */
+const TASK_HEAD = /^\[(来自|用户从)父会话「([^」]*)」派发的子会话任务\]\n/;
 const FOLLOWUP_HEAD = /^\[来自父会话「([^」]*)」的追加指令[^\]]*\]\n/;
 const SECTION_HEAD = /^### 子会话「([^」]*)」（id ([^）]+)）· (已完成|出错|被打断) · (.+)$/;
 const TRUNCATED_LINE = /^（回报过长已截断，完整内容在子会话「[^」]*」里）$/;
@@ -20,6 +21,7 @@ const EMPTY_BODY = "（这一轮没有文字回复）";
 const STATUS: Record<string, string> = { 已完成: "done", 出错: "error", 被打断: "interrupted" };
 const ORIGIN: Record<string, string> = {
   执行派发的任务: "task",
+  执行用户手动派发的任务: "user_task",
   回应你的追加指令: "parent",
   由用户在子会话里触发: "user",
 };
@@ -63,7 +65,13 @@ export function parseInstructionPrompt(text: string): SubsessionInstruction | nu
   const task = text.match(TASK_HEAD);
   if (task) {
     const sep = text.indexOf("\n---\n");
-    return { parentId: "", parentTitle: task[1], text: sep >= 0 ? text.slice(sep + 5) : text, kind: "task" };
+    return {
+      parentId: "",
+      parentTitle: task[2],
+      text: sep >= 0 ? text.slice(sep + 5) : text,
+      kind: "task",
+      by: task[1] === "用户从" ? "user" : "agent",
+    };
   }
   const follow = text.match(FOLLOWUP_HEAD);
   if (follow) return { parentId: "", parentTitle: follow[1], text: text.slice(follow[0].length), kind: "followup" };

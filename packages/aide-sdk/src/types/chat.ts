@@ -476,7 +476,8 @@ export interface SubsessionReport {
   /** done / error / interrupted */
   status: string;
   text: string;
-  /** 这一轮由谁触发：task（派发时的任务）/ parent（父会话追加指令）/ user（用户在子会话里插话） */
+  /** 这一轮由谁触发：task（agent 派发的任务）/ user_task（用户手动派发的任务）/ parent（父会话追加指令）/
+   *  user（用户在子会话里插话） */
   origin: string;
   truncated?: boolean;
 }
@@ -497,6 +498,8 @@ export interface SubsessionInstruction {
   text: string;
   /** task（派发）/ followup（追加指令） */
   kind: string;
+  /** 谁派的：agent（父会话 agent 的 session_spawn）/ user（用户手动派）；缺省按 agent */
+  by?: string;
 }
 
 export interface PermissionRequest {

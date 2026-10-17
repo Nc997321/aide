@@ -22,6 +22,7 @@ const STATUS: Record<string, { label: string; tone: string }> = {
 };
 const ORIGIN: Record<string, string> = {
   task: "执行派发的任务",
+  user_task: "执行你派的任务",
   parent: "回应追加指令",
   user: "由你在子会话里触发",
 };

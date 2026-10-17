@@ -346,7 +346,7 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 
 | `type` | 字段 | 含义 |
 |---|---|---|
-| `subsession_started` | `childId`, `title`, `task` | 派出了一个子会话（已定名、档案已落盘，`childId` 是真实会话 id） |
+| `subsession_started` | `childId`, `title`, `task`, `by`? | 派出了一个子会话（已定名、档案已落盘，`childId` 是真实会话 id）。`by` ∈ `agent`（父会话 agent 派的）/ `user`（用户手动派的，2026-10-17 新增；缺省按 `agent`） |
 | `subsession_paused` | `pending`, `limit` | 连续 `limit` 次自动回报没有任何用户输入，暂停投递（攒着 `pending` 条）；用户在父会话发任意一条消息即恢复 |
 | `subsession_resumed` | — | 暂停解除 |
 
@@ -357,10 +357,12 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 **`user_message.display` 新增两种块**（Host 代发的消息，不是用户说的话）：
 
 - `{type:"subsession_report", childId, title, status, text, origin, truncated?}`：子会话回报，出现在父会话里。
-  `status` ∈ `done` / `error` / `interrupted`；`origin` ∈ `task`（执行派发的任务）/ `parent`（回应父会话追加指令）/
-  `user`（用户在子会话里插话触发）。建议渲染成系统卡片而不是用户气泡。
-- `{type:"subsession_instruction", parentId, parentTitle, text, kind}`：父会话派来的任务（`kind: "task"`）或追加指令
-  （`kind: "followup"`），出现在子会话里。
+  `status` ∈ `done` / `error` / `interrupted`；`origin` ∈ `task`（执行 agent 派发的任务）/ `user_task`（执行用户手动派发的任务，
+  2026-10-17 新增）/ `parent`（回应父会话追加指令）/ `user`（用户在子会话里插话触发）。认不出的 `origin` 不显示即可。建议渲染成系统卡片而不是用户气泡。
+- `{type:"subsession_instruction", parentId, parentTitle, text, kind, by?}`：父会话派来的任务（`kind: "task"`）或追加指令
+  （`kind: "followup"`），出现在子会话里。`by` ∈ `agent` / `user`（用户手动派的任务；缺省按 `agent`）。
+
+用户在桌面手动派子会话走 Host 命令 `spawn_subsession`；**它不在手机暴露目录里**，手机端要做同样的入口时再商量加进目录。
 
 不认识这两种块的客户端按 `user_message.text` 渲染即可（它是带前言的完整文本）。
 
