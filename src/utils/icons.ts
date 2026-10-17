@@ -53,6 +53,8 @@ export const GLYPHS: Record<string, string> = {
   /** 向下箭头：回到底部 */
   "arrow-down": '<path d="M8 3v10M8 13l-4.5-4.5M8 13l4.5-4.5"/>',
   "arrow-up-left": '<path d="M12 12L4.5 4.5M4.5 4.5v6M4.5 4.5h6"/>',
+  /** 回车键：发送按钮 */
+  enter: '<path d="M12.5 3.5v4.5a1.5 1.5 0 0 1 -1.5 1.5H4"/><path d="M6.5 7L4 9.5L6.5 12"/>',
   reset: '<path d="M4 8A4 4 0 1 1 4 4"/><path d="M2.6 5.4L4 4L5.4 5.4"/>',
   warning: '<path d="M8 2.5L14 13H2Z"/><path d="M8 6.2V9.6"/><circle cx="8" cy="11.4" r="0.55" class="f"/>',
   cursor: '<path d="M3.5 3L3.5 12.5L6 10L8 14L9.4 13.5L7.4 9.5L11 9.5Z" class="f"/>',

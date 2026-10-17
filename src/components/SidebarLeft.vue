@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from "vue";
+import { ref, computed, onMounted, watch } from "vue";
 import { timeAgo } from "../utils/time";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
@@ -26,6 +26,7 @@ import LinkConnectPopover from "./LinkConnectPopover.vue";
 import { dailyWorkspaceBind, ensureDailyWorkspace } from "@aide/sdk/utils/dailyWorkspace";
 import { useToast } from "../composables/useToast";
 import type { Session, WorkspaceInfo } from "../types";
+import { orderByRecency, collapseProjects } from "../utils/projectRecency";
 import { vOverlayLayer } from "../directives/overlayLayer";
 
 const props = defineProps<{
@@ -138,6 +139,23 @@ const filteredWorkspaces = computed(() => {
   return workspaces.value.filter(
     (ws) => workspaceLabel(ws).toLowerCase().includes(q) || ws.name.toLowerCase().includes(q),
   );
+});
+
+// ── 项目折叠（2026-10-17）：项目按最近会话活动倒序，只露前 N 个（同「最近访问保留条数」），
+// 其余收进「另外 N 个」；搜索时全部命中都露出；当前项目永远露出。
+// 活动时间 = Host 给的 lastActive（转录最大 mtime）与本窗口里观察到的发送（会话转入 running）取大，
+// 所以在某个项目里发消息，它立刻浮到最上面，不用等下次刷新列表。
+const wsTouched = ref<Record<string, number>>({});
+const showAllProjects = ref(false);
+
+function wsActivity(ws: WorkspaceInfo): number {
+  return Math.max(ws.lastActive ?? 0, wsTouched.value[ws.key] ?? 0);
+}
+
+const projectView = computed(() => {
+  const ordered = orderByRecency(filteredWorkspaces.value, wsActivity);
+  if (searchQuery.value.trim() || showAllProjects.value) return { shown: ordered, hidden: 0 };
+  return collapseProjects(ordered, settings.recentLimit, (ws) => ws.key === activeWorkspace.value);
 });
 
 // Sessions for a specific workspace (for template use, respects search filter)
@@ -274,6 +292,21 @@ const { toastState, showToast } = useToast();
 const sessionNames = useSessionNames();
 const sessionWs = useSessionWorkspaces();
 const { state: sessionState, dotTone } = useSessionState();
+
+// 会话新转入 running = 刚发了消息：给它所属的项目记一笔活动时间（项目排序用）
+let runningBefore = new Set<string>();
+watch(
+  () => Object.keys(sessionState).filter((id) => sessionState[id] === "running"),
+  (running) => {
+    const now = Date.now();
+    for (const id of running) {
+      if (runningBefore.has(id)) continue;
+      const wsKey = sessionWs.workspaceOf(id)?.wsKey;
+      if (wsKey) wsTouched.value = { ...wsTouched.value, [wsKey]: now };
+    }
+    runningBefore = new Set(running);
+  },
+);
 
 /** 把某工作区的一批会话记入归属注册表（tab 后缀标识 / sidecar cwd 依赖它），
  *  顺带回种子会话的父子关系（Session.parentId，见 useSubsessions）。 */
@@ -664,7 +697,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
       <div class="sec-subtree">
       <div v-if="workspacesLoading" class="session-empty muted">加载中...</div>
 
-      <template v-else v-for="ws in filteredWorkspaces" :key="ws.key">
+      <template v-else v-for="ws in projectView.shown" :key="ws.key">
         <!-- Workspace row -->
         <div
           class="workspace-item"
@@ -769,6 +802,21 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
           </template>
         </template>
       </template>
+      <!-- 项目折叠：只露最近活动的前 N 个（同「最近访问保留条数」） -->
+      <div
+        v-if="!workspacesLoading && projectView.hidden > 0"
+        class="session-more project-more"
+        @click="showAllProjects = true"
+      >
+        另外 {{ projectView.hidden }} 个项目
+      </div>
+      <div
+        v-else-if="!workspacesLoading && showAllProjects && !searchQuery.trim() && filteredWorkspaces.length > settings.recentLimit"
+        class="session-more project-more"
+        @click="showAllProjects = false"
+      >
+        收起项目
+      </div>
       </div>
       </template>
 
@@ -897,8 +945,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 12px 14px;
-  margin: 3px 8px 0 7px;
+  /* 2026-10-17 收紧：会话行原先上下 12px + 卡片投影，比项目头还高还重，层级倒挂。
+     现在比项目头矮一档、左侧缩进挂在项目下 */
+  padding: 7px 12px;
+  margin: 2px 8px 0 16px;
   cursor: pointer;
   border: 1px solid transparent;
   overflow: hidden; /* running 流光贴左缘，收进圆角内 */
@@ -910,12 +960,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .session-style-card .session-row {
   background: var(--aide-bg-raised);
   border-color: var(--aide-border-subtle);
-  border-radius: var(--aide-radius-lg);
-  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
+  border-radius: var(--aide-radius-md);
+  box-shadow: var(--aide-highlight-inset);
 }
 .session-style-card .session-row:hover {
   border-color: var(--aide-border-strong);
-  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-md);
+  box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
 }
 .session-style-card .session-row.on {
   border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
@@ -1033,7 +1083,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 
 .session-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--aide-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1045,9 +1095,9 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 /* 会话行右槽位元信息 = 时间（无底色 flat 形态；流内撑开槽位，hover 时让给 ⋯） */
 /* 子会话行：缩进挂在父会话下，左侧一道虚线引导，比父行矮一档 */
 .session-row--child {
-  margin-left: 22px;
-  padding-top: 7px;
-  padding-bottom: 7px;
+  margin-left: 30px;
+  padding-top: 5px;
+  padding-bottom: 5px;
   font-size: 12px;
 }
 .session-row--child::before {
@@ -1094,8 +1144,12 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   transition: opacity 0.12s;
 }
 
+.session-more.project-more {
+  margin-left: 7px;
+}
+
 .session-more {
-  margin: 2px 8px 0 7px;
+  margin: 2px 8px 0 16px;
   padding: 7px 12px 7px 20px;
   font-size: 11.5px;
   color: var(--aide-text-muted);
@@ -1341,14 +1395,14 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
    只有文字线消失、轮廓不动；线条脉冲语言与 MarketplaceTab 的 skel-line 一致
    （surface-hover 底 + 呼吸透明度）。 */
 .session-skel-card {
-  margin: 3px 8px 0 7px;
-  padding: 12px 14px;
+  margin: 2px 8px 0 16px;
+  padding: 7px 12px;
   border: 1px solid transparent;
 }
 .session-style-card .session-skel-card {
   background: var(--aide-bg-raised);
   border-color: var(--aide-border-subtle);
-  border-radius: var(--aide-radius-lg);
+  border-radius: var(--aide-radius-md);
 }
 .session-style-row .session-skel-card {
   background: var(--aide-surface-default);
@@ -1514,6 +1568,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   background:
     linear-gradient(180deg, rgba(255, 235, 210, 0.03), transparent 60px),
     var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
   box-shadow: var(--aide-shadow-lg);

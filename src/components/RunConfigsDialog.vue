@@ -254,6 +254,8 @@ async function close() {
 .rcd-dialog {
   position: relative;
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
   width: 660px;
@@ -514,6 +516,8 @@ async function close() {
   position: absolute;
   inset: 0;
   background: var(--aide-bg-deep);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   display: flex;
   flex-direction: column;
   padding: 20px;

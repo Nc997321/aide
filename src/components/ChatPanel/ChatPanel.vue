@@ -877,7 +877,10 @@ function onOpenBgDock(taskId: string) {
   gap: 6px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: var(--aide-surface-default);
+  /* 浮在正文上：与其它浮层同一配方（raised 底 + 毛玻璃），玻璃主题下 surface-default 近乎全透明会和正文糊在一起 */
+  background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border-strong);
   box-shadow: var(--aide-shadow-md);
   color: var(--aide-text-secondary);

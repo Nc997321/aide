@@ -35,6 +35,24 @@ pub struct WorkspaceInfo {
     pub key: String,
     pub name: String,
     pub missing: bool,
+    /// 该项目最近一次会话活动（毫秒）= 其转录目录下 .jsonl 的最大 mtime；从没发过会话 = None。
+    /// 侧栏按它排序、只露前 N 个（2026-10-17）。只在 list_workspaces 里填。
+    #[serde(rename = "lastActive", skip_serializing_if = "Option::is_none")]
+    pub last_active: Option<u64>,
+}
+
+/// 项目最近一次会话活动：各候选转录目录里 .jsonl 的最大 mtime。只 stat 不读文件。
+fn workspace_last_active(projects_dir: &std::path::Path, key: &str) -> Option<u64> {
+    resolve_project_dirs(projects_dir, key)
+        .into_iter()
+        .filter_map(|dir| std::fs::read_dir(dir).ok())
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| e.metadata().ok()?.modified().ok())
+        .filter_map(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_millis() as u64)
+        .max()
 }
 
 
@@ -386,6 +404,10 @@ async fn list_workspaces(_core: Arc<Core>, a: ListWorkspacesArgs) -> Result<Vec<
         // 的项目：从所有工作区列表（侧栏分区、WorkspacePicker）里剔除。唯一过滤点，
         // 渲染期不要再滤一次。设计见 docs/superpowers/specs/2026-09-20-daily-mode-design.md
         infos.retain(|w| !daily::is_daily_path(&daily, &w.name));
+        let projects_dir = claude_projects_dir();
+        for w in &mut infos {
+            w.last_active = workspace_last_active(&projects_dir, &w.key);
+        }
         Ok(infos)
     })
     .await
@@ -490,6 +512,7 @@ async fn create_workspace(core: Arc<Core>, a: CreateWorkspaceArgs) -> Result<Wor
         key,
         name: path,
         missing: false,
+        last_active: None,
     })
 }).await
 }
@@ -764,6 +787,26 @@ pub fn resolve_path_from_key(key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn last_active_is_newest_jsonl_mtime_and_none_without_sessions() {
+        let projects = std::env::temp_dir().join(format!("aide-last-active-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&projects);
+        let key = "c--work-demo";
+        assert_eq!(workspace_last_active(&projects, key), None, "目录不存在 = 从没发过会话");
+
+        let dir = projects.join(key);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("notes.txt"), "x").unwrap();
+        assert_eq!(workspace_last_active(&projects, key), None, "非 .jsonl 不算活动");
+
+        std::fs::write(dir.join("a.jsonl"), "{}").unwrap();
+        let got = workspace_last_active(&projects, key).expect("有转录 = 有活动时间");
+        let mtime = std::fs::metadata(dir.join("a.jsonl")).unwrap().modified().unwrap()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64;
+        assert_eq!(got, mtime);
+        let _ = std::fs::remove_dir_all(&projects);
+    }
 
     // ── filter_hidden 随扫描机制退役（list 换注册表源，唯一调用方消失，死代码删除）──
     // hiddenWorkspaces 纯函数（hidden_keys/hide_in_config/unhide_in_config）保留：

@@ -77,6 +77,8 @@ const countText = computed(() => {
   gap: 4px;
   padding: 6px 8px;
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border);
   border-radius: var(--aide-radius-sm);
   box-shadow: var(--aide-shadow-sm);

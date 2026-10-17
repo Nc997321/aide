@@ -63,7 +63,7 @@ function pick(kind: ProviderKind) {
 
 <style scoped>
 .picker-overlay { position: fixed; inset: 0; background: var(--aide-bg-overlay); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.picker-card { background: var(--aide-bg-base); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-lg); padding: 20px; width: 460px; max-height: 80vh; overflow: auto; box-shadow: var(--aide-shadow-lg); }
+.picker-card { background: var(--aide-bg-base); backdrop-filter: var(--aide-surface-blur); -webkit-backdrop-filter: var(--aide-surface-blur); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-lg); padding: 20px; width: 460px; max-height: 80vh; overflow: auto; box-shadow: var(--aide-shadow-lg); }
 .picker-title { font-size: 16px; font-weight: 600; color: var(--aide-text-primary); margin-bottom: 16px; }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .preset-card { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 14px 10px; border-radius: var(--aide-radius-md); background: var(--aide-surface-default); border: 1px solid var(--aide-border); cursor: pointer; font-size: 14px; color: var(--aide-text-primary); }

@@ -443,6 +443,8 @@ function uninstall() {
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-md);
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   box-shadow: var(--aide-shadow-lg);
 }
 

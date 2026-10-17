@@ -10,6 +10,9 @@ export interface WorkspaceInfo {
   key: string;
   name: string;
   missing: boolean;
+  /** 最近一次会话活动（毫秒，Host 取转录 .jsonl 的最大 mtime）；从没发过会话 = 缺省。
+   *  侧栏按它排序、只露前 N 个。 */
+  lastActive?: number;
 }
 
 export interface FileEntry {

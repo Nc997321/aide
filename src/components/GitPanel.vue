@@ -733,6 +733,7 @@ defineExpose({ reload });
   position: absolute; top: 100%; left: 0; margin-top: 3px;
   min-width: 200px; max-height: 240px; overflow-y: auto;
   background: var(--aide-bg-deep); border: 1px solid var(--aide-surface-hover);
+  backdrop-filter: var(--aide-surface-blur); -webkit-backdrop-filter: var(--aide-surface-blur);
   border-radius: var(--aide-radius-md); box-shadow: var(--aide-shadow-md); z-index: 50; padding: 4px;
 }
 

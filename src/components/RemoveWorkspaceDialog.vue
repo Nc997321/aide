@@ -62,7 +62,9 @@ const wsName = () => {
   display: flex; align-items: center; justify-content: center; z-index: 1100;
 }
 .rw-dialog {
-  background: var(--aide-bg-raised); border: 1px solid var(--aide-border-strong);
+  background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur); border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg); padding: 18px 22px;
   min-width: 360px; max-width: 440px;
   box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);

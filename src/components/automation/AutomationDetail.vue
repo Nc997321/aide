@@ -588,6 +588,8 @@ const PLAYBOOK_CARD: Record<string, { title: string; desc: string }> = {
   display: flex;
   flex-direction: column;
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
   box-shadow: var(--aide-shadow-lg);

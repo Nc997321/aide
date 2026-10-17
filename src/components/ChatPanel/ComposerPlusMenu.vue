@@ -4,18 +4,11 @@
  * 键盘直接输 `@` `/`、粘贴 / 拖入文件的行为都不变——菜单只是让这些能力看得见。
  *
  * 只发事件，动作由 ChatInputBox 落实（文件走既有的暂存 / 附件管线，@ 与 / 走既有补全）。
+ * 「顺便问一下」在发送按钮的悬停列表里、上下文与用量在环形图上，这里不重复（2026-10-17）。
  */
 import { ref } from "vue";
 import ComposerPopover from "./ComposerPopover.vue";
 import type { PlusAction } from "./composerPlus";
-
-const props = defineProps<{
-  /** 顺便问一下不可用（主会话还没开始）时的原因；空 = 可用 */
-  btwDisabledReason?: string;
-  btwActive?: boolean;
-  /** 上下文与用量不可用（还没有用量数据）时的原因；空 = 可用 */
-  usageDisabledReason?: string;
-}>();
 
 const emit = defineEmits<{ pick: [action: PlusAction] }>();
 
@@ -23,8 +16,6 @@ const open = ref(false);
 const triggerRef = ref<HTMLElement | null>(null);
 
 function pick(action: PlusAction) {
-  if (action === "btw" && props.btwDisabledReason) return;
-  if (action === "usage" && props.usageDisabledReason) return;
   open.value = false;
   emit("pick", action);
 }
@@ -60,32 +51,6 @@ function pick(action: PlusAction) {
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M9 20L15 4" /></svg>
         <span class="cplus-label">命令与技能</span>
         <span class="cplus-key">/</span>
-      </button>
-      <div class="cplus-sep" aria-hidden="true"></div>
-      <button
-        type="button"
-        role="menuitem"
-        class="cplus-item"
-        :class="{ 'cplus-item--disabled': !!btwDisabledReason, 'cplus-item--on': btwActive }"
-        :aria-disabled="!!btwDisabledReason"
-        v-tooltip="btwDisabledReason ?? ''"
-        @click="pick('btw')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M6 4v8a4 4 0 004 4h8" /><path d="M14 12l4 4-4 4" /></svg>
-        <span class="cplus-label">{{ btwActive ? "退出顺便问一下" : "顺便问一下" }}</span>
-        <span class="cplus-key">btw</span>
-      </button>
-      <button
-        type="button"
-        role="menuitem"
-        class="cplus-item"
-        :class="{ 'cplus-item--disabled': !!usageDisabledReason }"
-        :aria-disabled="!!usageDisabledReason"
-        v-tooltip="usageDisabledReason ?? ''"
-        @click="pick('usage')"
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="12" cy="12" r="8" /><path d="M12 4a8 8 0 018 8h-8z" /></svg>
-        <span class="cplus-label">上下文与用量</span>
       </button>
     </div>
   </ComposerPopover>
@@ -127,7 +92,7 @@ function pick(action: PlusAction) {
   text-align: left;
   cursor: pointer;
 }
-.cplus-item:hover:not(.cplus-item--disabled) {
+.cplus-item:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
 }
@@ -137,23 +102,11 @@ function pick(action: PlusAction) {
   height: 15px;
   color: var(--aide-text-muted);
 }
-.cplus-item--on {
-  color: var(--aide-accent);
-}
-.cplus-item--disabled {
-  opacity: 0.45;
-  cursor: default;
-}
 .cplus-label {
   flex: 1;
 }
 .cplus-key {
   font-size: 11px;
   color: var(--aide-text-muted);
-}
-.cplus-sep {
-  height: 1px;
-  margin: 4px 6px;
-  background: var(--aide-border);
 }
 </style>

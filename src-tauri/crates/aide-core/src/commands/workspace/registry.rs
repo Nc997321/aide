@@ -119,6 +119,7 @@ pub fn infos_from_registry(
                 key: w.key,
                 name: w.path,
                 missing,
+                last_active: None,
             }
         })
         .collect();

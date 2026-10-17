@@ -491,14 +491,17 @@ describe("ChatInputBox · 单行输入框（2026-10-16）", () => {
     findFilesByNameMock.mockResolvedValue([]);
   });
 
-  it("默认一行；工具栏那一层没有了，控件与文本在同一行", () => {
+  it("默认一行：框内只有 ＋ / 文本 / 发送，模型与权限在框下方的状态行", () => {
     const w = mountBox();
     expect(textarea(w).attributes("rows")).toBe("1");
     expect(w.find(".chat-toolbar").exists()).toBe(false);
     const row = w.find(".composer-row");
     expect(row.find("textarea.chat-input").exists()).toBe(true);
-    expect(row.findComponent({ name: "ModelEffortPicker" }).exists()).toBe(true);
     expect(row.findComponent({ name: "ChatSendButton" }).exists()).toBe(true);
+    expect(row.findComponent({ name: "ModelEffortPicker" }).exists()).toBe(false);
+    const foot = w.find(".composer-foot");
+    expect(w.find(".chat-input-box .composer-foot").exists()).toBe(false);
+    expect(foot.findComponent({ name: "ModelEffortPicker" }).exists()).toBe(true);
   });
 
   it("＋ 菜单：命令与技能在空输入里填出 /（斜杠菜单接手）", async () => {
@@ -517,11 +520,6 @@ describe("ChatInputBox · 单行输入框（2026-10-16）", () => {
     await flushPromises();
     await nextTick();
     expect((textarea(w).element as HTMLTextAreaElement).value).toBe("看看 @");
-  });
-
-  it("＋ 菜单：没开始的会话里顺便问一下不可用（带原因）", () => {
-    const w = mountBox({ sessionId: null });
-    expect(w.findComponent({ name: "ComposerPlusMenu" }).props("btwDisabledReason")).toContain("先发送一条消息");
   });
 
   it("跳过确认模式：权限 chip 恒为红色警示", async () => {

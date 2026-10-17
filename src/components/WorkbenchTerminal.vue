@@ -166,6 +166,8 @@ function onResizeStart(e: MouseEvent) {
   position: absolute;
   width: calc(100% - 20px);
   background: var(--aide-bg-base);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-surface-default);
   border-radius: var(--aide-radius-lg);
   box-shadow: var(--aide-shadow-lg);

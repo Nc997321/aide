@@ -1,27 +1,29 @@
 <script setup lang="ts">
 /**
- * ChatSendButton —— 分裂式发送按钮。
+ * ChatSendButton —— 发送按钮（2026-10-17 改：方形回车图标 + 悬停弹出功能列表）。
  *
- * 主体「发送 ↑」点击 = 正常发消息（emit send）；右侧小箭头 ▾ 点击 = 向上弹出
- * 菜单，列出命令注册表（useQuickActions）的全部条目——菜单只是注册表的 UI
- * 投影：kind=btw 的条目带勾选态/置灰语义，kind=prompt 的是普通菜单项。
- * 两个区域互不干扰：发送不会被菜单抢走，菜单也不需要输入框有内容（压缩/清空
- * 可在空输入时触发）。
+ * 点击按钮 = 正常发消息（emit send）。鼠标停上去 → 向上弹出列表：第一项是「发送 / 排队 ↵」
+ * （说明按钮本身做什么、快捷键是什么），其下是命令注册表（useQuickActions）的全部条目——
+ * 列表只是注册表的 UI 投影：kind=btw 的条目带勾选态/置灰语义，kind=prompt 的是普通菜单项。
+ * 输入为空时按钮置灰，但悬停列表照常可用（压缩/清空可在空输入时触发），所以禁用不用原生
+ * disabled（禁用元素上的鼠标事件不可靠），用 aria-disabled + 点击守卫。
  *
+ * 悬停开合：进按钮短延迟后打开，离开按钮/列表留一点宽限期再关，鼠标能从按钮挪进列表。
  * 弹层定位复用 ThemedSelect.vue 已验证的方案：Teleport to body + position fixed，
- * 工具栏贴窗口底部时自动向上展开。全配色走 var(--aide-*)，不硬编码 hex。
+ * 贴窗口底部时向上展开、右缘对齐按钮。全配色走 var(--aide-*)，不硬编码 hex。
  */
 import { ref, computed, nextTick, onUnmounted, watch } from "vue";
 import type { QuickAction } from "@/composables/useQuickActions";
+import Icon from "./Icon.vue";
 
 const props = withDefaults(
   defineProps<{
-    /** 主体「发送」是否禁用（输入空且无图片时）。▾ 菜单不受此约束。 */
+    /** 「发送」是否禁用（输入空且无图片时）。悬停列表里的命令不受此约束。 */
     disabled?: boolean;
-    /** busy=true 时主体标签显示「排队」而非「发送」——忙碌时发送一律走排队
+    /** busy=true 时「发送」显示为「排队」——忙碌时发送一律走排队
      *  （sidecar 在安全边界 interrupt 当前轮后续发）。 */
     busy?: boolean;
-    /** 菜单项数据源（命令注册表）；为空时不渲染 ▾。 */
+    /** 列表的命令条目数据源（命令注册表）。 */
     actions?: QuickAction[];
     /** btw 模式是否激活（kind=btw 条目的勾选态）。 */
     btwActive?: boolean;
@@ -38,14 +40,50 @@ const emit = defineEmits<{
   (e: "select", action: QuickAction): void;
 }>();
 
+/** 进按钮多久后打开（避免鼠标路过就弹） */
+const OPEN_DELAY_MS = 120;
+/** 离开后多久关（留给鼠标从按钮挪进列表） */
+const CLOSE_DELAY_MS = 180;
+
 const open = ref(false);
 const positioned = ref(false); // 定位算完前先隐藏，避免在 (0,0) 闪一帧
 const triggerRef = ref<HTMLElement>();
 const menuRef = ref<HTMLElement>();
 const menuStyle = ref<Record<string, string>>({});
+const sendLabel = computed(() => (props.busy ? "排队" : "发送"));
 
-/** 侧问条目(btw)与 prompt 条目之间的分隔线位置(第一个 prompt 条目的下标)。 */
-const firstNonBtwIndex = computed(() => props.actions.findIndex((a) => a.kind === "prompt"));
+let openTimer: ReturnType<typeof setTimeout> | null = null;
+let closeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function clearTimers() {
+  if (openTimer) clearTimeout(openTimer);
+  if (closeTimer) clearTimeout(closeTimer);
+  openTimer = closeTimer = null;
+}
+
+function onEnter() {
+  if (closeTimer) {
+    clearTimeout(closeTimer);
+    closeTimer = null;
+  }
+  if (open.value || openTimer) return;
+  openTimer = setTimeout(() => {
+    openTimer = null;
+    open.value = true;
+  }, OPEN_DELAY_MS);
+}
+
+function onLeave() {
+  if (openTimer) {
+    clearTimeout(openTimer);
+    openTimer = null;
+  }
+  if (!open.value || closeTimer) return;
+  closeTimer = setTimeout(() => {
+    closeTimer = null;
+    open.value = false;
+  }, CLOSE_DELAY_MS);
+}
 
 async function positionMenu() {
   const trigger = triggerRef.value;
@@ -55,50 +93,39 @@ async function positionMenu() {
   const rect = trigger.getBoundingClientRect();
   const margin = 8;
   const menuHeight = menu?.offsetHeight ?? 0;
-  const spaceBelow = window.innerHeight - rect.bottom;
-  // 下方空间不足则向上弹（工具栏贴底时常态）
-  const openUp = spaceBelow < menuHeight + margin && rect.top > spaceBelow;
-  const top = openUp
-    ? Math.max(margin, rect.top - menuHeight - 4)
-    : rect.bottom + 4;
-
-  let left = rect.left;
   const menuWidth = menu?.offsetWidth ?? rect.width;
-  if (left + menuWidth > window.innerWidth - margin) {
-    left = window.innerWidth - menuWidth - margin;
-  }
+  const spaceBelow = window.innerHeight - rect.bottom;
+  // 默认向上弹（按钮贴着窗口底部是常态）；上方放不下且下方更宽裕才向下
+  const openDown = rect.top < menuHeight + margin && spaceBelow > rect.top;
+  const top = openDown ? rect.bottom + 6 : Math.max(margin, rect.top - menuHeight - 6);
+  // 右缘对齐按钮右缘，左侧不出窗
+  const left = Math.min(window.innerWidth - menuWidth - margin, rect.right - menuWidth);
 
-  menuStyle.value = {
-    top: `${top}px`,
-    left: `${Math.max(margin, left)}px`,
-    minWidth: `${rect.width}px`,
-  };
+  menuStyle.value = { top: `${top}px`, left: `${Math.max(margin, left)}px` };
   positioned.value = true;
 }
 
-function toggleMenu() {
-  open.value = !open.value;
+function send() {
+  if (props.disabled) return;
+  clearTimers();
+  open.value = false;
+  emit("send");
 }
 
 function choose(action: QuickAction) {
-  // btw 置灰时静默：原因由 tooltip 给出，不切换、不关菜单（让用户继续看提示）。
+  // btw 置灰时静默：原因由 tooltip 给出，不切换、不关列表（让用户继续看提示）。
   if (action.kind === "btw" && props.btwDisabled) return;
   emit("select", action);
-  open.value = false;
-}
-
-function onDocPointer(e: PointerEvent) {
-  if (!open.value) return;
-  const target = e.target as Node;
-  if (triggerRef.value?.contains(target) || menuRef.value?.contains(target)) return;
+  clearTimers();
   open.value = false;
 }
 
 function onKeydown(e: KeyboardEvent) {
   // 消费标记（preventDefault）：PermissionDialog 的 window 级 Esc 见 defaultPrevented
-  // 让路——下拉开着时按 Esc 只关下拉，不同时触发权限弹窗的负面动作。
+  // 让路——列表开着时按 Esc 只关列表，不同时触发权限弹窗的负面动作。
   if (e.key === "Escape" && open.value) {
     e.preventDefault();
+    clearTimers();
     open.value = false;
   }
 }
@@ -107,45 +134,34 @@ watch(open, async (v) => {
   if (v) {
     positioned.value = false;
     await positionMenu();
-    document.addEventListener("pointerdown", onDocPointer, true);
     document.addEventListener("keydown", onKeydown);
     window.addEventListener("resize", positionMenu);
   } else {
-    document.removeEventListener("pointerdown", onDocPointer, true);
     document.removeEventListener("keydown", onKeydown);
     window.removeEventListener("resize", positionMenu);
   }
 });
 
 onUnmounted(() => {
-  document.removeEventListener("pointerdown", onDocPointer, true);
+  clearTimers();
   document.removeEventListener("keydown", onKeydown);
   window.removeEventListener("resize", positionMenu);
 });
 </script>
 
 <template>
-  <div ref="triggerRef" class="chat-send-split" :class="{ active: open }">
+  <div ref="triggerRef" class="chat-send" @mouseenter="onEnter" @mouseleave="onLeave">
     <button
       type="button"
-      class="chat-send-main"
-      :disabled="disabled"
-      @click="emit('send')"
+      class="chat-send-btn"
+      :class="{ 'is-disabled': disabled, 'is-busy': busy, active: open }"
+      :aria-disabled="disabled"
+      :aria-label="sendLabel"
+      aria-haspopup="menu"
+      :aria-expanded="open"
+      @click="send"
     >
-      {{ busy ? "排队" : "发送" }}
-    </button>
-    <button
-      v-if="actions.length"
-      type="button"
-      class="chat-send-caret"
-      :class="{ active: open }"
-      v-tooltip="'上下文操作'"
-      @click="toggleMenu"
-    >
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-        <path d="M2 3.5L5 6.5L8 3.5" fill="none" stroke="currentColor" stroke-width="1.4"
-          stroke-linecap="round" stroke-linejoin="round" />
-      </svg>
+      <Icon name="enter" :size="15" :stroke-width="1.5" />
     </button>
 
     <Teleport to="body">
@@ -156,27 +172,38 @@ onUnmounted(() => {
           class="chat-send-menu"
           :style="[menuStyle, positioned ? {} : { visibility: 'hidden' }]"
           role="menu"
+          @mouseenter="onEnter"
+          @mouseleave="onLeave"
         >
-          <template v-for="(a, i) in actions" :key="a.id">
-            <div
-              v-if="i > 0 && i === firstNonBtwIndex"
-              class="chat-send-menu-sep"
-            ></div>
-            <button
-              type="button"
-              class="chat-send-menu-item"
-              :class="a.kind === 'btw' ? { 'is-on': props.btwActive, 'is-disabled': props.btwDisabled } : {}"
-              :role="a.kind === 'btw' ? 'menuitemcheckbox' : 'menuitem'"
-              :aria-checked="a.kind === 'btw' ? props.btwActive : undefined"
-              :aria-disabled="a.kind === 'btw' ? props.btwDisabled : undefined"
-              v-tooltip="a.kind === 'btw' && props.btwDisabled ? props.btwDisabledReason : undefined"
-              @click="choose(a)"
-            >
-              <span v-if="a.icon" class="chat-send-menu-icon">{{ a.icon }}</span>
-              <span class="chat-send-menu-label">{{ a.label }}</span>
-              <span v-if="a.kind === 'btw' && props.btwActive" class="chat-send-menu-check">✓</span>
-            </button>
-          </template>
+          <button
+            type="button"
+            class="chat-send-menu-item is-primary"
+            :class="{ 'is-disabled': disabled }"
+            role="menuitem"
+            :aria-disabled="disabled"
+            @click="send"
+          >
+            <span class="chat-send-menu-label">{{ sendLabel }}</span>
+            <span class="chat-send-kbd"><Icon name="enter" :size="11" :stroke-width="1.5" /></span>
+          </button>
+          <div v-if="actions.length" class="chat-send-menu-sep"></div>
+          <button
+            v-for="a in actions"
+            :key="a.id"
+            type="button"
+            class="chat-send-menu-item"
+            :class="a.kind === 'btw' ? { 'is-on': props.btwActive, 'is-disabled': props.btwDisabled } : {}"
+            :role="a.kind === 'btw' ? 'menuitemcheckbox' : 'menuitem'"
+            :aria-checked="a.kind === 'btw' ? props.btwActive : undefined"
+            :aria-disabled="a.kind === 'btw' ? props.btwDisabled : undefined"
+            v-tooltip="a.kind === 'btw' && props.btwDisabled ? props.btwDisabledReason : undefined"
+            @click="choose(a)"
+          >
+            <span v-if="a.icon" class="chat-send-menu-icon">{{ a.icon }}</span>
+            <span class="chat-send-menu-label">{{ a.label }}</span>
+            <span v-if="a.kind === 'btw' && props.btwActive" class="chat-send-menu-check">✓</span>
+            <span v-else class="chat-send-kbd is-text">/{{ a.command }}</span>
+          </button>
         </div>
       </Transition>
     </Teleport>
@@ -184,67 +211,53 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-/* 发送按钮 · 分裂按钮：GALLERY .send-split */
-.chat-send-split {
+.chat-send {
   display: inline-flex;
-  align-items: stretch;
-  border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
-.chat-send-split button {
-  border: none;
-  background: var(--aide-accent-gradient);
-  color: var(--aide-text-on-accent);
-  font-family: inherit;
-  font-size: 12.5px;
-  font-weight: 600;
-  cursor: pointer;
-  transition: filter var(--aide-ease-t);
-}
-
-.chat-send-split button:hover:not(:disabled) {
-  filter: brightness(1.07);
-}
-
-.chat-send-main {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 7px 16px;
-  border-radius: var(--aide-radius-md) 0 0 var(--aide-radius-md);
-}
-
-.chat-send-caret {
+/* 方形回车键：可发送时铜色实底，空输入时退成浅底灰字 */
+.chat-send-btn {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 7px 10px;
-  border-radius: 0 var(--aide-radius-md) var(--aide-radius-md) 0;
-  border-left: 1px solid color-mix(in srgb, var(--aide-text-on-accent) 25%, transparent);
-  font-size: 10px;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-accent-gradient);
+  color: var(--aide-text-on-accent);
+  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  cursor: pointer;
+  transition: filter var(--aide-ease-t), background var(--aide-ease-t), color var(--aide-ease-t);
 }
 
-.chat-send-caret.active svg {
-  transform: rotate(180deg);
+.chat-send-btn:hover:not(.is-disabled) {
+  filter: brightness(1.07);
 }
 
-.chat-send-caret svg {
-  transition: transform var(--aide-ease-t);
-}
-
-.chat-send-main:disabled {
-  opacity: 0.5;
+.chat-send-btn.is-disabled {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-muted);
+  box-shadow: none;
   cursor: default;
+}
+
+.chat-send-btn.is-disabled.active,
+.chat-send-btn.is-disabled:hover {
+  color: var(--aide-text-secondary);
+}
+
+.chat-send-btn:focus-visible {
+  outline: 2px solid var(--aide-accent);
+  outline-offset: 2px;
 }
 
 /* ── 弹层（Teleport 到 body）：GALLERY .menu ── */
 .chat-send-menu {
   position: fixed;
   z-index: 9999;
-  min-width: 160px;
+  min-width: 180px;
   background: var(--aide-bg-raised);
   border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg);
@@ -259,11 +272,12 @@ onUnmounted(() => {
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 7px 10px;
+  padding: 6px 8px 6px 10px;
   border-radius: var(--aide-radius-sm);
   background: transparent;
   border: none;
   color: var(--aide-text-secondary);
+  font-family: inherit;
   font-size: 12.5px;
   text-align: left;
   cursor: pointer;
@@ -273,6 +287,11 @@ onUnmounted(() => {
 .chat-send-menu-item:hover {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
+}
+
+.chat-send-menu-item.is-primary {
+  color: var(--aide-text-primary);
+  font-weight: 600;
 }
 
 .chat-send-menu-icon {
@@ -287,6 +306,27 @@ onUnmounted(() => {
   white-space: nowrap;
 }
 
+/* 右侧快捷键 / 命令名小键帽 */
+.chat-send-kbd {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 5px;
+  min-height: 18px;
+  border: 1px solid var(--aide-border);
+  border-radius: var(--aide-radius-sm);
+  color: var(--aide-text-muted);
+  font-size: 11px;
+  font-weight: 400;
+}
+
+.chat-send-kbd.is-text {
+  border-color: transparent;
+  padding-right: 0;
+  font-family: var(--aide-font-mono);
+}
+
 /* Transition */
 .chat-send-pop-enter-active {
   transition: opacity 0.12s, transform 0.12s;
@@ -297,7 +337,7 @@ onUnmounted(() => {
 .chat-send-pop-enter-from,
 .chat-send-pop-leave-to {
   opacity: 0;
-  transform: scale(0.97);
+  transform: translateY(3px);
 }
 
 .chat-send-menu-item.is-on {

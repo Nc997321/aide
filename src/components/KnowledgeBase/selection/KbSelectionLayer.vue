@@ -975,6 +975,8 @@ function badgeText(o: Overlay): string {
   height: 10px;
   transform: rotate(45deg);
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border-left: 1px solid var(--aide-border-strong);
   border-top: 1px solid var(--aide-border-strong);
 }
@@ -1190,6 +1192,8 @@ function badgeText(o: Overlay): string {
   padding: 7px 14px;
   border-radius: 999px;
   background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
   border: 1px solid var(--aide-border-strong);
   box-shadow: var(--aide-shadow-md);
   font-size: 12px;

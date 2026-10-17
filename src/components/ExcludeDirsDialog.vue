@@ -82,7 +82,9 @@ function onConfirm() {
 }
 @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 .of-dialog {
-  background: var(--aide-bg-raised); border: 1px solid var(--aide-border-strong);
+  background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur); border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-lg); padding: 18px 20px;
   min-width: 460px; max-width: 600px; box-shadow: var(--aide-shadow-lg), var(--aide-highlight-inset);
   max-height: 90vh; display: flex; flex-direction: column;

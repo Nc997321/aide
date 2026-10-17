@@ -1177,13 +1177,6 @@ function onPlusAction(action: PlusAction) {
     case "slash":
       insertTrigger("/");
       return;
-    case "btw":
-      if (props.sessionId) toggleBtw();
-      textareaEl.value?.focus();
-      return;
-    case "usage":
-      if (props.contextUsage) usagePanelOpen.value = true;
-      return;
   }
 }
 
@@ -1576,15 +1569,10 @@ const { actions: quickActions } = useQuickActions();
           <button class="image-thumb-remove" @click="pendingImages.splice(i, 1)">×</button>
         </div>
       </div>
-      <!-- 单行输入（2026-10-16）：[＋] 文本 [模型·档位] [权限] (额度) (环) [发送] 一行横排，
+      <!-- 单行输入（2026-10-16）：[＋] 文本 [发送] 一行横排（模型 / 权限 / 用量在下方状态行），
            文本随内容撑高（useAutoGrow），两侧控件贴底（align-items:flex-end）。 -->
       <div class="composer-row">
-        <ComposerPlusMenu
-          :btw-active="btwMode"
-          :btw-disabled-reason="sessionId ? '' : '先发送一条消息开始主对话，才能顺便问一下'"
-          :usage-disabled-reason="contextUsage ? '' : (quotaBadge?.title || '会话开始后才有上下文用量')"
-          @pick="onPlusAction"
-        />
+        <ComposerPlusMenu @pick="onPlusAction" />
         <input
           ref="filePickerEl"
           type="file"
@@ -1614,55 +1602,6 @@ const { actions: quickActions } = useQuickActions();
           @input="handleInput"
         />
         <div class="composer-controls">
-          <!-- 模型 · 档位合一：选择仍各走 handleModelChange / handleEffortChange。
-               effort 是会话级思考深度，切换即时生效（sidecar applyFlagSettings，不重启进程、
-               不碰 prompt 缓存）；快速=关闭思考，进阶/极致=开启思考。 -->
-          <ModelEffortPicker
-            :models="modelSelectOptions"
-            :model="selectedModel"
-            :efforts="effortSelectOptions"
-            :effort="selectedEffort"
-            :disabled="btwMode"
-            :title="btwMode ? BTW_SELECTOR_HINT : '模型与思考深度'"
-            @update:model="handleModelChange"
-            @update:effort="handleEffortChange"
-          />
-          <div
-            v-if="displayPermissionModes.length"
-            class="perm-mode-wrap"
-            :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
-            v-tooltip="selectedPermissionMode === 'bypassPermissions'
-              ? '已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'
-              : ''"
-          >
-            <ThemedSelect
-              compact
-              :model-value="selectedPermissionMode"
-              :options="permissionModeSelectOptions"
-              title="权限模式"
-              @update:model-value="handlePermissionModeChange"
-            />
-          </div>
-          <!-- 额度：只在吃紧（≥80%）时露面，平时明细在环的用量弹层里 -->
-          <component
-            :is="contextUsage ? 'button' : 'div'"
-            v-if="quotaBadge && quotaBadge.status !== 'ok'"
-            :type="contextUsage ? 'button' : undefined"
-            class="chat-quota"
-            :class="[`chat-quota--${quotaBadge.status}`, { 'chat-quota--clickable': !!contextUsage }]"
-            v-tooltip="quotaBadge.title"
-            @click="contextUsage && (usagePanelOpen = true)"
-          >
-            <span class="chat-quota-dot" />
-            <span class="chat-quota-label">{{ quotaBadge.label }}</span>
-            <span class="chat-quota-pct">{{ quotaBadge.pct }}%</span>
-          </component>
-          <ContextUsageRing
-            v-if="contextUsage"
-            ref="usageRingRef"
-            :usage="contextUsage"
-            @open="usagePanelOpen = true; usageTips.markUsed('context-ring')"
-          />
           <ChatSendButton
             :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
             :busy="isBusy && !btwMode"
@@ -1674,6 +1613,63 @@ const { actions: quickActions } = useQuickActions();
             @select="handleQuickAction"
           />
         </div>
+      </div>
+    </div>
+    <!-- 输入框下方的状态行（2026-10-17，参考 Claude Code）：左 = 权限模式，右 = 模型·档位 / 额度 / 上下文环。
+         框内只留 [＋] 文本 [发送]。 -->
+    <div class="composer-foot">
+      <div class="composer-foot-side">
+        <div
+          v-if="displayPermissionModes.length"
+          class="perm-mode-wrap"
+          :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
+          v-tooltip="selectedPermissionMode === 'bypassPermissions'
+            ? '已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'
+            : ''"
+        >
+          <ThemedSelect
+            compact
+            :model-value="selectedPermissionMode"
+            :options="permissionModeSelectOptions"
+            title="权限模式"
+            @update:model-value="handlePermissionModeChange"
+          />
+        </div>
+      </div>
+      <div class="composer-foot-side composer-foot-side--end">
+        <!-- 模型 · 档位合一：选择仍各走 handleModelChange / handleEffortChange。
+             effort 是会话级思考深度，切换即时生效（sidecar applyFlagSettings，不重启进程、
+             不碰 prompt 缓存）；快速=关闭思考，进阶/极致=开启思考。 -->
+        <ModelEffortPicker
+          :models="modelSelectOptions"
+          :model="selectedModel"
+          :efforts="effortSelectOptions"
+          :effort="selectedEffort"
+          :disabled="btwMode"
+          :title="btwMode ? BTW_SELECTOR_HINT : '模型与思考深度'"
+          @update:model="handleModelChange"
+          @update:effort="handleEffortChange"
+        />
+        <!-- 额度：只在吃紧（≥80%）时露面，平时明细在环的用量弹层里 -->
+        <component
+          :is="contextUsage ? 'button' : 'div'"
+          v-if="quotaBadge && quotaBadge.status !== 'ok'"
+          :type="contextUsage ? 'button' : undefined"
+          class="chat-quota"
+          :class="[`chat-quota--${quotaBadge.status}`, { 'chat-quota--clickable': !!contextUsage }]"
+          v-tooltip="quotaBadge.title"
+          @click="contextUsage && (usagePanelOpen = true)"
+        >
+          <span class="chat-quota-dot" />
+          <span class="chat-quota-label">{{ quotaBadge.label }}</span>
+          <span class="chat-quota-pct">{{ quotaBadge.pct }}%</span>
+        </component>
+        <ContextUsageRing
+          v-if="contextUsage"
+          ref="usageRingRef"
+          :usage="contextUsage"
+          @open="usagePanelOpen = true; usageTips.markUsed('context-ring')"
+        />
       </div>
     </div>
     <Transition name="btw-toast">
@@ -1797,7 +1793,7 @@ const { actions: quickActions } = useQuickActions();
   to { --aide-input-comet: 360deg; }
 }
 
-/* 单行输入（2026-10-16）：[＋] 文本 [控件…] [发送] 一行横排；文本撑高时两侧贴底 */
+/* 单行输入（2026-10-16）：[＋] 文本 [发送] 一行横排；文本撑高时两侧贴底 */
 .composer-row {
   display: flex;
   align-items: flex-end;
@@ -1813,6 +1809,29 @@ const { actions: quickActions } = useQuickActions();
   min-height: 30px;
   font-size: 12px;
   color: var(--aide-text-secondary);
+}
+
+/* 输入框下方的状态行：两侧控件贴着框的左右内缘对齐 */
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 2px 0;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+}
+
+.composer-foot-side {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.composer-foot-side--end {
+  margin-left: auto;
 }
 
 .composer-file-input {
@@ -1895,7 +1914,7 @@ const { actions: quickActions } = useQuickActions();
   cursor: not-allowed;
 }
 
-/* 分裂式发送按钮（ChatSendButton 根元素）：始终靠右。按钮自身的外观在
+/* 发送按钮（ChatSendButton 根元素，方形回车键 + 悬停列表）：始终靠右。按钮自身的外观在
  * ChatSendButton.vue 内。 */
 /* 工具条右侧组（环形 + 发送分裂按钮）整体吸边；auto 在组容器上，
    环形才真正贴着发送按钮，且环形缺省（无用量数据）时发送仍吸右 */
@@ -1905,7 +1924,10 @@ const { actions: quickActions } = useQuickActions();
   left: 12px;
   right: 12px;
   background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
+  /* 玻璃主题的 raised 是半透明，必须配毛玻璃，否则下面的正文透上来 */
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur);
+  border: 1px solid var(--aide-border-strong);
   border-radius: var(--aide-radius-sm);
   box-shadow: var(--aide-shadow-lg);
   z-index: 100;
@@ -2373,7 +2395,9 @@ const { actions: quickActions } = useQuickActions();
 .btw-revert-toast {
   position: absolute; left: 50%; transform: translateX(-50%);
   bottom: 100%; margin-bottom: 6px;
-  background: var(--aide-bg-raised); border: 1px solid var(--aide-accent);
+  background: var(--aide-bg-raised);
+  backdrop-filter: var(--aide-surface-blur);
+  -webkit-backdrop-filter: var(--aide-surface-blur); border: 1px solid var(--aide-accent);
   color: var(--aide-accent); font-size: 11px; padding: 4px 12px;
   border-radius: 999px; box-shadow: var(--aide-shadow-md);
   z-index: 40; pointer-events: none; white-space: nowrap;
