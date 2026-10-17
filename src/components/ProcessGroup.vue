@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 过程胶囊（ProcessGroup）：消息里合计 ≥2 个连续过程项（思考/查询工具调用/子代理）
- * 合并成的折叠卡——收起（默认）= 一行摘要「过程 | N 段思考 · M 次工具调用」；
+ * 合并成的折叠行——收起（默认）= 一行灰字摘要「N 段思考 · Bash ×M」（不套卡片）；
  * 展开 = 段内各段按原序渲染。
  *
  * 层级（2026-09-08 精简）：工具组段在过程内直接平铺成逐条 ToolCallBlock，不再套
@@ -73,7 +73,6 @@ const summary = computed(() => {
   <div class="process-group" :class="{ 'process-group--open': expanded }">
     <button class="pg-head" :aria-expanded="expanded" @click="expanded = !expanded">
       <span class="pg-caret" aria-hidden="true"></span>
-      <span class="pg-pill">过程</span>
       <span class="pg-summary" v-tooltip="summary">{{ summary }}</span>
     </button>
     <div v-if="expanded" class="pg-body">
@@ -103,31 +102,29 @@ const summary = computed(() => {
 </template>
 
 <style scoped>
-/* 过程胶囊：视觉沿用工具调用卡的摘要卡语言（bg-base + 细边 + 内高光） */
-.process-group {
-  background: var(--aide-bg-base);
-  border: 1px solid var(--aide-border-subtle);
-  border-radius: var(--aide-radius-md);
-  box-shadow: var(--aide-highlight-inset);
-  overflow: hidden;
-}
-
+/* 过程行（2026-10-17 去卡片）：收起态就是一行灰字，不套边框、底色和「过程」徽章——
+   摘要「N 段思考 · Bash ×M」已说明这是什么，过程信息的视觉重量要低于正文。
+   悬停才浮出底色示意可点；与 ThinkingBlock 的折叠行同一种样子。 */
 .pg-head {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 8px 12px;
+  gap: 7px;
+  max-width: calc(100% + 6px);
+  margin-left: -6px;
+  padding: 3px 6px;
   cursor: pointer;
   border: 0;
+  border-radius: var(--aide-radius-sm);
   background: transparent;
   text-align: left;
+  font-family: inherit;
   font-size: 12px;
-  color: var(--aide-text-secondary);
-  transition: background var(--aide-ease-t);
+  color: var(--aide-text-muted);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .pg-head:hover {
-  background: var(--aide-surface-default);
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-secondary);
 }
 
 .pg-caret {
@@ -142,24 +139,12 @@ const summary = computed(() => {
   transform: rotate(90deg);
 }
 
-.pg-pill {
-  flex-shrink: 0;
-  padding: 1px 8px;
-  border-radius: 99px;
-  background: var(--aide-surface-active);
-  border: 1px solid var(--aide-border);
-  font-size: 10.5px;
-  font-weight: 600;
-  color: var(--aide-text-primary);
-}
-
 .pg-summary {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--aide-text-muted);
 }
 
 /* 展开体：限高内滚（阅读模式，同 ThinkingBlock 非流式的 overflow:auto） */
@@ -167,8 +152,7 @@ const summary = computed(() => {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  border-top: 1px solid var(--aide-border-subtle);
-  padding: 10px 12px;
+  padding: 6px 0 4px 12px;
   max-height: 440px;
   overflow: auto;
 }

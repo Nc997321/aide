@@ -326,9 +326,10 @@ const readRange = computed(() =>
   background: var(--aide-warning);
 }
 
+/* 工具名用次级色：过程项不该比正文还亮（2026-10-17） */
 .ti-name {
   font-weight: 600;
-  color: var(--aide-text-primary);
+  color: var(--aide-text-secondary);
   flex-shrink: 0;
   min-width: 38px;
 }

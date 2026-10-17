@@ -270,10 +270,18 @@ html, body, #app {
 .msg-text li {
   margin: 2px 0;
 }
+/* 标题靠字号拉开层级（不只靠加粗）：正文 13px → h3 14 / h2 15 / h1 17；
+   段前留白大于段后，标题归属下方内容。 */
 .msg-text h1, .msg-text h2, .msg-text h3 {
-  margin: 8px 0 4px;
+  margin: 14px 0 6px;
   font-weight: 600;
+  line-height: 1.4;
+  color: var(--aide-text-primary);
 }
+.msg-text h1 { font-size: 17px; }
+.msg-text h2 { font-size: 15px; }
+.msg-text h3 { font-size: 14px; }
+.msg-text > :is(h1, h2, h3):first-child { margin-top: 2px; }
 .msg-text blockquote {
   border-left: 3px solid var(--aide-accent);
   margin: 6px 0;

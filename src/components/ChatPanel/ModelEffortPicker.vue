@@ -110,21 +110,21 @@ function pickEffort(v: string) {
   gap: 5px;
   height: 26px;
   max-width: 220px;
-  padding: 0 9px;
+  padding: 0 8px;
   border: 1px solid transparent;
   border-radius: var(--aide-radius-sm);
-  background: var(--aide-surface-default);
+  background: transparent;
   color: var(--aide-text-secondary);
   font-family: inherit;
   font-size: 12px;
   cursor: pointer;
   white-space: nowrap;
-  transition: background var(--aide-ease-t), border-color var(--aide-ease-t);
+  transition: background var(--aide-ease-t);
 }
+/* 静止时是纯文字，悬停 / 展开才浮出底色（同 ThemedSelect.compact） */
 .mep:hover:not(.mep--disabled),
 .mep--open {
   background: var(--aide-surface-hover);
-  border-color: var(--aide-border);
 }
 .mep--disabled {
   opacity: 0.45;

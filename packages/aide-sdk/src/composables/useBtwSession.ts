@@ -1,196 +1,220 @@
-import { ref, computed } from "vue";
+import { ref } from "vue";
 import { api } from "../api";
 import type { ActionBlock } from "../types/chat";
 
-/** btw 支线对话的轻量 store——单例:同一时间只一个 btw(v1)。
+/** btw 侧边对话的 store——**按主会话一条线程**（2026-10-17 侧栏化）。
  *
- *  执行路径：一条 `api.btwAsk` 命令出去（走**存活主会话进程内**的官方
- *  side_question 通道，不起新进程），正文经 `btw_answer` 事件广播回来。
- *  所以这里**没有**事件分流、没有临时 session id、没有进程清理——发起端只把
- *  命令发出去，然后等事件。
+ *  执行路径不变：每问一条 `api.btwAsk` 命令出去（走**存活主会话进程内**的官方
+ *  side_question 通道，不起新进程），正文经 `btw_answer` 事件广播回来。这里没有
+ *  事件分流、没有临时 session id、没有进程清理——发起端只把命令发出去，然后等事件。
  *
- *  status 生命周期:idle(无)→starting(命令在途)→running(命令已受理,等事件)
- *  →done(结论已插入批注)/error(命令被拒或事件带 error)。UI 据此决定抽屉可见性，
- *  且只在 running 才向用户确认"已切回主对话"(失败不弹误导性成功提示)。
+ *  一条线程 = 一个主会话的全部支线问答（侧栏里按时间排的气泡）+ 侧栏开合 + 未读。
+ *  侧栏是**看回复的固定地点**；主对话里每轮一条批注只当书签（点开定位到这一轮）。
+ *  同一线程一次只有一问在途（侧栏输入在等答复时置灰）；不同主会话的线程互不干扰。
  *
- *  ownerSessionId:这条 btw 挂在哪个主会话上。抽屉是 per-ChatPanel 挂载的,store
- *  是全局单例——若可见性只看 status,任何一个窗口触发都会让所有窗口的抽屉一起
- *  弹出。用 ownerSessionId 绑回触发它的那个会话窗口。
- *  btw_answer 事件按 `session_id === ownerSessionId` + `question` 双重匹配落账，
- *  后者用于同一会话多条 btw 之间消歧。 */
-type BtwStatus = "idle" | "starting" | "running" | "error" | "done";
+ *  btw_answer 事件按 `session_id` 找线程、按 `question` 认领在途那一轮。 */
+export type BtwRoundStatus = "pending" | "done" | "error";
 
-interface BtwState {
-  messages: string[]; // 累积的 assistant 文本(纯展示)
-  isBusy: boolean;
-  done: boolean;
+export interface BtwRound {
+  id: string;
+  question: string;
+  answer: string | null;
   error: string | null;
-  question: string;
-  status: BtwStatus;
-  ownerSessionId: string | null; // 主会话 sid;null=idle
-  minimized: boolean; // 用户点了「关闭」=最小化:抽屉收起,答案到达后照样插批注。
+  status: BtwRoundStatus;
+  /** 官方兜底答复：照常展示，但不喂回 history（对齐官方"只把真实回答喂给 history"） */
+  synthetic: boolean;
 }
 
-const IDLE: BtwState = {
-  messages: [],
-  isBusy: false,
-  done: false,
-  error: null,
-  question: "",
-  status: "idle",
-  ownerSessionId: null,
-  minimized: false,
-};
-const state = ref<BtwState>({ ...IDLE });
-
-/** 每次重置都重建 messages 数组——{...IDLE} 是浅拷贝，共享那个空数组会让每轮的
- *  push 累积到常量上（跨轮污染，测试与运行时都会中招）。 */
-function freshState(): BtwState {
-  return { ...IDLE, messages: [] };
+export interface BtwThread {
+  rounds: BtwRound[];
+  /** 侧栏开着（按主会话记：切走再切回，侧栏还在） */
+  open: boolean;
+  /** 侧栏关着时有答复 / 错误到达，还没看——活动带据此亮「有新回复」 */
+  unread: boolean;
+  /** 要滚到并高亮的那一轮（批注书签点进来时设），侧栏消费后清空 */
+  focusRoundId: string | null;
+  /** 递增 = 请侧栏把光标放进输入框（/btw、快捷菜单打开时） */
+  focusInputTick: number;
 }
 
-let onDoneCb: ((block: ActionBlock) => void) | null = null;
+const threads = ref<Record<string, BtwThread>>({});
+const EMPTY_THREAD: BtwThread = Object.freeze({ ...emptyThreadShape(), rounds: Object.freeze([]) as unknown as BtwRound[] });
 
-/** 支线问答记忆：按主会话 id 记全部轮次（内存态，app 重启即忘——btw 本来就是
- *  阅后即弃的临时物）。不再拼进 prompt——作为 `history` 参数下发给官方通道
- *  （调用方不传就没有连续性，官方语义如此）。封顶 20 轮防病态累积，与官方一致。
- *
- *  注意形状：本地存 `{question, answer}`，线上要 `{question, response}`——转换在
- *  startBtw 里显式做，别直接把本地数组丢过去（字段名不匹配会静默失效）。 */
-interface BtwRound {
-  question: string;
-  answer: string;
-}
-const historyByOwner = new Map<string, BtwRound[]>();
+/** 喂给官方通道的跨问记忆封顶（与官方一致）；侧栏展示另有更宽的上限防病态累积。 */
 const BTW_HISTORY_ROUNDS_CAP = 20;
+const BTW_DISPLAY_ROUNDS_CAP = 100;
 
-/** useChatSession.handleChatEvent 调:btw_answer 事件按主会话 id 路由到这里。 */
+function emptyThreadShape(): BtwThread {
+  return { rounds: [], open: false, unread: false, focusRoundId: null, focusInputTick: 0 };
+}
+
+function threadOf(owner: string): BtwThread {
+  let t = threads.value[owner];
+  if (!t) {
+    threads.value[owner] = emptyThreadShape();
+    t = threads.value[owner];
+  }
+  return t;
+}
+
+let onDoneCb: ((owner: string, block: ActionBlock) => void) | null = null;
+
+/** 结论回插主对话（批注书签）的出口：由 useChatSession 注册（按 owner 找对应会话 store）。 */
+function setOnDone(cb: (owner: string, block: ActionBlock) => void) {
+  onDoneCb = cb;
+}
+
+/** useChatSession.handleChatEvent 调：btw_answer 事件按主会话 id 路由到这里。 */
 function handleBtwAnswer(e: Record<string, unknown>) {
-  if (e["session_id"] !== state.value.ownerSessionId) return;
-  if (e["question"] !== state.value.question) return; // 同会话多条 btw 消歧
+  const owner = e["session_id"];
+  if (typeof owner !== "string") return;
+  const t = threads.value[owner];
+  if (!t) return;
+  const round = t.rounds.find((r) => r.status === "pending" && r.question === e["question"]);
+  if (!round) return; // 不是本端发起的（或已被清掉的）那一问
 
   const err = e["error"] as string | undefined;
   if (err) {
-    state.value.isBusy = false;
-    state.value.status = "error";
-    state.value.error = err;
-    state.value.minimized = false; // 出错必须露出来:别让最小化把错误吞掉
+    round.status = "error";
+    round.error = err;
+    if (!t.open) t.unread = true; // 出错也要露出来：活动带亮提示
     return;
   }
 
   const answer = e["response"] as string | undefined;
-  if (!answer) return; // 既无正文又无错误：协议异常，保持 running 等后续帧
+  if (!answer) return; // 既无正文又无错误：协议异常，保持 pending 等后续帧
 
-  state.value.messages.push(answer);
-  state.value.isBusy = false;
-  state.value.done = true;
-  state.value.status = "done";
+  round.status = "done";
+  round.answer = answer;
+  round.synthetic = e["synthetic"] === true;
+  if (!t.open) t.unread = true;
 
-  // 记入支线记忆：只记真实回答（synthetic 兜底答复渲染但不记，对齐官方"只把真实
-  // 回答喂给 history"）；失败轮走不到这里。
-  if (e["synthetic"] !== true && state.value.ownerSessionId) {
-    const owner = state.value.ownerSessionId;
-    const rounds = historyByOwner.get(owner) ?? [];
-    rounds.push({ question: state.value.question, answer });
-    if (rounds.length > BTW_HISTORY_ROUNDS_CAP) {
-      rounds.splice(0, rounds.length - BTW_HISTORY_ROUNDS_CAP);
-    }
-    historyByOwner.set(owner, rounds);
-  }
-
-  onDoneCb?.({
+  onDoneCb?.(owner, {
     type: "action",
     actionId: "btw",
-    label: state.value.question,
+    label: round.question,
     icon: "↳",
     foldable: true,
     body: answer,
+    btwRoundId: round.id,
   });
 }
 
+/** 喂给官方通道的 history：已答完的真实回答（不含兜底、失败轮），最近 20 轮。
+ *  形状转换：本地 {question, answer} → 线上 {question, response}。 */
+function historyOf(t: BtwThread): { question: string; response: string }[] {
+  return t.rounds
+    .filter((r) => r.status === "done" && !r.synthetic && r.answer)
+    .slice(-BTW_HISTORY_ROUNDS_CAP)
+    .map((r) => ({ question: r.question, response: r.answer as string }));
+}
+
 /** btw **没有自己的一套模型/档位**：官方 side_question 通道只收 question/history，支线一律
- *  继承主会话的模型与档位（cache-safe fork 必须与父会话同前缀才吃得到缓存）。曾有的
- *  model/effort 两个可选字段既不下发、也不是"支线实际跑的"值，2026-09-20 删除。 */
-interface StartBtwOpts {
-  /** 主会话 sid：既作命令的路由键，也作抽屉绑定与记忆 key。 */
+ *  继承主会话的模型与档位（cache-safe fork 必须与父会话同前缀才吃得到缓存）。 */
+interface AskOpts {
+  /** 主会话 sid：命令的路由键，也是线程 key。 */
   ownerSid: string;
   question: string;
 }
 
-async function startBtw(opts: StartBtwOpts) {
-  // 单实例：新开直接覆盖旧 store（旧 btw 的事件会被 owner/question 匹配挡掉）
-  state.value = {
-    ...freshState(),
-    isBusy: true,
+/** 问一句：打开侧栏、追加一轮在途气泡、发命令。线程里已有在途的一问时拒绝（返回 false）。 */
+async function ask(opts: AskOpts): Promise<boolean> {
+  const t = threadOf(opts.ownerSid);
+  if (t.rounds.some((r) => r.status === "pending")) return false;
+  const history = historyOf(t);
+  t.rounds.push({
+    id: crypto.randomUUID(),
     question: opts.question,
-    status: "starting",
-    ownerSessionId: opts.ownerSid,
-  };
+    answer: null,
+    error: null,
+    status: "pending",
+    synthetic: false,
+  });
+  if (t.rounds.length > BTW_DISPLAY_ROUNDS_CAP) t.rounds.splice(0, t.rounds.length - BTW_DISPLAY_ROUNDS_CAP);
+  t.open = true;
+  t.unread = false;
+  // 取响应式代理：直接改 push 进去的原对象绕过代理，侧栏收不到变更
+  const round = t.rounds[t.rounds.length - 1];
   try {
-    await api.btwAsk({
-      sessionId: opts.ownerSid,
-      question: opts.question,
-      // 形状转换：本地 {question, answer} → 线上 {question, response}
-      history: (historyByOwner.get(opts.ownerSid) ?? []).map((r) => ({
-        question: r.question,
-        response: r.answer,
-      })),
-    });
+    await api.btwAsk({ sessionId: opts.ownerSid, question: opts.question, history });
     // 命令已受理；正文等 btw_answer 事件（fire-and-forget，与用户气泡同构）
-    state.value.status = "running";
   } catch (e) {
-    // 命令没写进 sidecar（Runtime 不可用等）：进 error 态让抽屉展示原因，不静默吞
-    state.value.isBusy = false;
-    state.value.status = "error";
-    state.value.error = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
+    // 命令没写进 sidecar（Runtime 不可用等）：这一轮进 error，原因在侧栏里展示，不静默吞
+    round.status = "error";
+    round.error = typeof e === "string" ? e : e instanceof Error ? e.message : String(e);
   }
+  return true;
 }
 
-function setOnDone(cb: (block: ActionBlock) => void) {
-  onDoneCb = cb;
+/** 打开侧栏（看过即清未读）。focusInput：把光标放进侧栏输入框。 */
+function openPanel(owner: string, opts: { focusInput?: boolean } = {}) {
+  const t = threadOf(owner);
+  t.open = true;
+  t.unread = false;
+  if (opts.focusInput) t.focusInputTick++;
 }
 
-/** 「关闭」=最小化:抽屉收起，答案到达后照样经 onDone 插进主对话。 */
-function minimize() {
-  state.value.minimized = true;
+function closePanel(owner: string) {
+  const t = threads.value[owner];
+  if (t) t.open = false;
 }
 
-/** 重展抽屉:最小化的逆操作。 */
-function reopen() {
-  state.value.minimized = false;
+/** 主对话里的批注书签：打开它所在线程的侧栏并定位到这一轮。找不到（线程已清）返回 false。 */
+function openRound(roundId: string): boolean {
+  for (const [owner, t] of Object.entries(threads.value)) {
+    if (t.rounds.some((r) => r.id === roundId)) {
+      openPanel(owner);
+      t.focusRoundId = roundId;
+      return true;
+    }
+  }
+  return false;
 }
 
-/** 主会话 tempId→realId 定名跟随:主会话 finalize 改名后，抽屉绑定与记忆 key
- *  一起迁到 realId，否则可见性判定永久失绑。由 useChatSession.finalizeSession 调。 */
+function hasRound(roundId: string): boolean {
+  return Object.values(threads.value).some((t) => t.rounds.some((r) => r.id === roundId));
+}
+
+/** 侧栏滚到目标轮后调用，清掉一次性的定位请求。 */
+function consumeFocusRound(owner: string) {
+  const t = threads.value[owner];
+  if (t) t.focusRoundId = null;
+}
+
+/** 主会话 tempId→realId 定名跟随：线程整体迁到 realId，否则侧栏与记忆永久失绑。
+ *  由 useChatSession.finalizeSession 调。 */
 function rebindOwner(tempId: string, realId: string) {
-  if (state.value.ownerSessionId === tempId) state.value.ownerSessionId = realId;
-  const rounds = historyByOwner.get(tempId);
-  if (rounds) {
-    historyByOwner.delete(tempId);
-    historyByOwner.set(realId, rounds);
-  }
+  const t = threads.value[tempId];
+  if (!t) return;
+  delete threads.value[tempId];
+  threads.value[realId] = t;
+}
+
+/** 关 tab / 删会话时清理该主会话的支线线程（owner 已关，无人消费）。 */
+export function clearBtwHistory(ownerSid: string) {
+  delete threads.value[ownerSid];
 }
 
 export function useBtwSession() {
   return {
-    store: computed(() => state.value),
-    startBtw,
+    /** 某主会话的线程（响应式读取；没有则返回共享的空线程，不会因读取而创建）。
+     *  组件里包一层 computed 用：`computed(() => btw.threadFor(props.sessionId))`。 */
+    threadFor: (owner: string | null | undefined): BtwThread =>
+      (owner && threads.value[owner]) || EMPTY_THREAD,
+    ask,
     handleBtwAnswer,
-    minimize,
-    reopen,
+    openPanel,
+    closePanel,
+    openRound,
+    hasRound,
+    consumeFocusRound,
     rebindOwner,
     setOnDone,
     clearBtwHistory,
   };
 }
 
-/** 关 tab / 删会话时清理该主会话的支线问答记忆（owner 已关，记忆无人消费）。 */
-export function clearBtwHistory(ownerSid: string) {
-  historyByOwner.delete(ownerSid);
-}
-
 export function __resetBtwForTest() {
-  state.value = freshState();
+  threads.value = {};
   onDoneCb = null;
-  historyByOwner.clear();
 }

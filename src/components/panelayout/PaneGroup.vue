@@ -2,6 +2,7 @@
 import { computed, inject, ref, type Ref } from "vue";
 import ChatPanel from "../ChatPanel/ChatPanel.vue";
 import PaneTabBar from "./PaneTabBar.vue";
+import BtwPanel from "../BtwPanel.vue";
 import { tabWsKeyOf, usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import type { PermissionRuleDraft } from "../../types/permissions";
@@ -222,6 +223,8 @@ async function onPickMode(mode: ChatMode) {
         @new-tab="onNewTab"
       />
     </Transition>
+    <!-- 会话 + btw 侧边对话并排：侧栏挤开会话而不是盖住它（BtwPanel 文件头） -->
+    <div class="pane-group__body">
     <ChatPanel
       :focused="focused"
       :session-id="activeTab?.sessionId ?? null"
@@ -264,6 +267,8 @@ async function onPickMode(mode: ChatMode) {
       @respond-permission="onRespondPermission"
       @rollback-text-consumed="consumeRollbackText"
     />
+    <BtwPanel :owner-sid="activeTab?.sessionId ?? null" @ask="onSendBtw" />
+    </div>
   </div>
 </template>
 
@@ -278,8 +283,15 @@ async function onPickMode(mode: ChatMode) {
   background: var(--aide-bg-base);
 }
 
+.pane-group__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
 .pane-group__chat {
   flex: 1;
+  min-width: 0;
   min-height: 0;
 }
 

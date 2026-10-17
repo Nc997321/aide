@@ -577,37 +577,35 @@ export function useChatSession(sessionId: Ref<string | null>) {
   }
 
   /** 顺便问一下:对当前存活主会话做一次侧问（官方 side_question 通道，进程内完成）。
-   *  一次性——发送后由 ChatPanel 负责复位 btw 模式视觉。结论以
-   *  ActionBlock(actionId:'btw')回插本会话 store 末尾(前端可见、不进 SDK resume
-   *  上下文,见 ChatMessage 渲染)。
+   *  问答进本会话的 btw 侧栏线程（useBtwSession）；每答完一轮，以
+   *  ActionBlock(actionId:'btw')回插答复到达时所在会话 store 的末尾，当侧栏书签
+   *  (前端可见、不进 SDK resume 上下文,见 ChatMessage 渲染)。
    *
    *  不接模型/档位参数：官方通道只收 question/history，跑的是主会话同一 query 的
-   *  cache-safe fork（同模型同档位才吃得到缓存），支线一律继承主会话。 */
-  async function sendBtw(prompt: string) {
+   *  cache-safe fork（同模型同档位才吃得到缓存），支线一律继承主会话。
+   *  返回 false = 这条线程已有一问在途（侧栏会置灰输入，正常走不到）。 */
+  async function sendBtw(prompt: string): Promise<boolean> {
     const sid = sessionId.value;
     if (!sid) {
-      // 无主会话可问:ChatPanel 已在 !sessionId 时禁用 btw 切换项,正常走不到这里。
-      // 兜底(在已启动会话切了 btw 模式后,又切到空白 tab 发送):静默 no-op——
-      // 不弹误导性 toast(乐观 toast 已移除),也不拉单例抽屉污染其它窗口。
+      // 无主会话可问:入口在 !sessionId 时都已置灰，正常走不到这里。
       console.warn("sendBtw 需要一个存活的主会话作为侧问对象");
-      return;
+      return false;
     }
-    const store = getStore(sid);
     const btw = useBtwSession();
-    btw.setOnDone((block) => {
-      // 结论回插主对话:作为一条只含 ActionBlock 的用户消息(与 /compact /clear 同形),
-      // ChatMessage 检测 actionId==='btw' 渲染为页边批注。
+    // 出口按 owner 找会话 store：不同主会话的 btw 可以同时在途，单个闭包会插错地方。
+    // 重复注册是幂等的（同一实现）。
+    btw.setOnDone((owner, block) => {
+      const store = getStore(owner);
       store.messages.push({
         id: crypto.randomUUID(),
         role: "user",
         blocks: [block],
         timestamp: Date.now(),
       });
-      maybeEvict(sid, store);
+      maybeEvict(owner, store);
     });
-    // startBtw 内部把命令失败(Runtime 不可用)转成 store.status="error",由抽屉展示
-    // 原因;答案与错误都走 btw_answer 事件——不抛、不静默。
-    await btw.startBtw({ ownerSid: sid, question: prompt });
+    // 命令失败(Runtime 不可用)由 ask 转成这一轮的 error，在侧栏展示原因——不抛、不静默。
+    return btw.ask({ ownerSid: sid, question: prompt });
   }
 
   return {

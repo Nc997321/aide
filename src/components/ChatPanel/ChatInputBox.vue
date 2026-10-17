@@ -96,7 +96,7 @@ const emit = defineEmits<{
   /** 发送请求（不清输入）：effectiveProvider/effectiveModel 并入 opts（ChatPanel
    *  的发送前确认门控据此判定是否弹确认形态），相邻 string 不再位置错位 */
   "send-request": [prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }];
-  /** btw 只带问题正文：支线的模型/档位一律继承主会话（见 toggleBtw 处说明） */
+  /** 「/btw 问题」：直接在 btw 侧栏问。只带问题正文——支线的模型/档位一律继承主会话 */
   "send-btw": [prompt: string];
   "set-model": [model: string];
   "set-effort": [effort: string];
@@ -505,14 +505,11 @@ function formatResetTime(resetsAt: number | null): string | null {
   return `约 ${Math.round(hours / 24)} 天后`;
 }
 
-// ── btw 输入模式 ──
-const btwMode = ref(false);
-
 // ── 欢迎页场景（见 hero/scenes.ts）──
 // 只在欢迎态生效：场景定的是「这次对话做什么」，随首条消息发出后就在上下文里了，
 // 之后的消息不再重复带。
 const pickedScene = ref<Scene | null>(null);
-const activeScene = computed(() => (props.isHero && !btwMode.value ? pickedScene.value : null));
+const activeScene = computed(() => (props.isHero ? pickedScene.value : null));
 
 function fillSceneExample(ex: SceneExample) {
   inputText.value = ex.prompt;
@@ -528,67 +525,26 @@ function fillSceneExample(ex: SceneExample) {
 const placeholder = computed(() =>
   activeScene.value?.placeholder ??
   inputPlaceholder({
-    btw: btwMode.value,
     busy: props.isBusy,
     hero: props.isHero,
     daily: props.mode === "daily",
   }),
 );
-// 支线**没有自己的模型/档位**：btw 走官方 side_question，进程内跑在存活主 query 的
-// cache-safe fork 上，通道只收 question/history（SDK 的 askSideQuestion 无 model/effort
-// 参数，BtwAskParams 也只有 sessionId/question/history）——支线一律继承主会话当时的模型
-// 与档位，且只有同模型同档位才吃得到那份缓存。所以 btw 期间两个选择器一律禁用（只读显示
-// 主会话的值），曾经的"支线自己一套"（btwModel/btwEffort/displayedModel）是假控件——
-// 显示的是一个对支线毫无作用的值，2026-09-20 删除。
-const BTW_SELECTOR_HINT = "支线跟随主会话，不可单独设置";
-function toggleBtw() {
-  btwMode.value = !btwMode.value;
-  if (btwMode.value) usageTips.markUsed("btw");
-}
-const btwRevertToast = ref(false);
-let btwToastTimer: number | undefined;
-function showBtwRevertToast() {
-  btwRevertToast.value = true;
-  clearTimeout(btwToastTimer);
-  btwToastTimer = window.setTimeout(() => (btwRevertToast.value = false), 1600);
-}
-function playBtwRevertFlash() {
-  const box = rootEl.value?.querySelector(".chat-input-box") as HTMLElement | null;
-  if (!box) return;
-  box.classList.remove("btw-revert-flash");
-  void box.offsetWidth; // 重启动画
-  box.classList.add("btw-revert-flash");
-  setTimeout(() => box.classList.remove("btw-revert-flash"), 800);
-}
-
+// ── btw 侧边对话入口 ──
+// btw 是会话右侧独立的一栏（BtwPanel，自带输入框），主输入框只管主对话、不再有「btw 模式」。
+// /btw、分裂按钮菜单 = 打开侧栏并把光标放过去；「/btw 问题」= 直接在侧栏里问。
+// 支线没有自己的模型/档位（官方 side_question 只收 question/history），侧栏里也就没有选择器。
 const btw = useBtwSession();
-// 最小化后,支线还在后台跑(starting/running)时浮一个可点开重展抽屉的小标。
-// 出错会强制取消最小化(见 useBtwSession error 分支)把错误露出来,所以这里只
-// 盖真正在跑的情况;跑完(done)结论已进主对话批注,不再浮。
-const btwBgChipVisible = computed(
-  () => btw.store.value.minimized
-    && btw.store.value.isBusy
-    && btw.store.value.ownerSessionId !== null
-    && btw.store.value.ownerSessionId === props.sessionId,
-);
-// 一次性回弹确认:只在支线真正进入 running 才弹"已切回主对话"+flash。
-// 失败(error)不弹成功提示,原因在抽屉里展示——修掉"没抽屉却弹已切回"的误导。
-const awaitingBtwLaunch = ref(false);
-watch(
-  () => btw.store.value.status,
-  (st) => {
-    if (!awaitingBtwLaunch.value) return;
-    if (st === "running") {
-      awaitingBtwLaunch.value = false;
-      playBtwRevertFlash();
-      showBtwRevertToast();
-    } else if (st === "error") {
-      awaitingBtwLaunch.value = false;
-    }
-  },
-);
-// 点浮标重展抽屉(最小化的逆操作)。仅清标志、不动进程。
-function reopenBtw() { btw.reopen(); }
+const btwPanelOpen = computed(() => btw.threadFor(props.sessionId).open);
+function toggleBtwPanel() {
+  if (!props.sessionId) return;
+  if (btwPanelOpen.value) {
+    btw.closePanel(props.sessionId);
+    return;
+  }
+  btw.openPanel(props.sessionId, { focusInput: true });
+  usageTips.markUsed("btw");
+}
 
 // ── 输入状态 ──
 const inputText = ref("");
@@ -639,26 +595,24 @@ watch(inputText, (val) => {
     return;
   }
   slashDropdownVisible.value = false;
-  // 模式类斜杠命令的即时切换（同一监听点，与斜杠下拉共用）："/btw "（命令名 +
-  // 空格）= 点分裂按钮菜单的「顺便问一下」，立即进输入模式并清空，不用等 Enter
-  // （"/btw 问题" 的 Enter 直发分发仍在 handleSend）。prompt 类命令（/compact
-  // /clear）无输入模式，仍由 Enter 执行。
+  // "/btw "（命令名 + 空格）= 点分裂按钮菜单的「顺便问一下」：立即清空并打开 btw 侧栏、
+  // 光标落进侧栏输入框，不用等 Enter（"/btw 问题" 的 Enter 直发仍在 handleSend）。
+  // prompt 类命令（/compact /clear）由 Enter 执行。
   const cmd = val.match(/^\/(\S+)\s$/)?.[1];
   const action = cmd ? quickActions.find((a) => a.command === cmd) : undefined;
-  if (!btwMode.value && action?.kind === "btw") {
+  if (action?.kind === "btw") {
     inputText.value = "";
-    toggleBtw();
+    if (!btwPanelOpen.value) toggleBtwPanel();
+    else if (props.sessionId) btw.openPanel(props.sessionId, { focusInput: true });
   }
 });
 
 // 切换会话时清空待发图片/引用芯片
 // （滚动/窗口复位 + 切入收紧与落位由 useChatScroll 自己 watch sessionId 处理）
 //
-// 注意:切会话绝不清理 btw 支线——此前这里调 btw.cleanup(),跑中的支线(问答/
-// git-commit)直接被 kill,像被"取消"了一样。现在:抽屉可见性由 ownerSessionId
-// 绑定(切走自动隐藏、切回重现),sidecar 进程后台照跑,结论经 onDone 回插主会话
-// store(模块级,切换不丢)。真正 teardown 只有两处:用户关抽屉(done/error 态)
-// / 开新 btw(单实例替换,见 useBtwSession.startBtw)。
+// 注意:切会话绝不清理 btw 支线——线程按主会话记(useBtwSession),切走侧栏随之隐藏、
+// 切回重现,在途的问答照跑,答复经 onDone 回插主会话 store(模块级,切换不丢)。
+// 线程只在关 tab / 删会话时清(clearBtwHistory)。
 watch(() => props.sessionId, () => {
   pendingImages.value = [];
   pendingMentions.value = [];
@@ -857,14 +811,14 @@ const attachError = computed(() => (props.sessionId ? attachStore.errorOf(props.
 // 实时算，第 maxShows 次会刚出来就自己消失。只有聚焦的输入框出提示。
 
 /** 生成中开始打字 → 「直接发会排队；只想顺便问一句用 /btw」。一个忙碌期至多出一次，
- *  出来后留到这一轮结束（或进了 btw 模式）。 */
+ *  出来后留到这一轮结束。 */
 const busyTypingTip = ref<UsageTip | null>(null);
 let busyTypingLatched = false;
 watch(
-  [() => props.isBusy, () => inputText.value.trim().length > 0, btwMode, () => props.focused],
-  ([busy, typing, inBtw, focused]) => {
+  [() => props.isBusy, () => inputText.value.trim().length > 0, () => props.focused],
+  ([busy, typing, focused]) => {
     if (!busy) busyTypingLatched = false;
-    if (!busy || inBtw || !focused) {
+    if (!busy || !focused) {
       busyTypingTip.value = null;
       return;
     }
@@ -1241,24 +1195,24 @@ async function performSend() {
 
   // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
   // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
-  // + 二次确认）；btw 无参数进输入模式、有参数直接发支线。查不到才走 skill /
-  // 普通文本。已在 btw 模式里时不拦（输入本来就是支线内容，/btw 字面量无意义）。
-  if (!btwMode.value) {
+  // + 二次确认）；btw 无参数打开侧栏、有参数直接在侧栏问。查不到才走 skill / 普通文本。
+  {
     const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
     const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
       const args = (cmdMatch?.[2] ?? "").trim();
       if (action.kind === "btw") {
+        if (!props.sessionId) return; // 还没有主会话可问：入口已置灰，保留输入
         inputText.value = "";
-        pendingImages.value = [];
-        pendingMentions.value = [];
         if (!args) {
-          toggleBtw(); // 只切输入模式，等问题
+          if (!btwPanelOpen.value) toggleBtwPanel();
           return;
         }
+        // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
         emit("send-btw", mentionPrefix + args);
+        pendingImages.value = [];
+        pendingMentions.value = [];
         usageTips.markUsed("btw");
-        awaitingBtwLaunch.value = true;
         return;
       }
       // prompt 类：菜单点击与手打同出口；取消确认则保留输入、什么都不发。
@@ -1266,22 +1220,6 @@ async function performSend() {
       await runPromptAction(action, mentionPrefix + text);
       return;
     }
-  }
-
-  if (btwMode.value) {
-    // btw 一次性:发完自动切回主对话输入。回弹确认(回弹动画 + "已切回"toast)
-    // 不在这里乐观触发——等支线真正进入 running 才确认(见上面 status 的 watch),
-    // 否则 fork 失败时也会弹"已切回主对话输入"造成误导。
-    // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-    emit("send-btw", mentionPrefix + text);
-    pushInputHistory(text);
-    inputHistory.reset();
-    inputText.value = "";
-    pendingImages.value = [];
-    pendingMentions.value = [];
-    btwMode.value = false; // 横幅收起、按钮复原
-    awaitingBtwLaunch.value = true;
-    return;
   }
 
   let finalPrompt = text;
@@ -1382,10 +1320,10 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
   return true;
 }
 
-/** 分裂按钮菜单选择：btw 是输入模式切换（不发消息），prompt 类与手打 /name 同路径。 */
+/** 分裂按钮菜单选择：btw = 开合会话右侧的 btw 侧栏（不发消息），prompt 类与手打 /name 同路径。 */
 async function handleQuickAction(action: QuickAction) {
   if (action.kind === "btw") {
-    toggleBtw();
+    toggleBtwPanel();
     return;
   }
   await runPromptAction(action, "/" + action.command);
@@ -1497,38 +1435,19 @@ const { actions: quickActions } = useQuickActions();
         <span class="jump-item-hint">等当前回合结束发出</span>
       </div>
     </div>
-    <!-- 最小化后支线仍在后台跑:浮一个可点开重展抽屉的小标(done 后结论已进批注,不再浮) -->
-    <Transition name="btw-chip">
-      <button
-        v-if="btwBgChipVisible"
-        class="btw-bg-chip"
-        v-tooltip="'支线还在后台跑,点开重展抽屉'"
-        @click="reopenBtw"
-      >
-        <span class="btw-bg-chip-glyph">↳</span> btw 后台运行中
-        <span class="btw-bg-chip-pulse"></span>
-      </button>
-    </Transition>
     <!-- 欢迎页场景条：选场景 → 换成该场景的示例提示词 -->
     <SceneBar
-      v-if="isHero && !btwMode"
+      v-if="isHero"
       :active="activeScene"
       @select="pickedScene = $event"
       @example="fillSceneExample"
     />
     <div
       class="chat-input-box"
-      :class="{ 'btw-mode': btwMode, 'session-running': isBusy }"
+      :class="{ 'session-running': isBusy }"
       @dragover.prevent="handleDragOver"
       @drop.prevent="handleDrop"
     >
-      <Transition name="btw-banner">
-        <div v-if="btwMode" class="btw-mode-banner">
-          <span class="btw-banner-glyph">↳</span>
-          <span class="btw-banner-text"><b>顺便问一下</b> · 不进入主对话 · 阅后即弃</span>
-          <button type="button" class="btw-banner-x" @click="btwMode = false" v-tooltip="'退出 btw 模式'">×</button>
-        </div>
-      </Transition>
       <!-- 选中的场景：× = 取消，回到场景条 -->
       <div v-if="activeScene" class="mention-strip">
         <div class="mention-chip scene-capsule">
@@ -1632,9 +1551,9 @@ const { actions: quickActions } = useQuickActions();
         <div class="composer-controls">
           <ChatSendButton
             :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
-            :busy="isBusy && !btwMode"
+            :busy="isBusy"
             :actions="quickActions"
-            :btw-active="btwMode"
+            :btw-active="btwPanelOpen"
             :btw-disabled="!sessionId"
             :btw-disabled-reason="'先发送一条消息开始主对话，才能顺便问一下'"
             @send="handleSend()"
@@ -1673,8 +1592,7 @@ const { actions: quickActions } = useQuickActions();
           :model="selectedModel"
           :efforts="effortSelectOptions"
           :effort="selectedEffort"
-          :disabled="btwMode"
-          :title="btwMode ? BTW_SELECTOR_HINT : '模型与思考深度'"
+          title="模型与思考深度"
           @update:model="handleModelChange"
           @update:effort="handleEffortChange"
         />
@@ -1700,9 +1618,6 @@ const { actions: quickActions } = useQuickActions();
         />
       </div>
     </div>
-    <Transition name="btw-toast">
-      <div v-if="btwRevertToast" class="btw-revert-toast">已切回主对话输入</div>
-    </Transition>
     <AToast :state="toastState" />
     <ContextUsagePanel
       v-if="usagePanelOpen"
@@ -2390,68 +2305,4 @@ const { actions: quickActions } = useQuickActions();
 .image-thumb-remove:hover {
   background: var(--aide-danger);
 }
-
-/* ── btw 模式 ── */
-.btw-mode-banner {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 11px;
-  font-size: 11px;
-  color: var(--aide-accent);
-  background: color-mix(in srgb, var(--aide-accent) 8%, transparent);
-  border-bottom: 1px solid var(--aide-border-subtle);
-}
-.btw-banner-glyph { font-size: 14px; line-height: 1; }
-.btw-banner-text { flex: 1; }
-.btw-banner-text b { color: var(--aide-accent); }
-.btw-banner-x {
-  background: none; border: none; color: var(--aide-accent);
-  font-size: 14px; cursor: pointer; opacity: 0.8; line-height: 1;
-}
-.btw-banner-x:hover { opacity: 1; }
-.chat-input-box.btw-mode {
-  border-color: var(--aide-accent);
-  box-shadow: 0 0 0 2px var(--aide-accent-subtle);
-}
-.chat-input-box.btw-revert-flash { animation: btw-revert-flash 0.8s ease-out; }
-@keyframes btw-revert-flash {
-  0% { border-color: var(--aide-accent); box-shadow: 0 0 0 3px var(--aide-accent-subtle); }
-  40% { border-color: var(--aide-accent); box-shadow: 0 0 0 3px var(--aide-accent-subtle); }
-  100% { border-color: var(--aide-border); box-shadow: none; }
-}
-.btw-revert-toast {
-  position: absolute; left: 50%; transform: translateX(-50%);
-  bottom: 100%; margin-bottom: 6px;
-  background: var(--aide-bg-raised);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur); border: 1px solid var(--aide-accent);
-  color: var(--aide-accent); font-size: 11px; padding: 4px 12px;
-  border-radius: 999px; box-shadow: var(--aide-shadow-md);
-  z-index: 40; pointer-events: none; white-space: nowrap;
-}
-.btw-banner-enter-active, .btw-banner-leave-active { transition: opacity 0.2s, max-height 0.25s; overflow: hidden; }
-.btw-banner-enter-from, .btw-banner-leave-to { opacity: 0; max-height: 0; }
-.btw-toast-enter-active, .btw-toast-leave-active { transition: opacity 0.2s, transform 0.2s; }
-.btw-toast-enter-from, .btw-toast-leave-to { opacity: 0; transform: translate(-50%, 4px); }
-
-/* 最小化后重展抽屉的入口浮标:支线仍在后台跑时显示,点开重展。 */
-.btw-bg-chip {
-  display: inline-flex; align-items: center; gap: 6px;
-  margin: 0 0 8px auto; padding: 4px 11px;
-  background: color-mix(in srgb, var(--aide-accent) 12%, transparent);
-  border: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
-  color: var(--aide-accent); font-size: 11.5px;
-  border-radius: 999px; cursor: pointer;
-  transition: background 0.12s ease, border-color 0.12s ease;
-}
-.btw-bg-chip:hover { background: color-mix(in srgb, var(--aide-accent) 20%, transparent); border-color: var(--aide-accent); }
-.btw-bg-chip-glyph { font-size: 13px; line-height: 1; }
-.btw-bg-chip-pulse {
-  width: 6px; height: 6px; border-radius: 50%; background: var(--aide-accent);
-  animation: btw-chip-pulse 1.4s ease-in-out infinite;
-}
-@keyframes btw-chip-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
-.btw-chip-enter-active, .btw-chip-leave-active { transition: opacity 0.18s, transform 0.18s; }
-.btw-chip-enter-from, .btw-chip-leave-to { opacity: 0; transform: translateY(4px); }
 </style>

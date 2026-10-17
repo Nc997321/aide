@@ -1,13 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { inputPlaceholder } from "./inputPlaceholder";
 
-const base = { btw: false, busy: false, hero: false, daily: false };
+const base = { busy: false, hero: false, daily: false };
 
 describe("inputPlaceholder", () => {
-  it("优先级 btw > busy > hero > 普通（先把话说清楚的排前面）", () => {
-    expect(inputPlaceholder({ ...base, btw: true, busy: true, hero: true, daily: true })).toBe(
-      "顺便问一下,不进入主对话…",
-    );
+  it("优先级 busy > hero > 普通（先把话说清楚的排前面）", () => {
     expect(inputPlaceholder({ ...base, busy: true, hero: true, daily: true })).toBe(
       "生成中，发送的消息将排队…",
     );

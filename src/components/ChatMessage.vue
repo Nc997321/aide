@@ -19,6 +19,7 @@ import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
 import { effortLabel } from "@aide/sdk/utils/effort";
 import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
+import { useBtwSession } from "@/composables/useBtwSession";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -37,6 +38,7 @@ const emit = defineEmits<{
 }>();
 
 const isUser = computed(() => props.message.role === "user");
+const btw = useBtwSession();
 
 /** 模型徽标文案：sidecar 的别名建议在列采信（系统默认 → "sonnet"），
  *  否则用 wire 原文（第三方真实 id，如 kimi-for-coding-highspeed）——
@@ -48,7 +50,7 @@ const modelBadge = computed(() => {
   return isModelInList(props.models ?? [], label) ? label : m.model;
 });
 
-/** 本轮 effort 并进模型徽标（"k3 · HIGH"），与模型名保持同一 accent 色。 */
+/** 本轮 effort 并进模型标注（"k3 · HIGH"）。 */
 const modelBadgeTooltip = computed(() => {
   const lines: string[] = [];
   if (modelBadge.value) {
@@ -184,6 +186,24 @@ function handleTextClick(e: MouseEvent) {
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
+        <!-- btw 批注 = 侧栏书签：点开 btw 侧栏并定位到这一轮（侧栏才是看回复的地方）。
+             线程已不在（关过 tab 等）时退回下面的原地展开。 -->
+        <div
+          v-else-if="seg.block.type === 'action' && seg.block.actionId === 'btw' && seg.block.btwRoundId && btw.hasRound(seg.block.btwRoundId)"
+          class="msg-row--note"
+        >
+          <button
+            type="button"
+            class="btw-note btw-note-head btw-note--link"
+            v-tooltip="'在侧栏中查看这条回复'"
+            @click="btw.openRound(seg.block.btwRoundId)"
+          >
+            <span class="btw-note-glyph">{{ seg.block.icon || "↳" }}</span>
+            <span class="btw-note-tag">btw</span>
+            <span class="btw-note-q">{{ seg.block.label }}</span>
+            <span class="btw-note-go" aria-hidden="true">›</span>
+          </button>
+        </div>
         <!-- btw/任务支线页边批注：可折叠、视觉权重远低于真实消息，读起来是"贴在边上的便签" -->
         <div
           v-else-if="seg.block.type === 'action' && (seg.block.actionId === 'btw' || seg.block.actionId === 'git-commit')"
@@ -409,29 +429,19 @@ function handleTextClick(e: MouseEvent) {
   margin-top: 4px;
 }
 
-/* 模型徽标：GALLERY badge accent 调 */
+/* 模型标注（2026-10-17 去徽章）：元数据是一条消息里最安静的一层——与用量同为灰色小字，
+   不加底色、边框、强调色。 */
 .msg-model {
   display: inline-flex;
   align-items: center;
   gap: 5px;
   font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  color: var(--aide-accent);
-  background: var(--aide-accent-subtle);
-  border: 1px solid color-mix(in srgb, var(--aide-accent) 28%, transparent);
-  border-radius: var(--aide-radius-sm);
-  padding: 2.5px 9px;
+  color: var(--aide-text-muted);
   white-space: nowrap;
 }
 
 .msg-meta .msg-usage {
   margin-top: 0;
-}
-
-/* 徽标内的 effort 部分：与模型名同 pill 同色，仅字重略作区分 */
-.msg-model-effort {
-  font-weight: 700;
 }
 
 /* 用量行：GALLERY 要求 tabular-nums */
@@ -459,35 +469,41 @@ function handleTextClick(e: MouseEvent) {
   border-radius: var(--aide-radius-sm);
 }
 
-/* btw 页边批注：右对齐、虚线 accent 边、默认折叠。
+/* btw 页边批注：右对齐、默认折叠。
    不在此设百分比 max-width：批注走 .msg-action-wrap(inline-flex)分支，宽度按内容
    撑开、无外部基准，百分比 max-width 的基准会自指 .btw-note 自身撑开的
    .msg-row--note，把容器压到比内容还窄、head 标签被 overflow:hidden 截断。宽度
    上限交由 .msg-action-wrap 的 max-width:85%（基准=消息区，正确）兜底。 */
 .msg-row--note { display: flex; justify-content: flex-end; padding: 2px 12px; }
-.btw-note {
-  border: 1px dashed var(--aide-accent); border-radius: var(--aide-radius-md);
-  background: color-mix(in srgb, var(--aide-accent) 6%, transparent); overflow: hidden;
-}
+/* 2026-10-17 去装饰：收起态与过程行同一语法——一行灰字、悬停浮底色，不要虚线框、
+   accent 底色和描边药丸（批注是附属物，视觉重量要低于正文）。展开后才给一层浅底，
+   让右侧浮着的结论有个落脚处。 */
+.btw-note { border-radius: var(--aide-radius-md); overflow: hidden; }
+.btw-note[open] { background: var(--aide-surface-default); }
 .btw-note-head {
-  display: flex; align-items: center; gap: 7px; padding: 5px 11px; cursor: pointer;
-  list-style: none; font-size: 12px; color: var(--aide-accent);
+  display: flex; align-items: center; gap: 7px; padding: 3px 8px; cursor: pointer;
+  list-style: none; font-size: 12px; color: var(--aide-text-muted);
+  border-radius: var(--aide-radius-md);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
+.btw-note-head:hover { background: var(--aide-surface-hover); color: var(--aide-text-secondary); }
 .btw-note-head::-webkit-details-marker { display: none; }
+/* 收起朝右、展开朝下，与过程行 / 思考块的折叠三角一致 */
 .btw-note-caret {
-  border-left: 4px solid transparent; border-right: 4px solid transparent;
-  border-top: 5px solid var(--aide-accent); opacity: 0.7; transition: transform var(--aide-ease-t);
+  border-top: 4px solid transparent; border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor; opacity: 0.7; transition: transform var(--aide-ease-t);
 }
 .btw-note[open] .btw-note-caret { transform: rotate(90deg); }
-.btw-note-glyph { color: var(--aide-accent); }
 .btw-note-tag {
-  font-size: 10px; font-weight: 600; letter-spacing: 0.04em; padding: 1px 6px;
-  border-radius: 999px; border: 1px solid var(--aide-accent); color: var(--aide-accent);
-  /* 标签胶囊永不换行、不收缩：含中文 label（如 git-commit 的「Git 提交」)时，
-     flex item 默认 min-width:auto 会收缩到 min-content（latin 词宽），把中文挤成竖排三行。 */
+  /* 永不换行、不收缩：含中文 label（如 git-commit 的「Git 提交」)时，flex item 默认
+     min-width:auto 会收缩到 min-content（latin 词宽），把中文挤成竖排三行。 */
   white-space: nowrap; flex-shrink: 0;
 }
-.btw-note-q { color: var(--aide-text-secondary); font-size: 12px; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.btw-note-body { padding: 2px 12px 9px; font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); border-top: 1px dashed var(--aide-border); }
+.btw-note-q { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.btw-note-q:not(:empty)::before { content: "· "; }
+/* 书签版（点开侧栏）：去掉 button 默认外观，尾部一个 › 示意「去别处看」 */
+.btw-note--link { border: 0; background: transparent; font: inherit; text-align: left; max-width: 100%; }
+.btw-note-go { flex: none; opacity: 0.7; }
+.btw-note-body { padding: 2px 12px 9px; font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); }
 .btw-note-warn { font-size: 11px; color: var(--aide-text-muted); margin-top: 7px; }
 </style>

@@ -3,12 +3,13 @@ import { ref, computed, watch, onUnmounted } from "vue";
 import type { TruncatedInfo } from "@/types/chat";
 import { useStreamChunks } from "@/composables/useStreamChunks";
 /** 主线程思考块——partial=on 时 sidecar 把 thinking_delta 逐字转发（流式），partial=off /
- *  历史回放走 thinking 整块。视觉对齐子代理 .sa-thinking（灰斜体小字 + agentAccent 色调），独立成
- *  组件与 ToolCallBlock / SubagentCallBlock 同级。
+ *  历史回放走 thinking 整块。独立成组件与 ToolCallBlock / SubagentCallBlock 同级。
  *
  *  思考可能很长（实测上万字），用 details 原生折叠。流式期（streaming=true）默认展开看逐字
  *  生成，结束自动折叠；用户手动点一次后 userOverride 接管（用户意愿优先于流式默认）。
- *  落在 .msg-turn（铜书脊）里，不套独立卡片避免双层边条，只用 agentAccent 淡左边条区分正文。
+ *  视觉（2026-10-17）：折叠行与 ProcessGroup 同一种样子（一行灰字、悬停浮底色）；正文只靠
+ *  灰色小字 + 缩进区分正文——不加左边条（会和 .msg-turn 的书脊叠成两条平行线）、不用斜体
+ *  （等宽斜体难读）。
  *  text 空时 sidecar 不发本组件，故此处 text 必非空。
  *
  *  性能红线（freeze-1788224842632 长任务环链坐实）：thinking delta 每条都会整段替换
@@ -100,7 +101,8 @@ function onToggle(e: Event) {
   <details class="thinking" :class="{ 'thinking--streaming': streaming }" :open="open" @toggle="onToggle">
     <summary class="thinking-head">
       <span class="thinking-caret" aria-hidden="true"></span>
-      <span class="thinking-label">思考</span>
+      <span>思考</span>
+      <span aria-hidden="true">·</span>
       <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
     </summary>
     <!-- 流式期：前缀文本节点 + 逐块淡入的尾巴。模板刻意写成紧凑形式——容器的
@@ -130,11 +132,18 @@ function onToggle(e: Event) {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+  margin-left: -6px;
+  padding: 3px 6px;
+  border-radius: var(--aide-radius-sm);
   cursor: pointer;
   list-style: none;
-  padding: 2px 0;
   font-size: 12px;
   color: var(--aide-text-muted);
+  transition: background var(--aide-ease-t), color var(--aide-ease-t);
+}
+.thinking-head:hover {
+  background: var(--aide-surface-hover);
+  color: var(--aide-text-secondary);
 }
 .thinking-head::-webkit-details-marker { display: none; }
 
@@ -147,22 +156,14 @@ function onToggle(e: Event) {
 }
 .thinking[open] .thinking-caret { transform: rotate(90deg); }
 
-.thinking-label { font-weight: 600; color: var(--aide-text-secondary); }
-.thinking-count {
-  font-size: 10.5px;
-  font-family: var(--aide-font-mono);
-  color: var(--aide-text-muted);
-}
+.thinking-count { font-variant-numeric: tabular-nums; }
 
 .thinking-body {
   margin: 4px 0 6px;
-  padding: 4px 10px;
-  border-left: 2px solid color-mix(in srgb, var(--aide-agent-accent) 40%, transparent);
-  font-size: 11.5px;
-  line-height: 1.6;
+  padding: 0 0 0 12px;
+  font-size: 12px;
+  line-height: 1.7;
   color: var(--aide-text-muted);
-  font-style: italic;
-  opacity: 0.85;
   white-space: pre-wrap;
   max-height: 320px;
   overflow: auto;

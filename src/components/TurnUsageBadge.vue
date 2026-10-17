@@ -53,6 +53,7 @@ const tooltip = computed(() => {
   gap: 8px;
   font-size: 11px;
   font-family: var(--aide-font-mono);
+  color: var(--aide-text-muted);
   cursor: default;
 }
 
@@ -62,18 +63,6 @@ const tooltip = computed(() => {
   gap: 1px;
 }
 
-/* ↓ 输入（喂给模型看的）：代理活动装饰色（agentAccent），与思考竖线/子代理卡同色系 */
-.tu-in {
-  color: var(--aide-agent-accent);
-}
-
-/* ↑ 输出（模型吐出来的，含工具调用/子代理产出）：偏强调的成功色，
- * 跟 ToolCallBlock 的 diff "+N" 用同一套绿色语言，都是"产出/增量"的意思 */
-.tu-out {
-  color: var(--aide-success);
-}
-
-.tu-cost {
-  color: var(--aide-text-muted);
-}
+/* 输入 / 输出 / 费用一律灰（2026-10-17）：用量是元数据，与模型标注同为一条消息里
+   最安静的一层；方向靠 ↓/↑ 图标区分，不靠颜色。 */
 </style>

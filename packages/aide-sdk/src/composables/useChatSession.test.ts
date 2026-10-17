@@ -1387,12 +1387,13 @@ describe("useChatSession per-session store", () => {
     });
     await flush();
 
-    // 正文进 btw store
-    const btw = useBtwSession();
-    expect(btw.store.value.messages.join("")).toBe("侧问答案");
-    // 主对话只多出那条批注（结论回插），没有别的污染
+    // 正文进本会话的 btw 线程
+    const round = useBtwSession().threadFor("uuid-btw-route").rounds[0];
+    expect(round).toMatchObject({ status: "done", answer: "侧问答案" });
+    // 主对话只多出那条批注（侧栏书签，指向这一轮），没有别的污染
     expect(chat.messages.value.length).toBe(before + 1);
-    expect(btw.store.value.done).toBe(true);
+    const note = chat.messages.value[chat.messages.value.length - 1].blocks[0];
+    expect(note).toMatchObject({ type: "action", actionId: "btw", btwRoundId: round.id });
   });
 
   it("btw_answer 的 question 与当前问题不符时不落账（同会话多条 btw 消歧）", async () => {
@@ -1409,7 +1410,7 @@ describe("useChatSession per-session store", () => {
     });
     await flush();
 
-    expect(useBtwSession().store.value.messages).toEqual([]);
+    expect(useBtwSession().threadFor("uuid-btw-route-2").rounds[0].status).toBe("pending");
   });
 });
 

@@ -360,10 +360,9 @@ function isRowRunning(cfg: RunConfig): boolean {
   align-items: center;
   height: 42px;
   flex-shrink: 0;
-  background:
-    linear-gradient(180deg, var(--aide-border-subtle) 0%, transparent 100%),
-    var(--aide-bg-deep);
-  border-bottom: 1px solid var(--aide-border);
+  /* 框架层（2026-10-17）：标题栏与侧栏、标签栏、右侧栏同为纯 bg-deep，连成一个「框」，
+     不叠渐变、不画底边线——框架内部不分隔，分隔只在框架与内容区（bg-base）之间。 */
+  background: var(--aide-bg-deep);
   padding: 0 0 0 14px;
   user-select: none;
 }

@@ -8,7 +8,7 @@ import TaskListPanel from "../TaskListPanel.vue";
 import PermissionDialog from "../PermissionDialog.vue";
 import ActivityStrip from "../activity/ActivityStrip.vue";
 import ActivityDrawer from "../activity/ActivityDrawer.vue";
-import { bgTaskChip, subagentChip, subsessionChip, type ActivityChip, type ActivityTab, type ChildActivity } from "../activity/activityChips";
+import { bgTaskChip, btwChip, subagentChip, subsessionChip, type ActivityChip, type ActivityChipTarget, type ChildActivity } from "../activity/activityChips";
 import { openActivityTab } from "../activity/ActivityDrawer.vue";
 import SubsessionWaitCard from "../subsession/SubsessionWaitCard.vue";
 import SubsessionComposer from "../subsession/SubsessionComposer.vue";
@@ -31,7 +31,6 @@ import LspSendPrompt from "./LspSendPrompt.vue";
 import { sameRoot, useLsp } from "@/composables/useLsp";
 import type { PreflightLang } from "@aide/sdk/types/lspPacks";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
-import BtwDrawer from "../BtwDrawer.vue";
 import type { UsageTip } from "./usageTips";
 import { useUsageTips } from "@/composables/useUsageTips";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, SubagentBlock, TaskItem } from "@/types/chat";
@@ -482,17 +481,27 @@ const answer = computed(() =>
 );
 
 /** 活动带的 chip：每类后台活一个，点开活动抽屉对应 tab。 */
+const btw = useBtwSession();
+/** 本会话的 btw 线程（侧栏本体挂在 PaneGroup，与会话并排；这里只管活动带 chip） */
+const btwThread = computed(() => btw.threadFor(props.sessionId));
+
 const activityChips = computed<ActivityChip[]>(() =>
   [
+    btwChip(btwThread.value),
     subsessionChip(children.value, childActivity, subsessionOpen.value),
     subagentChip(props.subagents ?? [], props.subagentDockOpen),
     bgTaskChip(props.bgTasks ?? [], props.bgDockOpen),
   ].filter((c): c is ActivityChip => c !== null),
 );
 
-/** chip 点击：开对应 tab；已开着就收起（三个 tab 互斥，见 openActivityTab）。 */
-function onToggleActivity(tab: ActivityTab) {
+/** chip 点击：开对应 tab；已开着就收起（三个 tab 互斥，见 openActivityTab）。
+ *  btw 不是活动抽屉的 tab：点它 = 打开会话右侧的 btw 侧栏。 */
+function onToggleActivity(tab: ActivityChipTarget) {
   if (!props.sessionId) return;
+  if (tab === "btw") {
+    btw.openPanel(props.sessionId);
+    return;
+  }
   const open = { subagentOpen: props.subagentDockOpen, bgOpen: props.bgDockOpen, subsessionOpen: subsessionOpen.value };
   const isOpen = tab === "subagent" ? open.subagentOpen : tab === "bg" ? open.bgOpen : open.subsessionOpen;
   openActivityTab(props.sessionId, isOpen ? null : tab, open);
@@ -626,24 +635,6 @@ const {
 // 顶部入口按钮的「磁盘还有更早页」开关（模板里直接读，sessionId 空时 no-op）。
 const canLoadOlder = computed(() => (props.sessionId ? hasMoreOlder(props.sessionId) : false));
 
-const btw = useBtwSession();
-// 抽屉可见性:status 非 idle 且本窗口的活动会话正是被 fork 的那个主会话。
-// btw store 是全局单例,但抽屉 per-ChatPanel 挂载——只看 status 会让任意窗口触发
-// 时所有窗口的抽屉一起弹出。ownerSessionId 把抽屉绑回触发它的那个会话窗口。
-const btwDrawerVisible = computed(
-  () => btw.store.value.status !== "idle"
-    && !btw.store.value.minimized
-    && btw.store.value.ownerSessionId !== null
-    && btw.store.value.ownerSessionId === props.sessionId,
-);
-// 「关闭」按状态分两种语义:
-//  - 还在跑(starting/running):最小化——抽屉收起,侧问在服务端继续跑,答案到达后
-//    照样作为批注插进主对话(用户要的就是这个)。
-//  - 已结束/出错(done/error):只收起抽屉。现在没有独立进程可回收(侧问跑在主会话
-//    进程里),reset 由下一次 startBtw 覆盖完成。
-function closeBtw() {
-  btw.minimize();
-}
 
 // ── 手动派子会话 + 消息里选中文字的小浮条（子会话设计 §11）──
 // 能派 = 已定名的顶层会话（子会话不能再派：深度 1；还没发过第一条的没有父会话可挂）。
@@ -951,10 +942,6 @@ function onOpenBgDock(taskId: string) {
         @close="closeComposer"
       />
     </FloatingCard>
-    <BtwDrawer
-      :visible="btwDrawerVisible"
-      @close="closeBtw"
-    />
   </div>
 </template>
 

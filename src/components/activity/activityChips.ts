@@ -1,4 +1,5 @@
 import type { BgTask, SubagentBlock } from "@/types/chat";
+import type { BtwThread } from "@/composables/useBtwSession";
 
 /**
  * 活动带的 chip 读数（纯函数）。活动带把原先三条状态条（思考行 / 子代理条 / 后台任务条）
@@ -9,11 +10,14 @@ import type { BgTask, SubagentBlock } from "@/types/chat";
  */
 export type ActivityTab = "subsession" | "subagent" | "bg";
 
+/** chip 点开的目标：活动抽屉的某个 tab，或会话右侧的 btw 侧栏（不在抽屉里） */
+export type ActivityChipTarget = ActivityTab | "btw";
+
 /** attn = 有子会话在等你批准（黄，压过运行中的绿） */
 export type ChipTone = "run" | "done" | "err" | "attn";
 
 export interface ActivityChip {
-  tab: ActivityTab;
+  tab: ActivityChipTarget;
   label: string;
   /** 运行中个数；全部结束时为 null（tone 说明完成还是失败） */
   running: number | null;
@@ -23,6 +27,8 @@ export interface ActivityChip {
   open: boolean;
   /** 附注（子会话：「N 待批准」） */
   note?: string;
+  /** 自定义状态字（btw：「回答中」/「有新回复」）；缺省按 running / tone 出数字或完成态 */
+  stateText?: string;
 }
 
 /** 子会话的活跃度（与侧栏同一份 useSessionState）：attention = 在等权限批准。 */
@@ -87,4 +93,31 @@ export function bgTaskChip(tasks: readonly BgTask[], open: boolean): ActivityChi
     title: namesTitle(running.map((t) => t.command || t.description || t.id)),
     open,
   };
+}
+
+/**
+ * btw 侧边对话 chip：只在侧栏**收起**时出现，告诉你「那边还有事」——
+ * 还在答 → 「回答中」；答完 / 出错但还没看 → 「有新回复」/「出错了」。
+ * 点开 = 打开侧栏（落到最新一轮）。侧栏开着时什么都不显示（回复就在眼前）。
+ */
+export function btwChip(thread: BtwThread): ActivityChip | null {
+  if (thread.open) return null;
+  const pendingRound = thread.rounds.find((r) => r.status === "pending");
+  const last = thread.rounds[thread.rounds.length - 1];
+  if (pendingRound) {
+    return { tab: "btw", label: "顺便问", running: null, tone: "run", stateText: "回答中", title: pendingRound.question, open: false };
+  }
+  if (thread.unread && last) {
+    const failed = last.status === "error";
+    return {
+      tab: "btw",
+      label: "顺便问",
+      running: null,
+      tone: failed ? "err" : "attn",
+      stateText: failed ? "出错了" : "有新回复",
+      title: last.question,
+      open: false,
+    };
+  }
+  return null;
 }

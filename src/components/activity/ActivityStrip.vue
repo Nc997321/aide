@@ -6,7 +6,7 @@ import ContextCompactionStatus from "../ContextCompactionStatus.vue";
 import UsageTipText from "../ChatPanel/UsageTipText.vue";
 import type { UsageTip } from "../ChatPanel/usageTips";
 import type { ContextCompactionState } from "@/types/chat";
-import type { ActivityChip, ActivityTab } from "./activityChips";
+import type { ActivityChip, ActivityChipTarget } from "./activityChips";
 
 /**
  * 活动带（2026-10-16 会话组成重排）：一行装下「此刻在进行中的东西」——
@@ -17,7 +17,10 @@ import type { ActivityChip, ActivityTab } from "./activityChips";
  * 不占高度。「有待确认卡片时不显示正在思考」由调用方算进 thinking（会话在等用户，不是在想）。
  *
  * 「正在思考」主体已搬到消息流末尾（ThinkingLine，跟着回答走）；这里在忙时照样占位（中断要够得着），
- * 只在那一行被翻出可视区时（thinkingLabel）亮出精简的「思考中 12s」——只改透明度，不改高度，不闪。
+ * 只在那一行被翻出可视区时（thinkingLabel）亮出精简的「思考中 12s」（淡入）。
+ * 那一行看得见时这里**整块不渲染**（2026-10-17）：原先只调透明度、隐身的「思考中」仍占宽度，
+ * 把后台 chip 挤到右边、还留一条孤立分隔线。整条高度由 min-height 兜，不跳；
+ * 字样出现时 chip 横移一次，代价可接受。
  */
 const props = defineProps<{
   compaction: ContextCompactionState | null;
@@ -31,12 +34,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   interrupt: [];
-  toggle: [tab: ActivityTab];
+  toggle: [tab: ActivityChipTarget];
 }>();
 
 const compacting = computed(() => props.compaction?.stage === "compacting");
 const showInterrupt = computed(() => compacting.value || (!props.compaction && props.thinking));
 const visible = computed(() => !!props.compaction || props.thinking || props.chips.length > 0);
+/** 「思考中」字样此刻要不要占位：只有消息流末尾那行看不见时才要 */
+const showThinking = computed(() => props.thinking && props.thinkingLabel !== false);
 </script>
 
 <template>
@@ -47,7 +52,7 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
       :status="compaction"
       :elapsed-seconds="elapsedSeconds"
     />
-    <div v-else-if="thinking" class="astrip-thinking" :class="{ 'astrip-thinking--quiet': thinkingLabel === false }">
+    <div v-else-if="showThinking" class="astrip-thinking">
       <ThinkingMark :size="16" />
       <span class="astrip-thinking-text">思考中</span>
       <span class="astrip-elapsed">{{ elapsedSeconds }}s</span>
@@ -56,7 +61,7 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
       </Transition>
     </div>
 
-    <div v-if="chips.length" class="astrip-chips" :class="{ 'astrip-chips--alone': !compaction && !thinking }">
+    <div v-if="chips.length" class="astrip-chips" :class="{ 'astrip-chips--alone': !compaction && !showThinking }">
       <button
         v-for="chip in chips"
         :key="chip.tab"
@@ -70,7 +75,7 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
         <span class="astrip-chip-dot" aria-hidden="true"></span>
         <span>{{ chip.label }}</span>
         <span v-if="chip.running !== null" class="astrip-chip-n">{{ chip.running }}</span>
-        <span v-else class="astrip-chip-state">{{ chip.tone === "err" ? "有失败" : "已完成" }}</span>
+        <span v-else class="astrip-chip-state">{{ chip.stateText ?? (chip.tone === "err" ? "有失败" : "已完成") }}</span>
         <span v-if="chip.note" class="astrip-chip-note">{{ chip.note }}</span>
       </button>
     </div>
@@ -86,7 +91,8 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
   align-items: center;
   gap: 10px;
   min-height: 34px;
-  padding: 4px 2px;
+  /* 左右 10px：内容与输入框下方状态行的文字（「自动模式」/ 模型）对齐，输入框上下两行同一条边 */
+  padding: 4px 10px;
   font-size: 12px;
   color: var(--aide-text-muted);
 }
@@ -97,15 +103,10 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
   gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
-  transition: opacity .2s var(--aide-ease);
+  animation: astrip-fade-in .2s var(--aide-ease);
 }
-/* 消息流末尾的思考行看得见时：这里只留位置（高度不变），字样淡出 */
-.astrip-thinking--quiet {
-  opacity: 0;
-  pointer-events: none;
-}
-.astrip-thinking--quiet :deep(*) {
-  animation-play-state: paused;
+@keyframes astrip-fade-in {
+  from { opacity: 0; }
 }
 
 .astrip-thinking-text {
@@ -239,6 +240,7 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .astrip-thinking,
   .astrip-thinking-text {
     animation: none;
     background: var(--aide-text-muted);

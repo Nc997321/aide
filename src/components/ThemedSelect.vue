@@ -198,20 +198,26 @@ onUnmounted(() => {
   cursor: default;
 }
 
-/* 紧凑 chip：输入框一行里用，不要阴影与大内边距 */
+/* 紧凑文字按钮：输入框下方状态行用。静止时融进背景（无底色无边框），
+   悬停 / 展开才浮出底色，示意可点。 */
 .themed-select.compact {
   gap: 5px;
   height: 26px;
-  padding: 0 9px;
+  padding: 0 8px;
   font-size: 12px;
   color: var(--aide-text-secondary);
+  background: transparent;
   border-color: transparent;
   border-radius: var(--aide-radius-sm);
   box-shadow: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 .themed-select.compact:hover:not(.disabled),
 .themed-select.compact.active {
-  border-color: var(--aide-border);
+  background: var(--aide-surface-hover);
+  border-color: transparent;
+  color: var(--aide-text-primary);
 }
 
 /* 整宽表单模式：撑满并对齐设置面板里的文本输入框 */

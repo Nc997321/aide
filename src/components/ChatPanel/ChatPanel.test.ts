@@ -54,9 +54,10 @@ vi.mock("../../composables/useChatScroll", () => ({
 }));
 vi.mock("../../composables/useBtwSession", () => ({
   useBtwSession: () => ({
-    store: { value: { status: "idle", minimized: false, isBusy: false, ownerSessionId: null, model: "", effort: "" } },
-    isBtwSid: () => false, startBtw: vi.fn(), handleBtwEvent: vi.fn(), cleanup: vi.fn(),
-    minimize: vi.fn(), reopen: vi.fn(), rebindOwner: vi.fn(), setOnDone: vi.fn(),
+    threadFor: () => ({ rounds: [], open: false, unread: false, focusRoundId: null, focusInputTick: 0 }),
+    ask: vi.fn(), openPanel: vi.fn(), closePanel: vi.fn(), openRound: vi.fn(), hasRound: () => false,
+    consumeFocusRound: vi.fn(), handleBtwAnswer: vi.fn(), rebindOwner: vi.fn(), setOnDone: vi.fn(),
+    clearBtwHistory: vi.fn(),
   }),
 }));
 vi.mock("../../composables/useQuickActions", () => ({ useQuickActions: () => ({ actions: [] }) }));

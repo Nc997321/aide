@@ -121,6 +121,9 @@ export interface ActionBlock {
   foldable?: boolean;
   body?: string; // 结论全文
   hint?: string; // 折叠头尾部提示,如"不进上下文"
+  // btw 批注 = 侧栏书签：指向 useBtwSession 线程里的那一轮，点开侧栏定位过去。
+  // 只在本端内存里（批注本身就不落盘）；找不到这一轮时退回原地展开结论。
+  btwRoundId?: string;
 }
 
 /** 主线程思考块——sidecar 把 assistant 消息 content 里的 thinking block 整块转发
