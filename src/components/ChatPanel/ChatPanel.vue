@@ -25,6 +25,7 @@ import { pickAnswer } from "./answerSlot";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
+import ThinkingLine from "./ThinkingLine.vue";
 import { applyLspChoice, lspLangsToAsk, pendingLspAsk } from "./lspSendGate";
 import LspSendPrompt from "./LspSendPrompt.vue";
 import { sameRoot, useLsp } from "@/composables/useLsp";
@@ -533,6 +534,10 @@ watch(isHero, (now, prev) => {
 // 通用思考行与压缩状态条共用一个秒级计时器：压缩时以 SDK 生命周期到达的
 // startedAt 为准，普通生成时才从 busy 开始计时。不会额外引入高频更新。
 const activityElapsed = ref(0);
+/** 此刻在想：忙、没有在等用户作答、不在压缩上下文（消息流末尾的思考行据此淡入淡出）。 */
+const thinkingNow = computed(() => !!props.isBusy && !displayedPermission.value && !contextCompactionVal.value);
+/** 消息流末尾的思考行在不在可视区：往上翻走了，活动带补一个精简的「思考中」（中断始终在活动带）。 */
+const thinkingLineInView = ref(true);
 const busyStartedAt = ref<number | null>(null);
 let activityTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -639,8 +644,6 @@ const btwDrawerVisible = computed(
 function closeBtw() {
   btw.minimize();
 }
-
-
 
 // ── 手动派子会话 + 消息里选中文字的小浮条（子会话设计 §11）──
 // 能派 = 已定名的顶层会话（子会话不能再派：深度 1；还没发过第一条的没有父会话可挂）。
@@ -790,6 +793,14 @@ function onOpenBgDock(taskId: string) {
           :feed="turnChanges"
           :session-id="props.sessionId"
         />
+        <!-- 「正在思考」跟着会话走：消息流最末一格，常驻固定高度、只淡入淡出（防闪，见 ThinkingLine 文件头） -->
+        <ThinkingLine
+          v-if="props.messages.length > 0"
+          :active="thinkingNow"
+          :elapsed-seconds="activityElapsed"
+          :tip="thinkingTip"
+          @in-view="thinkingLineInView = $event"
+        />
       </div>
       </div>
 
@@ -858,8 +869,9 @@ function onOpenBgDock(taskId: string) {
       <ActivityStrip
         :compaction="contextCompactionVal"
         :thinking="props.isBusy && !displayedPermission"
+        :thinking-label="!thinkingLineInView"
         :elapsed-seconds="activityElapsed"
-        :tip="thinkingTip"
+        :tip="null"
         :chips="activityChips"
         @interrupt="emit('interrupt')"
         @toggle="onToggleActivity"

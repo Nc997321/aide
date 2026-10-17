@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
-import AppLogo from "../AppLogo.vue";
+import ThinkingMark from "./ThinkingMark.vue";
 import InterruptButton from "../InterruptButton.vue";
 import ContextCompactionStatus from "../ContextCompactionStatus.vue";
 import UsageTipText from "../ChatPanel/UsageTipText.vue";
@@ -15,10 +15,15 @@ import type { ActivityChip, ActivityTab } from "./activityChips";
  *
  * 取代原来竖着堆的三条（思考行、子代理状态条、后台任务条）。没有任何内容时整条不渲染、
  * 不占高度。「有待确认卡片时不显示正在思考」由调用方算进 thinking（会话在等用户，不是在想）。
+ *
+ * 「正在思考」主体已搬到消息流末尾（ThinkingLine，跟着回答走）；这里在忙时照样占位（中断要够得着），
+ * 只在那一行被翻出可视区时（thinkingLabel）亮出精简的「思考中 12s」——只改透明度，不改高度，不闪。
  */
 const props = defineProps<{
   compaction: ContextCompactionState | null;
   thinking: boolean;
+  /** 是否显示「思考中」字样（消息流末尾那行看不见时才要）；缺省显示 */
+  thinkingLabel?: boolean;
   elapsedSeconds: number;
   tip: UsageTip | null;
   chips: ActivityChip[];
@@ -42,9 +47,9 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
       :status="compaction"
       :elapsed-seconds="elapsedSeconds"
     />
-    <div v-else-if="thinking" class="astrip-thinking">
-      <AppLogo :size="15" animated />
-      <span class="astrip-thinking-text">正在思考</span>
+    <div v-else-if="thinking" class="astrip-thinking" :class="{ 'astrip-thinking--quiet': thinkingLabel === false }">
+      <ThinkingMark :size="16" />
+      <span class="astrip-thinking-text">思考中</span>
       <span class="astrip-elapsed">{{ elapsedSeconds }}s</span>
       <Transition name="astrip-tip" mode="out-in">
         <UsageTipText v-if="tip" :key="tip.id" class="astrip-tip" :text="tip.text" />
@@ -92,6 +97,15 @@ const visible = computed(() => !!props.compaction || props.thinking || props.chi
   gap: 6px;
   min-width: 0;
   flex: 0 1 auto;
+  transition: opacity .2s var(--aide-ease);
+}
+/* 消息流末尾的思考行看得见时：这里只留位置（高度不变），字样淡出 */
+.astrip-thinking--quiet {
+  opacity: 0;
+  pointer-events: none;
+}
+.astrip-thinking--quiet :deep(*) {
+  animation-play-state: paused;
 }
 
 .astrip-thinking-text {

@@ -64,4 +64,9 @@ export const glass: ThemeTokens = {
 
   syntaxKeyword: "#c3b3f7",
   syntaxNumber: "#f0b08c",
+
+  logoSpectrum: "conic-gradient(from 0deg, #fae586, #fab877, #f34aa0, #f655db, #eb5cf7, #5deafa, #8ffdfa, #fae586)",
+  logoStreak: "conic-gradient(from 0deg, transparent 0 58%, rgba(255,255,255,.25) 70%, #ffffff 80%, #ffe0a6 84%, transparent 92%)",
+  logoGlowWarm: "rgba(243,74,160,.45)",
+  logoGlowCool: "rgba(93,234,250,.7)",
 };

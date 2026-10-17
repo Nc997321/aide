@@ -443,12 +443,12 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
   });
 
   const tipText = (w: VueWrapper) => {
-    const el = w.find(".astrip-thinking .usage-tip-body");
+    const el = w.find(".tline .usage-tip-body");
     return el.exists() ? el.text() : null;
   };
 
   it("思考满 3 秒才出（短回复不闪），之后每 9 秒换一条", async () => {
-    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true }), global: { directives: { tooltip: () => {} } } });
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true, messages: [{ id: "m1", role: "user", blocks: [{ type: "text", text: "hi" }], timestamp: 0 }] }), global: { directives: { tooltip: () => {} } } });
     await vi.advanceTimersByTimeAsync(2000);
     expect(tipText(w)).toBeNull();
     await vi.advanceTimersByTimeAsync(1000);
@@ -461,7 +461,7 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
   });
 
   it("回复结束即收起", async () => {
-    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true }), global: { directives: { tooltip: () => {} } } });
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true, messages: [{ id: "m1", role: "user", blocks: [{ type: "text", text: "hi" }], timestamp: 0 }] }), global: { directives: { tooltip: () => {} } } });
     await vi.advanceTimersByTimeAsync(4000);
     expect(tipText(w)).not.toBeNull();
     await w.setProps({ isBusy: false });

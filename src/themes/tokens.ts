@@ -92,4 +92,15 @@ export interface ThemeTokens {
   surfaceBlur: string;
   /** 后门：应用根层环境场景图（画在面板后面）；普通主题 "none" */
   ambientScene: string;
+
+  // ── 「正在思考」的 A 字光带（ThinkingMark）──
+  // 颜色取自 Aide 图标里那条光带本身（是 logo 的画，不随主题的 UI 配色变）；各主题目前给同一组值，
+  // 浅色主题需要时可以单独调辉光。
+  /** 沿光带流转的色谱（金→橙→粉→品红→紫→青，一整圈的圆锥渐变） */
+  logoSpectrum: string;
+  /** 沿光带跑的那道白光（圆锥渐变，只占一小段，其余透明） */
+  logoStreak: string;
+  /** 光带外圈辉光的两端（暖 / 冷，一明一暗之间来回） */
+  logoGlowWarm: string;
+  logoGlowCool: string;
 }
