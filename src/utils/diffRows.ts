@@ -130,6 +130,23 @@ function marksOfLine(hunk: Hunk, side: Side, lineIndex: number, which: "a" | "b"
 }
 
 /** 片段 diff → 行模型。空 old（新增文件片段）自然退化成整段 add。 */
+/** 行窗口 [start, end)，rest = 窗口之后还剩的行数。 */
+export interface DiffRowWindow {
+  start: number;
+  end: number;
+  rest: number;
+}
+
+/** 截断预览（工具行「当前这一步」）的行窗口：从第一处改动的前一行起取 max 行——
+ *  Edit 的片段常带几行上下文，从头取会把预览花在没变的行上；Write 新文件全是新增，
+ *  自然从第 1 行起。 */
+export function peekDiffWindow(rows: readonly DiffRow[], max: number): DiffRowWindow {
+  const first = rows.findIndex((r) => r.kind !== "ctx");
+  const start = Math.max(0, (first === -1 ? 0 : first) - 1);
+  const end = Math.min(rows.length, start + max);
+  return { start, end, rest: rows.length - end };
+}
+
 export function buildDiffRows(oldText: string, newText: string): DiffRow[] {
   const a = makeSide(oldText);
   const b = makeSide(newText);

@@ -50,24 +50,25 @@ describe("segmentBlocks", () => {
     expect((inner[2] as { blocks: ToolCallBlock[] }).blocks).toHaveLength(2);
   });
 
-  it("变更类工具（Edit/Write/NotebookEdit）不进折叠组，作为独立块透传并切开两侧查询组", () => {
+  it("变更类工具（Edit/Write/NotebookEdit）与查询工具同为过程项：同组、同进胶囊", () => {
+    const glob = tool("Glob");
     const segs = segmentBlocks([
-      tool("Read"), tool("Grep"), tool("Edit"), tool("Write"), tool("NotebookEdit"), tool("Glob"),
+      tool("Read"), tool("Grep"), tool("Edit"), tool("Write"), tool("NotebookEdit"), glob,
     ]);
-    expect(segs.map((s) => s.kind)).toEqual([
-      "process", "block", "block", "block", "tool_group",
+    // 消息尾是 Glob（当前这一步）留在外面，前面五条成一个胶囊
+    expect(segs.map((s) => s.kind)).toEqual(["process", "tool_group"]);
+    const inner = (segs[0] as { segments: Segment[] }).segments;
+    expect((inner[0] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual([
+      "Read", "Grep", "Edit", "Write", "NotebookEdit",
     ]);
-    const head = (segs[0] as { segments: Segment[] }).segments[0];
-    expect((head as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Read", "Grep"]);
-    expect((segs[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
-    expect((segs[2] as { block: ToolCallBlock }).block.name).toBe("Write");
-    expect((segs[3] as { block: ToolCallBlock }).block.name).toBe("NotebookEdit");
-    expect((segs[4] as { blocks: ToolCallBlock[] }).blocks.map((b) => b.name)).toEqual(["Glob"]);
+    expect(segs[1]).toMatchObject({ kind: "tool_group", currentId: glob.id });
   });
 
-  it("变更块保留原下标作为 index", () => {
-    const segs = segmentBlocks([text("a"), tool("Read"), tool("Edit")]);
-    expect(segs[2]).toMatchObject({ kind: "block", index: 2 });
+  it("消息尾的 Edit 是「当前这一步」：留在胶囊外、带 currentId", () => {
+    const edit = tool("Edit");
+    const segs = segmentBlocks([text("a"), tool("Read"), tool("Grep"), edit]);
+    expect(segs.map((s) => s.kind)).toEqual(["block", "process", "tool_group"]);
+    expect(segs[2]).toMatchObject({ kind: "tool_group", index: 3, currentId: edit.id });
   });
 });
 
@@ -113,16 +114,15 @@ describe("segmentBlocks 过程合并", () => {
     ).toEqual(["block", "tool_group", "block"]);
   });
 
-  it("变更卡（Edit/Write/NotebookEdit）切断连续段：两侧单块段不合并，长段各自成 process", () => {
-    const shortRuns = segmentBlocks([tool("Read"), tool("Edit"), tool("Grep")], { finalized: true });
-    expect(shortRuns.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group"]);
-
-    const longRuns = segmentBlocks(
+  it("变更类工具不再切断连续段：夹在过程中间的 Edit 一起收进同一个胶囊", () => {
+    const segs = segmentBlocks(
       [tool("Read"), thinking("t1"), tool("Edit"), thinking("t2"), tool("Grep"), text("完")],
       { finalized: true },
     );
-    expect(longRuns.map((s) => s.kind)).toEqual(["process", "block", "process", "block"]);
-    expect((longRuns[1] as { block: ToolCallBlock }).block.name).toBe("Edit");
+    expect(segs.map((s) => s.kind)).toEqual(["process", "block"]);
+    const inner = (segs[0] as { segments: Segment[] }).segments;
+    expect(inner.map((s) => s.kind)).toEqual(["tool_group", "block", "tool_group", "block", "tool_group"]);
+    expect((inner[2] as { blocks: ToolCallBlock[] }).blocks[0].name).toBe("Edit");
   });
 
   it("subagent 块是可折叠过程项：进 process 段，单独存在时不合并", () => {

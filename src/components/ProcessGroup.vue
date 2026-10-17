@@ -11,7 +11,7 @@
  * 2026-09-09：流式期与定稿后的单个工具组段也一并平铺（原走 ChatMessage），
  * 组内折叠壳这条路径全库已不再存在。
  *
- * 只装"过程"：文本块（回复）与变更卡从不在段内——分段层保证（blockSegments.ts
+ * 只装"过程"：文本块（回复）从不在段内——分段层保证（blockSegments.ts
  * 二阶段），这里不做防御。流式期也会产生 process 段，但分段层只放已落定的项进来
  * （未出结果的工具调用、在跑的子代理、吐字中的尾部思考块都留在胶囊外），故内部
  * 没有流式态要处理（ThinkingBlock 不传 streaming）；流式期段内项只增不改，摘要
@@ -27,6 +27,8 @@ import { processStats, type Segment } from "@/utils/blockSegments";
 const props = defineProps<{
   /** process 段内的原始段（原序）：tool_group / block(thinking) / block(subagent) */
   segments: Segment[];
+  /** 段内变更类工具行「打开 ↗」的定位基准（ChatMessage 透传） */
+  workspacePath?: string;
   /** 后台任务列表（ChatMessage 链透传）——段内 ToolCallBlock 的徽章数据源 */
   bgTasks?: BgTask[];
 }>();
@@ -82,6 +84,7 @@ const summary = computed(() => {
             v-for="b in seg.blocks"
             :key="b.id"
             :block="b"
+            :workspace-path="workspacePath"
             :bg-tasks="bgTasks"
             @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
           />

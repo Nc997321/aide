@@ -7,6 +7,8 @@ import StaticDiff from "./fileviewer/StaticDiff.vue";
 import { buildChangeInfo, locateAnchorLine, locateEditStartLine, type ChangeInfo } from "@/utils/changeCard";
 import { isChangeTool } from "@/utils/blockSegments";
 import { estimateDiffHeight } from "@/utils/diffHeight";
+import { buildDiffRows, peekDiffWindow } from "@/utils/diffRows";
+import { diffNotice } from "@/utils/diffNotice";
 import { previewToolResult, summarizeToolInput } from "@/utils/toolSummary";
 import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
@@ -17,11 +19,9 @@ import { useSettings } from "@/composables/useSettings";
 const props = withDefaults(
   defineProps<{
     block: ToolCallBlock;
-    /** 变更类工具（Edit/Write/NotebookEdit）由 ChatMessage 传 true：变更卡默认展开，
-     *  其余调用点（SubagentCallBlock 等）不传，保持收起。 */
-    defaultExpanded?: boolean;
     /** 「当前这一步」：这条调用是消息的最后一块（blockSegments 的 currentId）——头行下
-     *  带几行结果预览。后面一有别的块就不再是 current，预览收回、只剩头行。 */
+     *  带几行结果预览（变更类工具是 diff 片段）。后面一有别的块就不再是 current，
+     *  预览收回、只剩头行。 */
     current?: boolean;
     /** 强制卡片外观。查询类工具默认是无框的「工具行」；用户气泡里的 @引用合成卡
      *  是附件而不是过程，落在 accent 实心底上，需要自己的底与边。 */
@@ -31,7 +31,7 @@ const props = withDefaults(
     /** 后台任务列表（仅 ChatMessage 链透传）——Bash 卡按 toolUseId 匹配出「后台运行中」徽章 */
     bgTasks?: BgTask[];
   }>(),
-  { defaultExpanded: false, current: false, card: false, workspacePath: undefined, bgTasks: undefined },
+  { current: false, card: false, workspacePath: undefined, bgTasks: undefined },
 );
 
 const emit = defineEmits<{
@@ -39,7 +39,7 @@ const emit = defineEmits<{
   "open-bg-dock": [taskId: string];
 }>();
 
-const expanded = ref(props.defaultExpanded);
+const expanded = ref(false);
 const { openResolved } = useFileResolver();
 const { settings } = useSettings();
 
@@ -107,18 +107,31 @@ async function openChangeFile(e: MouseEvent) {
  */
 const firstLine = ref<number | undefined | null>(null);
 
+/** 变更类「当前这一步」的 diff 预览行数（与 CLI 的写入预览同量级）。 */
+const PEEK_DIFF_ROWS = 10;
+
+/** 变更类工具当前这一步的预览窗口：diff 片段代替结果正文（Edit 的结果正文只有一句
+ *  「已更新」）。只算当前这一条——被取代 / 展开后为 null，不付 diff 成本。
+ *  画不出 diff（过大 / 二进制）时不预览，头行的 +N −M 仍在。 */
+const changePeek = computed(() => {
+  const info = changeInfo.value;
+  if (!info || props.card || !props.current || expanded.value || denial.value) return null;
+  if (diffNotice(info.pair)) return null;
+  const rows = buildDiffRows(info.pair.oldText, info.pair.newText);
+  return rows.length ? peekDiffWindow(rows, PEEK_DIFF_ROWS) : null;
+});
+
 watch(
-  [expanded, changeInfo] as const,
-  async ([exp, info]) => {
-    if (!exp || !info || firstLine.value !== null) return;
+  [() => expanded.value || changePeek.value !== null, changeInfo] as const,
+  async ([shown, info]) => {
+    if (!shown || !info || firstLine.value !== null) return;
     firstLine.value = await locateEditStartLine(info.filePath, info.pair.newText, info.pair.status);
   },
   { immediate: true },
 );
 
-/** 工具行外观：查询类工具（Bash/Grep/Glob/Read/MCP…）。变更卡要把 diff 当产出
- *  摆出来，保持卡片。 */
-const asLine = computed(() => !props.card && !isChangeTool(props.block.name));
+/** 工具行外观：所有工具（含 Edit/Write，2026-10-16 起）。只有强制 card 的调用点除外。 */
+const asLine = computed(() => !props.card);
 
 /** 头行下的结果预览：只给「当前这一步」，展开后让位给全文。被拒 / 已截断的结果
  *  正文不是工具输出（外框文案 / 占位摘要），不预览；拒绝态由徽章承担。还在跑的
@@ -126,7 +139,7 @@ const asLine = computed(() => !props.card && !isChangeTool(props.block.name));
  *  圆点，没有正文就什么都不显示。 */
 const peek = computed(() => {
   if (!asLine.value || !props.current || expanded.value) return null;
-  if (denial.value || props.block.truncated) return null;
+  if (denial.value || props.block.truncated || changeInfo.value) return null;
   return previewToolResult(props.block.name, props.block.result, { tail: props.block.isPending });
 });
 
@@ -223,6 +236,20 @@ const readRange = computed(() =>
       <div class="ti-peek-out">
         <pre class="ti-peek-lines">{{ peek.lines.join("\n") }}</pre>
         <span v-if="peek.rest > 0" class="ti-peek-more">还有 {{ peek.rest }} 行</span>
+      </div>
+    </div>
+    <div v-else-if="changePeek && changeInfo" class="ti-peek" @click="expanded = true">
+      <span class="ti-elbow" aria-hidden="true"></span>
+      <div class="ti-peek-out">
+        <div class="ti-peek-diff">
+          <StaticDiff
+            :pair="changeInfo.pair"
+            :file-path="changeInfo.filePath"
+            :first-line-number="firstLine ?? undefined"
+            :row-window="changePeek"
+          />
+        </div>
+        <span v-if="changePeek.rest > 0" class="ti-peek-more">还有 {{ changePeek.rest }} 行</span>
       </div>
     </div>
     <!-- grep 顺带作答这次附了什么（lsp_glance 事件）：收起成一枚药丸，点开看定义 / 引用 -->
@@ -560,6 +587,17 @@ const readRange = computed(() =>
   font-size: 11.5px;
   line-height: 1.65;
   color: var(--aide-text-muted);
+}
+/* diff 预览：StaticDiff 默认撑满定高容器并内滚；预览是截好的窗口，按内容高度排 */
+.ti-peek-diff {
+  margin: 2px 0;
+  border: 1px solid var(--aide-border-subtle);
+  border-radius: var(--aide-radius-sm);
+  overflow: hidden;
+}
+.ti-peek-diff :deep(.sd) {
+  height: auto;
+  overflow: hidden;
 }
 .ti-peek-more {
   font-size: 11px;

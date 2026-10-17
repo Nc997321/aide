@@ -26,10 +26,11 @@ import type { ContentBlock, ToolCallBlock } from "@/types/chat";
  * index 是段首块在原 blocks 里的下标——既当 v-for 的稳定 key，
  * 也让 ChatMessage 能继续用原始下标判定流式尾块（blockHtml 的缓存策略）。
  *
- * 例外：代码变更类工具（CHANGE_TOOL_NAMES）不进任何折叠——它们产出的 diff/新文件
- * 内容是要直接被看到的，折叠进胶囊里就得翻两层才能找到。这类块作为独立段透传，
- * 由 ToolCallBlock 以 defaultExpanded 渲染成对话流里的变更卡；顺带把两侧过程段
- * 自然切开（过程段 → 变更卡 → 过程段）。
+ * 代码变更类工具（Edit/Write/NotebookEdit）与查询工具同等对待（2026-10-16）：同样
+ * 是过程项、同样的「当前这一步」规则，当前这一步的预览是 diff 片段而不是结果正文
+ * （见 ToolCallBlock）。此前它们不进折叠、默认展开成整块变更卡，理由是「diff 要直接
+ * 被看到」——回合变更结算卡（TurnChangeCard，2026-09-24）接手了这件事：一轮改了
+ * 哪些文件统一在消息尾结算，过程里再逐块摊开就是第二份，一轮改八个文件就是八张大卡。
  */
 export type Segment =
   | { kind: "block"; block: ContentBlock; index: number }
@@ -39,7 +40,7 @@ export type Segment =
   /** 合计 ≥2 个过程项的连续段合并成的折叠胶囊；segments 保持原序，不会是 process 嵌套。 */
   | { kind: "process"; segments: Segment[]; index: number };
 
-/** 代码变更类工具：不进折叠组，对话流里默认展开成变更卡。 */
+/** 代码变更类工具：工具行头带 +N −M 与「打开」，预览 / 展开体是 diff。 */
 export const CHANGE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "Edit",
   "Write",
@@ -56,11 +57,10 @@ interface RunItem {
   index: number;
 }
 
-/** 可进连续段的块：查询工具调用 / 思考 / 子代理调用。
- *  文本（回复）与变更卡永远不可折——它们是回合的"产出"，位置即时序。 */
+/** 可进连续段的块：工具调用 / 思考 / 子代理调用。
+ *  文本（回复）永远不可折——它是回合的"产出"，位置即时序。 */
 function isProcessItem(block: ContentBlock): boolean {
-  if (block.type === "tool_call") return !isChangeTool(block.name);
-  return block.type === "thinking" || block.type === "subagent";
+  return block.type === "tool_call" || block.type === "thinking" || block.type === "subagent";
 }
 
 /** 命令 = 能当"当前这一步"的过程项。思考不算——它自己就是折叠胶囊，没有结果可预览。 */

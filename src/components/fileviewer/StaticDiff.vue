@@ -33,8 +33,10 @@ const props = withDefaults(
     filePath: string;
     /** 片段在文件中的真实起始行（算出前不传 → 行号从 1） */
     firstLineNumber?: number;
+    /** 只画这一段行（截断预览）；缺省画全部 */
+    rowWindow?: { start: number; end: number };
   }>(),
-  { firstLineNumber: undefined },
+  { firstLineNumber: undefined, rowWindow: undefined },
 );
 
 const { settings } = useSettings();
@@ -63,7 +65,9 @@ const rows = computed<RenderRow[]>(() => {
   const aLines = highlightLines(oldText, ext.value);
   const bLines = highlightLines(newText, ext.value);
 
-  return buildDiffRows(oldText, newText).map((row) => {
+  const all = buildDiffRows(oldText, newText);
+  const w = props.rowWindow;
+  return (w ? all.slice(w.start, w.end) : all).map((row) => {
     // del 行取旧侧高亮、add 行取新侧；ctx 两侧文本相同，取旧侧即可
     const which = row.kind === "add" ? bLines : aLines;
     const index = (row.kind === "add" ? row.bLine : row.aLine) ?? 1;

@@ -12,7 +12,7 @@ import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
-import { segmentBlocks, isChangeTool, type Segment } from "@/utils/blockSegments";
+import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isModelInList } from "@/utils/modelSelect";
@@ -128,6 +128,7 @@ function handleTextClick(e: MouseEvent) {
             :key="b.id"
             :block="b"
             :current="b.id === seg.currentId"
+            :workspace-path="workspacePath"
             :bg-tasks="bgTasks"
             @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
           />
@@ -135,6 +136,7 @@ function handleTextClick(e: MouseEvent) {
         <ProcessGroup
           v-else-if="seg.kind === 'process'"
           :segments="seg.segments"
+          :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
         />
@@ -155,7 +157,6 @@ function handleTextClick(e: MouseEvent) {
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"
           :block="seg.block"
-          :default-expanded="isChangeTool(seg.block.name)"
           :card="isUser"
           :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
