@@ -2,19 +2,16 @@
 import { computed } from "vue";
 import type { SubagentBlock } from "@/types/chat";
 import SubagentTimeline from "./subagent/SubagentTimeline.vue";
-import { toggleSubagentDock } from "@/composables/useChatSession";
 import { subagentStatus, subagentStepCount } from "@/utils/subagent";
 
 /**
- * 子代理 dock：状态条（常驻）+ 底部展开面板（子代理列表 + 时间线阅读区）。
- * 布局同 BgTaskDock —— inline dock，占真实布局空间挤压消息区，不是浮层。
+ * 子代理面板：活动抽屉（activity/ActivityDrawer）的「子代理」tab——子代理列表 + 时间线阅读区。
  *
  * 为什么要有它：子代理块活在消息流里，定稿后被折进过程胶囊、跑起来又被新内容顶走，
- * 「现在有几个在跑」根本看不见。dock 把「运行中」提到输入框上方常驻可见。
+ * 「现在有几个在跑」根本看不见。运行状态由活动带的 chip 常驻（2026-10-16 起，取代原来
+ * 这里自带的状态条），点开看这块面板。
  *
- * 视觉身份与后台任务刻意区分（同屏时不该靠读字分辨）：agentAccent 左条 + 节点字形
- * （图标语义＝中心派发子节点）+ 大写字距的类型名，全是消息流里子代理块那一套；
- * 后台任务保持中性底 + 绿点 + 圆点状态。
+ * 视觉身份延续消息流里子代理块那一套：agentAccent 左条 + 大写字距的类型名。
  *
  * 数据来自 useChatSession 的 per-session store（subagent_start/end 累积），
  * 开合与清理语义在 toggleSubagentDock（结束的留着回看，关面板才清）。
@@ -42,25 +39,6 @@ const groups = computed(() =>
   ].filter((g) => g.items.length > 0),
 );
 
-/** 状态条：有子代理或面板开着才出现。 */
-const barVisible = computed(() => props.subagents.length > 0 || props.open);
-
-/** 状态条读数：运行中把数量单独拆出来（数字染 accent、用等宽字），其余态给整句。 */
-const barState = computed(() => {
-  const n = running.value.length;
-  if (n > 0) return { count: n, text: "个子代理运行中" };
-  const anyFailed = props.subagents.some((s) => s.isError);
-  return { count: null, text: anyFailed ? "✗ 有子代理失败" : "✓ 子代理全部完成" };
-});
-
-/** 状态条上的名字（第一个运行中的 + 余量提示）。 */
-const barNames = computed(() => {
-  const names = running.value.map(itemName);
-  if (names.length === 0) return "";
-  const first = names[0].length > 40 ? names[0].slice(0, 40) + "…" : names[0];
-  return names.length > 1 ? `${first} 等 ${names.length} 个` : first;
-});
-
 /** 列表项标题：描述优先，没有就退回子代理类型。 */
 function itemName(block: SubagentBlock): string {
   return block.description || block.agentName;
@@ -77,38 +55,13 @@ const STATUS_GLYPH: Record<ReturnType<typeof subagentStatus>, string> = {
   err: "✗",
 };
 
-function onToggle() {
-  if (props.sessionId) toggleSubagentDock(props.sessionId);
-}
-
 function onSelect(block: SubagentBlock) {
   emit("update:selectedId", block.id);
 }
 </script>
 
 <template>
-  <div v-if="barVisible" class="sadock">
-    <!-- 状态条：常驻，点击开合。左条 + 节点字形 + 大写字距类型名 = 子代理身份，
-         与后台任务条（中性底 + 绿点）刻意区分。 -->
-    <button class="sadock-bar" :aria-expanded="open" @click="onToggle">
-      <svg
-        class="sadock-glyph" width="14" height="14" viewBox="0 0 16 16" fill="none"
-        stroke="currentColor" stroke-width="1.2" aria-hidden="true"
-      >
-        <!-- 节点图：中心节点派发子节点（icons.ts 的 agent 字形） -->
-        <path d="M8 8L3.8 4.5M8 8L3.8 11.5M8 8L12.5 8" />
-        <circle cx="8" cy="8" r="1.8" fill="currentColor" stroke="none" />
-        <circle cx="3.8" cy="4.5" r="1.3" fill="currentColor" stroke="none" />
-        <circle cx="3.8" cy="11.5" r="1.3" fill="currentColor" stroke="none" />
-        <circle cx="12.5" cy="8" r="1.3" fill="currentColor" stroke="none" />
-      </svg>
-      <span class="sadock-bar-text">
-        <span v-if="barState.count !== null" class="sadock-bar-n">{{ barState.count }}</span>
-        <span>{{ barState.text }}</span>
-      </span>
-      <span v-if="barNames" class="sadock-bar-names">{{ barNames }}</span>
-      <span class="sadock-caret">{{ open ? "▾" : "▴" }}</span>
-    </button>
+  <div v-if="open" class="sadock">
 
     <div v-if="open" class="sadock-panel">
       <div class="sadock-list">
@@ -153,84 +106,19 @@ function onSelect(block: SubagentBlock) {
 </template>
 
 <style scoped>
+/* 撑满活动抽屉的主体；外框归抽屉，左条延续子代理身份 */
 .sadock {
-  flex: none;
   display: flex;
   flex-direction: column;
-  margin: 8px 12px 0;
+  height: 100%;
 }
 
-/* 状态条：agentAccent 左条 + 同色微染底 —— 与消息流里的子代理块同一道条 */
-.sadock-bar {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 6px 12px;
-  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 28%, transparent);
-  border-left: 3px solid var(--aide-agent-accent);
-  border-radius: var(--aide-radius-md);
-  background: linear-gradient(90deg, color-mix(in srgb, var(--aide-agent-accent) 10%, transparent), var(--aide-bg-raised) 46%);
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  text-align: left;
-  transition: border-color var(--aide-ease-t);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
-}
-.sadock-bar:hover {
-  border-color: color-mix(in srgb, var(--aide-agent-accent) 45%, transparent);
-}
-
-.sadock-glyph {
-  flex-shrink: 0;
-  color: var(--aide-agent-accent);
-}
-
-/* inline-flex + gap：数字与措辞分开渲染（数字单独染色），间距交给布局，
-   不靠模板里的空格（否则会多出/丢掉空白） */
-.sadock-bar-text {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  font-weight: 600;
-  color: var(--aide-text-primary);
-  white-space: nowrap;
-}
-.sadock-bar-n {
-  font-family: var(--aide-font-mono);
-  color: var(--aide-agent-accent);
-  font-variant-numeric: tabular-nums;
-}
-.sadock-bar-names {
-  font-family: var(--aide-font-mono);
-  font-size: 11px;
-  color: var(--aide-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.sadock-caret {
-  margin-left: auto;
-  font-size: 14px; /* 全项目三角箭头统一 14px */
-  color: var(--aide-text-muted);
-  flex-shrink: 0;
-}
-
-/* 面板：挤压消息区的真实布局块（同 BgTaskDock），左条延续子代理身份 */
 .sadock-panel {
   display: flex;
-  height: 300px;
-  margin-top: 6px;
-  border: 1px solid color-mix(in srgb, var(--aide-agent-accent) 25%, transparent);
+  height: 100%;
   border-left: 3px solid var(--aide-agent-accent);
-  border-radius: var(--aide-radius-lg);
   background: linear-gradient(90deg, color-mix(in srgb, var(--aide-agent-accent) 5%, transparent), var(--aide-bg-raised) 26%);
   overflow: hidden;
-  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .sadock-list {

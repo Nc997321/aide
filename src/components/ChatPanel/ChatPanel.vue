@@ -3,14 +3,13 @@ import { ref, watch, nextTick, computed, onMounted, onUnmounted, inject } from "
 import ChatRow from "./ChatRow.vue";
 import TurnChangeCard from "./TurnChangeCard.vue";
 import { TURN_CHANGES_KEY } from "./turnChanges";
-import AppLogo from "../AppLogo.vue";
 import Icon from "../Icon.vue";
-import ContextCompactionStatus from "../ContextCompactionStatus.vue";
 import TaskListPanel from "../TaskListPanel.vue";
-import InterruptButton from "../InterruptButton.vue";
 import PermissionDialog from "../PermissionDialog.vue";
-import BgTaskDock from "../BgTaskDock.vue";
-import SubagentDock from "../SubagentDock.vue";
+import ActivityStrip from "../activity/ActivityStrip.vue";
+import ActivityDrawer from "../activity/ActivityDrawer.vue";
+import { bgTaskChip, subagentChip, type ActivityChip, type ActivityTab } from "../activity/activityChips";
+import { pickAnswer } from "./answerSlot";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
@@ -20,7 +19,6 @@ import { sameRoot, useLsp } from "@/composables/useLsp";
 import type { PreflightLang } from "@aide/sdk/types/lspPacks";
 import ModelSwitchConfirm from "./ModelSwitchConfirm.vue";
 import BtwDrawer from "../BtwDrawer.vue";
-import UsageTipText from "./UsageTipText.vue";
 import type { UsageTip } from "./usageTips";
 import { useUsageTips } from "@/composables/useUsageTips";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, SubagentBlock, TaskItem } from "@/types/chat";
@@ -42,6 +40,7 @@ import { provideSessionIdentityView, sessionIdentityStore, buildConfirmDecision,
 import {
   isPendingSession,
   toggleBgDock,
+  toggleSubagentDock,
   loadOlderPage,
   hasMoreOlder,
   messagesOf,
@@ -436,6 +435,30 @@ const inputBoxRef = ref<{ rootEl: HTMLElement | null } | null>(null);
 const inputStow = computed<"off" | "unless-draft" | "always">(() =>
   sendConfirm.value ? "always" : props.permission ? "unless-draft" : "off",
 );
+
+/** 作答槽仲裁：权限队列（含发送前确认）优先，其次语言服务器询问；一次只出一张。 */
+const answer = computed(() =>
+  pickAnswer({
+    permission: !!displayedPermission.value,
+    permissionCount: sendConfirm.value ? 1 : (props.permissionQueueCount ?? (props.permission ? 1 : 0)),
+    lsp: showLspAsk.value,
+  }),
+);
+
+/** 活动带的 chip：每类后台活一个，点开活动抽屉对应 tab。 */
+const activityChips = computed<ActivityChip[]>(() =>
+  [
+    subagentChip(props.subagents ?? [], props.subagentDockOpen),
+    bgTaskChip(props.bgTasks ?? [], props.bgDockOpen),
+  ].filter((c): c is ActivityChip => c !== null),
+);
+
+/** chip 点击：开对应 tab；已开着就收起（store 保证两个 tab 互斥）。 */
+function onToggleActivity(tab: ActivityTab) {
+  if (!props.sessionId) return;
+  if (tab === "subagent") toggleSubagentDock(props.sessionId);
+  else toggleBgDock(props.sessionId);
+}
 const heroLeaving = ref(false); // 首条消息淡入用的一次性 class
 
 watch(isHero, (now, prev) => {
@@ -591,7 +614,10 @@ function onOpenBgDock(taskId: string) {
 
 <template>
   <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
-    <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
+    <!-- 会话头条：待办摘要一行，清单浮层下拉（不挤压消息区） -->
+    <div v-if="props.tasks && props.tasks.length > 0" class="chat-col chat-head">
+      <TaskListPanel :tasks="props.tasks" />
+    </div>
 
     <!-- 滚动区 wrapper：接手 .chat-messages 的 flex 占位，并作为「回到底部」
          悬浮按钮的定位锚点——按钮若直接放进滚动容器会随内容一起滚走；
@@ -603,7 +629,7 @@ function onOpenBgDock(taskId: string) {
       </div>
       <!-- 内容盒：ResizeObserver 的观察目标（见 useChatScroll 的 contentObserver），
            纯布局 wrapper，消息增高的任何来源都会反映为它的盒高变化 -->
-      <div ref="contentEl" class="chat-messages-body">
+      <div ref="contentEl" class="chat-messages-body chat-col">
         <button
           v-if="canLoadOlder"
           class="chat-history-gate"
@@ -646,127 +672,105 @@ function onOpenBgDock(taskId: string) {
       </button>
     </div>
 
-    <!-- 权限确认 / AskUserQuestion / 发送前确认（变体 C）：挤在消息区和输入框之间，
-         占真实布局空间而不是悬浮遮挡——上面 .chat-messages 是 flex:1，这块一出现
-         就自动让出高度，正文不会被盖住；输入框此时收起（inputStow；有草稿则不收）。displayedPermission 优先显示
-         发送前确认（本地合成请求），其次真实权限请求。 -->
-    <PermissionDialog
-      :permission="displayedPermission"
-      :queue-count="permissionQueueCount"
-      :remember-context="rememberState"
-      :current-mode="permissionMode"
-      @respond="onPermissionRespond"
-    />
-
-    <!-- 模型切换成本确认：sidecar PreModelSwitch hook 挂起时由 store.modelSwitchConfirm
-         驱动（切换发生前弹窗，SDK 真相裁决），与发送前确认（respawn 维度）不同轴 -->
-    <ModelSwitchConfirm
-      v-if="props.sessionId && !isPendingSession(props.sessionId)"
-      :session-id="props.sessionId"
-    />
-
-    <!-- 活动状态行（上下文压缩 / 正在思考）：inline dock，固定位于后台任务 dock 上方——
-         生成状态是当前会话的第一信息，后台任务条只是次要入口；
-         不随消息滚动——上滚读历史时状态可见、中断按钮仍触手可及；
-         出现时挤压消息区高度，与 PermissionDialog 同一模式。 -->
-    <ContextCompactionStatus
-      v-if="contextCompactionVal"
-      :status="contextCompactionVal"
-      :elapsed-seconds="activityElapsed"
-      @interrupt="emit('interrupt')"
-    />
-    <!-- 有待确认卡片时会话在等用户、不是在思考：不显示思考行 -->
-    <div v-else-if="props.isBusy && !displayedPermission" class="chat-thinking">
-      <AppLogo :size="15" animated />
-      <span class="chat-thinking-text">正在思考</span>
-      <Transition name="thinking-tip" mode="out-in">
-        <UsageTipText v-if="thinkingTip" :key="thinkingTip.id" class="chat-thinking-tip" :text="thinkingTip.text" />
-      </Transition>
-      <InterruptButton class="chat-interrupt-btn" @click="emit('interrupt')" />
-    </div>
-
-    <!-- 子代理 dock：同样式 inline dock，压在后台任务条之上——子代理是当前回合的活，
-         后台 shell 更「背景」；两者视觉刻意不同（agentAccent 左条 vs 中性+绿点），
-         同屏时不必读字。开合/清理语义在 toggleSubagentDock（结束的留着回看，关面板才清）。 -->
-    <SubagentDock
-      :session-id="props.sessionId"
-      :subagents="subagents ?? []"
-      :open="subagentDockOpen"
-      :selected-id="subagentDockSelectedId ?? null"
-      @update:selected-id="(id: string) => emit('update:subagentDockSelectedId', id)"
-    />
-
-    <!-- 后台任务 dock：与 PermissionDialog 同款 inline dock——挤压消息区而非浮层。
-         位于活动状态行之下（状态行固定在上，后台条出现/消失不顶走它）。
-         开合/清理语义在 toggleBgDock（结束的任务下次点开才清）。 -->
-    <BgTaskDock
-      :session-id="props.sessionId"
-      :tasks="bgTasks ?? []"
-      :open="bgDockOpen"
-      :selected-id="bgDockSelectedId ?? null"
-      @update:selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
-    />
-
-    <!-- hero 欢迎区（零会话欢迎态）：时间问候 + 轮换文案（HeroWelcome）。
-         模型/权限模式的实际选择仍在输入盒工具栏。 -->
-    <Transition name="hero-fade">
-      <HeroWelcome
-        v-if="isHero"
-        :mode="props.mode ?? DEFAULT_CHAT_MODE"
-        :workspace-path="props.workspacePath ?? ''"
-        :model-name="heroModelName"
-        @select-workspace="(ws) => emit('select-workspace', ws)"
-        @select-mode="(m) => emit('select-mode', m)"
-        @open-session="(sid) => emit('open-session', sid)"
+    <!-- 底部组成（2026-10-16 重排）：作答槽 → 活动抽屉 → 活动带 → 输入框，整列与消息内容同宽居中。 -->
+    <div class="chat-col chat-bottom">
+      <!-- 作答槽：「需要你回应」的只有这一个位置，一次一张卡（answerSlot.ts 仲裁），其余计入「还有 N 条」。
+           权限 / 提问 / 发送前确认占真实布局空间而不是悬浮遮挡，出现时输入框收起（inputStow；有草稿则不收）。
+           语言服务器询问不阻塞（消息已发出），保持轻量一行，权限卡在时让位。 -->
+      <PermissionDialog
+        :permission="answer.kind === 'permission' ? displayedPermission : null"
+        :queue-count="answer.total"
+        :remember-context="rememberState"
+        :current-mode="permissionMode"
+        @respond="onPermissionRespond"
       />
-    </Transition>
+      <LspSendPrompt
+        v-if="answer.kind === 'lsp' && lspAsk"
+        :langs="lspAsk.langs"
+        :busy="lspAskBusy"
+        @enable="resolveLspAsk('enable')"
+        @skip="resolveLspAsk('skip')"
+        @dismiss="resolveLspAsk('dismiss')"
+      />
 
-    <!-- 输入区（textarea + 工具栏 + 全部输入逻辑）已拆为独立组件 ChatInputBox：
-         输入框相关的改动（如 effort 选择器）不再动 ChatPanel。发送走 send-request
-         门控（onSendRequest），确认后经 sendConfirmedNonce 坐实清空输入。 -->
-    <ChatInputBox
-      :stow="inputStow"
-      ref="inputBoxRef"
-      :session-id="props.sessionId"
-      :workspace-path="props.workspacePath"
-      :is-busy="props.isBusy"
-      :is-hero="isHero"
-      :mode="props.mode"
-      :models="displayModels"
-      :current-model="props.currentModel"
-      :model-switch-result="props.modelSwitchResult"
-      :current-effort="props.currentEffort"
-      :effort-switch-error="props.effortSwitchError"
-      :permission-modes="displayPermissionModes"
-      :current-permission-mode="props.currentPermissionMode"
-      :context-usage="props.contextUsage"
-      :slash-commands="props.slashCommands"
-      :rate-limit="props.rateLimit"
-      :pending-jumps="props.pendingJumps"
-      :rollback-text="props.rollbackText"
-      :focused="props.focused"
-      :session-provider="sessionProvider"
-      :send-confirmed-nonce="sendConfirmedNonce"
-      @send-request="onSendRequest"
-      @send-btw="(prompt) => emit('send-btw', prompt)"
-      @set-model="(m) => emit('set-model', m)"
-      @set-effort="(e) => emit('set-effort', e)"
-      @set-permission-mode="(m) => emit('set-permission-mode', m)"
-      @rollback-text-consumed="emit('rollback-text-consumed')"
-      @hero-model-name="heroModelName = $event"
-      @permission-mode-changed="permissionMode = $event"
-    >
-      <template #above-box>
-        <LspSendPrompt
-          v-if="showLspAsk && lspAsk"
-          :langs="lspAsk.langs"
-          :busy="lspAskBusy"
-          @enable="resolveLspAsk('enable')"
-          @skip="resolveLspAsk('skip')"
-          @dismiss="resolveLspAsk('dismiss')"
+      <!-- 模型切换成本确认：Teleport 到 body 的模态框，由用户刚点的切换直接触发，不进作答槽 -->
+      <ModelSwitchConfirm
+        v-if="props.sessionId && !isPendingSession(props.sessionId)"
+        :session-id="props.sessionId"
+      />
+
+      <!-- 活动抽屉：子代理 / 后台任务面板合一，按 tab 切换（开合语义在 store 的 toggle*Dock） -->
+      <ActivityDrawer
+        :session-id="props.sessionId"
+        :subagents="subagents ?? []"
+        :subagent-open="subagentDockOpen"
+        :subagent-selected-id="subagentDockSelectedId ?? null"
+        :bg-tasks="bgTasks ?? []"
+        :bg-open="bgDockOpen"
+        :bg-selected-id="bgDockSelectedId ?? null"
+        @update:subagent-selected-id="(id: string) => emit('update:subagentDockSelectedId', id)"
+        @update:bg-selected-id="(id: string) => emit('update:bgDockSelectedId', id)"
+      />
+
+      <!-- 活动带：压缩 / 思考 + 计时 + 轮换提示、子代理与后台任务 chip、中断，一行。
+           不随消息滚动——上滚读历史时状态可见、中断按钮仍触手可及。 -->
+      <ActivityStrip
+        :compaction="contextCompactionVal"
+        :thinking="props.isBusy && !displayedPermission"
+        :elapsed-seconds="activityElapsed"
+        :tip="thinkingTip"
+        :chips="activityChips"
+        @interrupt="emit('interrupt')"
+        @toggle="onToggleActivity"
+      />
+
+      <!-- hero 欢迎区（零会话欢迎态）：时间问候 + 轮换文案（HeroWelcome）。
+           模型/权限模式的实际选择仍在输入盒工具栏。 -->
+      <Transition name="hero-fade">
+        <HeroWelcome
+          v-if="isHero"
+          :mode="props.mode ?? DEFAULT_CHAT_MODE"
+          :workspace-path="props.workspacePath ?? ''"
+          :model-name="heroModelName"
+          @select-workspace="(ws) => emit('select-workspace', ws)"
+          @select-mode="(m) => emit('select-mode', m)"
+          @open-session="(sid) => emit('open-session', sid)"
         />
-      </template>
-    </ChatInputBox>
+      </Transition>
+
+      <ChatInputBox
+        :stow="inputStow"
+        ref="inputBoxRef"
+        :session-id="props.sessionId"
+        :workspace-path="props.workspacePath"
+        :is-busy="props.isBusy"
+        :is-hero="isHero"
+        :mode="props.mode"
+        :models="displayModels"
+        :current-model="props.currentModel"
+        :model-switch-result="props.modelSwitchResult"
+        :current-effort="props.currentEffort"
+        :effort-switch-error="props.effortSwitchError"
+        :permission-modes="displayPermissionModes"
+        :current-permission-mode="props.currentPermissionMode"
+        :context-usage="props.contextUsage"
+        :slash-commands="props.slashCommands"
+        :rate-limit="props.rateLimit"
+        :pending-jumps="props.pendingJumps"
+        :rollback-text="props.rollbackText"
+        :focused="props.focused"
+        :session-provider="sessionProvider"
+        :send-confirmed-nonce="sendConfirmedNonce"
+        @send-request="onSendRequest"
+        @send-btw="(prompt) => emit('send-btw', prompt)"
+        @set-model="(m) => emit('set-model', m)"
+        @set-effort="(e) => emit('set-effort', e)"
+        @set-permission-mode="(m) => emit('set-permission-mode', m)"
+        @rollback-text-consumed="emit('rollback-text-consumed')"
+        @hero-model-name="heroModelName = $event"
+        @permission-mode-changed="permissionMode = $event"
+      />
+    </div>
     <BtwDrawer
       :visible="btwDrawerVisible"
       @close="closeBtw"
@@ -913,80 +917,39 @@ function onOpenBgDock(taskId: string) {
   color: var(--aide-text-secondary);
 }
 
-.chat-thinking {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 8px 16px;
-  font-size: 12px;
-  color: var(--aide-text-muted);
-  /* 输入框正上方的固定状态行（inline dock）：flex 列里不许被压扁 */
-  flex-shrink: 0;
+/* ── 会话列（2026-10-16）：内容列默认居中限宽（阅读友好），窗格比上限窄时自然满宽。
+   滚动容器 .chat-messages 仍满宽（滚动条贴窗格边），只有内容盒与头条 / 底部组成套这一列。
+   --chat-col-max 是布局尺寸、不是配色，不进主题 token。 */
+.chat-panel {
+  --chat-col-max: 860px;
 }
 
-.chat-thinking-text {
-  position: relative;
-  font-weight: 500;
-  background: linear-gradient(
-    90deg,
-    var(--aide-text-muted) 0%,
-    var(--aide-text-muted) 33%,
-    var(--aide-agent-accent) 50%,
-    var(--aide-text-muted) 67%,
-    var(--aide-text-muted) 100%
-  );
-  background-size: 300% 100%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  animation: thinking-text-shimmer 2.5s linear infinite;
-}
-
-@keyframes thinking-text-shimmer {
-  0% {
-    background-position: 100% center;
-  }
-  100% {
-    background-position: 0% center;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-thinking-text {
-    animation: none;
-    background: var(--aide-text-muted);
-    -webkit-background-clip: initial;
-    background-clip: initial;
-    -webkit-text-fill-color: initial;
-  }
-}
-
-/* 思考行的小提示：夹在「正在思考」与中断钮之间，窄了就省略号，不挤中断钮 */
-.chat-thinking-tip {
-  margin-left: 8px;
-  overflow: hidden;
-}
-
-.thinking-tip-enter-active,
-.thinking-tip-leave-active {
-  transition: opacity .4s var(--aide-ease);
-}
-
-.thinking-tip-enter-from,
-.thinking-tip-leave-to {
-  opacity: 0;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .thinking-tip-enter-active,
-  .thinking-tip-leave-active {
-    transition: none;
-  }
-}
-
-/* 中断按钮：视觉在 InterruptButton.vue（声波停止钮），这里只给布局——靠右 */
-.chat-interrupt-btn {
+.chat-col {
+  width: 100%;
+  max-width: var(--chat-col-max);
   margin-left: auto;
+  margin-right: auto;
+  /* 行 / 卡片自带 12px 左右边距（.msg-row、.perm-dock、输入区），列只补一点 */
+  padding-left: 4px;
+  padding-right: 4px;
+  box-sizing: border-box;
+}
+
+.chat-head {
+  flex: none;
+}
+
+.chat-bottom {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 活动带与输入框、子代理 / 后台抽屉对齐行的 12px 边距 */
+.chat-bottom > :deep(.astrip),
+.chat-bottom > :deep(.adrawer) {
+  margin-left: 12px;
+  margin-right: 12px;
 }
 
 /* ── hero（零会话欢迎态）────────────────────────────────────────────

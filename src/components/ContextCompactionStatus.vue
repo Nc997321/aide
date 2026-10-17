@@ -6,6 +6,8 @@ import InterruptButton from "./InterruptButton.vue";
 const props = defineProps<{
   status: ContextCompactionState;
   elapsedSeconds: number;
+  /** 嵌在活动带里：不画自己的底与边、不带中断钮（中断钮归活动带） */
+  inline?: boolean;
 }>();
 
 const emit = defineEmits<{ interrupt: [] }>();
@@ -23,7 +25,7 @@ const statusLabel = computed(() => `${headline.value}，${supportingText.value}`
 <template>
   <div
     class="context-compaction-status"
-    :class="{ 'context-compaction-status--failed': failed }"
+    :class="{ 'context-compaction-status--failed': failed, 'context-compaction-status--inline': inline }"
     role="status"
     aria-live="polite"
     aria-atomic="true"
@@ -41,7 +43,7 @@ const statusLabel = computed(() => `${headline.value}，${supportingText.value}`
     </span>
 
     <span v-if="!failed" class="context-compaction-elapsed" aria-hidden="true">{{ elapsedSeconds }}s</span>
-    <InterruptButton v-if="!failed" class="context-compaction-interrupt" @click="emit('interrupt')" />
+    <InterruptButton v-if="!failed && !inline" class="context-compaction-interrupt" @click="emit('interrupt')" />
   </div>
 </template>
 
@@ -61,6 +63,14 @@ const statusLabel = computed(() => `${headline.value}，${supportingText.value}`
 
 .context-compaction-status--failed {
   --compaction-tone: var(--aide-danger);
+}
+.context-compaction-status--inline {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 0;
+  border-top: 0;
+  background: none;
 }
 
 .context-fold-rail {

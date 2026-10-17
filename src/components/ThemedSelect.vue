@@ -25,8 +25,10 @@ const props = withDefaults(
     placeholder?: string;
     /** 整宽表单模式：撑满容器、对齐表单输入框（用于设置面板） */
     block?: boolean;
+    /** 紧凑 chip 外观（单行输入框里的权限模式）；弹层向上优先 */
+    compact?: boolean;
   }>(),
-  { title: "", disabled: false, placeholder: "", block: false },
+  { title: "", disabled: false, placeholder: "", block: false, compact: false },
 );
 
 const emit = defineEmits<{ (e: "update:modelValue", value: string): void }>();
@@ -125,7 +127,7 @@ onUnmounted(() => {
     ref="triggerRef"
     type="button"
     class="themed-select"
-    :class="{ disabled, active: open, block }"
+    :class="{ disabled, active: open, block, compact }"
     v-tooltip="title"
     :disabled="disabled"
     @click="toggle"
@@ -194,6 +196,22 @@ onUnmounted(() => {
 .themed-select.disabled {
   opacity: 0.45;
   cursor: default;
+}
+
+/* 紧凑 chip：输入框一行里用，不要阴影与大内边距 */
+.themed-select.compact {
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  font-size: 12px;
+  color: var(--aide-text-secondary);
+  border-color: transparent;
+  border-radius: var(--aide-radius-sm);
+  box-shadow: none;
+}
+.themed-select.compact:hover:not(.disabled),
+.themed-select.compact.active {
+  border-color: var(--aide-border);
 }
 
 /* 整宽表单模式：撑满并对齐设置面板里的文本输入框 */

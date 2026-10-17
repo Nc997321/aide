@@ -1,17 +1,40 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, onUnmounted, ref, watch } from "vue";
 import type { TaskItem } from "@/types/chat";
 import Icon from "./Icon.vue";
-import { useTaskListCollapse } from "@/composables/useTaskListCollapse";
 
 const props = defineProps<{ tasks: TaskItem[] }>();
 
 /**
- * 自动折叠状态机：tasks 长度增长 → 展开 + 起计时，STABLE_MS 内无新 task 增长则判定
- * 「创建批次结束」自动收起成摘要条，把高度还给消息区/输入框（解决 todo 过长覆盖输入框）。
- * 手动 toggle 取消计时器；状态变化（长度不变）不触发展开，折叠态下进度仍在摘要条实时更新。
+ * 会话头条（2026-10-16 会话组成重排）：恒为一行「计划 ▬▬ 2/4 · 当前步骤」，清单是
+ * 点开才出的**浮层**——不再挤压消息区，也**不再自动展开**（旧的「新任务到来自动展开、
+ * 稳定后收起」状态机已删：浮层自己弹出会盖住正在流式的正文）。点外部 / Esc 收起。
  */
-const { collapsed, toggleCollapse } = useTaskListCollapse(() => props.tasks.length);
+const open = ref(false);
+const rootEl = ref<HTMLElement | null>(null);
+
+function toggleOpen() {
+  open.value = !open.value;
+}
+
+function onDocPointerDown(e: PointerEvent) {
+  if (rootEl.value && !rootEl.value.contains(e.target as Node)) open.value = false;
+}
+
+function onDocKeyDown(e: KeyboardEvent) {
+  if (e.key === "Escape") open.value = false;
+}
+
+watch(open, (now) => {
+  if (now) {
+    document.addEventListener("pointerdown", onDocPointerDown, true);
+    document.addEventListener("keydown", onDocKeyDown);
+  } else {
+    document.removeEventListener("pointerdown", onDocPointerDown, true);
+    document.removeEventListener("keydown", onDocKeyDown);
+  }
+});
+onUnmounted(() => { open.value = false; });
 
 /** 状态 → Icon.vue 字形 key。进行中带呼吸动画，复用主线程工具步的执行中语义。 */
 function iconKey(status: TaskItem["status"]): string {
@@ -43,6 +66,9 @@ const summaryCurrent = computed(() => {
   if (total.value > 0 && completedCount.value === total.value) return "全部完成";
   return `${total.value - completedCount.value} 项待办`;
 });
+/** 头条进度条（已完成占比）。 */
+const progressPct = computed(() => (total.value ? Math.round((completedCount.value / total.value) * 100) : 0));
+
 /** 摘要条文本配色态：in_progress 强调，其余 muted。 */
 const summaryCurrentState = computed(() => {
   if (inProgressTask.value) return "in_progress";
@@ -52,14 +78,14 @@ const summaryCurrentState = computed(() => {
 </script>
 
 <template>
-  <div class="task-list-panel">
-    <!-- 摘要条：常驻头部，点击 toggle 展开/收起 -->
+  <div ref="rootEl" class="task-list-panel">
+    <!-- 头条：恒为一行，点击开合清单浮层 -->
     <button
       class="task-summary"
       type="button"
-      :aria-expanded="!collapsed"
-      v-tooltip="collapsed ? '展开待办清单' : '收起待办清单'"
-      @click="toggleCollapse"
+      :aria-expanded="open"
+      v-tooltip="open ? '收起待办清单' : '展开待办清单'"
+      @click="toggleOpen"
     >
       <Icon
         class="task-summary-icon"
@@ -68,13 +94,14 @@ const summaryCurrentState = computed(() => {
         :size="13"
         :pulse="summaryIconState === 'in_progress'"
       />
+      <span class="task-summary-label">计划</span>
+      <span class="task-summary-bar" aria-hidden="true"><i :style="{ width: `${progressPct}%` }"></i></span>
       <span class="task-summary-count">{{ completedCount }}/{{ total }}</span>
       <span class="task-summary-current" :class="`task-summary-current--${summaryCurrentState}`">{{ summaryCurrent }}</span>
-      <span class="task-summary-caret" :class="{ 'task-summary-caret--open': !collapsed }" aria-hidden="true"></span>
+      <span class="task-summary-caret" :class="{ 'task-summary-caret--open': open }" aria-hidden="true"></span>
     </button>
-    <!-- body：grid-template-rows 0fr→1fr 高度过渡（现代 Chromium/WebView2 原生支持，
-         无需测高），收起时 overflow:hidden 把列表藏进 0 高度行 -->
-    <div class="task-list-body-wrap" :class="{ 'task-list-body-wrap--open': !collapsed && total > 0 }">
+    <!-- 清单浮层：盖在消息区上方，不参与布局 -->
+    <div v-if="open && total > 0" class="task-pop">
       <TransitionGroup name="task" tag="div" class="task-list-body">
         <div
           v-for="task in props.tasks"
@@ -92,13 +119,50 @@ const summaryCurrentState = computed(() => {
 
 <style scoped>
 .task-list-panel {
+  position: relative;
+  z-index: 20; /* 浮层盖在消息区之上 */
+  flex: none;
   display: flex;
   flex-direction: column;
-  gap: 0;
-  padding: 4px 10px;
-  border-bottom: 1px solid var(--aide-border);
-  background: var(--aide-bg-base);
+  padding: 3px 0;
+  border-bottom: 1px solid var(--aide-border-subtle);
   font-size: 12px;
+}
+
+.task-summary-label {
+  flex-shrink: 0;
+  color: var(--aide-text-secondary);
+}
+
+.task-summary-bar {
+  flex-shrink: 0;
+  width: 72px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--aide-surface-default);
+  overflow: hidden;
+}
+.task-summary-bar i {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--aide-accent);
+  transition: width var(--aide-ease-t);
+}
+
+/* —— 清单浮层 —— */
+.task-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 50vh;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--aide-border-strong);
+  border-radius: var(--aide-radius-md);
+  background: var(--aide-bg-raised);
+  box-shadow: var(--aide-shadow-lg);
 }
 
 /* —— 摘要条（常驻，收起后只占一行，把高度还给消息区/输入框） —— */
@@ -182,20 +246,6 @@ const summaryCurrentState = computed(() => {
 }
 .task-summary-caret--open {
   transform: rotate(90deg);
-}
-
-/* —— body：grid 0fr→1fr 高度过渡 —— */
-.task-list-body-wrap {
-  display: grid;
-  grid-template-rows: 0fr;
-  transition: grid-template-rows var(--aide-ease-t);
-}
-.task-list-body-wrap--open {
-  grid-template-rows: 1fr;
-}
-.task-list-body {
-  overflow: hidden;
-  min-height: 0;
 }
 
 /* —— 新 task 入场：从上淡入下落，贴近 Claude 逐个 TaskCreate「一条条建出来」的观感 —— */
@@ -286,7 +336,7 @@ const summaryCurrentState = computed(() => {
   .task-icon {
     transition: none;
   }
-  .task-list-body-wrap {
+  .task-summary-bar i {
     transition: none;
   }
   .task-enter-active {

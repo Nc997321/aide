@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   findFilesByName: vi.fn<(query: string, cwd: string, limit?: number) => Promise<string[]>>(),
   pathTypes: vi.fn<(paths: string[]) => Promise<string[]>>(),
   readFileContent: vi.fn<(path: string) => Promise<string>>(),
+  scanPluginSkills: vi.fn(async () => [] as unknown[]),
 }));
 vi.mock("@aide/sdk/api", () => ({
   api: new Proxy(
@@ -28,6 +29,7 @@ vi.mock("@aide/sdk/api", () => ({
       findFilesByName: mocks.findFilesByName,
       pathTypes: mocks.pathTypes,
       readFileContent: mocks.readFileContent,
+      scanPluginSkills: mocks.scanPluginSkills,
     },
     { get: (t, k) => (typeof k === "string" && k in t ? (t as Record<string, unknown>)[k] : vi.fn(async () => undefined)) },
   ),
@@ -479,5 +481,58 @@ describe("ChatInputBox — 发送历史（↑/↓）", () => {
     await textarea(w).setValue("draft");
     await key(w, "ArrowUp");
     expect(valueOf(w)).toBe("draft");
+  });
+});
+
+describe("ChatInputBox · 单行输入框（2026-10-16）", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listDirectoryMock.mockResolvedValue([]);
+    findFilesByNameMock.mockResolvedValue([]);
+  });
+
+  it("默认一行；工具栏那一层没有了，控件与文本在同一行", () => {
+    const w = mountBox();
+    expect(textarea(w).attributes("rows")).toBe("1");
+    expect(w.find(".chat-toolbar").exists()).toBe(false);
+    const row = w.find(".composer-row");
+    expect(row.find("textarea.chat-input").exists()).toBe(true);
+    expect(row.findComponent({ name: "ModelEffortPicker" }).exists()).toBe(true);
+    expect(row.findComponent({ name: "ChatSendButton" }).exists()).toBe(true);
+  });
+
+  it("＋ 菜单：命令与技能在空输入里填出 /（斜杠菜单接手）", async () => {
+    mocks.scanPluginSkills.mockResolvedValue([]);
+    const w = mountBox({ slashCommands: [] });
+    await flushPromises();
+    w.findComponent({ name: "ComposerPlusMenu" }).vm.$emit("pick", "slash");
+    await nextTick();
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("/");
+  });
+
+  it("＋ 菜单：引用文件在已有文字后补一个空格再插 @", async () => {
+    const w = mountBox();
+    await typeAt(w, "看看");
+    w.findComponent({ name: "ComposerPlusMenu" }).vm.$emit("pick", "mention");
+    await flushPromises();
+    await nextTick();
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("看看 @");
+  });
+
+  it("＋ 菜单：没开始的会话里顺便问一下不可用（带原因）", () => {
+    const w = mountBox({ sessionId: null });
+    expect(w.findComponent({ name: "ComposerPlusMenu" }).props("btwDisabledReason")).toContain("先发送一条消息");
+  });
+
+  it("跳过确认模式：权限 chip 恒为红色警示", async () => {
+    const w = mountBox({
+      permissionModes: [
+        { value: "default", displayName: "手动" },
+        { value: "bypassPermissions", displayName: "跳过确认" },
+      ],
+    });
+    await w.setProps({ currentPermissionMode: "bypassPermissions" });
+    await nextTick();
+    expect(w.find(".perm-mode-wrap").classes()).toContain("perm-mode-wrap--bypass");
   });
 });

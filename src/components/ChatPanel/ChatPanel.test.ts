@@ -124,24 +124,23 @@ async function flush() {
   await nextTick();
 }
 
-/** 取模型 ThemedSelect 的 modelValue（按 title="模型" 区分三个下拉）。 */
+/** 模型 · 档位合一选择器（单行输入框，2026-10-16）。 */
+function pickerOf(wrapper: VueWrapper) {
+  return wrapper.findComponent({ name: "ModelEffortPicker" });
+}
+/** 取当前显示的模型。 */
 function modelValueOf(wrapper: VueWrapper): string {
-  const stubs = wrapper.findAllComponents({ name: "ThemedSelect" });
-  const model = stubs.find((s) => s.props("title") === "模型");
-  return (model?.props("modelValue") as string) ?? "";
+  const p = pickerOf(wrapper);
+  return p.exists() ? ((p.props("model") as string) ?? "") : "";
 }
 function permValueOf(wrapper: VueWrapper): string {
   const stubs = wrapper.findAllComponents({ name: "ThemedSelect" });
   const perm = stubs.find((s) => s.props("title") === "权限模式");
   return (perm?.props("modelValue") as string) ?? "";
 }
-/** 取 effort ThemedSelect 组件本身（用户手选档位 = 给它 emit update:modelValue）。 */
-function effortStubOf(wrapper: VueWrapper) {
-  const stubs = wrapper.findAllComponents({ name: "ThemedSelect" });
-  return stubs.find((s) => typeof s.props("title") === "string" && (s.props("title") as string).startsWith("effort"));
-}
 function effortValueOf(wrapper: VueWrapper): string {
-  return (effortStubOf(wrapper)?.props("modelValue") as string) ?? "";
+  const p = pickerOf(wrapper);
+  return p.exists() ? ((p.props("effort") as string) ?? "") : "";
 }
 
 describe("ChatPanel 跨会话串修复", () => {
@@ -230,8 +229,7 @@ describe("ChatPanel 跨会话串修复", () => {
     expect(modelValueOf(wrapper)).toBe("kimi"); // 恢复身份
 
     // 用户切换模型到 deepseek：仅模型漂移，弹「模型变更」确认形态
-    const modelStub = wrapper.findAllComponents({ name: "ThemedSelect" }).find((s) => s.props("title") === "模型");
-    modelStub?.vm.$emit("update:modelValue", "deepseek");
+    pickerOf(wrapper).vm.$emit("update:model", "deepseek");
     await nextTick();
     expect(modelValueOf(wrapper)).toBe("deepseek");
 
@@ -386,7 +384,7 @@ describe("ChatPanel — 档位跟随模式（日常 / 工程）", () => {
   it("hero 上手选过档位，切模式仍按模式重算（pre-send 语境，模式赢）", async () => {
     const wrapper = mount(ChatPanel, { props: baseProps({ mode: "daily" }) });
     await flush();
-    effortStubOf(wrapper)?.vm.$emit("update:modelValue", "max");
+    pickerOf(wrapper).vm.$emit("update:effort", "max");
     await nextTick();
     expect(effortValueOf(wrapper)).toBe("max");
 
@@ -445,7 +443,7 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
   });
 
   const tipText = (w: VueWrapper) => {
-    const el = w.find(".chat-thinking .usage-tip-body");
+    const el = w.find(".astrip-thinking .usage-tip-body");
     return el.exists() ? el.text() : null;
   };
 
@@ -467,7 +465,7 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
     await vi.advanceTimersByTimeAsync(4000);
     expect(tipText(w)).not.toBeNull();
     await w.setProps({ isBusy: false });
-    expect(w.find(".chat-thinking").exists()).toBe(false);
+    expect(w.find(".astrip-thinking").exists()).toBe(false);
   });
 
   it("未聚焦的面板不轮（多分屏同时在跑不重复计出场）", async () => {

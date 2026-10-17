@@ -17,7 +17,7 @@ vi.mock("@tauri-apps/api/core", () => ({
   invoke: (...args: unknown[]) => invokeMock(...args),
 }));
 
-import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest, toggleSubagentDock } from "./useChatSession";
+import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest, toggleSubagentDock, toggleBgDock } from "./useChatSession";
 import { SUBAGENTS_CAP } from "./useChatSession/state";
 import { useBtwSession } from "./useBtwSession";
 import { useSessionState } from "./useSessionState";
@@ -2229,6 +2229,30 @@ describe("子代理 dock — 派发列表与开合（2026-09-28）", () => {
     toggleSubagentDock("uuid-a");
     await flush();
     expect(chat.subagentDockSelectedId.value).toBe("a2");
+  });
+
+  it("活动抽屉同一时刻只开一个 tab：开后台任务会按子代理的关闭语义收掉它（含清理），反之亦然", async () => {
+    const chat = await openedChat();
+    startSubagent("a1");
+    startSubagent("a2");
+    await flush();
+    endSubagent("a1");
+    await flush();
+
+    toggleSubagentDock("uuid-a");
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(true);
+
+    toggleBgDock("uuid-a");
+    await flush();
+    expect(chat.bgDockOpen.value).toBe(true);
+    expect(chat.subagentDockOpen.value).toBe(false);
+    expect(chat.subagents.value.map((s) => s.id)).toEqual(["a2"]); // 已结束的 a1 随关闭清掉
+
+    toggleSubagentDock("uuid-a");
+    await flush();
+    expect(chat.subagentDockOpen.value).toBe(true);
+    expect(chat.bgDockOpen.value).toBe(false);
   });
 
   it(`列表上限 ${SUBAGENTS_CAP}：淘汰最老的已结束项，运行中的永不动`, async () => {

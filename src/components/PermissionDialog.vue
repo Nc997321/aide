@@ -118,8 +118,8 @@ const eyebrowLabel = computed(() => {
   return "工具调用请求";
 });
 
-/** 折叠态：计划批准 / 澄清提问弹窗较高，与顶部 TaskListPanel 一同挤压时会把消息区
- *  夹到几乎不可见（perm-dock max-height 60vh）。右上角折叠按钮把正文收起、只留头部
+/** 折叠态：计划批准 / 澄清提问弹窗较高，会把消息区夹到几乎不可见（perm-dock
+ *  max-height 60vh；顶部待办自 2026-10-16 起是浮层头条，不再一同挤压）。右上角折叠按钮把正文收起、只留头部
  *  条，把高度还给 .chat-messages（flex:1 自动回收），用户回看上文后再展开决定。
  *  仅 plan / question 给按钮——工具调用弹窗本就矮（输入封顶 128px），折叠省不了多少。
  *  组件常驻挂载（外层 v-if 在内层 .perm-dock），collapsed 会跨请求残留，故新请求到达

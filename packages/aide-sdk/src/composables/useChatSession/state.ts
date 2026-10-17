@@ -275,6 +275,8 @@ export function toggleSubagentDock(sid: string, selectedId?: string): void {
     return;
   }
   clearSubagentDockAutoHide(sid);
+  // 活动抽屉同一时刻只开一个 tab：先按后台任务自己的关闭语义收掉它（含清理）
+  if (store.bgDockOpen) toggleBgDock(sid);
   store.subagentDockOpen = true;
   // 选中项：指定的 → 最近派发的运行中 → 列表末尾（最近一个）
   if (selectedId && store.subagents.some((s) => s.id === selectedId)) {
@@ -333,6 +335,8 @@ export function toggleBgDock(sid: string, selectedId?: string): void {
     return;
   }
   clearBgDockAutoHide(sid);
+  // 活动抽屉同一时刻只开一个 tab：先按子代理自己的关闭语义收掉它（含清理）
+  if (store.subagentDockOpen) toggleSubagentDock(sid);
   store.bgTasks = store.bgTasks.filter((t) => t.status === "running");
   store.bgDockOpen = true;
   if (selectedId && store.bgTasks.some((t) => t.id === selectedId)) {

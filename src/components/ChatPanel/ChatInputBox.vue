@@ -2,6 +2,10 @@
 import { ref, watch, nextTick, computed } from "vue";
 import ThemedSelect from "../ThemedSelect.vue";
 import ChatSendButton from "../ChatSendButton.vue";
+import ModelEffortPicker from "./ModelEffortPicker.vue";
+import ComposerPlusMenu from "./ComposerPlusMenu.vue";
+import type { PlusAction } from "./composerPlus";
+import { useAutoGrow } from "@/composables/useAutoGrow";
 import ContextUsageRing from "./ContextUsageRing.vue";
 import ContextUsagePanel from "./ContextUsagePanel.vue";
 import AToast from "@/ui/AToast.vue";
@@ -590,6 +594,8 @@ const filteredSkills = computed(() =>
 );
 const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
 const textareaEl = ref<HTMLTextAreaElement>();
+// 空时一行，逐行撑高到上限（12 行 / 会话面板高度 40%）后内滚，发送清空后回落
+useAutoGrow(textareaEl, inputText);
 
 // 键盘上下移动时把选中行带进可视区（清单长过下拉框高度）
 const slashDropdownEl = ref<HTMLElement>();
@@ -1081,8 +1087,12 @@ async function handleDrop(e: DragEvent) {
   e.stopPropagation();
   const dt = e.dataTransfer;
   if (!dt) return;
+  await ingestFiles(Array.from(dt.files ?? []));
+}
 
-  const dropped = Array.from(dt.files ?? []);
+/** 拖入 / `＋` 菜单选取的文件进对话：图片成附件，其余成 @引用（与粘贴同一套判定）。
+ *  dropped 为空 = 内部文件树拖入（走文件剪贴板条目）。 */
+async function ingestFiles(dropped: File[]) {
   let paths: string[] = [];
   const localPaths: string[] = [];
   let entry: ReturnType<typeof peekFileClipboard> = null;
@@ -1127,6 +1137,54 @@ async function handleDrop(e: DragEvent) {
   if (paths.length) usageTips.markUsed("file-mention");
   await applyPasteResolution(res);
   if (entry) clearFileClipboard();
+}
+
+// ── `＋` 菜单（单行输入框，2026-10-16）：把粘贴 / 拖入 / @ / / / btw / 用量这些入口摆成可见菜单 ──
+const filePickerEl = ref<HTMLInputElement | null>(null);
+
+async function onFilesPicked(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const files = Array.from(input.files ?? []);
+  input.value = ""; // 同一文件再选一次也要触发 change
+  if (files.length) await ingestFiles(files);
+}
+
+/** 在光标处插入触发符并让既有补全接手（@ 走提及补全，/ 只在行首才是命令）。 */
+function insertTrigger(ch: "@" | "/") {
+  const ta = textareaEl.value;
+  ta?.focus();
+  if (ch === "/") {
+    if (!inputText.value.trim()) inputText.value = "/";
+    else insertAtCursor(" /");
+    return;
+  }
+  const before = inputText.value.slice(0, ta?.selectionStart ?? inputText.value.length);
+  insertAtCursor(before && !/\s$/.test(before) ? " @" : "@");
+  void nextTick(() => {
+    lastSuggestSig = "";
+    refreshSuggest();
+  });
+}
+
+function onPlusAction(action: PlusAction) {
+  switch (action) {
+    case "files":
+      filePickerEl.value?.click();
+      return;
+    case "mention":
+      insertTrigger("@");
+      return;
+    case "slash":
+      insertTrigger("/");
+      return;
+    case "btw":
+      if (props.sessionId) toggleBtw();
+      textareaEl.value?.focus();
+      return;
+    case "usage":
+      if (props.contextUsage) usagePanelOpen.value = true;
+      return;
+  }
 }
 
 // ── 发送流 ──
@@ -1437,8 +1495,6 @@ const { actions: quickActions } = useQuickActions();
       @select="pickedScene = $event"
       @example="fillSceneExample"
     />
-    <!-- 紧贴输入框上方、与它同宽的提示位（如新会话发送前的语言服务器询问） -->
-    <slot name="above-box" />
     <div
       class="chat-input-box"
       :class="{ 'btw-mode': btwMode, 'session-running': isBusy }"
@@ -1520,68 +1576,77 @@ const { actions: quickActions } = useQuickActions();
           <button class="image-thumb-remove" @click="pendingImages.splice(i, 1)">×</button>
         </div>
       </div>
-      <textarea
-        ref="textareaEl"
-        v-model="inputText"
-        class="chat-input"
-        :placeholder="placeholder"
-        rows="3"
-        @keydown.enter.exact.prevent="onEnterKey"
-        @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
-        @keydown.tab="handleTabKey"
-        @keydown.escape="onEscapeKey"
-        @keydown.right="onArrowRight"
-        @keydown.up="handleArrowUp"
-        @keydown.down="handleArrowDown"
-        @keyup="onSuggestCaretKey"
-        @click="refreshSuggest"
-        @focus="refreshSuggest"
-        @paste="handlePaste"
-        @input="handleInput"
-      />
-      <div class="chat-toolbar">
-        <ThemedSelect
-          v-if="displayModels.length"
-          :model-value="selectedModel"
-          :options="modelSelectOptions"
-          :disabled="btwMode"
-          :title="btwMode ? BTW_SELECTOR_HINT : '模型'"
-          @update:model-value="handleModelChange"
+      <!-- 单行输入（2026-10-16）：[＋] 文本 [模型·档位] [权限] (额度) (环) [发送] 一行横排，
+           文本随内容撑高（useAutoGrow），两侧控件贴底（align-items:flex-end）。 -->
+      <div class="composer-row">
+        <ComposerPlusMenu
+          :btw-active="btwMode"
+          :btw-disabled-reason="sessionId ? '' : '先发送一条消息开始主对话，才能顺便问一下'"
+          :usage-disabled-reason="contextUsage ? '' : (quotaBadge?.title || '会话开始后才有上下文用量')"
+          @pick="onPlusAction"
         />
-        <!-- effort 选择器：会话级思考深度，切换即时生效（sidecar applyFlagSettings，
-             不重启进程、不碰 prompt 缓存）；三档制：快速=关闭思考模式、进阶/极致=
-             开启思考（worker 侧 thinkingForEffort 联动）；默认 思考(high) -->
-        <ThemedSelect
-          :model-value="selectedEffort"
-          :options="effortSelectOptions"
-          :disabled="btwMode"
-          :title="btwMode ? BTW_SELECTOR_HINT : 'effort（思考深度）：快速=关闭思考模式、进阶/极致=开启思考；切换从下一轮起生效，不影响缓存'"
-          @update:model-value="handleEffortChange"
+        <input
+          ref="filePickerEl"
+          type="file"
+          multiple
+          class="composer-file-input"
+          tabindex="-1"
+          aria-hidden="true"
+          @change="onFilesPicked"
         />
-        <div
-          v-if="displayPermissionModes.length"
-          class="perm-mode-wrap"
-          :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
-        >
-          <ThemedSelect
-            :model-value="selectedPermissionMode"
-            :options="permissionModeSelectOptions"
-            title="权限模式"
-            @update:model-value="handlePermissionModeChange"
+        <textarea
+          ref="textareaEl"
+          v-model="inputText"
+          class="chat-input"
+          :placeholder="placeholder"
+          rows="1"
+          @keydown.enter.exact.prevent="onEnterKey"
+          @keydown.enter.shift.exact.prevent="insertAtCursor('\n')"
+          @keydown.tab="handleTabKey"
+          @keydown.escape="onEscapeKey"
+          @keydown.right="onArrowRight"
+          @keydown.up="handleArrowUp"
+          @keydown.down="handleArrowDown"
+          @keyup="onSuggestCaretKey"
+          @click="refreshSuggest"
+          @focus="refreshSuggest"
+          @paste="handlePaste"
+          @input="handleInput"
+        />
+        <div class="composer-controls">
+          <!-- 模型 · 档位合一：选择仍各走 handleModelChange / handleEffortChange。
+               effort 是会话级思考深度，切换即时生效（sidecar applyFlagSettings，不重启进程、
+               不碰 prompt 缓存）；快速=关闭思考，进阶/极致=开启思考。 -->
+          <ModelEffortPicker
+            :models="modelSelectOptions"
+            :model="selectedModel"
+            :efforts="effortSelectOptions"
+            :effort="selectedEffort"
+            :disabled="btwMode"
+            :title="btwMode ? BTW_SELECTOR_HINT : '模型与思考深度'"
+            @update:model="handleModelChange"
+            @update:effort="handleEffortChange"
           />
-          <span
-            v-if="selectedPermissionMode === 'bypassPermissions'"
-            class="perm-bypass-badge"
-            v-tooltip="'已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'"
-          >⚠️ 跳过确认</span>
-        </div>
-        <!-- 右侧组整体吸边：auto margin 挂在组容器上而不是发送按钮——否则
-             弹性空隙会插在环形与发送之间，环形被留在左侧队列（真踩过） -->
-        <div class="chat-toolbar-right">
-          <!-- 有上下文环时点它开同一个用量弹层（额度环明细在那里）；欢迎页没有环，只给提示 -->
+          <div
+            v-if="displayPermissionModes.length"
+            class="perm-mode-wrap"
+            :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
+            v-tooltip="selectedPermissionMode === 'bypassPermissions'
+              ? '已跳过所有工具权限确认（含本会话派生的所有子代理，子代理会继承此模式且不能单独覆盖），仅本会话生效；切换/新建会话会恢复默认权限模式'
+              : ''"
+          >
+            <ThemedSelect
+              compact
+              :model-value="selectedPermissionMode"
+              :options="permissionModeSelectOptions"
+              title="权限模式"
+              @update:model-value="handlePermissionModeChange"
+            />
+          </div>
+          <!-- 额度：只在吃紧（≥80%）时露面，平时明细在环的用量弹层里 -->
           <component
             :is="contextUsage ? 'button' : 'div'"
-            v-if="quotaBadge"
+            v-if="quotaBadge && quotaBadge.status !== 'ok'"
             :type="contextUsage ? 'button' : undefined"
             class="chat-quota"
             :class="[`chat-quota--${quotaBadge.status}`, { 'chat-quota--clickable': !!contextUsage }]"
@@ -1627,8 +1692,7 @@ const { actions: quickActions } = useQuickActions();
 
 <style scoped>
 .chat-input-area {
-  border-top: 1px solid var(--aide-border);
-  padding: 8px 12px;
+  padding: 4px 12px 12px;
   flex-shrink: 0;
   position: relative;
 }
@@ -1666,7 +1730,7 @@ const { actions: quickActions } = useQuickActions();
 .chat-input-box {
   display: flex;
   flex-direction: column;
-  border-radius: var(--aide-radius-sm);
+  border-radius: var(--aide-radius-lg);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
   transition: all var(--aide-ease-t);
@@ -1733,14 +1797,26 @@ const { actions: quickActions } = useQuickActions();
   to { --aide-input-comet: 360deg; }
 }
 
-.chat-toolbar {
+/* 单行输入（2026-10-16）：[＋] 文本 [控件…] [发送] 一行横排；文本撑高时两侧贴底 */
+.composer-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  padding: 6px 6px 6px 6px;
+}
+
+.composer-controls {
+  flex: none;
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 10px;
-  border-top: 1px solid var(--aide-border);
+  gap: 6px;
+  min-height: 30px;
   font-size: 12px;
   color: var(--aide-text-secondary);
+}
+
+.composer-file-input {
+  display: none;
 }
 
 /* bypassPermissions（跳过所有确认）常驻警示：不用一次性确认框，而是选中期间持续
@@ -1755,12 +1831,7 @@ const { actions: quickActions } = useQuickActions();
 .perm-mode-wrap--bypass :deep(.themed-select) {
   border-color: var(--aide-danger);
   color: var(--aide-danger);
-}
-
-.perm-bypass-badge {
-  font-size: 11px;
-  color: var(--aide-danger);
-  white-space: nowrap;
+  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
 }
 
 .chat-quota {
@@ -1801,15 +1872,18 @@ const { actions: quickActions } = useQuickActions();
 .chat-quota--exceeded { color: var(--aide-danger); font-weight: 600; }
 
 .chat-input {
+  flex: 1;
+  min-width: 0;
   resize: none;
   border: none;
   background: transparent;
-  padding: 8px 12px;
+  padding: 5px 4px;
   font-size: 13px;
   color: var(--aide-text-primary);
   outline: none;
   font-family: inherit;
-  line-height: 1.5;
+  line-height: 20px;
+  overflow-y: hidden;
 }
 
 .chat-input::placeholder {
@@ -1825,13 +1899,6 @@ const { actions: quickActions } = useQuickActions();
  * ChatSendButton.vue 内。 */
 /* 工具条右侧组（环形 + 发送分裂按钮）整体吸边；auto 在组容器上，
    环形才真正贴着发送按钮，且环形缺省（无用量数据）时发送仍吸右 */
-.chat-toolbar-right {
-  margin-left: auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
 .skill-dropdown {
   position: absolute;
   bottom: 100%;

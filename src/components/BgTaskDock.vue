@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import type { BgTask } from "@/types/chat";
-import { toggleBgDock } from "@/composables/useChatSession";
 import { api } from "@/api";
 import { buildXtermTheme } from "../utils/xterm";
 import { MONO_FONT_STACK } from "../utils/fonts";
@@ -11,9 +10,8 @@ import { windowsPtyConfig } from "../utils/platform";
 import { useSettings } from "../composables/useSettings";
 
 /**
- * 后台任务 dock：状态条（常驻）+ 底部展开面板（任务列表 + xterm 实时输出）。
- * 布局对齐 PermissionDialog 的 inline dock 模式——占真实布局空间挤压消息区，
- * 不是浮层（滚动置底由 ChatPanel 的 RO 双观察自动兜底，不需要数据层触发器）。
+ * 后台任务面板：活动抽屉（activity/ActivityDrawer）的「后台任务」tab——任务列表 + xterm 实时输出。
+ * 运行状态由活动带的 chip 常驻（2026-10-16 起，取代原来这里自带的状态条）。
  *
  * 数据全部来自 useChatSession 的 per-session store（bg_task_* 事件累积）；
  * 开合/清理语义在 toggleBgDock（结束的任务下次点开时才清）。
@@ -33,28 +31,6 @@ const { settings } = useSettings();
 
 const runningTasks = computed(() => props.tasks.filter((t) => t.status === "running"));
 const selectedTask = computed(() => props.tasks.find((t) => t.id === props.selectedId) ?? null);
-
-/** 状态条：有任务或面板开着才出现。 */
-const barVisible = computed(() => props.tasks.length > 0 || props.open);
-
-const barText = computed(() => {
-  const n = runningTasks.value.length;
-  if (n > 0) return `${n} 个后台任务运行中`;
-  const anyFailed = props.tasks.some((t) => t.status === "failed");
-  return anyFailed ? "✗ 有后台任务失败" : "✓ 后台任务全部完成";
-});
-
-/** 状态条上的运行中命令名（第一个 + 余量提示）。 */
-const barNames = computed(() => {
-  const names = runningTasks.value.map((t) => t.command || t.description || t.id);
-  if (names.length === 0) return "";
-  const first = names[0].length > 40 ? names[0].slice(0, 40) + "…" : names[0];
-  return names.length > 1 ? `${first} 等 ${names.length} 个` : first;
-});
-
-function onToggle() {
-  if (props.sessionId) toggleBgDock(props.sessionId);
-}
 
 function onSelect(task: BgTask) {
   emit("update:selectedId", task.id);
@@ -154,13 +130,15 @@ function writeTaskOutput(task: BgTask | null, full = false) {
   writtenTaskId = task?.id ?? null;
 }
 
-// 面板开合：开 → 建终端；关 → 销毁（下次开重建并重放存量输出）
+// 面板开合：开 → 建终端；关 → 销毁（下次开重建并重放存量输出）。
+// immediate：嵌在活动抽屉里时，切到本 tab 才挂载、挂载那一刻 open 已经是 true。
 watch(
   () => props.open,
   async (open) => {
     if (open) await initTerminal();
     else disposeTerminal();
   },
+  { immediate: true },
 );
 
 // 输出增量 / 选中切换：前缀匹配只写后缀，否则全量重写
@@ -199,13 +177,7 @@ function taskName(task: BgTask): string {
 </script>
 
 <template>
-  <div v-if="barVisible" class="bgtask">
-    <button class="bgtask-bar" :aria-expanded="open" @click="onToggle">
-      <span :class="['bgtask-dot', runningTasks.length > 0 ? 'bgtask-dot--run' : 'bgtask-dot--idle']"></span>
-      <span class="bgtask-bar-text">{{ barText }}</span>
-      <span v-if="barNames" class="bgtask-bar-names">{{ barNames }}</span>
-      <span class="bgtask-caret">{{ open ? "▾" : "▴" }}</span>
-    </button>
+  <div v-if="open" class="bgtask">
 
     <div v-if="open" class="bgtask-dock">
       <div class="bgtask-list">
@@ -240,84 +212,22 @@ function taskName(task: BgTask): string {
 </template>
 
 <style scoped>
+/* 撑满活动抽屉的主体；外框归抽屉 */
 .bgtask {
-  flex: none;
   display: flex;
   flex-direction: column;
-  margin: 0 12px;
+  height: 100%;
 }
 
-/* 状态条：常驻，点击开合 dock */
-.bgtask-bar {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  width: 100%;
-  padding: 6px 12px;
-  background: var(--aide-bg-raised);
-  border: 1px solid var(--aide-border);
-  border-radius: var(--aide-radius-md);
-  color: var(--aide-text-secondary);
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color var(--aide-ease-t);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
-}
-.bgtask-bar:hover {
-  border-color: var(--aide-border-strong);
-}
-
-.bgtask-dot {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.bgtask-dot--run {
-  background: var(--aide-success);
-  animation: bgtask-pulse 1.6s infinite;
-}
-.bgtask-dot--idle {
-  background: var(--aide-surface-active);
-}
 @keyframes bgtask-pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
 
-.bgtask-bar-text {
-  font-weight: 600;
-  color: var(--aide-text-primary);
-  white-space: nowrap;
-}
-.bgtask-bar-names {
-  font-family: var(--aide-font-mono);
-  font-size: 11px;
-  color: var(--aide-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.bgtask-caret {
-  margin-left: auto;
-  font-size: 14px; /* 全项目三角箭头统一 14px */
-  color: var(--aide-text-muted);
-  flex-shrink: 0;
-}
-
-/* dock 面板：挤压消息区的真实布局块 */
 .bgtask-dock {
   display: flex;
-  height: 220px;
-  margin-top: 6px;
-  border: 1px solid var(--aide-border-strong);
-  border-radius: var(--aide-radius-lg);
-  background: var(--aide-bg-raised);
+  height: 100%;
   overflow: hidden;
-  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
 }
 
 .bgtask-list {
