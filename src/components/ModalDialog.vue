@@ -188,6 +188,7 @@ function onOverlayClick(e: MouseEvent) {
 
 .modal-actions {
   display: flex;
+  flex-wrap: wrap; /* 三选时按钮文字长也不会挤出对话框左缘（2026-10-17 删除父会话对话框踩过） */
   justify-content: flex-end;
   gap: 9px;
 }

@@ -236,8 +236,8 @@ export function sessionMenuItems(
         if (children.length) {
           const pick = await modal.choice(
             "删除会话",
-            `这个会话派出过 ${children.length} 个子会话。连同子会话一起删除？对话记录（.jsonl）会一并删除，无法通过 --resume 恢复。`,
-            { confirmLabel: `连同 ${children.length} 个子会话删除`, altLabel: "只删这个，保留子会话", danger: true },
+            `这个会话派出过 ${children.length} 个子会话。「只删这个」会把子会话留下，变成普通会话。对话记录（.jsonl）删除后无法通过 --resume 恢复。`,
+            { confirmLabel: "连同子会话删除", altLabel: "只删这个", danger: true },
           );
           if (pick === "cancel") return;
           withChildren = pick === "confirm";
