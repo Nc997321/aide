@@ -191,7 +191,7 @@ export struct FileViewer {
             .objectFit(ImageFit.Contain)
             .width('100%')
             .layoutWeight(1)
-            .onComplete((e?: ImageCompleteCallback) => {
+            .onComplete((e) => {
               if (e !== undefined) {
                 this.imgW = e.width;
                 this.imgH = e.height;
