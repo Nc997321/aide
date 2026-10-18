@@ -1108,6 +1108,13 @@ export struct ChatPage {
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
+    // 点击 = 只读预览 Host 上这个文件（图片 / 文档 / 文本）；无路径的不响应
+    .onClick(() => {
+      const path: string = toolSummary(b.input);
+      if (path !== '' && !b.isPending) {
+        this.model.openWorkspaceFile(path);
+      }
+    })
   }
 
   /** 思考卡内容一屏限高：列表视口 − 头行/边距预留，保底最小可滚高度。 */
@@ -2294,6 +2301,10 @@ export struct ChatPage {
         FileViewer({
           title: this.store.fvTitle,
           content: this.store.fvContent,
+          kind: this.store.fvKind,
+          dataUri: this.store.fvDataUri,
+          bytes: this.store.fvBytes,
+          errorText: this.store.fvError,
           onClose: () => {
             this.store.closeFilePreview();
           }

@@ -11,6 +11,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::bus::{Attach, Bus, ClientId, Consumer, Event, Resume};
+use super::files;
 use crate::{Core, Reply};
 
 pub struct CoreBackend {
@@ -62,6 +63,13 @@ impl Backend for CoreBackend {
         Box::pin(async move {
             let core = core.ok_or("Host is shutting down")?;
             let run = crate::lookup(&method).ok_or_else(|| format!("unknown host command `{method}`"))?;
+            // 手机读文件：只许已注册工作区内的文件、有大小上限（桌面同名命令不设限，闸门只在远程这一扇）
+            if files::is_read_method(&method) {
+                let p = params.clone();
+                tokio::task::spawn_blocking(move || files::check_read(&p, &files::registered_roots()))
+                    .await
+                    .map_err(|e| e.to_string())??;
+            }
             match run(core, params).await? {
                 Reply::Json(v) => Ok(v),
                 Reply::Bytes(b) => Ok(json!({ "$bytes": base64::engine::general_purpose::STANDARD.encode(b) })),

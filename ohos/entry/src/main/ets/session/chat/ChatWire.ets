@@ -55,6 +55,13 @@ export function toolSummary(input: Object): string {
 
 /** 写盘类工具判定：Edit/Write 落消息 blocks 常驻折叠行（原型 .edit-row 语义）；
  * 其余工具维持 liveActivities 瞬态行。 */
+/** 路径末段的扩展名（小写、无点；无后缀 / 点文件 = 空串）。 */
+export function fileExt(path: string): string {
+  const base: string = path.substring(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
+  const i: number = base.lastIndexOf('.');
+  return i <= 0 || i === base.length - 1 ? '' : base.substring(i + 1).toLowerCase();
+}
+
 export function isEditTool(name: string): boolean {
   return name === 'Edit' || name === 'Write';
 }

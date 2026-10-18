@@ -11,6 +11,7 @@
 //! 值是 Host 自持的链路状态（密钥库 `link/relayUrl`，与网关开关并列）——改地址即重连，手机需重新扫码。
 
 pub mod backend;
+pub mod files;
 pub mod vault;
 
 use std::sync::atomic::{AtomicBool, Ordering};

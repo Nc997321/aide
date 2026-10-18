@@ -89,6 +89,11 @@ pub mod daily;
 // 共用 aide-workspace 里的同一份（远程会话的转录在目标机上按同一规则落盘）。
 pub use aide_workspace::transcripts::{path_to_key, resolve_project_dirs};
 
+/// 已注册工作区的路径（手机端读文件的根白名单用；纯读 `config`，不做存在性判断）。
+pub fn registered_paths(config: &serde_json::Value) -> Vec<String> {
+    registry::registered(config).into_iter().map(|w| w.path).collect()
+}
+
 /// 读 state 里的 hiddenWorkspaces 黑名单。
 pub fn hidden_keys(config: &serde_json::Value) -> Vec<String> {
     config

@@ -229,7 +229,7 @@ aide-link://pair?v=1&relay=wss%3A%2F%2Frelay.example.com%2F&id=00112233445566778
 → {"type":"hello","client":{"name":"aide-pwa","version":"0.8.0","platform":"web"}}
 ← {"type":"hello_ok","version":1,
    "host":{"id":"00112233445566778899aabbccddeeff","name":"devbox","os":"linux","arch":"x86_64","version":"0.8.0"},
-   "granted":["chat","sessions","workspace","settings","automation"],
+   "granted":["chat","sessions","workspace","settings","files","automation"],
    "limits":{"max_frame_bytes":8388608,"max_in_flight":64}}
 ```
 
@@ -309,12 +309,15 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 | `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` |
 | `workspace` 工作区 | `list_workspaces` `daily_workspace` `get_active_workspace` `is_workspace_trusted` `trust_workspace` `untrust_workspace` |
 | `settings` 设置与供应商 | `get_settings` `set_settings` `get_providers` `set_providers` `get_active_provider_id` `set_active_provider_id` `get_provider_catalog` `refresh_models` `claude_credentials_exist` `load_notifications` `save_notifications` |
+| `files` 文件（只读，限已注册工作区） | `read_file_content` `read_file_base64` |
 | `automation` 自动化任务 | `list_automations` `get_automation` `create_automation` `update_automation` `delete_automation` `set_automation_enabled` `list_automation_runs` `automation_run_stats` `run_automation_now` `get_automation_playbook` `redistill_automation` |
 
 **远程专属行为**（只此一处，由 Host 在转发前应用）：
 
 - `send_message` 缺 `permissionMode` 时，Host 补上自己的「远程默认权限模式」（Host 设置项）；旧 id `default` 归一化为 `manual`。
   客户端显式给的优先。其余参数原样交给 Host 命令（Host 命令自己校验形状）。
+- `read_file_content` / `read_file_base64` 经 Host 的**读文件闸**（`aide-core` 的 link/files）：路径 canonicalize 后须落在某个
+  已注册工作区之下（`..` 与符号链接都解掉再判），单文件不超过 8 MiB；不满足返回错误。桌面同名命令不设限。
 
 ### 7.3 `link.*`
 

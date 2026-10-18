@@ -45,7 +45,7 @@ import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/Cha
 import { routeChatEvent } from './chat/ChatEvents';
 import { ttsModel } from './chat/TtsModel';
 import { readerModel } from './chat/ReaderModel';
-import { uuid } from './chat/ChatWire';
+import { uuid, fileExt } from './chat/ChatWire';
 import { sessionsModel } from './SessionsModel';
 import { workspaceModel } from './WorkspaceModel';
 import { providerModel } from './ProviderModel';
@@ -114,6 +114,18 @@ export interface RespondPermissionOpts {
   reason: string | null;
 }
 
+/** 远程预览：可直接当图片显示的扩展名 → MIME。 */
+const PREVIEW_IMAGE_MIME: Map<string, string> = new Map<string, string>([
+  ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'], ['webp', 'image/webp'], ['bmp', 'image/bmp']
+]);
+
+/** 远程预览：只给提示、不拉取正文的文档/二进制类扩展名。 */
+const PREVIEW_DOC_EXTS: Set<string> = new Set<string>([
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf',
+  'zip', 'rar', '7z', 'tar', 'gz', 'mp3', 'mp4', 'mov', 'wav', 'apk', 'hap', 'exe', 'bin'
+]);
+
 export class ChatModel {
   /** 单会话 store（单例实例终生不变；打开新会话 = resetForOpen 整体复位）。 */
   readonly store: ChatStore = new ChatStore();
@@ -140,6 +152,34 @@ export class ChatModel {
   }
 
   /** 打开会话（路由进入）：整体复位 + 立即 hydrate + 后台任务快照对账 + 模型域同步。 */
+  /**
+   * 手机端只读预览 Host 上的文件（Write/Edit 卡点击）：图片拉字节转 data: URI；文档类
+   * （pdf/office/压缩包…）不拉正文（体积大、手机渲不了，只给提示）；其余按文本拉取。
+   * 读文件闸在 Host 侧（已注册工作区内、≤8 MiB），越界/超限的错误原样进 error 态。
+   */
+  openWorkspaceFile(path: string): void {
+    this.store.openRemoteFile(path);
+    void this.loadWorkspaceFile(path);
+  }
+
+  private async loadWorkspaceFile(path: string): Promise<void> {
+    const ext: string = fileExt(path);
+    const mime: string = PREVIEW_IMAGE_MIME.has(ext) ? PREVIEW_IMAGE_MIME.get(ext) ?? '' : '';
+    try {
+      if (mime !== '') {
+        const b64: string = await api.readFileBase64(path);
+        this.store.setRemoteFile(path, 'image', '', `data:${mime};base64,${b64}`, Math.floor(b64.length * 3 / 4), '');
+      } else if (PREVIEW_DOC_EXTS.has(ext)) {
+        this.store.setRemoteFile(path, 'other', '', '', 0, '');
+      } else {
+        const text: string = await api.readFileContent(path);
+        this.store.setRemoteFile(path, 'text', text, '', 0, '');
+      }
+    } catch (e) {
+      this.store.setRemoteFile(path, 'error', '', '', 0, e instanceof Error ? e.message : String(e));
+    }
+  }
+
   open(sid: string, name: string): void {
     ttsModel.stop(); // 切走即停：不念旧会话（对照原型 pickSession）
     readerModel.stop(); // 听书同理：面板播放列表是旧会话快照，切走即收

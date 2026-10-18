@@ -98,6 +98,11 @@ pub static GROUPS: &[Group] = &[
         ],
     },
     Group {
+        id: "files",
+        title: "文件（只读，限已注册工作区）",
+        methods: &["read_file_content", "read_file_base64"],
+    },
+    Group {
         id: "automation",
         title: "自动化任务",
         methods: &[

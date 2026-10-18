@@ -35,6 +35,17 @@ function extOf(name: string): string {
   return name.substring(i + 1).toLowerCase();
 }
 
+/** 字节数人类可读（B / KB / MB）。 */
+function byteLabel(n: number): string {
+  if (n < 1024) {
+    return `${n} B`;
+  }
+  if (n < 1024 * 1024) {
+    return `${(n / 1024).toFixed(1)} KB`;
+  }
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 @ComponentV2
 export struct FileViewer {
   /** 展示标题（readChip 传入 = file_path；兜底工具名）。 */
@@ -43,6 +54,17 @@ export struct FileViewer {
   @Param content: string = '';
   /** 关闭回调（标题栏 ← 键；上层接 store.closeFilePreview）。 */
   @Param onClose: () => void = () => {};
+  /** 预览种类（ChatStore.fvKind）：text 正文 / loading 拉取中 / image 图片 / other 文档 / error 失败。 */
+  @Param kind: string = 'text';
+  /** 图片 data: URI（kind = image）。 */
+  @Param dataUri: string = '';
+  /** 字节数（kind = image；0 = 未知）。 */
+  @Param bytes: number = 0;
+  /** 失败原文（kind = error）。 */
+  @Param errorText: string = '';
+  /** 图片解码后的像素尺寸（Image.onComplete 回填；0 = 未解码完）。 */
+  @Local imgW: number = 0;
+  @Local imgH: number = 0;
 
   /** 文件名（标题末段；空标题兜底「文件」）。 */
   private nameOf(): string {
@@ -53,6 +75,43 @@ export struct FileViewer {
   /** 扩展名（分流与徽标共用）。 */
   private extValue(): string {
     return extOf(baseName(this.title));
+  }
+
+  /** 图片信息行：像素尺寸（解码后）· 字节数 · 格式。 */
+  private imageInfo(): string {
+    const parts: string[] = [];
+    if (this.imgW > 0 && this.imgH > 0) {
+      parts.push(`${this.imgW} × ${this.imgH}`);
+    }
+    if (this.bytes > 0) {
+      parts.push(byteLabel(this.bytes));
+    }
+    parts.push(this.extValue().toUpperCase());
+    return parts.join(' · ');
+  }
+
+  /** 居中提示块（loading / other / error 共用）。 */
+  @Builder
+  centerNote(icon: Resource, title: string, sub: string) {
+    Column({ space: 8 }) {
+      SymbolGlyph(icon)
+        .fontSize(40)
+        .fontColor([$r('app.color.text_secondary')])
+      Text(title)
+        .fontSize(13)
+        .fontColor($r('app.color.text_secondary'))
+      if (sub !== '') {
+        Text(sub)
+          .fontSize(11.5)
+          .fontColor($r('app.color.text_secondary'))
+          .textAlign(TextAlign.Center)
+          .padding({ left: 24, right: 24 })
+      }
+    }
+    .width('100%')
+    .layoutWeight(1)
+    .justifyContent(FlexAlign.Center)
+    .alignItems(HorizontalAlign.Center)
   }
 
   build() {
@@ -111,7 +170,44 @@ export struct FileViewer {
       .padding({ left: 12, right: 16 })
       .alignItems(VerticalAlign.Center)
 
-      if (this.content === '') {
+      if (this.kind === 'loading') {
+        Column({ space: 10 }) {
+          LoadingProgress().width(28).height(28).color($r('app.color.accent'))
+          Text('正在从桌面读取…')
+            .fontSize(13)
+            .fontColor($r('app.color.text_secondary'))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .justifyContent(FlexAlign.Center)
+        .alignItems(HorizontalAlign.Center)
+      } else if (this.kind === 'error') {
+        this.centerNote($r('sys.symbol.exclamationmark_circle'), '读取失败', this.errorText)
+      } else if (this.kind === 'other') {
+        this.centerNote($r('sys.symbol.doc'), '手机端暂不预览此类文件', '请在桌面端打开查看')
+      } else if (this.kind === 'image') {
+        Column({ space: 10 }) {
+          Image(this.dataUri)
+            .objectFit(ImageFit.Contain)
+            .width('100%')
+            .layoutWeight(1)
+            .onComplete((e?: ImageCompleteCallback) => {
+              if (e !== undefined) {
+                this.imgW = e.width;
+                this.imgH = e.height;
+              }
+            })
+          Text(this.imageInfo())
+            .fontSize(11.5)
+            .fontColor($r('app.color.text_secondary'))
+            .fontFamily('monospace')
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .padding({ left: 16, right: 16, top: 12, bottom: 24 })
+      } else if (this.content === '') {
         Column({ space: 8 }) {
           SymbolGlyph($r('sys.symbol.doc'))
             .fontSize(40)

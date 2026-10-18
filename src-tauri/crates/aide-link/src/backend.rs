@@ -23,7 +23,7 @@ pub trait Backend: Send + Sync + 'static {
     fn policy(&self) -> LinkPolicy;
 
     /// 执行一个 Host 命令（命令名 = 命令表里的名字，`params` 已经过 [`crate::Catalog::prepare`]）。
-    /// 二进制结果由实现包成 `{"$bytes":"<base64>"}`。目录白名单已由会话挡过，实现不必再挡。
+    /// 二进制结果由实现包成 `{"$bytes":"<base64>"}`。目录白名单已由会话挡过；读文件的路径闸（工作区内、大小上限）在实现里做（`aide-core` 的 link/files）。
     fn call(&self, method: &str, params: Value) -> BoxFuture<Result<Value, String>>;
 
     /// 把本连接接到 Host 的事件流。**契约**（客户端依赖这个顺序）：

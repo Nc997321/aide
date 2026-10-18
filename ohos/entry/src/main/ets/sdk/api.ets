@@ -126,6 +126,16 @@ export class AideApi {
     return getTransport().invoke<Session[]>('list_sessions_for_workspace', { 'wsKey': wsKey });
   }
 
+  /** 读 Host 上的文本文件（读文件闸：须在已注册工作区内，≤8 MiB；越界报错）。 */
+  readFileContent(path: string): Promise<string> {
+    return getTransport().invoke<string>('read_file_content', { 'path': path });
+  }
+
+  /** 读 Host 上的文件字节（base64；同一道闸）。图片预览用。 */
+  readFileBase64(path: string): Promise<string> {
+    return getTransport().invoke<string>('read_file_base64', { 'path': path });
+  }
+
   listWorkspaces(): Promise<WorkspaceInfo[]> {
     return getTransport().invoke<WorkspaceInfo[]>('list_workspaces');
   }

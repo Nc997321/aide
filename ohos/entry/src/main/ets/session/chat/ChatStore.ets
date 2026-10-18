@@ -101,6 +101,17 @@ export class ChatStore {
   @Trace fvTitle: string = '';
   /** 预览正文（Read 卡 result 全文快照，≤50k 字；开层零 I/O）。 */
   @Trace fvContent: string = '';
+  /** 预览种类（fvTitle 非空时有效）：text 正文快照 / loading 远程拉取中 / image 图片 /
+   *  other 文档类（手机不拉取正文，只给提示）/ error 拉取失败。 */
+  @Trace fvKind: string = 'text';
+  /** 远程预览的 Host 路径（拉取结果回填前用它判竞态：用户已切到别的文件则丢弃）。 */
+  @Trace fvPath: string = '';
+  /** 图片预览的 data: URI（fvKind = image）。 */
+  @Trace fvDataUri: string = '';
+  /** 远程拉取得到的字节数（fvKind = image；与 base64 长度估算一致）。 */
+  @Trace fvBytes: number = 0;
+  /** 拉取失败原文（fvKind = error）。 */
+  @Trace fvError: string = '';
 
   /** 上次流式跟尾 bump 时刻（bumpTailThrottled 节流窗）。 */
   private lastStreamBumpAt: number = 0;
@@ -291,12 +302,45 @@ export class ChatStore {
   openFilePreview(title: string, content: string): void {
     this.fvTitle = title;
     this.fvContent = content;
+    this.fvKind = 'text';
+    this.fvPath = '';
+    this.fvDataUri = '';
+    this.fvBytes = 0;
+    this.fvError = '';
+  }
+
+  /** 打开远程文件预览（Write/Edit 卡点击）：先展示拉取中，结果由 setRemoteFile 回填。 */
+  openRemoteFile(path: string): void {
+    this.fvTitle = path;
+    this.fvContent = '';
+    this.fvKind = 'loading';
+    this.fvPath = path;
+    this.fvDataUri = '';
+    this.fvBytes = 0;
+    this.fvError = '';
+  }
+
+  /** 远程拉取结果回填（竞态：path 已不是当前预览则丢弃）。 */
+  setRemoteFile(path: string, kind: string, content: string, dataUri: string, bytes: number, error: string): void {
+    if (this.fvPath !== path || this.fvTitle === '') {
+      return;
+    }
+    this.fvKind = kind;
+    this.fvContent = content;
+    this.fvDataUri = dataUri;
+    this.fvBytes = bytes;
+    this.fvError = error;
   }
 
   /** 关闭文件预览层（标题栏 ← 键；返回键路径见 handlePopups）。 */
   closeFilePreview(): void {
     this.fvTitle = '';
     this.fvContent = '';
+    this.fvKind = 'text';
+    this.fvPath = '';
+    this.fvDataUri = '';
+    this.fvBytes = 0;
+    this.fvError = '';
   }
 
   /**
