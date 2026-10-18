@@ -97,6 +97,68 @@ export class VideoBlock implements ContentBlock {
   }
 }
 
+/**
+ * 子会话回报块（Host 代子会话投递的 user_message；系统卡片，不是用户气泡）。
+ * 形同 packages/aide-sdk/src/types/chat.ts 的 SubsessionReport（协议 §8.1）。
+ */
+@ObservedV2
+export class SubsessionReportBlock implements ContentBlock {
+  type: string = 'subsession_report';
+  id: string = '';
+  childId: string = '';
+  title: string = '';
+  /** done / error / interrupted */
+  status: string = 'done';
+  /** task / user_task / parent / user（认不出的不显示来源即可） */
+  origin: string = '';
+  text: string = '';
+  truncated: boolean = false;
+  /** 展开全文（收起态只露前几行；仅用户点击翻转）。 */
+  @Trace expanded: boolean = false;
+
+  constructor(id: string, childId: string, title: string, status: string, origin: string, text: string,
+    truncated: boolean) {
+    this.id = id;
+    this.childId = childId;
+    this.title = title;
+    this.status = status;
+    this.origin = origin;
+    this.text = text;
+    this.truncated = truncated;
+  }
+}
+
+/**
+ * 父会话派给子会话的任务 / 追加指令（出现在子会话里的系统卡片）。
+ * 形同 SubsessionInstruction；parentId 只在实时 display 里有，历史还原拿不到，留空。
+ */
+@ObservedV2
+export class SubsessionInstructionBlock implements ContentBlock {
+  type: string = 'subsession_instruction';
+  id: string = '';
+  parentId: string = '';
+  parentTitle: string = '';
+  text: string = '';
+  /** task（派发的任务）/ followup（追加指令） */
+  kind: string = 'task';
+  /** agent / user（用户手动派的任务）；缺省按 agent。 */
+  by: string = 'agent';
+
+  constructor(id: string, parentId: string, parentTitle: string, text: string, kind: string, by: string) {
+    this.id = id;
+    this.parentId = parentId;
+    this.parentTitle = parentTitle;
+    this.text = text;
+    this.kind = kind;
+    this.by = by;
+  }
+}
+
+/** 子会话块判别（消息级分派：整条消息都是子会话块时渲染成系统卡片）。 */
+export function isSubsessionBlock(b: ContentBlock): boolean {
+  return b instanceof SubsessionReportBlock || b instanceof SubsessionInstructionBlock;
+}
+
 /** 工具调用块：user 侧 = @引用 Read 卡片（可展开看文件内容）；assistant 侧 =
  * Edit/Write 常驻折叠行（写盘留痕，始终显示不可展开）。其余 assistant 工具
  * 不落 blocks（瞬态行，见 LiveActivity）。 */
@@ -221,6 +283,21 @@ export class ChatMessage {
     m.timestamp = Date.now();
     m.blocks = [new TextBlock(uuid(), text)];
     return m;
+  }
+
+  /** 子会话卡片消息（回报 / 派发指令；role = system，渲染走卡片不走气泡）。 */
+  static subsession(id: string, blocks: ContentBlock[]): ChatMessage {
+    const m: ChatMessage = new ChatMessage();
+    m.id = id;
+    m.role = 'system';
+    m.timestamp = Date.now();
+    m.blocks = blocks;
+    return m;
+  }
+
+  /** 是否子会话卡片消息（首块判别；消息级分派用）。 */
+  isSubsessionCard(): boolean {
+    return this.blocks.length > 0 && isSubsessionBlock(this.blocks[0]);
   }
 }
 

@@ -58,7 +58,8 @@ import { ProviderModel, providerModel } from '../session/ProviderModel';
 import { ChatStore } from '../session/chat/ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, SubagentEntry,
-  SubagentBlock, ChatMessage, PendingJump, LiveActivity, ImageBlock, VideoBlock
+  SubagentBlock, ChatMessage, PendingJump, LiveActivity, ImageBlock, VideoBlock,
+  SubsessionReportBlock, SubsessionInstructionBlock
 } from '../session/chat/ChatBlocks';
 import { Attachment, ChatAttachments, attachmentsModel, durationLabel } from '../session/chat/ChatAttachments';
 import { toolSummary, extBadgeColor } from '../session/chat/ChatWire';
@@ -110,6 +111,24 @@ const CTX_RING_STYLE: RingStyleOptions = { strokeWidth: 2.5 };
 
 function pad2(n: number): string {
   return n < 10 ? `0${n}` : `${n}`;
+}
+
+/** 回报收起态的行数 / 字数阈值（同桌面 SubsessionReportCard：超出才显示「展开全文」）。 */
+const REPORT_PREVIEW_LINES: number = 4;
+const REPORT_PREVIEW_CHARS: number = 360;
+
+function reportHasMore(b: SubsessionReportBlock): boolean {
+  return b.text.split('\n').length > REPORT_PREVIEW_LINES || b.text.length > REPORT_PREVIEW_CHARS;
+}
+
+function reportStatusLabel(status: string): string {
+  if (status === 'error') {
+    return '出错';
+  }
+  if (status === 'interrupted') {
+    return '被打断';
+  }
+  return '已完成';
 }
 
 /** 时间分隔线文案：今天/昨天/N月N日 + HH:mm。 */
@@ -646,7 +665,9 @@ export struct ChatPage {
 
   @Builder
   messageRow(m: ChatMessage, idx: number) {
-    if (m.role === 'system') {
+    if (m.isSubsessionCard()) {
+      this.subsessionCards(m)
+    } else if (m.role === 'system') {
       this.systemDivider(m)
     } else {
       Column({ space: 8 }) {
@@ -685,6 +706,124 @@ export struct ChatPage {
     .width('100%')
     .alignItems(VerticalAlign.Center)
     .padding({ top: 2, bottom: 2 })
+  }
+
+  /** 子会话卡片消息：系统卡片，左对齐（不是用户气泡——Host 代子会话投递的）。 */
+  @Builder
+  subsessionCards(m: ChatMessage) {
+    Column({ space: 8 }) {
+      ForEach(m.blocks, (b: ContentBlock) => {
+        if (b instanceof SubsessionReportBlock) {
+          this.subsessionReportCard(b)
+        } else if (b instanceof SubsessionInstructionBlock) {
+          this.subsessionInstructionCard(b)
+        }
+      }, (b: ContentBlock) => b.id)
+    }
+    .width('100%')
+  }
+
+  /** 回报卡片：状态点 + 标题 + 状态；收起只露前几行，可展开；「打开子会话」切过去。 */
+  @Builder
+  subsessionReportCard(b: SubsessionReportBlock) {
+    Column({ space: 8 }) {
+      Row({ space: 6 }) {
+        Column()
+          .width(7)
+          .height(7)
+          .borderRadius(4)
+          .backgroundColor(this.reportTone(b.status))
+        Text('子会话回报')
+          .fontSize(12)
+          .fontColor(this.reportTone(b.status))
+        Text(b.title)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.text_primary'))
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+          .layoutWeight(1)
+        Text(reportStatusLabel(b.status))
+          .fontSize(11)
+          .fontColor($r('app.color.text_secondary'))
+      }
+      .width('100%')
+
+      // 9999 = 展开即不限行（maxLines 不接受 undefined）
+      Text(b.text !== '' ? b.text : '（这一轮没有文字回复）')
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(b.expanded ? 9999 : REPORT_PREVIEW_LINES)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+
+      Row({ space: 14 }) {
+        if (reportHasMore(b)) {
+          Text(b.expanded ? '收起' : '展开全文')
+            .fontSize(12)
+            .fontColor($r('app.color.accent'))
+            .onClick(() => {
+              b.expanded = !b.expanded;
+            })
+        }
+        Text('打开子会话')
+          .fontSize(12)
+          .fontColor($r('app.color.accent'))
+          .onClick(() => {
+            chatModel.open(b.childId, b.title);
+          })
+      }
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+  }
+
+  /** 派发指令卡片（出现在子会话里）：来源父会话 + 任务/追加指令正文。 */
+  @Builder
+  subsessionInstructionCard(b: SubsessionInstructionBlock) {
+    Column({ space: 6 }) {
+      Text(this.instructionHead(b))
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .width('100%')
+      Text(b.text)
+        .fontSize(13)
+        .lineHeight(19)
+        .fontColor($r('app.color.text_primary'))
+        .width('100%')
+    }
+    .width('100%')
+    .alignItems(HorizontalAlign.Start)
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(12)
+    .backgroundColor($r('app.color.accent_weak'))
+  }
+
+  private instructionHead(b: SubsessionInstructionBlock): string {
+    if (b.kind === 'followup') {
+      return `来自父会话「${b.parentTitle}」的追加指令`;
+    }
+    return b.by === 'user'
+      ? `你从父会话「${b.parentTitle}」派发的任务`
+      : `来自父会话「${b.parentTitle}」派发的任务`;
+  }
+
+  /** 回报状态点颜色（done = ok / error = danger / interrupted = warn）。 */
+  private reportTone(status: string): ResourceColor {
+    if (status === 'error') {
+      return $r('app.color.status_danger');
+    }
+    if (status === 'interrupted') {
+      return $r('app.color.status_warn');
+    }
+    return $r('app.color.status_ok');
   }
 
   private systemTextOf(m: ChatMessage): string {

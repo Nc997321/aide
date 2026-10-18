@@ -47,6 +47,7 @@ import { StoredCreds } from '../sdk/storage';
 import { ChatModel, chatModel } from './ChatModel';
 import { ChatStore } from './chat/ChatStore';
 import { SessionsModel, sessionsModel } from './SessionsModel';
+import { SessionRow, nestSessions } from './SessionTree';
 import { WorkspaceModel, workspaceModel, WsMeta, baseName } from './WorkspaceModel';
 import { ProviderModel, providerModel } from './ProviderModel';
 import { ProviderMark } from './ProviderLogos';
@@ -311,6 +312,19 @@ export struct ChatDrawer {
       }
     }
     return out;
+  }
+
+  /** 列表行：无搜索词时父子嵌套（子会话缩进挂父下）；搜索态扁平匹配、不嵌套。 */
+  private sessionRows(): SessionRow[] {
+    if (this.query.trim() === '') {
+      return nestSessions(this.sm.sessions);
+    }
+    const flat: SessionRow[] = [];
+    const hits: Session[] = this.filteredSessions();
+    for (let i = 0; i < hits.length; i++) {
+      flat.push({ s: hits[i], depth: 0 });
+    }
+    return flat;
   }
 
   private activePvName(): string {
@@ -1112,7 +1126,7 @@ export struct ChatDrawer {
   }
 
   @Builder
-  sessionRow(s: Session) {
+  sessionRow(s: Session, depth: number) {
     Row({ space: 8 }) {
       Row() {
         this.statusDot(this.sm.statusOf(s.id))
@@ -1121,6 +1135,15 @@ export struct ChatDrawer {
       .height(7)
       .justifyContent(FlexAlign.Center)
       .alignItems(VerticalAlign.Center)
+
+      if (depth > 0) {
+        Text('子会话')
+          .fontSize(10)
+          .fontColor($r('app.color.accent'))
+          .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+          .borderRadius(8)
+          .backgroundColor($r('app.color.accent_weak'))
+      }
 
       Text(s.name)
         .fontSize(14)
@@ -1201,7 +1224,7 @@ export struct ChatDrawer {
           .padding({ top: 22, bottom: 22 })
         }
       } else {
-        if (this.filteredSessions().length === 0) {
+        if (this.sessionRows().length === 0) {
           ListItem() {
             Text(this.query.trim() !== '' ? '无匹配会话' : '暂无会话')
               .fontSize(12)
@@ -1211,11 +1234,13 @@ export struct ChatDrawer {
               .padding({ top: 22, bottom: 22 })
           }
         } else {
-          ForEach(this.filteredSessions(), (s: Session) => {
+          ForEach(this.sessionRows(), (r: SessionRow) => {
             ListItem() {
-              this.sessionRow(s)
+              this.sessionRow(r.s, r.depth)
             }
-          }, (s: Session) => s.id)
+            // 子会话缩进挂在父会话下（嵌套见 SessionTree.nestSessions）
+            .padding({ left: r.depth * 16 })
+          }, (r: SessionRow) => r.s.id)
         }
       }
     }

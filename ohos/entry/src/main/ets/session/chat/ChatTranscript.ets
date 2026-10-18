@@ -12,9 +12,11 @@
  */
 import { HistoryBlock, ChatMessageItem } from '../../sdk/types';
 import {
-  ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, ChatMessage
+  ContentBlock, TextBlock, ThinkingBlock, ToolCallBlock, ChatMessage,
+  SubsessionReportBlock, SubsessionInstructionBlock
 } from './ChatBlocks';
 import { uuid, emptyRecord, isEditTool } from './ChatWire';
+import { parseReportPrompt, parseInstructionPrompt } from './SubsessionText';
 
 /** @mention 引用段：transcript 落盘的用户文本 = 原文 + 引用文件展开内容。 */
 interface MentionSection {
@@ -87,6 +89,20 @@ function historyBlockToContentBlocks(block: HistoryBlock, isUser: boolean): Cont
   if (!isUser) {
     return [new TextBlock(uuid(), text)];
   }
+  // 子会话回报 / 父会话派来的任务：Host 投递的 prompt 按固定格式拆回卡片（与实时
+  // display 块同形；认不出 → 落到下面的普通用户文本分支，整条不消失）
+  const reports: SubsessionReportBlock[] | null = parseReportPrompt(text);
+  if (reports !== null) {
+    const cards: ContentBlock[] = [];
+    for (let i = 0; i < reports.length; i++) {
+      cards.push(reports[i]);
+    }
+    return cards;
+  }
+  const instruction: SubsessionInstructionBlock | null = parseInstructionPrompt(text);
+  if (instruction !== null) {
+    return [instruction];
+  }
   // user 文本块拆引用段：原文 text 块 + N 个 Read 附件卡片（与直发路径同形）
   const split: MentionSplit = splitMentionSections(text);
   if (split.sections.length === 0) {
@@ -133,6 +149,10 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
     }
   }
   m.blocks = blocks;
+    // 子会话卡片整条消息 role = system（与实时路径 ChatMessage.subsession 同形）
+    if (m.isSubsessionCard()) {
+      m.role = 'system';
+    }
     out.push(m);
   }
   return out;

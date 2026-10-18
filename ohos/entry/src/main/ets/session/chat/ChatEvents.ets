@@ -13,7 +13,8 @@
  *    （jump_queued/promoted）、轮次收尾（message_stop）、模型切换回执
  *    （model_switch_result）、上下文窗口用量（context_usage，输入区环形
  *    指示）、notification、error、session_dead、
- *    session_title
+ *    session_title、子会话（subsession_started/paused/resumed 落分隔线；
+ *    user_message.display 的 subsession_report/instruction 块落系统卡片，见 parseUserDisplay）
  *  - 显式忽略（随对应 UI 扩容接入）：models_available / model_switch_confirm
  *    （decision RPC 不在远程白名单，成本确认远程不可用） / effort_changed /
  *    context_compaction / tasks_update /
@@ -32,7 +33,8 @@ import { ChatStore } from './ChatStore';
 import {
   ContentBlock, TextBlock, ThinkingBlock, SubagentEntry, SubagentBlock,
   ChatMessage, PermissionRequest, LiveActivity, BgTask, SUBAGENT_ENTRY_CAP,
-  appendSubagentTextEntry, appendBgOutput, ToolCallBlock, ImageBlock, VideoBlock
+  appendSubagentTextEntry, appendBgOutput, ToolCallBlock, ImageBlock, VideoBlock,
+  SubsessionReportBlock, SubsessionInstructionBlock, isSubsessionBlock
 } from './ChatBlocks';
 import { parseQuestions } from './PermissionShape';
 import { uuid, str, bool, obj, num, emptyRecord, isEditTool } from './ChatWire';
@@ -279,6 +281,32 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       store.bumpTail();
       break;
     }
+    case 'subsession_started': {
+      // 父会话派出了子会话（协议 §8.1）：时间线上留一条分隔线，点它进子会话的入口
+      // 在回报卡片的「打开子会话」。by=user 是用户手动派的，文案区分一下
+      store.finishStreaming();
+      const title: string = str(payload, 'title');
+      const verb: string = str(payload, 'by') === 'user' ? '你派出了' : '已派出';
+      store.appendMessage(ChatMessage.systemNote(uuid(), `${verb}子会话「${title}」`));
+      store.bumpTail();
+      break;
+    }
+    case 'subsession_paused': {
+      // 连续 limit 次自动回报没有任何用户输入 → 暂停投递；用户发消息即恢复（见 subsession_resumed）
+      store.finishStreaming();
+      const limit: number = num(payload, 'limit');
+      const pending: number = num(payload, 'pending');
+      store.appendMessage(ChatMessage.systemNote(uuid(),
+        `子会话回报已暂停：连续 ${limit} 次没有你的输入，${pending} 条回报攒着，发一条消息即恢复`));
+      store.bumpTail();
+      break;
+    }
+    case 'subsession_resumed': {
+      store.finishStreaming();
+      store.appendMessage(ChatMessage.systemNote(uuid(), '子会话回报已恢复'));
+      store.bumpTail();
+      break;
+    }
     case 'model_switch_result': {
       // 模型切换终态回执（对照 ModelSwitchResult 事件）：成功坐实 store.model；
       // 失败落提示不回滚——记忆元数据已随 pickModel 写入，选择仍随下一条消息
@@ -391,8 +419,20 @@ function parseUserDisplay(d: Object | undefined, text: string): ChatMessage {
           blocks.push(new VideoBlock(uuid(), `data:image/jpeg;base64,${poster}`,
             num(rec, 'durationMs'), str(rec, 'name')));
         }
+      } else if (kind === 'subsession_report') {
+        // Host 代子会话投递的回报（协议 §8.1）：系统卡片，不是用户说的话
+        blocks.push(new SubsessionReportBlock(uuid(), str(rec, 'childId'), str(rec, 'title'),
+          str(rec, 'status'), str(rec, 'origin'), str(rec, 'text'), bool(rec, 'truncated')));
+      } else if (kind === 'subsession_instruction') {
+        blocks.push(new SubsessionInstructionBlock(uuid(), str(rec, 'parentId'), str(rec, 'parentTitle'),
+          str(rec, 'text'), str(rec, 'kind'), str(rec, 'by') === 'user' ? 'user' : 'agent'));
       }
     }
+  }
+  // 子会话块整条消息走系统卡片（不混进用户气泡；Host 投递的消息没有附件/引用）
+  const subs: ContentBlock[] = blocks.filter((b: ContentBlock) => isSubsessionBlock(b));
+  if (subs.length > 0) {
+    return ChatMessage.subsession(uuid(), subs);
   }
   if (blocks.length === 0) {
     return ChatMessage.userText(uuid(), text);

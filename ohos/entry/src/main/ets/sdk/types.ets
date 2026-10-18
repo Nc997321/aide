@@ -19,6 +19,8 @@ export interface Session {
   name: string;
   /** 毫秒（Rust as_millis / startedAt u64），0 = 未知时间。 */
   timestamp: number;
+  /** 子会话的父会话 id（协议 §8.1：缺席 = 普通会话；列表嵌套见 session/SessionTree）。 */
+  parentId?: string;
 }
 
 export interface WorkspaceInfo {
