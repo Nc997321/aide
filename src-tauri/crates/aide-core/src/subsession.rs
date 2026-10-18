@@ -515,17 +515,51 @@ impl SubsessionService {
         }
 
         let p = parent.clone();
-        let (ws, provider, parent_title) = blocking(move || {
-            Ok((our_session_workspace(&p), our_session_provider_field(&p), our_session_name(&p)))
+        let (ws, provider, parent_title, transcript_cwd) = blocking(move || {
+            // 转录里记的 cwd 是会话真正跑过的目录（与 adopt_scoped_session 同一来源）：
+            // 档案缺 wsPath、运行时路由也不在（Host 重启后路由只在内存里）时，靠它补归属
+            let transcript_cwd = crate::session_store::find_session_jsonl_globally(&p)
+                .first()
+                .and_then(|j| crate::session_store::transcript_cwd(j.as_path()))
+                .filter(|c| crate::workspace::present(std::path::Path::new(c)));
+            Ok((
+                our_session_workspace(&p),
+                our_session_provider_field(&p),
+                our_session_name(&p),
+                transcript_cwd,
+            ))
         })
         .await?;
         let parent_title = parent_title.unwrap_or_else(|| "父会话".to_string());
-        // 子会话与父会话同一个工作目录：档案的 wsPath 优先，其次父会话发送时登记的路由
-        let ws_path = ws
-            .path
-            .clone()
-            .or_else(|| core.runtime.session_workspace_root(&parent).map(|p| p.to_string_lossy().to_string()))
-            .ok_or_else(|| "父会话没有工作区归属，无法派发子会话".to_string())?;
+        // 子会话与父会话同一个工作目录：档案 wsPath → 运行时路由 → 转录 cwd（三者都没有才拒绝）
+        let route_root = core.runtime.session_workspace_root(&parent);
+        let ws_path = match ws.path.clone().or_else(|| route_root.as_ref().map(|p| p.to_string_lossy().to_string())) {
+            Some(path) => path,
+            None => match transcript_cwd {
+                Some(cwd) => {
+                    // 从转录补归属并写回档案：之后不再依赖路由（路由只在内存里，Host 一重启就没了）
+                    let (pid, cwd2) = (parent.clone(), cwd.clone());
+                    let patch = SessionMetaPatch {
+                        ws_path: MetaField::Set { value: cwd2 },
+                        ..Default::default()
+                    };
+                    blocking(move || write_session_meta_blocking(&pid, &patch)).await?;
+                    tracing::info!(parent = %parent, cwd = %cwd, "subsession: 父会话无档案归属，从转录 cwd 补回并写入档案");
+                    cwd
+                }
+                None => {
+                    // 派发失败只回给 agent，不落别处——把各处来源的查询结果一起记下来，事后能看出是哪一边缺
+                    tracing::warn!(
+                        parent = %parent,
+                        archive_ws_path = ?ws.path,
+                        archive_ws_key = ?ws.key,
+                        route_root = ?route_root,
+                        "subsession: 父会话无工作区归属，拒绝派发（档案 wsPath、运行时路由、转录 cwd 都没有）"
+                    );
+                    return Err("父会话没有工作区归属，无法派发子会话".to_string());
+                }
+            },
+        };
 
         let routing = crate::automation::new_id(ROUTING_PREFIX);
         let (tx, rx) = oneshot::channel();

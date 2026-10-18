@@ -37,11 +37,25 @@ fn build_id_from(exe: &std::path::Path) -> Option<String> {
     dir.starts_with(&format!("{VERSION}-")).then(|| dir.to_string())
 }
 
+/// 守护进程的 tracing 落 stderr——`spawn_daemon` 已把 stderr 接到 `daemon.log`。
+/// 桌面端自己装了文件 subscriber；守护进程之前没装，aide-core 的 WARN/INFO 全被丢弃。
+fn init_daemon_logging() {
+    let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
+        .with_ansi(false)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .try_init();
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     if mode == "daemon" {
         // Host 进程整体用用户登录环境：必须在建 tokio runtime（多线程）之前改进程环境。
         login::apply_login_env();
+        init_daemon_logging();
     }
     let rt = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {
         Ok(rt) => rt,
