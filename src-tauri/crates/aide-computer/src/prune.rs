@@ -7,7 +7,7 @@
 //! - 与最近一个留下的祖先同名的 Text 去掉（按钮里那行同名文字）；
 //! - 密码框不回值。
 
-use crate::model::{RawElement, ViewElement};
+use crate::model::{click_via, RawElement, ViewElement};
 
 /// 一次读取最多回多少个元素；超出截断并告诉 agent 还剩多少。
 pub const MAX_ELEMENTS: usize = 400;
@@ -50,8 +50,8 @@ pub fn prune(raw: &[RawElement], mut assign_ref: impl FnMut(&[i32]) -> String) -
         out.push(ViewElement {
             ref_id: assign_ref(&e.runtime_id),
             role: e.role.clone(),
-            name: clip(e.name.trim(), MAX_NAME),
-            value: if e.password { None } else { e.value.as_deref().map(|v| clip(&newlines(v), MAX_VALUE)) },
+            name: clip(visible(&e.name).trim(), MAX_NAME),
+            value: if e.password { None } else { e.value.as_deref().map(|v| clip(&newlines(&visible(v)), MAX_VALUE)) },
             states: states(e),
             depth,
             text: e
@@ -61,10 +61,7 @@ pub fn prune(raw: &[RawElement], mut assign_ref: impl FnMut(&[i32]) -> String) -
                 .filter(|t| squash(t) != squash(&e.name))
                 .map(|t| clip_tail(&t, MAX_TEXT)),
             runtime_id: e.runtime_id.clone(),
-            clickable_by_pattern: e.patterns.invoke
-                || e.patterns.toggle
-                || e.patterns.select
-                || e.patterns.expand,
+            click_via: click_via(&e.role, &e.patterns),
         });
     }
     Pruned { elements: out, omitted }
@@ -141,6 +138,14 @@ fn states(e: &RawElement) -> Vec<&'static str> {
         s.push("password");
     }
     s
+}
+
+/// 去掉看不见的格式字符（零宽空格、方向标记等）：有的应用在名字里夹着它们，
+/// 读出来是噪音，按名字找元素时还会对不上。
+fn visible(s: &str) -> String {
+    s.chars()
+        .filter(|c| !matches!(*c, '\u{200B}'..='\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2060}'..='\u{2064}' | '\u{FEFF}'))
+        .collect()
 }
 
 /// 统一换行：有的控件用 `\r`（RichEdit），有的用 `\r\n`。
@@ -234,7 +239,7 @@ mod tests {
         assert_eq!(p.elements[0].value, None);
         assert_eq!(p.elements[0].states, vec!["focused", "password"]);
         assert_eq!(p.elements[1].states, vec!["checked"]);
-        assert!(p.elements[1].clickable_by_pattern);
+        assert!(p.elements[1].click_via.is_some());
     }
 
     #[test]
@@ -264,6 +269,15 @@ mod tests {
         assert_eq!(p.elements[0].value.as_deref(), Some("a\nb\nc"));
         assert_eq!(p.elements[0].text.as_deref(), Some("a\nb"));
         assert_eq!(p.elements[1].text, None);
+    }
+
+    #[test]
+    fn strips_invisible_format_characters() {
+        let mut e = el(0, "Button", "剪切\u{200b}\u{200b}");
+        e.value = Some("\u{200e}2026/\u{200e}10".into());
+        let p = prune(&[e], refs());
+        assert_eq!(p.elements[0].name, "剪切");
+        assert_eq!(p.elements[0].value.as_deref(), Some("2026/10"));
     }
 
     #[test]

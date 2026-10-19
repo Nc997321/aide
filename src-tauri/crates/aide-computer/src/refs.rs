@@ -180,7 +180,7 @@ mod tests {
             depth: 0,
             text: None,
             runtime_id: vec![],
-            clickable_by_pattern: false,
+            click_via: None,
         }
     }
 

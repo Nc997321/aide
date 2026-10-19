@@ -12,7 +12,7 @@ use base64::Engine as _;
 use serde_json::{json, Value};
 
 use crate::keys::parse_combo;
-use crate::model::{MouseButton, PatternClick, RawTree, ViewElement, WindowAction, WindowInfo};
+use crate::model::{ClickVia, MouseButton, RawElement, RawTree, ViewElement, WindowAction, WindowInfo};
 use crate::port::{Backend, Guard, HostHooks, Res, SharedSignals};
 use crate::protocol::{err_payload, ok_payload, Condition, Query, Request, Step, Target};
 use crate::prune::prune;
@@ -39,6 +39,8 @@ struct WinState {
     /// 上次读取之后做过动作：坐标作废，按名字找元素前要重读。
     dirty: bool,
     shot: Option<ShotMeta>,
+    /// 分区读取：只看这个元素（RuntimeId, ref）下面的部分。
+    scope: Option<(Vec<i32>, String)>,
 }
 
 #[derive(Clone, Copy)]
@@ -94,9 +96,9 @@ impl<B: Backend> Engine<B> {
                 self.flash_viewing(sid);
                 self.list_windows()
             }
-            Query::Read { window_id, screenshot, text_tail } => {
+            Query::Read { window_id, screenshot, text_tail, scope } => {
                 self.flash_viewing(sid);
-                self.read(window_id.as_deref(), *screenshot, *text_tail)
+                self.read(window_id.as_deref(), *screenshot, *text_tail, scope.as_deref())
             }
             Query::Wait { window_id, condition, timeout_ms } => {
                 self.flash_viewing(sid);
@@ -161,7 +163,7 @@ impl<B: Backend> Engine<B> {
                 self.signals.set_owner(Some(sid.to_string()));
                 self.lock = Some(Lock { session: sid.to_string(), last_used: Instant::now() });
                 self.guard.watch_input(true);
-                self.guard.show(Some(self.operating_text(sid)), None);
+                self.guard.show(Some(Self::operating_text()), None);
                 Ok(())
             }
         }
@@ -175,11 +177,9 @@ impl<B: Backend> Engine<B> {
         }
     }
 
-    fn operating_text(&self, sid: &str) -> String {
-        match self.host.session_label(sid) {
-            Some(l) if !l.trim().is_empty() => format!("Aide 正在操作 · {l} · 按 {STOP_HOTKEY} 停止"),
-            _ => format!("Aide 正在操作 · 按 {STOP_HOTKEY} 停止"),
-        }
+    /// 提示条告诉用户：在 Aide 里操作（批准、打字、停止）不会打断它，别处点击 / 按键才会。
+    fn operating_text() -> String {
+        format!("Aide 正在操作 · Aide 内操作不影响 · 按 {STOP_HOTKEY} 停止")
     }
 
     fn flash_viewing(&self, sid: &str) {
@@ -234,19 +234,43 @@ impl<B: Backend> Engine<B> {
         }
     }
 
-    /// 读一次并更新该窗口的观察状态。返回 (窗口信息, 新视图, 截断数, 原始截断)。
+    /// 读一次并更新该窗口的观察状态（有分区就只看分区）。返回 (窗口信息, 截断数, 原始截断)。
     fn observe(&mut self, id: &str, text_tail: Option<u32>) -> Res<(WindowInfo, usize, bool)> {
         let RawTree { window, elements, truncated } = self.backend.snapshot(id, text_tail)?;
         let state = self.windows.entry(id.to_string()).or_default();
-        let pruned = prune(&elements, |rid| state.refs.assign(rid));
+        let slice: &[RawElement] = match &state.scope {
+            Some((rid, _)) => match subtree(&elements, rid) {
+                Some(s) => s,
+                None => {
+                    // 分区的根元素不在了：退回整个窗口。
+                    state.scope = None;
+                    &elements
+                }
+            },
+            None => &elements,
+        };
+        let pruned = prune(slice, |rid| state.refs.assign(rid));
         state.obs += 1;
         state.view = pruned.elements;
         state.dirty = false;
         Ok((window, pruned.omitted, truncated))
     }
 
-    fn read(&mut self, window_id: Option<&str>, screenshot: bool, text_tail: Option<u32>) -> Res<Value> {
+    fn read(&mut self, window_id: Option<&str>, screenshot: bool, text_tail: Option<u32>, scope: Option<&str>) -> Res<Value> {
         let id = self.resolve_window(window_id)?;
+        let state = self.windows.entry(id.clone()).or_default();
+        state.scope = match scope {
+            None => None,
+            Some(r) => {
+                let el = state.view.iter().find(|e| e.ref_id == r).ok_or_else(|| {
+                    format!("scope {r} is not in the latest read of this window — read the whole window first and pick a ref from it.")
+                })?;
+                if el.runtime_id.is_empty() {
+                    return Err(format!("{r} cannot be used as a scope; pick a container that has a name or a role like List, Pane, Group."));
+                }
+                Some((el.runtime_id.clone(), r.to_string()))
+            }
+        };
         let (window, omitted, raw_truncated) = self.observe(&id, text_tail)?;
         let focused = self.focused_ref(&id);
         let state = self.windows.get_mut(&id).expect("observed");
@@ -258,9 +282,14 @@ impl<B: Backend> Engine<B> {
         if let Some(f) = focused {
             out["focused"] = json!(f);
         }
+        match (&state.scope, scope) {
+            (Some((_, r)), _) => out["scope"] = json!(r),
+            (None, Some(r)) => out["note_scope"] = json!(format!("{r} is gone; showing the whole window.")),
+            _ => {}
+        }
         if omitted > 0 || raw_truncated {
             out["truncated"] = json!(format!(
-                "{omitted} more elements not listed{}. Narrow down: act on what you see, or read a dialog/child window by its own window_id.",
+                "{omitted} more elements not listed{}. Narrow down: read again with scope=<ref of the list/panel you need>.",
                 if raw_truncated { " (the window's tree is very large)" } else { "" }
             ));
         }
@@ -414,12 +443,10 @@ impl<B: Backend> Engine<B> {
                     _ => (MouseButton::Left, 1),
                 };
                 let resolved = self.resolve_target(window, target).map_err(fail)?;
-                if let Resolved::Element { runtime_id, by_pattern, label } = &resolved {
-                    if clicks == 1 && button == MouseButton::Left && *by_pattern {
-                        match self.backend.pattern_click(window, runtime_id).map_err(fail)? {
-                            PatternClick::Done(how) => return Ok(format!("{how} {label}")),
-                            PatternClick::Unsupported => {}
-                        }
+                if let Resolved::Element { runtime_id, via: Some(via), label } = &resolved {
+                    if clicks == 1 && button == MouseButton::Left {
+                        self.backend.pattern_click(window, runtime_id, *via).map_err(fail)?;
+                        return Ok(format!("{} {label}", via.verb()));
                     }
                 }
                 let (x, y) = self.point_of(window, &resolved).map_err(fail)?;
@@ -556,12 +583,11 @@ impl<B: Backend> Engine<B> {
                 let el = state.view.iter().find(|e| &e.ref_id == ref_id).ok_or_else(|| {
                     format!("{ref_id} is not in the latest read of this window — the UI changed. Call computer_read again.")
                 })?;
-                let (rid, role, by_pattern, label) =
-                    (el.runtime_id.clone(), el.role.clone(), el.clickable_by_pattern, describe(el));
+                let (rid, role, via, label) = (el.runtime_id.clone(), el.role.clone(), el.click_via, describe(el));
                 if rid.is_empty() || !self.backend.element_alive(window, &rid, &role)? {
                     return Err(format!("{label} is no longer there — the UI changed. Call computer_read again."));
                 }
-                Ok(Resolved::Element { runtime_id: rid, by_pattern, label })
+                Ok(Resolved::Element { runtime_id: rid, via, label })
             }
             Target::Name { name, role } => {
                 if self.windows.get(window).is_none_or(|s| s.dirty) {
@@ -571,7 +597,7 @@ impl<B: Backend> Engine<B> {
                 let el = find_by_name(&state.view, name, role.as_deref())?;
                 Ok(Resolved::Element {
                     runtime_id: el.runtime_id.clone(),
-                    by_pattern: el.clickable_by_pattern,
+                    via: el.click_via,
                     label: describe(el),
                 })
             }
@@ -724,8 +750,19 @@ impl<B: Backend> Engine<B> {
     }
 }
 
+/// 先序列表里以 `rid` 为根的子树（含根）。
+fn subtree<'a>(elements: &'a [RawElement], rid: &[i32]) -> Option<&'a [RawElement]> {
+    let start = elements.iter().position(|e| !e.runtime_id.is_empty() && e.runtime_id == rid)?;
+    let depth = elements[start].depth;
+    let end = elements[start + 1..]
+        .iter()
+        .position(|e| e.depth <= depth)
+        .map_or(elements.len(), |i| start + 1 + i);
+    Some(&elements[start..end])
+}
+
 enum Resolved {
-    Element { runtime_id: Vec<i32>, by_pattern: bool, label: String },
+    Element { runtime_id: Vec<i32>, via: Option<ClickVia>, label: String },
     Point { x: i32, y: i32, label: String },
 }
 

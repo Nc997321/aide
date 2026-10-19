@@ -14,7 +14,7 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use windows::Win32::UI::HiDpi::{SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 
 use crate::keys::Combo;
-use crate::model::{Direction, MouseButton, PatternClick, RawTree, Shot, WindowAction, WindowInfo};
+use crate::model::{ClickVia, Direction, MouseButton, RawTree, Shot, WindowAction, WindowInfo};
 use crate::port::{Backend, Guard, Res, SharedSignals};
 
 /// 在**执行器线程**上调用：初始化 COM（MTA）与 DPI 感知，建适配器；另起守护线程。
@@ -86,8 +86,8 @@ impl Backend for WinBackend {
         self.uia()?.alive(window, runtime_id, role)
     }
 
-    fn pattern_click(&mut self, window: &str, runtime_id: &[i32]) -> Res<PatternClick> {
-        self.uia()?.pattern_click(window, runtime_id)
+    fn pattern_click(&mut self, window: &str, runtime_id: &[i32], via: ClickVia) -> Res<()> {
+        self.uia()?.pattern_click(window, runtime_id, via)
     }
 
     fn element_center(&mut self, window: &str, runtime_id: &[i32]) -> Res<(i32, i32)> {

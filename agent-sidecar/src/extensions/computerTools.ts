@@ -110,6 +110,13 @@ export function buildComputerTools(emit: Emit) {
       {
         window_id: windowIdArg.optional().describe("Omit for the foreground window."),
         screenshot: z.boolean().optional().describe("Also attach an image of the window. Default false."),
+        scope: z
+          .string()
+          .optional()
+          .describe(
+            "Ref of a container (list, panel, dialog body) from the latest read: list only what is inside it. " +
+              "Use it when a read is truncated. It sticks for this window's change reports until you read without scope.",
+          ),
         text_tail: z
           .number()
           .int()

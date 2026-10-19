@@ -97,6 +97,11 @@ describe("computer result formatting", () => {
     expect(out).toContain("(12 more elements not listed.)");
   });
 
+  it("marks a scoped read", () => {
+    const out = formatRead({ obs: 1, scope: "e7", window: { id: "0x1", title: "w", process: "p" }, elements: [] });
+    expect(out).toContain("only inside e7");
+  });
+
   it("renders act results with stop reason and changes", () => {
     const out = formatAct({
       executed: 1,

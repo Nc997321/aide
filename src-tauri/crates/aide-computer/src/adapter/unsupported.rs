@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use crate::keys::Combo;
-use crate::model::{Direction, MouseButton, PatternClick, RawTree, Shot, WindowAction, WindowInfo};
+use crate::model::{ClickVia, Direction, MouseButton, RawTree, Shot, WindowAction, WindowInfo};
 use crate::port::{Backend, Guard, Res};
 
 fn no<T>() -> Res<T> {
@@ -43,7 +43,7 @@ impl Backend for Unsupported {
     fn element_alive(&mut self, _: &str, _: &[i32], _: &str) -> Res<bool> {
         no()
     }
-    fn pattern_click(&mut self, _: &str, _: &[i32]) -> Res<PatternClick> {
+    fn pattern_click(&mut self, _: &str, _: &[i32], _: ClickVia) -> Res<()> {
         no()
     }
     fn element_center(&mut self, _: &str, _: &[i32]) -> Res<(i32, i32)> {

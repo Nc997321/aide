@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use crate::keys::Combo;
-use crate::model::{Direction, MouseButton, PatternClick, RawTree, Shot, WindowAction, WindowInfo};
+use crate::model::{ClickVia, Direction, MouseButton, RawTree, Shot, WindowAction, WindowInfo};
 
 pub type Res<T> = Result<T, String>;
 
@@ -29,8 +29,8 @@ pub trait Backend {
 
     /// 元素是否还在、控件类型是否仍是 `role`（身份按 RuntimeId，取自该窗口最近一次读取）。
     fn element_alive(&mut self, window: &str, runtime_id: &[i32], role: &str) -> Res<bool>;
-    /// 不动鼠标地「点一下」（Invoke / Toggle / Select / ExpandCollapse）。
-    fn pattern_click(&mut self, window: &str, runtime_id: &[i32]) -> Res<PatternClick>;
+    /// 不动鼠标地「单击」：用 `via` 指定的模式，然后把键盘焦点交给它（真人点一下也会拿到焦点）。
+    fn pattern_click(&mut self, window: &str, runtime_id: &[i32], via: ClickVia) -> Res<()>;
     /// 元素当前中心点（屏幕物理像素）。
     fn element_center(&mut self, window: &str, runtime_id: &[i32]) -> Res<(i32, i32)>;
     fn focus_element(&mut self, window: &str, runtime_id: &[i32]) -> Res<()>;

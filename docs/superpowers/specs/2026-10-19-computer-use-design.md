@@ -1,7 +1,7 @@
 # 电脑操作（computer use）：让 agent 像人一样操作 Windows 桌面
 
 日期：2026-10-19
-状态：**P1 已实现（2026-10-19）**——执行器 `src-tauri/crates/aide-computer`，sidecar 工具 `agent-sidecar/src/extensions/computer*`，
+状态：**P1、P2 已实现（2026-10-19）**——执行器 `src-tauri/crates/aide-computer`，sidecar 工具 `agent-sidecar/src/extensions/computer*`，
 桌面壳接线 `src-tauri/src/runtime/computer_agent.rs`。真机（Windows 11）用调试台 `cargo run -p aide-computer --example drive` 跑通验收 A 与 B 的终端 / 接管部分；
 **Aide 里由 agent 端到端走一遍尚未做**（见 §13）。
 来源：用户提供的《Aide Windows 电脑操作系统：技术架构与 MVP 实施方案》（下称「原方案」）。本文是它按 Aide 现有架构与红线改写后的落地版；
@@ -355,7 +355,34 @@ Chromium / Electron 应用的控件树裁剪调优；验收 C；按 tracing 数�
 - 提示条窗口在还没设文字时就可能收到 WM_PAINT，空切片交给 `DrawTextW` 越界 → 进程以 0xC000041D 退出（启动几秒后整个 Aide 闪退）。已修，见 `guard.rs`。
 - 窗口标题改用 `InternalGetWindowText`：`GetWindowText` 对本进程窗口会发 WM_GETTEXT，Aide 读自己时界面线程一忙就卡。
 
+**P1 之后的修订**
+
+- 「什么算接管」改为只有在别的窗口里点击 / 滚动 / 按键（§5.3）——用户在 Aide 里实测：手动权限模式下点「允许」就触发接管。
+- 提示条文案改为「Aide 正在操作 · Aide 内操作不影响 · 按 Ctrl+Alt+Shift+S 停止」（用户要求，告诉用户在 Aide 里操作不会打断它）。
+
+## 14. P2 实现记录
+
+- `computer_read` 加 `scope`（某个容器的 ref）：只列那一块；之后该窗口的动作回报 / 按名字找 / 等待沿用，直到一次不带 scope 的读取。
+  大窗口（Chromium / Electron）被截断时用。
+- `computer-use` skill（`agent-sidecar/src/extensions/computerSkill.ts`）：通用工作流（找东西、对话框与焦点、终端里与另一个程序对话、
+  不可逆操作前后核对、何时停）。**不含任何应用名词**，测试里有守卫词表。MCP instructions 指向它。
+- **单击的语义按控件类型选模式**（`model::click_via`，纯函数单测）：可选中的项 → Select；按钮 / 链接 / 菜单项 → Invoke；开关 → Toggle；
+  下拉框 → ExpandCollapse；其余真实鼠标。之前一律优先 Invoke，实测对文件列表项 Invoke = 双击打开（把文件打开了）。
+  用模式完成的单击之后把键盘焦点交给该元素（真人点一下也会拿到焦点；否则紧跟的 F2 落空）。
+- 名字 / 值里的不可见格式字符（零宽空格、方向标记）清掉：资源管理器的名字里夹着它们。
+
+**验收 C（不改工具代码，真机）**
+
+| 应用 | 任务 | 结果 |
+|---|---|---|
+| 计算器（UWP） | 按引用点按钮算 12×34；截图后按图像坐标点「C」 | 408；坐标点中「清除」归零；6 次点击 340 ms |
+| 资源管理器 | 选中 a.txt → F2 → 全选 → 输入 b.txt 回车 | 磁盘上已改名（修了上面两处之后） |
+| Aide 自己（WebView2） | 折叠 / 展开侧栏一个分组；分区读取 | 267 个元素；折叠 −28、展开复原；分区 5 个元素 |
+
+**延迟（真机，单步工具耗时，不含模型思考）**：read 中位 139 ms（p90 169）；act 中位 494 ms（含动作后回报，p90 764）；
+window 中位 288 ms；windows 2 ms。等待类按条件计。
+
 **还没做**
 
-- 在 Aide 里由 agent 端到端走一遍（验收 A、B 让 agent 自己完成，含审批卡片、急停热键中断会话、手机端批准）。
-- 验收 C（不改代码换三个应用）与延迟指标统计。
+- 在 Aide 里由 agent 端到端走一遍（用户已在跑 dev 版；手动模式审批与接管的修订来自那里）。
+- 截图坐标路径只在单一缩放比例下验证过；多显示器 / 不同 DPI 待测。

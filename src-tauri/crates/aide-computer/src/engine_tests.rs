@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 
 use super::*;
 use crate::keys::Combo;
-use crate::model::{Direction, Patterns, RawElement, Rect, Shot};
+use crate::model::{ClickVia, Direction, Patterns, RawElement, Rect, Shot};
 use crate::port::Signals;
 use crate::protocol::parse_request;
 
@@ -108,9 +108,9 @@ impl Backend for Fake {
     fn element_alive(&mut self, _w: &str, _rid: &[i32], _role: &str) -> Res<bool> {
         Ok(self.0.borrow().alive)
     }
-    fn pattern_click(&mut self, _w: &str, rid: &[i32]) -> Res<PatternClick> {
-        self.0.borrow_mut().calls.push(format!("invoke {rid:?}"));
-        Ok(PatternClick::Done("invoked"))
+    fn pattern_click(&mut self, _w: &str, rid: &[i32], via: ClickVia) -> Res<()> {
+        self.0.borrow_mut().calls.push(format!("{} {rid:?}", via.verb()));
+        Ok(())
     }
     fn element_center(&mut self, _w: &str, _rid: &[i32]) -> Res<(i32, i32)> {
         Ok((20, 20))
@@ -233,12 +233,27 @@ fn read_then_act_by_ref_uses_pattern_and_reports_changes() {
         "steps": [{"do": "click", "target": {"ref": save}}, {"do": "type", "text": "hello"}]}));
     assert_eq!(act["ok"], true, "{act}");
     assert_eq!(act["data"]["executed"], 2);
-    assert!(r.desk.borrow().calls.iter().any(|c| c.starts_with("invoke")));
+    assert!(r.desk.borrow().calls.iter().any(|c| c.starts_with("invoked")));
     let added = &act["data"]["after"]["changes"]["added"];
     assert_eq!(added[0]["name"], "hello");
     // 持锁：装了钩子、提示条显示「正在操作」
     assert_eq!(r.screen.watching.lock().unwrap().last(), Some(&true));
     assert!(r.screen.shown.lock().unwrap().last().unwrap().as_ref().unwrap().contains("正在操作"));
+}
+
+#[test]
+fn clicking_a_list_item_selects_it_instead_of_opening_it() {
+    let mut r = rig();
+    r.desk.borrow_mut().elements.push(RawElement {
+        patterns: Patterns { invoke: true, select: true, ..Default::default() },
+        ..el(30, "ListItem", "a.txt")
+    });
+    let read = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1"}));
+    let item = ref_of(&read, "a.txt");
+    let act = call(&mut r, "s1", json!({"op": "act", "window_id": "0x1", "intent": "select",
+        "steps": [{"do": "click", "target": {"ref": item}}]}));
+    assert_eq!(act["data"]["steps"][0]["done"], format!("selected [{item}] ListItem \"a.txt\""));
+    assert!(!r.desk.borrow().calls.iter().any(|c| c.starts_with("invoked")));
 }
 
 #[test]
@@ -260,7 +275,7 @@ fn stale_element_stops_before_acting() {
         "steps": [{"do": "click", "target": {"ref": save}}]}));
     assert_eq!(act["data"]["executed"], 0);
     assert!(act["data"]["stopped"].as_str().unwrap().contains("no longer there"));
-    assert!(!r.desk.borrow().calls.iter().any(|c| c.starts_with("invoke")));
+    assert!(!r.desk.borrow().calls.iter().any(|c| c.starts_with("invoked")));
 }
 
 #[test]
@@ -365,6 +380,37 @@ fn act_waits_briefly_for_a_modal_dialog_to_appear() {
     r.desk.borrow_mut().dialog_after_lists = Some(3);
     let v = call(&mut r, "s1", json!({"op": "act", "window_id": "0x1", "intent": "save", "steps": [{"do": "press", "keys": "ctrl+s"}]}));
     assert_eq!(v["data"]["after"]["opened_windows"][0]["title"], "另存为", "{v}");
+}
+
+#[test]
+fn scoped_read_lists_only_the_subtree_and_sticks() {
+    let mut r = rig();
+    {
+        let mut d = r.desk.borrow_mut();
+        d.elements = vec![
+            RawElement { depth: 1, ..el(20, "List", "会话列表") },
+            RawElement { depth: 2, ..el(21, "ListItem", "甲") },
+            RawElement { depth: 2, ..el(22, "ListItem", "乙") },
+            RawElement { depth: 1, ..el(23, "Button", "设置") },
+        ];
+    }
+    let full = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1"}));
+    let list = ref_of(&full, "会话列表");
+    let scoped = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1", "scope": list}));
+    let names: Vec<&str> = scoped["data"]["elements"].as_array().unwrap().iter().map(|e| e["name"].as_str().unwrap()).collect();
+    assert_eq!(names, vec!["会话列表", "甲", "乙"]);
+    assert_eq!(scoped["data"]["scope"], list.as_str());
+    // 分区沿用到动作回报：新增在分区外的元素不出现在变化里
+    r.desk.borrow_mut().elements.push(RawElement { depth: 1, ..el(24, "Button", "分区外") });
+    let act = call(&mut r, "s1", json!({"op": "act", "window_id": "0x1", "intent": "x", "steps": [{"do": "press", "keys": "down"}]}));
+    assert_eq!(act["data"]["after"]["changes"], "none visible in this window", "{act}");
+    // 不带 scope 的读取回到整个窗口
+    let back = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1"}));
+    assert!(back["data"].get("scope").is_none());
+    assert_eq!(back["data"]["elements"].as_array().unwrap().len(), 6);
+    // 不在最近一次读取里的 ref 不能当分区
+    let bad = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1", "scope": "e999"}));
+    assert_eq!(bad["ok"], false);
 }
 
 #[test]

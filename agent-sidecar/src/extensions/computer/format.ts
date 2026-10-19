@@ -65,7 +65,9 @@ export function formatRead(data: unknown): string {
   const w = rec(d.window) as unknown as WindowInfo;
   const head = [`Window ${windowLine(w)}`, `obs ${String(d.obs)}`];
   if (typeof d.focused === "string") head.push(`focused ${d.focused}`);
+  if (typeof d.scope === "string") head.push(`only inside ${d.scope}`);
   const lines = [head.join(" · ")];
+  if (typeof d.note_scope === "string") lines.push(`NOTE: ${d.note_scope}`);
   if (typeof d.note === "string") lines.push(`NOTE: ${d.note}`);
   for (const e of arr<ViewElement>(d.elements)) lines.push(elementLine(e, "  ".repeat(e.depth)));
   if (typeof d.truncated === "string") lines.push(`(${d.truncated})`);

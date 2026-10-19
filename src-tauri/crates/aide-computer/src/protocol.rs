@@ -35,6 +35,9 @@ pub enum Query {
         window_id: Option<String>,
         screenshot: bool,
         text_tail: Option<u32>,
+        /// 只读这个元素（ref）下面的部分；之后对该窗口的内部读取（动作回报、按名字找、等待）沿用，
+        /// 直到一次不带 scope 的读取。
+        scope: Option<String>,
     },
     Act {
         window_id: String,
@@ -194,6 +197,7 @@ fn parse_query_inner(event: &Value) -> Result<Query, String> {
             window_id: opt_str("window_id"),
             screenshot: event.get("screenshot").and_then(Value::as_bool).unwrap_or(false),
             text_tail: event.get("text_tail").and_then(Value::as_u64).map(|n| n.min(2000) as u32),
+            scope: opt_str("scope"),
         }),
         "act" => {
             let window_id = opt_str("window_id").ok_or("act requires `window_id`")?;

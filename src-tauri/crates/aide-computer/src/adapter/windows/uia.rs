@@ -10,7 +10,7 @@ use windows::Win32::System::Ole::{SafeArrayDestroy, SafeArrayGetElement, SafeArr
 use windows::Win32::System::Variant::{VariantClear, VARIANT, VT_ARRAY, VT_BOOL, VT_BSTR, VT_I4};
 use windows::Win32::UI::Accessibility::*;
 
-use crate::model::{Patterns, PatternClick, RawElement, Rect};
+use crate::model::{ClickVia, Patterns, RawElement, Rect};
 use crate::prune::innermost;
 use crate::port::Res;
 
@@ -135,32 +135,31 @@ impl Uia {
         })
     }
 
-    pub fn pattern_click(&self, window: &str, rid: &[i32]) -> Res<PatternClick> {
+    pub fn pattern_click(&self, window: &str, rid: &[i32], via: ClickVia) -> Res<()> {
         let el = self.element(window, rid)?;
         unsafe {
-            if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
-                p.Invoke().map_err(|e| format!("Invoke failed: {e}"))?;
-                return Ok(PatternClick::Done("invoked"));
+            match via {
+                ClickVia::Select => el
+                    .GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+                    .and_then(|p| p.Select()),
+                ClickVia::Invoke => el
+                    .GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId)
+                    .and_then(|p| p.Invoke()),
+                ClickVia::Toggle => el
+                    .GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId)
+                    .and_then(|p| p.Toggle()),
+                ClickVia::ExpandCollapse => el
+                    .GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId)
+                    .and_then(|p| match p.CurrentExpandCollapseState() {
+                        Ok(s) if s == ExpandCollapseState_Expanded => p.Collapse(),
+                        _ => p.Expand(),
+                    }),
             }
-            if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationTogglePattern>(UIA_TogglePatternId) {
-                p.Toggle().map_err(|e| format!("Toggle failed: {e}"))?;
-                return Ok(PatternClick::Done("toggled"));
-            }
-            if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId) {
-                p.Select().map_err(|e| format!("Select failed: {e}"))?;
-                return Ok(PatternClick::Done("selected"));
-            }
-            if let Ok(p) = el.GetCurrentPatternAs::<IUIAutomationExpandCollapsePattern>(UIA_ExpandCollapsePatternId) {
-                let state = p.CurrentExpandCollapseState().unwrap_or(ExpandCollapseState_Collapsed);
-                if state == ExpandCollapseState_Expanded {
-                    p.Collapse().map_err(|e| format!("Collapse failed: {e}"))?;
-                    return Ok(PatternClick::Done("collapsed"));
-                }
-                p.Expand().map_err(|e| format!("Expand failed: {e}"))?;
-                return Ok(PatternClick::Done("expanded"));
-            }
+            .map_err(|e| format!("The control did not accept the click ({}): {e}", via.verb()))?;
+            // 真人点一下 = 动作 + 拿到键盘焦点。只调模式不给焦点，紧跟的按键会落到别处。
+            let _ = el.SetFocus();
         }
-        Ok(PatternClick::Unsupported)
+        Ok(())
     }
 
     pub fn center(&self, window: &str, rid: &[i32]) -> Res<(i32, i32)> {
