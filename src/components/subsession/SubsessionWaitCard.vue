@@ -3,7 +3,7 @@
  * 作答槽里的「子会话在等你批准」引导卡（子会话设计 §8.5-6）。
  *
  * 权限请求属于子会话，**在子会话里批**——v1 不在父会话里代批（同屏两处都能批会让「这条是在哪批的」
- * 含混）。这张卡只负责把人带过去：点「去处理」在父会话旁边分屏打开那个子会话。
+ * 含混）。这张卡只负责把人带过去：点「去处理」在父会话的 tab 里钻进那个子会话（spec §13）。
  * 子会话的**提问**（AskUserQuestion）不走这张卡：父会话作答槽就地回答（ChatPanel 的 childQuestion，spec §12）。
  */
 import type { SubsessionEntry } from "@/composables/useSubsessions";
@@ -11,7 +11,7 @@ import { usePaneLayout } from "@/composables/usePaneLayout";
 
 defineProps<{ child: SubsessionEntry; others: number }>();
 
-const { openSessionBeside } = usePaneLayout();
+const { openSubsession } = usePaneLayout();
 </script>
 
 <template>
@@ -23,7 +23,7 @@ const { openSessionBeside } = usePaneLayout();
         权限请求在子会话里批<template v-if="others > 0"> · 还有 {{ others }} 条待处理</template>
       </div>
     </div>
-    <button type="button" class="sswait-btn" @click="openSessionBeside(child.id)">去处理</button>
+    <button type="button" class="sswait-btn" @click="openSubsession(child.id)">去处理</button>
   </div>
 </template>
 

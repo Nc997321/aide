@@ -17,7 +17,9 @@ import {
   type LayoutSnapshot,
   type PaneNode,
   type TabItem,
+  viewSessionOf,
 } from "./paneLayout/tree";
+import { useSubsessions } from "./useSubsessions";
 import { useSessionState } from "./useSessionState";
 // 模式表是全项目唯一一份定义（ChatPanel/modes.ts，零依赖的叶子模块）：这里只借它的
 // 字面量联合与默认值，不反向耦合——布局层与 hero 组件都用同一份，别各写一个。
@@ -146,7 +148,15 @@ export function usePaneLayout() {
   function openSession(sessionId: string) {
     const existing = findTabBySession(layout.root, sessionId);
     if (existing) {
+      // 点的是这个 tab 自己的会话：钻在子会话里的话退回来
+      delete existing.tab.drillChildId;
       activateTab(existing.group, existing.tab.id);
+      return;
+    }
+    // 子会话不单独占 tab：打开父会话的 tab 并钻进去（spec §13）
+    const parent = useSubsessions().parentIdOf(sessionId);
+    if (parent) {
+      openSubsession(sessionId);
       return;
     }
     const group = focusedGroup();
@@ -155,6 +165,7 @@ export function usePaneLayout() {
       if (preview) {
         const oldSid = preview.sessionId; // 改绑前取：旧会话 tab 无声落下，需收口
         preview.sessionId = sessionId;
+        delete preview.drillChildId;
         delete preview.pendingName;
         delete preview.pendingWs; // 改绑已存在会话：归属走注册表，空白快照作废
         activateTab(group, preview.id);
@@ -178,6 +189,7 @@ export function usePaneLayout() {
     if (preview) {
       const oldSid = preview.sessionId; // 改绑前取：旧会话 tab 无声落下，需收口
       preview.sessionId = null;
+      delete preview.drillChildId;
       preview.pendingName = pendingName;
       // 复用预览 tab = 换一个空白面板：归属快照跟着换绑（无新快照则清除旧绑定）
       if (pendingWs) preview.pendingWs = pendingWs;
@@ -248,26 +260,39 @@ export function usePaneLayout() {
   }
 
   /**
-   * 子会话「打开」：放在父会话旁边并排看（子会话设计 §8.5-4）。
-   * - 已在任何组打开 → 聚焦过去（全局唯一）；
-   * - 已经分过屏 → 开进聚焦组之外的那一组（几个子会话叠成 tab，不越分越碎）；
-   * - 否则在聚焦组右侧分屏。
+   * 打开子会话 = 在父会话的 tab 里钻进去（子会话设计 spec §13）。子会话不单独占 tab：
+   * tab 的 × 一直表示「关掉这个会话」，「看一眼子会话」不该只剩这一个出口。
+   * - 子会话自己已经占着一个 tab（旧布局恢复出来的）→ 聚焦过去；
+   * - 父会话已有 tab → 激活它并钻进去；没有 → 先照常打开父会话再钻；
+   * - 不知道父会话（还没回种）→ 退化成普通打开。
    */
-  function openSessionBeside(sessionId: string) {
-    const existing = findTabBySession(layout.root, sessionId);
-    if (existing) {
-      activateTab(existing.group, existing.tab.id);
+  function openSubsession(childId: string) {
+    const own = findTabBySession(layout.root, childId);
+    if (own) {
+      activateTab(own.group, own.tab.id);
       return;
     }
-    const other = listGroups(layout.root).find((g) => g.id !== layout.focusedGroupId);
-    if (other) {
-      const tab = createTab(sessionId);
-      other.tabs.push(tab);
-      if (!isStarted(sessionId)) other.previewTabId = tab.id;
-      activateTab(other, tab.id);
+    const parent = useSubsessions().parentIdOf(childId);
+    if (!parent) {
+      openSessionInNewTab(childId);
       return;
     }
-    openSessionInSplit(sessionId, "horizontal");
+    let hit = findTabBySession(layout.root, parent);
+    if (!hit) {
+      openSession(parent);
+      hit = findTabBySession(layout.root, parent);
+      if (!hit) return;
+    }
+    hit.tab.drillChildId = childId;
+    activateTab(hit.group, hit.tab.id);
+  }
+
+  /** ← 返回：从子会话回到这个 tab 自己的会话。 */
+  function drillOut(tabId: string) {
+    const hit = findTabById(layout.root, tabId);
+    if (!hit) return;
+    delete hit.tab.drillChildId;
+    activateTab(hit.group, hit.tab.id);
   }
 
   /** tab 右键/快捷键「拆分」：激活 tab 移入新组（组内只剩 1 个 tab 时新组给空白面板）。 */
@@ -343,6 +368,10 @@ export function usePaneLayout() {
    *  前端状态不作判据）。async 以把"停止命令没送达 → tab 保留"的结果交给调用方，
    *  调用点用 `void` 表达"不等"语义。 */
   async function closeSessionTab(sessionId: string): Promise<void> {
+    // 被删的是正被钻着看的子会话：退回父会话（tab 属于父会话，不关）
+    for (const g of listGroups(layout.root)) {
+      for (const t of g.tabs) if (t.drillChildId === sessionId) delete t.drillChildId;
+    }
     const hit = findTabBySession(layout.root, sessionId);
     if (hit) await closeTab(hit.group.id, hit.tab.id);
   }
@@ -488,7 +517,7 @@ export function usePaneLayout() {
     activeSessionId: computed(() => {
       const g = findGroup(layout.root, layout.focusedGroupId) ?? listGroups(layout.root)[0];
       const tab = g.tabs.find((t) => t.id === g.activeTabId);
-      return tab?.sessionId ?? "";
+      return viewSessionOf(tab) ?? "";
     }),
     /** 聚焦组激活 tab 的工作区归属 key（"" = 无归属 / 欢迎态）。右栏模式策略等下游用，
      *  与 activeSessionId 同一处取值，走同一个 tabWsKeyOf —— 别在别处重算。 */
@@ -503,7 +532,8 @@ export function usePaneLayout() {
     setChatMode,
     openSessionInNewTab,
     openSessionInSplit,
-    openSessionBeside,
+    openSubsession,
+    drillOut,
     splitFocusedGroup,
     closeTab,
     closeActiveTab,

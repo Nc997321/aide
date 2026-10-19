@@ -3,7 +3,7 @@
  * 子会话面板：活动抽屉的「子会话」tab（子会话设计 §8.5-2 / 线框 A2）。
  *
  * 左边按「需要你 / 进行中 / 空闲」分组列出本会话的子会话，右边是选中项的详情：任务、待办进度、
- * 最近一次回报，以及 打开（在父会话旁边分屏）/ 停止这一轮。
+ * 最近一次回报，以及 打开（在父会话的 tab 里钻进去）/ 停止这一轮。
  *
  * 数据：父子关系与最近回报来自 useSubsessions（可回种的缓存，打开时用 `list_subsessions` 回种一次）；
  * 在跑 / 等批准看 useSessionState——与侧栏流光同一份，不另开状态源。本端从没收到过某个子会话的事件
@@ -21,7 +21,7 @@ const props = defineProps<{ parentId: string }>();
 
 const subs = useSubsessions();
 const { state } = useSessionState();
-const { openSessionBeside } = usePaneLayout();
+const { openSubsession } = usePaneLayout();
 
 /** Host 回种时报的运行态（本端没有该子会话状态时兜底用）。 */
 const hostStatus = ref<Record<string, string>>({});
@@ -139,7 +139,7 @@ function stopAll() {
             class="ssp-btn"
             @click="stop(selected.id)"
           >停止这一轮</button>
-          <button type="button" class="ssp-btn ssp-btn--pri" @click="openSessionBeside(selected.id)">
+          <button type="button" class="ssp-btn ssp-btn--pri" @click="openSubsession(selected.id)">
             {{ activityOf(selected.id) === "attention" ? "去处理" : "打开" }}
           </button>
         </div>

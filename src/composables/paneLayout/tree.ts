@@ -33,6 +33,18 @@ export interface TabItem {
    * 首发时种进 useSessionWorkspaces 注册表（bindSession 时清掉本字段）。
    */
   pendingWs?: { wsKey: string; wsPath: string };
+  /**
+   * 正在这个 tab 里看的子会话（钻进去，← 返回；子会话设计 spec §13）。tab 的拥有者仍是
+   * sessionId（父会话）：关闭 / 停止 / 落盘都认它；ChatPanel、右栏、侧栏高亮跟随 viewSessionOf。
+   * 不落盘：重开应用回到父会话。
+   */
+  drillChildId?: string;
+}
+
+/** tab 当前显示的会话：钻进子会话时是子会话，否则是 tab 自己的会话。 */
+export function viewSessionOf(tab: TabItem | null | undefined): string | null {
+  if (!tab) return null;
+  return tab.drillChildId ?? tab.sessionId;
 }
 
 export interface GroupNode {

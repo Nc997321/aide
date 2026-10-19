@@ -5,6 +5,7 @@ import { listGroups, listSnapshotTabs, type GroupNode, type SplitNode } from "./
 import { useSessionNames } from "./useSessionNames";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { useSessionState } from "./useSessionState";
+import { noteSubsessionStarted, __resetSubsessionsForTest } from "./useSubsessions";
 
 /** 「已启动」判定注入：测试里显式指定哪些会话算已启动 */
 const started = new Set<string>();
@@ -100,25 +101,6 @@ describe("全局唯一", () => {
     expect(pl.layout.focusedGroupId).toBe(groups()[0].id);
     expect(pl.activeSessionId.value).toBe("s1");
     expect(groups().flatMap((g) => g.tabs).filter((t) => t.sessionId === "s1")).toHaveLength(1);
-  });
-
-  it("openSessionBeside：首个子会话向右分屏；再开一个叠进右组，不越分越碎；已打开只聚焦", () => {
-    const pl = usePaneLayout();
-    pl.openSession("parent");
-    started.add("parent");
-    pl.promoteTab("parent");
-    started.add("c1");
-    started.add("c2");
-    pl.openSessionBeside("c1");
-    expect(groups()).toHaveLength(2);
-    expect(groups()[1].tabs.map((t) => t.sessionId)).toEqual(["c1"]);
-    pl.openSession("parent"); // 回到父会话那组
-    pl.openSessionBeside("c2");
-    expect(groups()).toHaveLength(2);
-    expect(groups()[1].tabs.map((t) => t.sessionId)).toEqual(["c1", "c2"]);
-    pl.openSessionBeside("c1");
-    expect(pl.activeSessionId.value).toBe("c1");
-    expect(groups()).toHaveLength(2);
   });
 
   it("openSessionInNewTab：未启动会话也开固定 tab，不占预览位；已打开则只聚焦", () => {
@@ -483,6 +465,76 @@ describe("生命周期收口（closeTab / 预览改绑触发 disposeSession）",
     pl.openBlankTab("B"); // 覆盖 → retireSilentSession(null) → if (!oldSid) return
     expect(focused().tabs).toHaveLength(1);
     expect(focused().tabs[0].pendingName).toBe("B");
+  });
+});
+
+describe("子会话：在父会话的 tab 里钻进去（spec §13）", () => {
+  beforeEach(() => {
+    __resetSubsessionsForTest();
+    noteSubsessionStarted("parent", "c1", "查超时");
+    noteSubsessionStarted("parent", "c2", "查限流");
+    started.add("parent");
+  });
+
+  it("openSubsession：不开新 tab，在父会话的 tab 里钻进去；显示的是子会话", () => {
+    const pl = usePaneLayout();
+    pl.openSession("parent");
+    pl.openSubsession("c1");
+    expect(groups()).toHaveLength(1);
+    expect(focused().tabs.map((t) => t.sessionId)).toEqual(["parent"]);
+    expect(focused().tabs[0].drillChildId).toBe("c1");
+    expect(pl.activeSessionId.value).toBe("c1");
+    pl.openSubsession("c2"); // 换一个子会话：仍是同一个 tab
+    expect(focused().tabs).toHaveLength(1);
+    expect(pl.activeSessionId.value).toBe("c2");
+  });
+
+  it("父会话没开着：先打开父会话再钻；侧栏点子会话（openSession）走同一条路", () => {
+    const pl = usePaneLayout();
+    pl.openSession("c1");
+    expect(focused().tabs.map((t) => t.sessionId)).toEqual(["parent"]);
+    expect(pl.activeSessionId.value).toBe("c1");
+  });
+
+  it("← 返回 / 再点父会话：退回父会话", () => {
+    const pl = usePaneLayout();
+    pl.openSubsession("c1");
+    pl.drillOut(focused().tabs[0].id);
+    expect(pl.activeSessionId.value).toBe("parent");
+    pl.openSubsession("c1");
+    pl.openSession("parent");
+    expect(pl.activeSessionId.value).toBe("parent");
+    expect(focused().tabs[0].drillChildId).toBeUndefined();
+  });
+
+  it("关闭钻着子会话的 tab：停的是父会话，子会话不受影响", async () => {
+    const pl = usePaneLayout();
+    pl.openSubsession("c1");
+    const g = focused();
+    await pl.closeTab(g.id, g.tabs[0].id);
+    expect(api.stopChatSession).toHaveBeenCalledWith("parent");
+    expect(api.stopChatSession).not.toHaveBeenCalledWith("c1");
+  });
+
+  it("删掉正被钻着看的子会话：退回父会话，tab 不关", async () => {
+    const pl = usePaneLayout();
+    pl.openSubsession("c1");
+    await pl.closeSessionTab("c1");
+    expect(focused().tabs.map((t) => t.sessionId)).toEqual(["parent"]);
+    expect(pl.activeSessionId.value).toBe("parent");
+    expect(api.stopChatSession).not.toHaveBeenCalled();
+  });
+
+  it("不知道父会话（还没回种）：退化成普通打开", () => {
+    const pl = usePaneLayout();
+    pl.openSubsession("orphan");
+    expect(focused().tabs.map((t) => t.sessionId)).toEqual(["orphan"]);
+  });
+
+  it("钻入状态不落盘：快照只记 tab 自己的会话", () => {
+    const pl = usePaneLayout();
+    pl.openSubsession("c1");
+    expect(JSON.stringify(pl.serialize())).not.toContain("c1");
   });
 });
 

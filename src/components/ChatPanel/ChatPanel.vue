@@ -11,6 +11,7 @@ import ActivityDrawer from "../activity/ActivityDrawer.vue";
 import { bgTaskChip, btwChip, subagentChip, subsessionChip, type ActivityChip, type ActivityChipTarget, type ChildActivity } from "../activity/activityChips";
 import { openActivityTab } from "../activity/ActivityDrawer.vue";
 import SubsessionWaitCard from "../subsession/SubsessionWaitCard.vue";
+import SubsessionDrillBar from "../subsession/SubsessionDrillBar.vue";
 import SubsessionComposer from "../subsession/SubsessionComposer.vue";
 import { quoteMarkdown } from "../subsession/composeTask";
 import FloatingCard from "../FloatingCard.vue";
@@ -19,8 +20,6 @@ import MessageSelectionBar from "./MessageSelectionBar.vue";
 import { readMessageSelection, rectVisibleIn, selectionEndRect, selectionRect, type MessageSelection } from "./messageSelection";
 import { SUBSESSION_MAX_RUNNING, useSubsessions } from "@/composables/useSubsessions";
 import { useSessionState } from "@/composables/useSessionState";
-import { useSessionNames } from "@/composables/useSessionNames";
-import { usePaneLayout } from "@/composables/usePaneLayout";
 import { pickAnswer } from "./answerSlot";
 import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
@@ -116,6 +115,8 @@ const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
   "send-btw": [prompt: string];
   interrupt: [];
+  /** 子会话返回条的 ←（参数：父会话 id）：PaneGroup 决定是退出钻入还是去父会话的 tab */
+  "back-to-parent": [parentId: string];
   "set-model": [model: string];
   "set-effort": [effort: string];
   "set-permission-mode": [mode: string];
@@ -503,14 +504,11 @@ function onChildQuestionRespond(id: string, approved: boolean, answers?: Record<
 const subsessionOpen = computed(() => (props.sessionId ? !!subs.drawerOpen[props.sessionId] : false));
 /** 本会话是子会话：父会话 id 与名字（头条面包屑）。 */
 const parentId = computed(() => subs.parentIdOf(props.sessionId));
-const sessionNames = useSessionNames();
-const parentTitle = computed(() => (parentId.value ? sessionNames.names[parentId.value] || "父会话" : ""));
 /** 自动回报被暂停（防乒乓）：null = 没暂停；数字 = 攒着的回报条数。 */
 const pausedCount = computed(() => {
   const n = props.sessionId ? subs.paused[props.sessionId] : undefined;
   return n === undefined ? null : n;
 });
-const { openSession } = usePaneLayout();
 
 /** 作答槽仲裁：本会话权限队列（含发送前确认）> 子会话等批准 > 语言服务器询问；一次只出一张。 */
 const answer = computed(() =>
@@ -768,15 +766,16 @@ function onOpenBgDock(taskId: string) {
 
 <template>
   <div ref="rootEl" class="chat-panel" :class="{ 'chat-panel--hero': isHero, 'chat-panel--hero-leaving': heroLeaving }">
-    <!-- 会话头条：子会话面包屑 / 自动回报暂停提示 / 待办摘要（清单浮层下拉，不挤压消息区） -->
-    <div v-if="parentId || pausedCount !== null || (props.tasks && props.tasks.length > 0)" class="chat-col chat-head">
-      <div v-if="parentId" class="chat-crumb">
-        <button type="button" class="chat-crumb-link" @click="openSession(parentId)">
-          <Icon name="arrow-up-left" :size="12" :stroke-width="1.8" />{{ parentTitle }}
-        </button>
-        <span class="chat-crumb-sep" aria-hidden="true"></span>
-        <span class="chat-crumb-note">子会话 · 每轮结束会回报给父会话</span>
-      </div>
+    <!-- 子会话返回条（整宽）：← 回父会话 · 状态 · 停止这一轮（spec §13） -->
+    <SubsessionDrillBar
+      v-if="parentId && props.sessionId"
+      :child-id="props.sessionId"
+      :parent-id="parentId"
+      @back="emit('back-to-parent', parentId)"
+      @stop="emit('interrupt')"
+    />
+    <!-- 会话头条：自动回报暂停提示 / 待办摘要（清单浮层下拉，不挤压消息区） -->
+    <div v-if="pausedCount !== null || (props.tasks && props.tasks.length > 0)" class="chat-col chat-head">
       <div v-if="pausedCount !== null" class="chat-paused">
         已暂停子会话自动回报（连续多次没有你的输入）<template v-if="pausedCount"> · {{ pausedCount }} 条待投递</template>
         · 发任意一条消息即恢复
@@ -1158,46 +1157,6 @@ function onOpenBgDock(taskId: string) {
 
 .chat-head {
   flex: none;
-}
-
-/* 子会话面包屑：点击回父会话（已打开就聚焦过去） */
-.chat-crumb {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  height: 30px;
-  padding: 0 12px;
-  font-size: 12px;
-  border-bottom: 1px solid var(--aide-border-subtle);
-}
-.chat-crumb-link {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--aide-info);
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.chat-crumb-link:hover {
-  text-decoration: underline;
-}
-.chat-crumb-sep {
-  flex: none;
-  width: 1px;
-  height: 12px;
-  background: var(--aide-border-strong);
-}
-.chat-crumb-note {
-  flex: none;
-  color: var(--aide-text-muted);
 }
 
 /* 自动回报被暂停（防乒乓）：一行提示，发消息即恢复 */

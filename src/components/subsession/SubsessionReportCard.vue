@@ -3,7 +3,7 @@
  * 子会话回报卡片（父会话消息流里；Host 投递的 user_message，display 带 subsession_report）。
  *
  * **不是用户气泡**：左对齐的系统卡片、蓝色描边——这条消息是 Host 代子会话送来的，不是用户说的话。
- * 默认收起成标题 + 状态 + 前几行，展开看全文；「打开子会话」在父会话旁边分屏打开。
+ * 默认收起成标题 + 状态 + 前几行，展开看全文；「打开子会话」在父会话的 tab 里钻进去（spec §13）。
  */
 import { computed, ref } from "vue";
 import type { SubsessionReportBlock } from "@/types/chat";
@@ -13,7 +13,7 @@ import { usePaneLayout } from "@/composables/usePaneLayout";
 const props = defineProps<{ block: SubsessionReportBlock }>();
 
 const expanded = ref(false);
-const { openSessionBeside } = usePaneLayout();
+const { openSubsession } = usePaneLayout();
 
 const STATUS: Record<string, { label: string; tone: string }> = {
   done: { label: "已完成", tone: "done" },
@@ -59,7 +59,7 @@ const html = computed(() => renderMarkdown(shownText.value || "（这一轮没�
       <button v-if="hasMore" type="button" class="ssr-link" @click="expanded = !expanded">
         {{ expanded ? "收起" : "展开全文" }}
       </button>
-      <button type="button" class="ssr-link" @click="openSessionBeside(block.childId)">
+      <button type="button" class="ssr-link" @click="openSubsession(block.childId)">
         {{ asking ? "去子会话里回答" : "打开子会话" }}
       </button>
     </footer>

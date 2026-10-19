@@ -5,7 +5,7 @@ import { flushPromises, mount } from "@vue/test-utils";
 const spawnMock = vi.fn();
 vi.mock("@aide/sdk/api", () => ({ api: { spawnSubsession: (a: unknown) => spawnMock(a) } }));
 const openBeside = vi.fn();
-vi.mock("@/composables/usePaneLayout", () => ({ usePaneLayout: () => ({ openSessionBeside: openBeside }) }));
+vi.mock("@/composables/usePaneLayout", () => ({ usePaneLayout: () => ({ openSubsession: openBeside }) }));
 
 import SubsessionComposer from "./SubsessionComposer.vue";
 

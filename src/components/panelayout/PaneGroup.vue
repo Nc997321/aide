@@ -18,7 +18,7 @@ import type { ChatMode } from "../ChatPanel/modes";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
 import { pickProjectWorkspace } from "./projectWorkspace";
-import type { GroupNode } from "../../composables/paneLayout/tree";
+import { viewSessionOf, type GroupNode } from "../../composables/paneLayout/tree";
 import type { WorkspaceInfo } from "../../types";
 
 /**
@@ -37,7 +37,8 @@ const focused = computed(() => pl.layout.focusedGroupId === props.group.id);
 const activeTab = computed(
   () => props.group.tabs.find((t) => t.id === props.group.activeTabId) ?? null,
 );
-const sessionIdRef = computed(() => activeTab.value?.sessionId ?? null);
+/** 本组正在显示的会话：钻进子会话时是子会话（tab 仍属于父会话，见 tree.ts drillChildId）。 */
+const sessionIdRef = computed(() => viewSessionOf(activeTab.value));
 
 const {
   messages,
@@ -95,7 +96,7 @@ function projectWsSnapshot(): { wsKey: string; wsPath: string } | undefined {
 
 const effectiveWorkspacePath = computed(() => {
   const tab = activeTab.value;
-  const sid = tab?.sessionId;
+  const sid = viewSessionOf(tab);
   if (sid) return workspaceOf(sid)?.wsPath || workspacePath.value;
   // 空白面板：显示创建时绑定的工作区（切工作区后仍如实展示它属于哪）；
   // 零 tab（hero）时显示 hero 归属选择器选定的归属，未选才回落活动工作区
@@ -118,6 +119,8 @@ async function onSend(prompt: string, opts: SendOptions) {
     workspace: tab.sessionId ? undefined : (tab.pendingWs ?? wsSnapshot()),
   });
   if (!sid) return;
+  // 钻在子会话里发的消息属于子会话：tab 仍是父会话的，不改绑、不转正
+  if (tab.drillChildId) return;
   if (tab.sessionId !== sid) pl.bindSession(tab.id, sid);
   pl.promoteTab(sid);
 }
@@ -134,6 +137,13 @@ function onRespondPermission(
     reason: req.reason,
     sessionRules,
   });
+}
+
+/** 子会话返回条的 ←：钻在本 tab 里就退回来；子会话自己占着 tab（旧布局）就去父会话。 */
+function onBackToParent(parentId: string) {
+  const tab = activeTab.value;
+  if (tab?.drillChildId) pl.drillOut(tab.id);
+  else pl.openSession(parentId);
 }
 
 function onSendBtw(prompt: string) {
@@ -227,7 +237,7 @@ async function onPickMode(mode: ChatMode) {
     <div class="pane-group__body">
     <ChatPanel
       :focused="focused"
-      :session-id="activeTab?.sessionId ?? null"
+      :session-id="sessionIdRef"
       :draft-blank-key="activeTab?.id ?? `group:${props.group.id}`"
       :workspace-path="effectiveWorkspacePath"
       :messages="messages"
@@ -261,6 +271,7 @@ async function onPickMode(mode: ChatMode) {
       @select-workspace="onPickWorkspace"
       @select-mode="onPickMode"
       @open-session="(sid: string) => pl.openSession(sid)"
+      @back-to-parent="onBackToParent"
       @interrupt="interrupt"
       @set-model="setModel"
       @set-effort="setEffort"
@@ -268,7 +279,7 @@ async function onPickMode(mode: ChatMode) {
       @respond-permission="onRespondPermission"
       @rollback-text-consumed="consumeRollbackText"
     />
-    <BtwPanel :owner-sid="activeTab?.sessionId ?? null" @ask="onSendBtw" />
+    <BtwPanel :owner-sid="sessionIdRef" @ask="onSendBtw" />
     </div>
   </div>
 </template>

@@ -78,11 +78,11 @@ function onKey(e: KeyboardEvent) {
   void send();
 }
 
-const { openSessionBeside } = usePaneLayout();
+const { openSubsession } = usePaneLayout();
 function openChild() {
   if (!done.value) return;
   clearTimeout(closeTimer);
-  openSessionBeside(done.value.id);
+  openSubsession(done.value.id);
   emit("close");
 }
 </script>
