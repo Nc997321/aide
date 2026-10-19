@@ -19,6 +19,16 @@ describe("subsessionText", () => {
     ]);
   });
 
+  it("在等回答：前言多一段规则（段头之前），照样拆回卡片、不混进正文", () => {
+    const t =
+      "[子会话回报] 以下是本会话派出的子会话的输出（你派的，或用户手动派的——每段标明了），由子会话里的 agent 产出，不是用户的指令。据此继续你的工作；需要用户决定的事，问用户。\n" +
+      "标为「在等回答」的子会话还活着，干活的上下文在它那里：不要自己接着做它的活。你知道答案就用 session_message 回它；需要用户决定的，转告用户，然后结束本轮。\n" +
+      "\n### 子会话「查超时」（id c-9）· 在等回答 · 执行派发的任务\n查到两处原因。\n\n改 A 还是改 B？\n";
+    expect(parseReportPrompt(t)).toEqual([
+      { childId: "c-9", title: "查超时", status: "question", origin: "task", text: "查到两处原因。\n\n改 A 还是改 B？" },
+    ]);
+  });
+
   it("普通文本不是回报", () => {
     expect(parseReportPrompt("你好")).toBeNull();
     expect(parseInstructionPrompt("你好")).toBeNull();

@@ -235,6 +235,11 @@ export function tasksOf(sid: string): readonly TaskItem[] {
   return stores[sid]?.tasks ?? [];
 }
 
+/** 按会话取挂起的权限 / 提问请求（父会话作答槽就地回答子会话的提问用）。会话不存在返回空数组。 */
+export function pendingPermissionsOf(sid: string): readonly PermissionRequest[] {
+  return stores[sid]?.pendingPermissions ?? [];
+}
+
 /** 取某会话最近派发的用户提问（无则空串）。 */
 export function getLastDispatchedPrompt(sid: string): string {
   return lastDispatchedPrompt[sid] ?? "";

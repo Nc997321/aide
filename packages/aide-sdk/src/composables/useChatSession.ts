@@ -324,6 +324,47 @@ async function ensureSendWorkspace(sid: string): Promise<void> {
 
 // ── useChatSession（App.vue 顶层单例 + 各分屏组各调一次）─────────────────────
 
+export interface RespondPermissionOpts {
+  answers?: Record<string, string>;
+  nextMode?: string;
+  reason?: string;
+  sessionRules?: PermissionRuleDraft[];
+}
+
+/** 应答某会话的一条权限 / 提问请求（按 sid，不依赖当前面板绑定的会话）。
+ *  answers：仅 AskUserQuestion 场景（问题文本 → 选中答案的不透明映射），
+ *  由 PermissionDialog.vue 收集，这里只透传，语义由 sidecar 解释。
+ *  reason：拒绝理由（仅 approved=false 时用户输入），Rust 参数名 message
+ *  （serde 自动 camelCase 映射），sidecar 交给 CLI 当 user feedback（由官方
+ *  模板包装后反馈给模型，不是工具结果正文）。
+ *  sessionRules：会话级规则草稿（「允许」文件工具时前端推导，如「本会话内
+ *  同文件不再询问」），随放行透传到 sidecar 入库，worker 销毁即消失。
+ *  父会话作答槽就地回答子会话的提问也走这里（sid = 子会话）。 */
+export async function respondPermissionFor(
+  sid: string,
+  id: string,
+  approved: boolean,
+  opts: RespondPermissionOpts = {},
+): Promise<void> {
+  const store = getStore(sid);
+  store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== id);
+  // 并发权限请求逐条确认：队列还有剩余时保持 attention（弹窗随队头自动切到
+  // 下一条），全部清空才回到 running。
+  const { setSessionState } = useSessionState();
+  if (store.pendingPermissions.length === 0) {
+    setSessionState(sid, "running"); // 权限批准后恢复生成（running 恒绿）
+  }
+  await api.permissionResponse({
+    sessionId: sid,
+    id,
+    approved,
+    answers: opts.answers,
+    nextMode: opts.nextMode,
+    message: opts.reason,
+    sessionRules: opts.sessionRules,
+  });
+}
+
 export function useChatSession(sessionId: Ref<string | null>) {
   void ensureGlobalListener();
 
@@ -448,32 +489,11 @@ export function useChatSession(sessionId: Ref<string | null>) {
   async function respondPermission(
     id: string,
     approved: boolean,
-    opts: {
-      answers?: Record<string, string>;
-      nextMode?: string;
-      reason?: string;
-      sessionRules?: PermissionRuleDraft[];
-    } = {},
+    opts: RespondPermissionOpts = {},
   ) {
     const sid = sessionId.value;
     if (!sid) return;
-    const store = getStore(sid);
-    store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== id);
-    // 并发权限请求逐条确认：队列还有剩余时保持 attention（弹窗随队头自动切到
-    // 下一条），全部清空才回到 running。
-    const { setSessionState } = useSessionState();
-    if (store.pendingPermissions.length === 0) {
-      setSessionState(sid, "running"); // 权限批准后恢复生成（running 恒绿）
-    }
-    await api.permissionResponse({
-      sessionId: sid,
-      id,
-      approved,
-      answers: opts.answers,
-      nextMode: opts.nextMode,
-      message: opts.reason,
-      sessionRules: opts.sessionRules,
-    });
+    await respondPermissionFor(sid, id, approved, opts);
   }
 
   async function interrupt() {
@@ -727,7 +747,7 @@ export async function canSendOrPrompt(): Promise<boolean> {
 export { toggleBgDock, toggleSubagentDock, stopSessionById, disposeSession, getLastDispatchedPrompt, isPendingSession, isFinalizedSessionPair };
 export { __setEvictThresholdsForTest };
 export { loadOlderPage, hasMoreOlder, resetPaginationForRevert };
-export { messagesOf, tasksOf } from "./useChatSession/state";
+export { messagesOf, tasksOf, pendingPermissionsOf } from "./useChatSession/state";
 export { liveMessageCount } from "./useChatSession/recycle";
 
 /** 远程重连后整页重载：清消息 + 分页状态后重新 hydrate。

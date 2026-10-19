@@ -130,7 +130,7 @@ export type UserMessageBlock =
       type: "subsession_report";
       childId: string;
       title: string;
-      /** done / error / interrupted */
+      /** done / question（以提问收尾，在等回答）/ error / interrupted */
       status: string;
       text: string;
       /** 这一轮由谁触发：task（派发时的任务）/ parent（父会话追加指令）/ user（用户在子会话里插话） */

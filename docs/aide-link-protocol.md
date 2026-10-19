@@ -360,7 +360,7 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 **`user_message.display` 新增两种块**（Host 代发的消息，不是用户说的话）：
 
 - `{type:"subsession_report", childId, title, status, text, origin, truncated?}`：子会话回报，出现在父会话里。
-  `status` ∈ `done` / `error` / `interrupted`；`origin` ∈ `task`（执行 agent 派发的任务）/ `user_task`（执行用户手动派发的任务，
+  `status` ∈ `done` / `question`（2026-10-19 新增：子会话这一轮以提问收尾、还在等回答；认不出按 `done` 显示即可）/ `error` / `interrupted`；`origin` ∈ `task`（执行 agent 派发的任务）/ `user_task`（执行用户手动派发的任务，
   2026-10-17 新增）/ `parent`（回应父会话追加指令）/ `user`（用户在子会话里插话触发）。认不出的 `origin` 不显示即可。建议渲染成系统卡片而不是用户气泡。
 - `{type:"subsession_instruction", parentId, parentTitle, text, kind, by?}`：父会话派来的任务（`kind: "task"`）或追加指令
   （`kind: "followup"`），出现在子会话里。`by` ∈ `agent` / `user`（用户手动派的任务；缺省按 `agent`）。
@@ -368,6 +368,10 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 用户在桌面手动派子会话走 Host 命令 `spawn_subsession`；**它不在手机暴露目录里**，手机端要做同样的入口时再商量加进目录。
 
 不认识这两种块的客户端按 `user_message.text` 渲染即可（它是带前言的完整文本）。
+
+**子会话提问的就地回答**（2026-10-19）：子会话用 AskUserQuestion 提问时，这条请求是**子会话**的 `permission_request`，
+桌面会在父会话的作答槽里直接显示并回答——回答就是对子会话 id 发普通的 `permission_response`，协议零改动。
+手机端想在父会话里提供同样的入口时照此办理：看子会话的挂起请求，答案按子会话 id 发回。
 
 **`list_sessions` / `list_sessions_for_workspace` 的会话条目**新增可选字段 `parentId`：有 = 这是某个会话的子会话。
 子会话的权限请求照常在子会话里批（`permission_response` 发给子会话 id）。

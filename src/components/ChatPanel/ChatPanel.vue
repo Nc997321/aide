@@ -55,7 +55,10 @@ import {
   loadOlderPage,
   hasMoreOlder,
   messagesOf,
+  pendingPermissionsOf,
+  respondPermissionFor,
 } from "@/composables/useChatSession";
+import { QUESTION_TOOL_NAME } from "@aide/sdk/utils/permissionShape";
 import { useToast } from "@/composables/useToast";
 
 const props = defineProps<{
@@ -472,8 +475,31 @@ const subs = useSubsessions();
 const { state: sessionActivity } = useSessionState();
 const children = computed(() => subs.childrenOfSession(props.sessionId));
 const childActivity = (id: string): ChildActivity => (sessionActivity[id] as ChildActivity | undefined) ?? "waiting";
-/** 在等权限批准的子会话（作答槽出引导卡；批在子会话里）。 */
-const waitingChildren = computed(() => children.value.filter((c) => childActivity(c.id) === "attention"));
+/** 子会话队头那条是不是提问（AskUserQuestion）：提问在父会话作答槽就地回答，答案回到子会话、由它接着做。 */
+function childQuestionOf(id: string): PermissionRequest | null {
+  const head = pendingPermissionsOf(id)[0];
+  return head && head.name === QUESTION_TOOL_NAME ? head : null;
+}
+/** 在等你的子会话：提问排在前面（就地能答）；权限批准出引导卡、去子会话里批（不代批，§8.5-6）。 */
+const waitingChildren = computed(() => {
+  const waiting = children.value.filter((c) => childActivity(c.id) === "attention");
+  return [...waiting.filter((c) => childQuestionOf(c.id)), ...waiting.filter((c) => !childQuestionOf(c.id))];
+});
+/** 作答槽里要就地回答的子会话提问（队首子会话在问问题时才有）。 */
+const childQuestion = computed(() => {
+  const child = waitingChildren.value[0];
+  const req = child ? childQuestionOf(child.id) : null;
+  return child && req ? { child, req } : null;
+});
+/** 子会话提问不涉及「记住规则」，弹窗的记住上下文恒为不可用。 */
+const NO_REMEMBER = { status: "failed" } as const;
+function onChildQuestionRespond(id: string, approved: boolean, answers?: Record<string, string>) {
+  const q = childQuestion.value;
+  if (!q || q.req.id !== id) return;
+  void respondPermissionFor(q.child.id, id, approved, { answers }).catch((e) =>
+    showToast(`回答没送到子会话：${e instanceof Error ? e.message : String(e)}`, "danger"),
+  );
+}
 const subsessionOpen = computed(() => (props.sessionId ? !!subs.drawerOpen[props.sessionId] : false));
 /** 本会话是子会话：父会话 id 与名字（头条面包屑）。 */
 const parentId = computed(() => subs.parentIdOf(props.sessionId));
@@ -837,8 +863,16 @@ function onOpenBgDock(taskId: string) {
         :current-mode="permissionMode"
         @respond="onPermissionRespond"
       />
+      <PermissionDialog
+        v-if="answer.kind === 'subsession' && childQuestion"
+        :permission="childQuestion.req"
+        :queue-count="answer.total"
+        :remember-context="NO_REMEMBER"
+        :from-subsession="childQuestion.child.title"
+        @respond="onChildQuestionRespond"
+      />
       <SubsessionWaitCard
-        v-if="answer.kind === 'subsession' && waitingChildren.length"
+        v-else-if="answer.kind === 'subsession' && waitingChildren.length"
         :child="waitingChildren[0]"
         :others="answer.total - 1"
       />

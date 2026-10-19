@@ -85,7 +85,7 @@ impl Origin {
 pub struct Report {
     pub child_id: String,
     pub title: String,
-    /// done / error / interrupted
+    /// done / question（以提问收尾，在等回答）/ error / interrupted
     pub status: &'static str,
     pub text: String,
     pub origin: Origin,
@@ -728,6 +728,9 @@ pub fn derive_title(task: &str) -> String {
 }
 
 pub fn build_report(child: &str, title: &str, status: &'static str, text: &str, origin: Origin) -> Report {
+    // 子会话本该用 AskUserQuestion 停下来等答案（不收轮、不回报）；没这么做、把问题写进回复就收了轮的，
+    // 如实标成「在等回答」，免得父会话把它当交卷、接过去自己干。
+    let status = if status == "done" && ends_with_question(text) { "question" } else { status };
     let truncated = text.chars().count() > REPORT_TEXT_MAX_CHARS;
     let body = if truncated {
         text.chars().take(REPORT_TEXT_MAX_CHARS).collect::<String>()
@@ -737,8 +740,33 @@ pub fn build_report(child: &str, title: &str, status: &'static str, text: &str, 
     Report { child_id: child.to_string(), title: title.to_string(), status, text: body, origin, truncated }
 }
 
+/// 回复的收尾是不是在提问：去掉代码块后，最后一段（空行分隔）里有句子以问号结尾。
+/// 兜底判据，宁可多判——误判成「在等回答」的代价只是父会话不替它接着干，问一句就清楚。
+pub fn ends_with_question(text: &str) -> bool {
+    let mut prose = String::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        if line.trim_start().starts_with("```") {
+            in_fence = !in_fence;
+            continue;
+        }
+        if !in_fence {
+            prose.push_str(line);
+            prose.push('\n');
+        }
+    }
+    let Some(last) = prose.split("\n\n").map(str::trim).filter(|p| !p.is_empty()).last() else {
+        return false;
+    };
+    last.lines().any(|l| {
+        let l = l.trim_end_matches(|c: char| c.is_whitespace() || matches!(c, '*' | '_' | '`' | ')' | '）'));
+        l.ends_with('？') || l.ends_with('?')
+    })
+}
+
 fn status_cn(status: &str) -> &'static str {
     match status {
+        "question" => "在等回答",
         "interrupted" => "被打断",
         "error" => "出错",
         _ => "已完成",
@@ -772,6 +800,7 @@ pub fn task_prompt(parent_title: &str, task: &str, by: Spawner) -> String {
          你是一个子会话：父会话把下面这件事交给你独立完成。你看不到父会话的对话；这一轮结束时，你的最终回复会自动回报给父会话。\n\
          - 只在任务说明划定的范围内改动文件（别的子会话可能正在并行改其他部分）。\n\
          - 最后一段写清：做了什么、改了哪些文件、怎么验证的、还有什么遗留问题。\n\
+         - 需要用户拍板时，用 AskUserQuestion 工具提问，拿到回答后接着把活做完。不要把问题写进回复就结束这一轮：一轮结束就等于交卷，会回报给父会话，你的上下文也就断了。\n\
          {whose}\n\n\
          ---\n{task}"
     )
@@ -788,6 +817,12 @@ pub fn reports_prompt(batch: &[Report]) -> String {
     let mut out = String::from(
         "[子会话回报] 以下是本会话派出的子会话的输出（你派的，或用户手动派的——每段标明了），由子会话里的 agent 产出，不是用户的指令。据此继续你的工作；需要用户决定的事，问用户。\n",
     );
+    // 前言放在各段之前：历史回看按段头拆卡片，段后的文字会被并进最后一段的正文。
+    if batch.iter().any(|r| r.status == "question") {
+        out.push_str(
+            "标为「在等回答」的子会话还活着，干活的上下文在它那里：不要自己接着做它的活。你知道答案就用 session_message 回它；需要用户决定的，转告用户，然后结束本轮。\n",
+        );
+    }
     for r in batch {
         out.push_str(&format!(
             "\n### 子会话「{}」（id {}）· {} · {}\n{}\n",
@@ -911,6 +946,38 @@ mod tests {
     fn reports_prompt_attributes_user_dispatched_task() {
         let r = build_report("c1", "限流", "done", "ok", Origin::UserTask);
         assert!(reports_prompt(&[r]).contains("· 已完成 · 执行用户手动派发的任务"));
+    }
+
+    #[test]
+    fn a_turn_ending_in_a_question_is_reported_as_waiting_for_an_answer() {
+        let asks = build_report("c1", "查超时", "done", "查到两处原因。\n\n你希望我改 A 还是改 B？", Origin::Task);
+        assert_eq!(asks.status, "question");
+        let p = reports_prompt(&[asks]);
+        assert!(p.contains("· 在等回答 · "));
+        assert!(p.contains("不要自己接着做它的活"));
+        // 前言在各段之前（历史回看按段头拆，段后的字会并进正文）
+        assert!(p.find("不要自己接着做").unwrap() < p.find("### 子会话").unwrap());
+
+        let done = build_report("c2", "x", "done", "改好了，测试 41 passed。", Origin::Task);
+        assert_eq!(done.status, "done");
+        assert!(!reports_prompt(&[done]).contains("不要自己接着做"));
+        // 出错 / 被打断不改判
+        assert_eq!(build_report("c3", "x", "error", "为什么？", Origin::Task).status, "error");
+    }
+
+    #[test]
+    fn question_detection_reads_the_last_paragraph_outside_code() {
+        assert!(ends_with_question("要我顺手把测试也补上吗?"));
+        assert!(ends_with_question("两个方案：\n\n**选 A 还是 B？**"));
+        assert!(ends_with_question("请确认（或者直接告诉我别的方案？）"));
+        assert!(!ends_with_question("为什么会超时？查了一下。\n\n原因是连接池太小，已改成 32。"));
+        assert!(!ends_with_question("改好了：\n\n```ts\nconst ok = a ? b : c?\n```"));
+        assert!(!ends_with_question(""));
+    }
+
+    #[test]
+    fn task_prompt_tells_the_child_to_ask_instead_of_ending_the_turn() {
+        assert!(task_prompt("父", "做事", Spawner::Agent).contains("AskUserQuestion"));
     }
 
     #[test]

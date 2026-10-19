@@ -50,6 +50,9 @@ const props = defineProps<{
    *  逐条点允许/记住都不解渴，切模式才是"之后别再问"的那个选项。可能为空串
    *  （模式清单还没就位），按"显示"处理。 */
   currentMode?: string;
+  /** 这条提问来自本会话派出的子会话（父会话作答槽就地回答，值为子会话标题）。
+   *  答案回到子会话，子会话拿着它接着干——不是本会话的 agent 在问。 */
+  fromSubsession?: string;
 }>();
 
 const emit = defineEmits<{
@@ -495,6 +498,7 @@ const inputJson = computed(() => {
           <span class="perm-title-main">
             <template v-if="isConfirm">{{ confirmInput?.title }}</template>
             <template v-else-if="isPlanApproval">批准执行这份计划？</template>
+            <template v-else-if="isQuestion && fromSubsession">子会话「{{ fromSubsession }}」有问题要问你</template>
             <template v-else-if="isQuestion">Aide 有问题要问你</template>
             <template v-else><code class="perm-tool-chip">{{ permission.name }}</code></template>
           </span>
@@ -517,6 +521,9 @@ const inputJson = computed(() => {
            的进度卡片，很容易被当成"平白无故弹出来的"）。 -->
       <!-- 来自子代理：方括号与 SubagentCallBlock 节点同形——消息流里见过这个括号，
            这里就懂「这条权限来自那条括号子线程」，跨表面呼应，不靠拼图块 emoji 暗示。 -->
+      <div v-if="fromSubsession" class="perm-subagent-badge">
+        回答会交给子会话，由它接着做
+      </div>
       <div v-if="permission.fromSubagent" class="perm-subagent-badge">
         <Icon class="perm-subagent-bracket" name="bracket" :size="13" :stroke-width="1.6" /> 来自子代理：{{ permission.fromSubagent.agentName }}
       </div>

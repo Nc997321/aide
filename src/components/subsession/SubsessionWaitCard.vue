@@ -4,6 +4,7 @@
  *
  * 权限请求属于子会话，**在子会话里批**——v1 不在父会话里代批（同屏两处都能批会让「这条是在哪批的」
  * 含混）。这张卡只负责把人带过去：点「去处理」在父会话旁边分屏打开那个子会话。
+ * 子会话的**提问**（AskUserQuestion）不走这张卡：父会话作答槽就地回答（ChatPanel 的 childQuestion，spec §12）。
  */
 import type { SubsessionEntry } from "@/composables/useSubsessions";
 import { usePaneLayout } from "@/composables/usePaneLayout";

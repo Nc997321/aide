@@ -17,6 +17,8 @@ const { openSessionBeside } = usePaneLayout();
 
 const STATUS: Record<string, { label: string; tone: string }> = {
   done: { label: "已完成", tone: "done" },
+  // 以提问收尾：子会话还活着、在等回答（Host 兜底判出来的，见 subsession.rs ends_with_question）
+  question: { label: "在等回答", tone: "warn" },
   error: { label: "出错", tone: "err" },
   interrupted: { label: "被打断", tone: "warn" },
 };
@@ -28,6 +30,7 @@ const ORIGIN: Record<string, string> = {
 };
 
 const status = computed(() => STATUS[props.block.status] ?? STATUS.done);
+const asking = computed(() => props.block.status === "question");
 const origin = computed(() => ORIGIN[props.block.origin] ?? "");
 /** 收起态只露前几行（按行数截，长段落由 CSS 行数限制兜底）。 */
 const PREVIEW_LINES = 4;
@@ -56,7 +59,9 @@ const html = computed(() => renderMarkdown(shownText.value || "（这一轮没�
       <button v-if="hasMore" type="button" class="ssr-link" @click="expanded = !expanded">
         {{ expanded ? "收起" : "展开全文" }}
       </button>
-      <button type="button" class="ssr-link" @click="openSessionBeside(block.childId)">打开子会话</button>
+      <button type="button" class="ssr-link" @click="openSessionBeside(block.childId)">
+        {{ asking ? "去子会话里回答" : "打开子会话" }}
+      </button>
     </footer>
   </section>
 </template>

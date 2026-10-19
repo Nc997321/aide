@@ -476,7 +476,7 @@ export type UserMessageBlock =
 export interface SubsessionReport {
   childId: string;
   title: string;
-  /** done / error / interrupted */
+  /** done / question（以提问收尾，在等回答）/ error / interrupted */
   status: string;
   text: string;
   /** 这一轮由谁触发：task（agent 派发的任务）/ user_task（用户手动派发的任务）/ parent（父会话追加指令）/
