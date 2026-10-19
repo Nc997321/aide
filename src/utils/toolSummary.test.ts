@@ -102,3 +102,13 @@ describe("previewToolResult", () => {
     expect(p?.lines[0]).toHaveLength(240);
   });
 });
+
+describe("电脑操作工具行", () => {
+  it("中文工具名 + 摘要", () => {
+    expect(toolDisplayName("mcp__aide-computer__computer_act")).toBe("操作电脑");
+    expect(summarizeToolInput("mcp__aide-computer__computer_act", { intent: "保存文件", steps: [] })).toBe("保存文件");
+    expect(summarizeToolInput("mcp__aide-computer__computer_window", { action: "launch", app: "记事本" })).toBe("启动 记事本");
+    expect(summarizeToolInput("mcp__aide-computer__computer_read", {})).toBe("前台窗口");
+    expect(summarizeToolInput("mcp__aide-computer__computer_wait", { condition: { kind: "text_stable" } })).toBe("text_stable");
+  });
+});

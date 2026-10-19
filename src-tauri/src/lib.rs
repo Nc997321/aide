@@ -191,6 +191,9 @@ pub fn run() {
             // 远程 Host 连接：manage 需要 AppHandle，只能在 setup 内注册。
             remote_workspace::manage(app);
 
+            // 电脑操作执行器（aide-computer）：本机与远程 Host 的 agent 都由它操作这台电脑。
+            runtime::computer_agent::manage(app.handle());
+
             // Create the main window programmatically so we can set file_drop_enabled = false.
             // On Windows, Tauri's built-in OLE Drop Target intercepts all drag-and-drop messages
             // at the Win32 level before WebView2 sees them, which prevents HTML5 dragover /

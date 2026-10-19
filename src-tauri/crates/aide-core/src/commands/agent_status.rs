@@ -18,14 +18,14 @@ pub static COMMANDS: &[HostCommand] = &[
 
 /// GUI 侧工具的应答能回写给 agent 的命令（sidecar 协议里的结果命令名）。只放行这些——
 /// 本命令不是通往 sidecar stdin 的通用后门。
-const GUI_TOOL_RESULTS: &[&str] = &["browser_result"];
+const GUI_TOOL_RESULTS: &[&str] = &["browser_result", "computer_result"];
 
 #[derive(Deserialize)]
 pub struct AgentToolResultArgs {
     payload: serde_json::Value,
 }
 
-/// GUI 侧工具（内嵌浏览器…）答完 agent 的查询，把结果写回这台 Host 的 agent runtime。
+/// GUI 侧工具（内嵌浏览器、电脑操作…）答完 agent 的查询，把结果写回这台 Host 的 agent runtime。
 ///
 /// 一个窗口 = 一个 Host：Host 的 sidecar 发出的 `browser_query` 经事件到了 GUI，GUI 执行后
 /// 由它回到 Host——本机窗口走进程内钩子（`runtime::ports::AgentHooks`），不经这里。

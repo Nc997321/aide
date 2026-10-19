@@ -47,7 +47,7 @@ jobs:
       - name: test host-side crates
         run: >
           cargo test --manifest-path src-tauri/Cargo.toml
-          -p aide-workspace -p aide-core -p aide-link -p aide-host
+          -p aide-workspace -p aide-core -p aide-link -p aide-host -p aide-computer
 
   tauri-shell:
     name: tauri shell compile (macOS)

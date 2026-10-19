@@ -44,6 +44,7 @@ import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { cancelAllLspQueries, syncLspWarmth } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
+import { cancelAllComputerQueries } from "../extensions/computer/client.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
   buildUserMessage,
@@ -626,6 +627,7 @@ export class SessionWorker {
       cancelAllLspQueries("interrupted");
       // 内嵌浏览器挂起查询同理：用户已打断，继续等 Rust 回包没有意义（回包来了也会被静默丢弃）。
       cancelAllBrowserQueries("interrupted");
+      cancelAllComputerQueries("interrupted");
       // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
       this.currentQuery?.interrupt().catch(() => {});
       // 兜底：打断不保证兑现——没有 query 可打断时整句是空操作，CLI 卡在端点上时投出去
@@ -1275,6 +1277,7 @@ export class SessionWorker {
     this.queue.close();
     cancelAllLspQueries("session stopped");
     cancelAllBrowserQueries("session stopped");
+    cancelAllComputerQueries("session stopped");
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();
     // 挂起中的切换确认按 deny 收尾（进程都没了，确认没有继续等的意义）

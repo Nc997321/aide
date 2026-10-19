@@ -30,7 +30,7 @@ macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foun
 - **Gitee（`origin`）是完整历史；GitHub（`github`，公开）是清洗后的镜像，只经 `scripts/publish-github.sh` 同步，禁止直接 `git push github`**（会公开未清洗的历史）。需 `git-filter-repo`；`--dry-run` 只清洗扫描。
 - 清洗规则（`rules.txt` / `mailmap.txt` / `forbidden.txt`）放 `~/.config/aide-publish/`，**不进仓库**（规则本身含要抹掉的字符串）。清洗确定性，日常快进；规则改了才需 `--force`；清洗后扫全历史，命中 `forbidden.txt` 即中止。
 - 仓库里不要写真实隧道 UUID / 镜像仓库账号 / 内网 IP / 个人邮箱或本机路径；新增敏感类型时同步改规则与 `forbidden.txt`。
-- CI（`.github/workflows/ci.yml`，仅 GitHub 触发）在 **macOS** 跑 frontend / rust crates（aide-workspace、core、link、host）/ sidecar / tauri-shell（`cargo check`）——跨平台红线靠它兜底，**Windows 暂无 CI**。CI 需还原本地依赖布局：根 vitest 含 `agent-sidecar/src/**`，要装 sidecar 依赖；`jsdom` 只在根 package.json；macOS bundle 资源 glob 要 `pnpm --dir agent-sidecar install`。
+- CI（`.github/workflows/ci.yml`，仅 GitHub 触发）在 **macOS** 跑 frontend / rust crates（aide-workspace、core、link、host、computer）/ sidecar / tauri-shell（`cargo check`）——跨平台红线靠它兜底，**Windows 暂无 CI**。CI 需还原本地依赖布局：根 vitest 含 `agent-sidecar/src/**`，要装 sidecar 依赖；`jsdom` 只在根 package.json；macOS bundle 资源 glob 要 `pnpm --dir agent-sidecar install`。
 
 ## 红线：多端一致性（命令 / 事件双通道）
 
@@ -100,5 +100,7 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 - **desktop 语义**：`display` 通道、`jumpQueue`、会话 tab 管理、automation/btw——不进 engine。
 
 新增逻辑先问是不是 engine 职责，别默认"跟会话有关就进 sidecar"。内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`）。引擎提供机制、宿主决定策略（browser facade / browser_agent 即此口径）。
+
+**电脑操作（aide-computer）**：agent 像人一样操作用户桌面。执行器在 **GUI 进程**（屏幕在用户眼前，Host 可能在 WSL/SSH），走与浏览器同一条查询桥（`computer_query` → `runtime/computer_agent.rs` → `computer_result`）；**工具面不出现应用名词、不为特定应用打补丁**；Win32/UIA 调用只准在 `crates/aide-computer/src/adapter/windows/`，策略层纯 Rust 可单测；读/等自动放行、做动作走权限审批；持锁期间用户一动鼠标键盘即停手。真机调试台：`cargo run -p aide-computer --example drive`。设计见 docs/superpowers/specs/2026-10-19-computer-use-design.md。
 
 **改 aide-browser 工具面前先读 [docs/browser-agent-feedback-log.md](docs/browser-agent-feedback-log.md)**（历轮 agent 反馈的取舍记录，含「不做」的理由与取舍原则）；每轮新反馈与实施结果都记回去。

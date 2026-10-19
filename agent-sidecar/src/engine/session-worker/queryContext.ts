@@ -7,6 +7,7 @@ import { docsMcpRegistration } from "../../extensions/docsMcp.js";
 import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import type { KbScopeStore } from "../../extensions/knowledge/scope.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
+import { computerMcpRegistration } from "../../extensions/computerMcp.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
@@ -78,6 +79,9 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 跳过。**带 emit**——它要走 request_id 桥回桌面 Rust 驱动 WebView2（本仓库第三种形态：
   // knowledge 直连 HTTP、docs 本地同步解析、lsp 与本插件回主进程）。
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
+  // 操作用户的电脑（读窗口控件 / 真实鼠标键盘）：注册条件=!trusted 跳过、AIDE_COMPUTER_TOOLS=off 跳过。
+  // 带 emit，同浏览器走 request_id 桥回桌面进程（aide-computer）。
+  const computerMcp = computerMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
   // agent LSP 工具：闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
   // 闸门数据 lspLanguages 由主进程算好下发（与 trusted 同一条政策值通道）。
   // **闸门算一次给三处用**（本文件的挂载、queryOptions 的内置插件退役、下面提示注入）：
@@ -141,6 +145,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
       ...(knowledgeMcp ?? {}),
       ...(memoryMcp ?? {}),
       ...(browserMcp ?? {}),
+      ...(computerMcp ?? {}),
       ...(lspMcp ?? {}),
       ...(subsessionMcp ?? {}),
     },

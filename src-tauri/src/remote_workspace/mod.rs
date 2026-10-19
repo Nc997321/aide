@@ -367,13 +367,18 @@ impl RemoteWorkspaces {
 /// serve 的通知帧（Host 核心经 `EventSink` 发出的事件）→ 只投给连着这台 Host 的窗口，
 /// 事件名 / payload 原样（Host 原生路径，前端无需翻译）。
 fn on_host_event(app: &AppHandle, host: &HostId, n: Notification) {
-    // Host 的 agent 要用内嵌浏览器（GUI 能力）：不转给前端，由桌面应答后经
+    // Host 的 agent 要用内嵌浏览器 / 操作电脑（GUI 能力）：不转给前端，由桌面应答后经
     // `agent_tool_result` 回到那台 Host 的 runtime。
     if n.event == "chat-event" {
         if let Some(req) = crate::browser::agent_bridge::parse_browser_query(&n.payload) {
             crate::host_window::answer_browser_query(app, host, req);
             return;
         }
+        // 电脑操作同理：屏幕在这台机器上，由桌面执行、回包经 agent_tool_result 回到 Host。
+        if crate::runtime::computer_agent::intercept_remote(app, host, &n.payload) {
+            return;
+        }
+        crate::runtime::computer_agent::observe(app, &n.payload);
     }
     crate::host_window::emit_to_host(app, host, &n.event, &n.payload);
 }

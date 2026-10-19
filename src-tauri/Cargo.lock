@@ -68,6 +68,7 @@ dependencies = [
 name = "aide"
 version = "1.2.4"
 dependencies = [
+ "aide-computer",
  "aide-core",
  "aide-host",
  "aide-workspace",
@@ -114,6 +115,19 @@ dependencies = [
  "which",
  "windows 0.61.3",
  "winreg 0.55.0",
+]
+
+[[package]]
+name = "aide-computer"
+version = "1.2.4"
+dependencies = [
+ "base64 0.22.1",
+ "png 0.17.16",
+ "serde",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+ "windows 0.61.3",
 ]
 
 [[package]]

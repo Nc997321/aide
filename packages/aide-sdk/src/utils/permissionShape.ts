@@ -136,7 +136,64 @@ export function permissionInputRows(name: string, input: unknown): PermissionInp
   if (name === "Bash") return [{ label: "命令", value: String(r?.command ?? "") }];
   if (name === "Write" || name === "Edit") return [{ label: "文件", value: String(r?.file_path ?? "") }];
   if (name === "WebFetch") return [{ label: "URL", value: String(r?.url ?? "") }];
+  if (name === "mcp__aide-computer__computer_act") return computerActRows(r);
+  if (name === "mcp__aide-computer__computer_window") {
+    const action = String(r?.action ?? "");
+    return action === "launch"
+      ? [{ label: "启动应用", value: String(r?.app ?? "") }]
+      : [{ label: WINDOW_ACTIONS[action] ?? action, value: `窗口 ${String(r?.window_id ?? "")}` }];
+  }
   return null;
+}
+
+// 电脑操作：审批时要看清「要做什么」——目的、哪个窗口、每一步（含要输入的全文），不能截断成 JSON。
+const WINDOW_ACTIONS: Record<string, string> = {
+  focus: "切到前台",
+  minimize: "最小化",
+  maximize: "最大化",
+  restore: "还原",
+  close: "关闭",
+};
+
+function computerTarget(t: unknown): string {
+  const r = (t ?? {}) as Record<string, unknown>;
+  if (typeof r.ref === "string") return `元素 ${r.ref}`;
+  if (typeof r.name === "string") return `「${r.name}」${typeof r.role === "string" ? `（${r.role}）` : ""}`;
+  if (typeof r.x === "number") return `截图坐标 (${r.x}, ${String(r.y)})`;
+  return "当前焦点";
+}
+
+const SCROLL_DIRS: Record<string, string> = { up: "向上", down: "向下", left: "向左", right: "向右" };
+
+export function describeComputerStep(step: unknown): string {
+  const s = (step ?? {}) as Record<string, unknown>;
+  switch (s.do) {
+    case "click":
+      return `点击 ${computerTarget(s.target)}`;
+    case "double_click":
+      return `双击 ${computerTarget(s.target)}`;
+    case "right_click":
+      return `右键点击 ${computerTarget(s.target)}`;
+    case "type":
+      return `输入「${String(s.text ?? "")}」${s.target ? ` 到 ${computerTarget(s.target)}` : ""}`;
+    case "press":
+      return `按键 ${String(s.keys ?? "")}`;
+    case "scroll":
+      return `${SCROLL_DIRS[String(s.direction)] ?? String(s.direction)}滚动 ${String(s.amount ?? 3)} 格${s.target ? `（在 ${computerTarget(s.target)}）` : ""}`;
+    case "set_value":
+      return `把 ${computerTarget(s.target)} 设为「${String(s.value ?? "")}」`;
+    default:
+      return JSON.stringify(step);
+  }
+}
+
+function computerActRows(r: Record<string, unknown> | undefined | null): PermissionInputRow[] {
+  const steps = Array.isArray(r?.steps) ? r.steps : [];
+  return [
+    { label: "目的", value: String(r?.intent ?? "") },
+    { label: "窗口", value: String(r?.window_id ?? "") },
+    ...steps.map((step, i) => ({ label: `第 ${i + 1} 步`, value: describeComputerStep(step) })),
+  ];
 }
 
 /** 摘要字段优先级：命中第一个非空 string 字段就返回。 */

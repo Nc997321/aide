@@ -5,7 +5,7 @@ edition = "2021"
 
 # Cargo workspace：`cargo build`（tauri dev/build 走的路径）默认只构建主包。
 [workspace]
-members = ["crates/aide-workspace", "crates/aide-core", "crates/aide-host", "crates/aide-link"]
+members = ["crates/aide-workspace", "crates/aide-core", "crates/aide-host", "crates/aide-link", "crates/aide-computer"]
 default-members = ["."]
 
 [dependencies]
@@ -102,6 +102,8 @@ aide-workspace = { path = "crates/aide-workspace" }
 aide-core = { path = "crates/aide-core" }
 # 远程工作区的桌面 ↔ aide-host 协议类型与可转发命令清单（只用其 lib）
 aide-host = { path = "crates/aide-host" }
+# 电脑操作：UIA 读窗口、真实输入做动作（只在 GUI 进程里跑，见 runtime/computer_agent.rs）
+aide-computer = { path = "crates/aide-computer" }
 lsp-types = "0.97.0"
 
 # Clipboard file-path reading is platform-specific; declare the platform-only

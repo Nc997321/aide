@@ -7,6 +7,7 @@ import type {
 import { SessionWorker } from "./session-worker.js";
 import { resolveLspResult } from "../extensions/lspClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
+import { resolveComputerResult } from "../extensions/computer/client.js";
 import { resolveSubsessionResult } from "../extensions/subsessions.js";
 import { isDroppableEvent, writeStdoutFrame } from "./stdoutFrames.js";
 import {
@@ -87,6 +88,12 @@ export class SessionManager {
     // 内嵌浏览器 MCP 工具的 Rust 回包：同上，按 request_id 结算，无会话路由。
     if (cmd.cmd === "browser_result") {
       resolveBrowserResult(cmd);
+      return;
+    }
+
+    // 电脑操作工具的 Rust 回包：同上。
+    if (cmd.cmd === "computer_result") {
+      resolveComputerResult(cmd);
       return;
     }
 

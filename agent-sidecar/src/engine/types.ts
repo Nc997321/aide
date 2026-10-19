@@ -394,6 +394,15 @@ export type ChatEvent =
       args: Record<string, unknown>;
       workspace_root: string;
     }
+  // 电脑操作查询（桌面进程拦截交给 aide-computer，不转发 Vue；响应走 computer_result 命令）。
+  // 载荷各 op 不同，权威定义在 `extensions/computer/client.ts` 的 `ComputerCall`
+  // （engine 不 import extensions，这里只声明到「带 op 的开放载荷」）。
+  | {
+      type: "computer_query";
+      request_id: string;
+      op: "windows" | "window" | "read" | "act" | "wait";
+      [key: string]: unknown;
+    }
   // Rust reader 拦截的内嵌浏览器查询（不转发 Vue；响应走 browser_result 命令）。
   // op 面**刻意收窄**：页面语义（正文/表格/表单）全在 sidecar 的投影脚本里，不进协议
   // （见 src-tauri/src/browser/agent_bridge.rs 头注释：换站点时 Rust 一行不动）；
@@ -651,6 +660,14 @@ export type SidecarCommand =
       error?: string;
       /** 各工具的其余载荷键（symbols / matches / languages / truncated），lspClient 整包透传。 */
       [key: string]: unknown;
+    }
+  // 电脑操作查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
+  | {
+      cmd: "computer_result";
+      request_id: string;
+      ok: boolean;
+      data?: unknown;
+      error?: string;
     }
   // 内嵌浏览器查询的应答（Rust → sidecar，按 request_id 配对，无 session 路由）。
   // data 刻意用 unknown 而非扁平字段：载荷随 op 而变（视图列表 / 脚本返回值 / CDP 返回值），

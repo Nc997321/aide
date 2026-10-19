@@ -26,7 +26,7 @@ describe("自动化连接器候选", () => {
 
   it("免确认就能做不可逆 / 等同本人身份操作的连接器带 caution", () => {
     const caution = automationConnectorOptions(["github"]).filter((c) => c.caution).map((c) => c.name);
-    expect(caution).toEqual(["aide-knowledge", "aide-browser"]);
+    expect(caution).toEqual(["aide-knowledge", "aide-browser", "aide-computer"]);
   });
 
   it("每个内置连接器都有一句说明（新增内置 MCP 忘了写说明会在这里挂）", () => {

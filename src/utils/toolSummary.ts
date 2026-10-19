@@ -12,6 +12,11 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   "mcp__aide-sessions__session_spawn": "派出子会话",
   "mcp__aide-sessions__session_message": "追加指令",
   "mcp__aide-sessions__session_children": "查看子会话",
+  "mcp__aide-computer__computer_windows": "列出窗口",
+  "mcp__aide-computer__computer_read": "查看窗口",
+  "mcp__aide-computer__computer_act": "操作电脑",
+  "mcp__aide-computer__computer_wait": "等待界面",
+  "mcp__aide-computer__computer_window": "窗口操作",
 };
 
 export function toolDisplayName(name: string): string {
@@ -48,6 +53,15 @@ export function summarizeToolInput(name: string, input: unknown): string {
     return str(record.title) || (str(record.task).split("\n").find((l) => l.trim()) ?? "").trim();
   }
   if (name === "mcp__aide-sessions__session_message") return str(record.text);
+  // 电脑操作：做动作看目的，窗口操作看动作与对象，看 / 等看窗口与条件
+  if (name === "mcp__aide-computer__computer_act") return str(record.intent);
+  if (name === "mcp__aide-computer__computer_window") {
+    return str(record.action) === "launch" ? `启动 ${str(record.app)}` : `${str(record.action)} ${str(record.window_id)}`.trim();
+  }
+  if (name === "mcp__aide-computer__computer_read") return str(record.window_id) || "前台窗口";
+  if (name === "mcp__aide-computer__computer_wait") {
+    return str((record.condition as Record<string, unknown> | undefined)?.kind);
+  }
   // 其余工具（MCP 等参数形态不定）：头行只留工具名，原始 JSON 没人读。
   return "";
 }

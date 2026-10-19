@@ -1,5 +1,5 @@
 //! aide-core agent runtime 的 GUI 侧钩子（`aide_core::runtime::ports::AgentHooks`）：
-//! 内嵌浏览器的 agent 工具查询、冻结诊断黑匣子——都是桌面进程的东西。
+//! 内嵌浏览器 / 电脑操作的 agent 工具查询、冻结诊断黑匣子——都是桌面进程的东西。
 
 use std::sync::Arc;
 
@@ -12,6 +12,10 @@ pub struct DesktopAgentHooks(pub AppHandle);
 impl AgentHooks for DesktopAgentHooks {
     /// 内嵌浏览器查询：执行体在 `runtime/browser_agent.rs`，这里只做「拦截 + 派发」。
     fn intercept(&self, event: &Value, stdin: &AgentStdin) -> bool {
+        // 电脑操作查询：执行体在 aide-computer，接线在 `runtime/computer_agent.rs`。
+        if super::computer_agent::intercept_local(&self.0, event, stdin) {
+            return true;
+        }
         let Some(req) = crate::browser::agent_bridge::parse_browser_query(event) else {
             return false;
         };
@@ -25,6 +29,8 @@ impl AgentHooks for DesktopAgentHooks {
     }
 
     fn observe(&self, event: &Value, raw_len: usize) {
+        // 电脑操作：用户新消息解除「接管暂停」、一轮结束放锁。
+        super::computer_agent::observe(&self.0, event);
         let event_type = event.get("type").and_then(|t| t.as_str()).unwrap_or("unknown");
         // 诊断黑匣子：chat-event 出口按秒计量。session_init 的路由键在 _routing_id，其余事件
         // 的 session_id 即路由键。

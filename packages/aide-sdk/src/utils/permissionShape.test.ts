@@ -207,3 +207,37 @@ describe("permissionInputJson", () => {
     expect(typeof permissionInputJson(cyclic)).toBe("string");
   });
 });
+
+describe("电脑操作的审批展示", () => {
+  it("computer_act 拆成目的 / 窗口 / 每一步，输入的文字完整显示", () => {
+    const rows = permissionInputRows("mcp__aide-computer__computer_act", {
+      window_id: "0x1A",
+      intent: "保存文件",
+      steps: [
+        { do: "click", target: { ref: "e3" } },
+        { do: "type", text: "第一行\n第二行", target: { name: "文件名", role: "Edit" } },
+        { do: "press", keys: "ctrl+s" },
+        { do: "scroll", direction: "down" },
+        { do: "double_click", target: { x: 10, y: 20, obs: 3 } },
+      ],
+    });
+    expect(rows).toEqual([
+      { label: "目的", value: "保存文件" },
+      { label: "窗口", value: "0x1A" },
+      { label: "第 1 步", value: "点击 元素 e3" },
+      { label: "第 2 步", value: "输入「第一行\n第二行」 到 「文件名」（Edit）" },
+      { label: "第 3 步", value: "按键 ctrl+s" },
+      { label: "第 4 步", value: "向下滚动 3 格" },
+      { label: "第 5 步", value: "双击 截图坐标 (10, 20)" },
+    ]);
+  });
+
+  it("computer_window 显示动作与对象", () => {
+    expect(permissionInputRows("mcp__aide-computer__computer_window", { action: "launch", app: "记事本" })).toEqual([
+      { label: "启动应用", value: "记事本" },
+    ]);
+    expect(permissionInputRows("mcp__aide-computer__computer_window", { action: "close", window_id: "0x2" })).toEqual([
+      { label: "关闭", value: "窗口 0x2" },
+    ]);
+  });
+});

@@ -9,6 +9,7 @@ import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
 import { KNOWLEDGE_READ_RULES } from "../../extensions/knowledgeMcp.js";
 import { MEMORY_READ_RULES } from "../crossMemory.js";
 import { BROWSER_ALLOW_RULES } from "../../extensions/browserMcp.js";
+import { COMPUTER_ALLOW_RULES } from "../../extensions/computerMcp.js";
 import { buildPluginsOption, buildDispatchPluginsOption, type SdkPluginConfig } from "../../extensions/dispatchPlugins.js";
 import { retireBuiltinLspPlugins } from "../../extensions/lspRetire.js";
 import { forkResumeOptions } from "./forkResume.js";
@@ -110,6 +111,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       // 跨工作区记忆只读，同样是工具级规则。
       ...MEMORY_READ_RULES,
       ...BROWSER_ALLOW_RULES,
+      // 电脑操作只放行读 / 等；computer_act / computer_window 走权限确认（见 computerMcp.ts）。
+      ...COMPUTER_ALLOW_RULES,
       // 子会话派活与 Agent / Task 同一口径免确认（子会话里的工具照样按它自己的权限模式确认）。
       ...SUBSESSION_ALLOW_RULES,
       // 侧栏应用后端里的只读工具（安装版、自己标了 readOnlyHint 的）；其余工具走权限确认。

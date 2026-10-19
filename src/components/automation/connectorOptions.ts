@@ -34,6 +34,10 @@ const NOTES: Record<string, { note: string; caution?: boolean }> = {
     note: "操作内嵌浏览器：能读你已登录的页面、以你的身份点击和发请求；仅桌面端可用",
     caution: true,
   },
+  "aide-computer": {
+    note: "操作这台电脑：用真实鼠标键盘操作桌面应用，任务内不再逐次确认；仅 Windows 桌面端可用",
+    caution: true,
+  },
 };
 
 export function automationConnectorOptions(userServers: string[]): ConnectorOption[] {
