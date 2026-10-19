@@ -377,7 +377,19 @@ const sendConfirmedNonce = ref(0);
  *  下沉 Rust，桌面端与手机端共用同一份 `session_identity_drift`；两维都相同才不弹）。
  *  需确认 → 弹确认形态（不清输入，取消时内容回退对话框）；否则直接发送 + 推进
  *  provider 基线 + 递增 sendConfirmedNonce（输入框据此清空输入）。 */
+/** 门控判定在途：这期间输入框还没清空，再按一次回车会把同一条再发一遍——直接吞掉。 */
+let sendGating = false;
 async function onSendRequest(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
+  if (sendGating) return;
+  sendGating = true;
+  try {
+    await gateAndSend(prompt, opts);
+  } finally {
+    sendGating = false;
+  }
+}
+
+async function gateAndSend(prompt: string, opts: SendOptions & { effectiveProvider: string; effectiveModel: string }) {
   // 拆出确认门控用的 provider/模型，真实发送只带纯 SendOptions（不给 useChatSession 传额外字段）
   const { effectiveProvider, effectiveModel, ...sendOpts } = opts;
   const sidForGate = props.sessionId;
@@ -395,14 +407,16 @@ async function onSendRequest(prompt: string, opts: SendOptions & { effectiveProv
       return;
     }
   }
-  // 新会话（工程模式）即将启动：这个工作区还没决定开不开语言服务器 → 先问，问完再发。
+  // 新会话（工程模式）即将启动：这个工作区还没决定开不开语言服务器 → 问一句。
   // 只在这一刻问——打开 / 浏览已有会话不问；日常模式不问（日常目录不是工程）。
+  // **后台判定、不等**：未决定的工作区 Host 要遍历目录探测语言，大项目要好几秒；以前 await 在这里，
+  // 输入框不清空、看着像没发出去，用户补张截图再按回车就发成了两条（2026-10-19 工作机）。
+  // 询问记在工作区上（pendingLspAsk），面板换会话号也不丢，所以回执晚到照样挂上。
   if ((!sidForGate || isPendingSession(sidForGate)) && props.mode === "project" && props.workspacePath) {
     const ws = props.workspacePath;
-    const langs = await lspLangsToAsk(ws);
-    if (props.sessionId !== sidForGate) return; // 等回执期间切走了
-    // 不阻塞：这条照发，提示条留在输入框上方等用户选（选了「开启」Host 立刻在后台预热）。
-    if (langs) pendingLspAsk.value = { workspaceRoot: ws, langs };
+    void lspLangsToAsk(ws).then((langs) => {
+      if (langs) pendingLspAsk.value = { workspaceRoot: ws, langs };
+    });
   }
   // 空白面板（sid 为空）：没有会话可落盘，spawn 时由 useChatSession.sendMessage
   // 拿到 tempId 后坐实（见 store.spawnProviderOf / finalizeSpawn）。

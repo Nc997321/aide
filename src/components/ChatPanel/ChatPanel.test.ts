@@ -566,6 +566,27 @@ describe("ChatPanel — 新会话发送前问语言服务器", () => {
     wrapper.unmount();
   });
 
+  it("Host 探测很慢：消息立刻发出、输入框立刻清空，不等回执；回执到了再挂提示（2026-10-19 发成两条）", async () => {
+    const { api } = await setup(ASK);
+    let answer!: (v: unknown) => void;
+    api.lspSessionPreflight = vi.fn(() => new Promise((r) => { answer = r; }));
+    const wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "/big" }) });
+    await flush();
+    await typeAndSend(wrapper);
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    expect((wrapper.find("textarea").element as HTMLTextAreaElement).value).toBe("");
+    // 输入框已空：再按回车不会把同一条再发一遍
+    await wrapper.find("textarea").trigger("keydown", { key: "Enter" });
+    await flush();
+    expect(wrapper.emitted("send")).toHaveLength(1);
+    expect(prompt(wrapper).exists()).toBe(false);
+    answer(ASK);
+    await flush();
+    await flush();
+    expect(prompt(wrapper).exists()).toBe(true);
+    wrapper.unmount();
+  });
+
   it("「不开启」= 写开关(false)；「×」= 不记录、提示消失", async () => {
     const { api } = await setup(ASK);
     const wrapper = mount(ChatPanel, { props: baseProps({ mode: "project", workspacePath: "/w" }) });

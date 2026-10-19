@@ -49,3 +49,42 @@ describe("ThinkingLine · 防闪", () => {
     expect(w.find(".tline").exists()).toBe(true);
   });
 });
+
+describe("ThinkingLine · 在不在可视区（直接量）", () => {
+  function rect(top: number, height: number) {
+    return { top, bottom: top + height, height, left: 0, right: 100, width: 100, x: 0, y: top, toJSON() {} } as DOMRect;
+  }
+
+  function mountInRoot(lineTop: { v: number }) {
+    const root = document.createElement("div");
+    root.className = "chat-messages";
+    root.getBoundingClientRect = () => rect(0, 400);
+    document.body.appendChild(root);
+    const w = mount(ThinkingLine, { props: { active: true, elapsedSeconds: 1, tip: null }, attachTo: root });
+    (w.find(".tline").element as HTMLElement).getBoundingClientRect = () => rect(lineTop.v, 28);
+    return w;
+  }
+
+  it("看得见报 true，翻走了报 false；只在变化时发", async () => {
+    const top = { v: 1000 };
+    const w = mountInRoot(top); // 挂载那一刻还没装矩形桩 → jsdom 全 0 → 看不见
+    top.v = 360;
+    await w.setProps({ elapsedSeconds: 2 });
+    await w.setProps({ elapsedSeconds: 3 });
+    top.v = 900;
+    await w.setProps({ elapsedSeconds: 4 });
+    expect(w.emitted("in-view")).toEqual([[false], [true], [false]]);
+    w.unmount();
+  });
+
+  it("漏了滚动事件也会在下一秒计时时自愈", async () => {
+    const top = { v: 2000 };
+    const w = mountInRoot(top);
+    await w.setProps({ elapsedSeconds: 2 });
+    expect(w.emitted("in-view")!.at(-1)).toEqual([false]);
+    top.v = 300; // 滚回来了，但没收到任何事件
+    await w.setProps({ elapsedSeconds: 3 });
+    expect(w.emitted("in-view")!.at(-1)).toEqual([true]);
+    w.unmount();
+  });
+});

@@ -11,8 +11,13 @@
  * 3. **只挂一次**：放在消息行列表外面（ChatPanel 里 rows 之后），不随某条消息重渲染，
  *    光带动画与计时不会被打断重来。
  *
- * 往上翻历史、看不到这一行时，活动带补一个精简的「思考中」：本行用 IntersectionObserver 报告自己在不在
- * 可视区（`in-view`），ChatPanel 据此告诉活动带。中断按钮始终在活动带。
+ * 往上翻历史、看不到这一行时，活动带补一个精简的「思考中」：本行报告自己在不在消息区可视范围
+ * （`in-view`），ChatPanel 据此告诉活动带。中断按钮始终在活动带。
+ *
+ * 「在不在」是**直接量出来的**（本行与滚动容器的矩形求交，露出 ≥60% 算在），在三个时机重量：
+ * 挂载、容器滚动（rAF 合并）、计时每跳一秒。以前只靠 IntersectionObserver 的事件，工作机上
+ * 出现过漏报一次就一直卡在「看不见」——本行明明在眼前，活动带又亮一个「思考中」，两个计时并排。
+ * 每秒重量一次让任何漏报最多活 1 秒。
  */
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
 import ThinkingMark from "../activity/ThinkingMark.vue";
@@ -30,7 +35,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  /** 这一格是否在消息区的可视范围里（往上翻走了 → false，活动带补「思考中」） */
+  /** 这一格是否在消息区的可视范围里（往上翻走了 → false，活动带补「思考中」）；只在变化时发 */
   "in-view": [inView: boolean];
 }>();
 
@@ -52,21 +57,48 @@ watch(
   { immediate: true },
 );
 
-let io: IntersectionObserver | null = null;
-onMounted(() => {
+/** 露出多少算「看得见」 */
+const IN_VIEW_RATIO = 0.6;
+
+let root: HTMLElement | null = null;
+let lastInView: boolean | null = null;
+let raf = 0;
+
+/** 量一次：本行与滚动容器可视区的竖向交叠比例。没有布局（面板被藏起）按看不见算。 */
+function measure() {
   const node = el.value;
-  if (!node || typeof IntersectionObserver === "undefined") return;
-  io = new IntersectionObserver(([entry]) => emit("in-view", entry.isIntersecting), {
-    root: node.closest(".chat-messages"),
-    threshold: 0.6,
+  if (!node || !root) return;
+  const r = node.getBoundingClientRect();
+  const v = root.getBoundingClientRect();
+  const overlap = Math.min(r.bottom, v.bottom) - Math.max(r.top, v.top);
+  const inView = r.height > 0 && v.height > 0 && overlap / r.height >= IN_VIEW_RATIO;
+  if (inView === lastInView) return;
+  lastInView = inView;
+  emit("in-view", inView);
+}
+
+function onRootScroll() {
+  if (raf) return;
+  raf = requestAnimationFrame(() => {
+    raf = 0;
+    measure();
   });
-  io.observe(node);
+}
+
+// 计时每跳一秒、开始想的那一刻都重量一次：内容增长、抽屉开合改变容器高度都不发 scroll，靠这里兜
+watch(() => [props.elapsedSeconds, props.active], measure, { flush: "post" });
+
+onMounted(() => {
+  root = el.value?.closest<HTMLElement>(".chat-messages") ?? null;
+  root?.addEventListener("scroll", onRootScroll, { passive: true });
+  measure();
 });
 
 onBeforeUnmount(() => {
   clearTimeout(timer);
-  io?.disconnect();
-  io = null;
+  root?.removeEventListener("scroll", onRootScroll);
+  if (raf) cancelAnimationFrame(raf);
+  root = null;
 });
 </script>
 
