@@ -43,11 +43,18 @@ export function useWindowControls() {
     } catch (_) { /* ignore */ }
   }
 
+  /** 藏起本窗口（收进托盘）：关闭询问卡片里选「最小化到托盘」时用。 */
+  async function hide() {
+    try {
+      await window.hide();
+    } catch (_) { /* ignore */ }
+  }
+
   function startDragging() {
     try {
       window.startDragging();
     } catch (_) { /* ignore */ }
   }
 
-  return { isMaximized, init, minimize, toggleMaximize, close, startDragging };
+  return { isMaximized, init, minimize, toggleMaximize, close, hide, startDragging };
 }

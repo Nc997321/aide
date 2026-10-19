@@ -138,11 +138,31 @@ pub fn run() {
         .on_window_event(|window, event| {
             // 没有「主窗口」：所有窗口平等。关的是应用里**唯一**的一扇窗口 → 收进托盘（应用继续活着，
             // 本机 Host 的会话 / 手机网关不断）；还有别的窗口 → 真关（Host 窗口关掉会断开那台 Host）。
+            //
+            // 关最后一扇时做什么由用户选（commands::app::CloseBehavior）：缺省每次问——前端弹「关闭 Aide
+            // 窗口？」卡片（收进托盘 / 退出应用 / 不再询问），卡片里的选择再回调 hide 或 quit_app。
+            // 没有托盘（Linux 缺 libappindicator）时一律退出：藏起来就找不回了。
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 let app = window.app_handle();
                 if app.windows().keys().all(|l| l == window.label()) {
-                    let _ = window.hide();
+                    use commands::app::{close_behavior, decide_close, quit_in_background, tray_ready, CloseAction};
                     api.prevent_close();
+                    match decide_close(close_behavior(), tray_ready()) {
+                        CloseAction::Hide => {
+                            let _ = window.hide();
+                        }
+                        CloseAction::Quit => quit_in_background(app),
+                        CloseAction::Ask => {
+                            // 窗口可能已被藏起（极少见）：先亮出来再问，不然卡片没人看得见
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let target = tauri::EventTarget::webview_window(window.label());
+                            if let Err(e) = app.emit_to(target, "close-requested", ()) {
+                                tracing::warn!("close-requested emit failed: {e}；按收进托盘处理");
+                                let _ = window.hide();
+                            }
+                        }
+                    }
                 }
             }
             if let tauri::WindowEvent::Focused(true) = event {
@@ -271,6 +291,9 @@ pub fn run() {
             // 托盘菜单「退出 Aide」的出口。刻意不在 Link 的暴露目录里——手机
             // 不该有把桌面端进程干掉的能力。
             commands::app::quit_app,
+            // 关闭最后一扇窗口时的行为（询问 / 收进托盘 / 退出）：桌面外壳自己的偏好，不进 Link 目录
+            commands::app::get_close_behavior,
+            commands::app::set_close_behavior,
             // 侧栏应用：本窗口里某个应用的资源根地址（GUI 能力，资源本身向窗口所连的 Host 取）。
             commands::app_assets::app_frame_base,
             // 侧栏应用 P0 隔离实验（仅 AIDE_APP_PROBE=1 生效）。金丝雀不进 Link 暴露目录。
@@ -356,15 +379,8 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
         .tooltip("Aide")
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => host_window::show_current_window(app),
-            "quit" => {
-                // 退出前必须收常驻子进程（Windows 无级联 kill）。清理是 async，
-                // 交给 tauri 的 async_runtime，收完再 exit(0)。
-                let app = app.clone();
-                tauri::async_runtime::spawn(async move {
-                    crate::commands::app::shutdown_children(&app).await;
-                    app.exit(0);
-                });
-            }
+            // 退出前必须收常驻子进程（Windows 无级联 kill），收完再 exit(0)。
+            "quit" => crate::commands::app::quit_in_background(app),
             _ => {}
         })
         .on_tray_icon_event(|tray, event| match event {
@@ -394,6 +410,7 @@ fn setup_tray(app: &tauri::AppHandle) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     builder.build(app)?;
+    commands::app::mark_tray_ready();
     Ok(())
 }
 

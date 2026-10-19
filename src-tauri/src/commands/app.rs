@@ -33,3 +33,111 @@ pub(crate) async fn shutdown_children(app: &AppHandle) {
         aide_core::apps::shutdown(&core);
     }
 }
+
+// ── 关闭最后一扇窗口时做什么（标题栏 X / Alt+F4 / 任务栏关闭）──
+//
+// 是桌面外壳自己的偏好（托盘只有 GUI 前门才有），**不进 Host 设置**：WSL / SSH 窗口的设置页
+// 改的是那台 Host 的文档，而决定关窗行为的是本机这个进程。落本机 state.json 的 `closeBehavior`。
+
+/// 关闭行为。缺省 / 未知值 = `Ask`（每次弹「关闭 Aide 窗口？」卡片）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CloseBehavior {
+    Ask,
+    Tray,
+    Quit,
+}
+
+const CLOSE_BEHAVIOR_KEY: &str = "closeBehavior";
+
+fn parse_close_behavior(state: &serde_json::Value) -> CloseBehavior {
+    serde_json::from_value(state[CLOSE_BEHAVIOR_KEY].clone()).unwrap_or(CloseBehavior::Ask)
+}
+
+/// 同步读（CloseRequested 回调里用：state.json 很小，读一次可以接受）。
+pub(crate) fn close_behavior() -> CloseBehavior {
+    parse_close_behavior(&aide_core::app_settings::load_state())
+}
+
+#[tauri::command]
+pub async fn get_close_behavior() -> Result<CloseBehavior, String> {
+    tauri::async_runtime::spawn_blocking(close_behavior)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn set_close_behavior(behavior: CloseBehavior) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        aide_core::app_settings::with_state_mut(|state| {
+            if !state.is_object() {
+                *state = serde_json::json!({});
+            }
+            state[CLOSE_BEHAVIOR_KEY] = serde_json::to_value(behavior).map_err(|e| e.to_string())?;
+            Ok(())
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// 托盘建成了没有（Linux 缺 libappindicator 时建不出来）。没有托盘时「收进托盘」等于窗口
+/// 找不回来，关闭一律按退出处理，也不弹询问。
+static TRAY_READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn mark_tray_ready() {
+    TRAY_READY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn tray_ready() -> bool {
+    TRAY_READY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 关最后一扇窗口时实际要做的事（纯函数，便于测试）。
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum CloseAction {
+    /// 让前端弹询问卡片
+    Ask,
+    Hide,
+    Quit,
+}
+
+pub(crate) fn decide_close(behavior: CloseBehavior, tray: bool) -> CloseAction {
+    match (behavior, tray) {
+        (_, false) | (CloseBehavior::Quit, _) => CloseAction::Quit,
+        (CloseBehavior::Tray, true) => CloseAction::Hide,
+        (CloseBehavior::Ask, true) => CloseAction::Ask,
+    }
+}
+
+/// 真退出（与托盘「退出 Aide」同一条路：先收常驻子进程再 exit）。
+pub(crate) fn quit_in_background(app: &AppHandle) {
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        shutdown_children(&app).await;
+        app.exit(0);
+    });
+}
+
+#[cfg(test)]
+mod close_tests {
+    use super::*;
+
+    #[test]
+    fn unknown_or_missing_value_means_ask() {
+        assert_eq!(parse_close_behavior(&serde_json::json!({})), CloseBehavior::Ask);
+        assert_eq!(parse_close_behavior(&serde_json::json!({"closeBehavior": "bogus"})), CloseBehavior::Ask);
+        assert_eq!(parse_close_behavior(&serde_json::json!({"closeBehavior": "tray"})), CloseBehavior::Tray);
+        assert_eq!(parse_close_behavior(&serde_json::json!({"closeBehavior": "quit"})), CloseBehavior::Quit);
+    }
+
+    #[test]
+    fn without_tray_closing_always_quits() {
+        for b in [CloseBehavior::Ask, CloseBehavior::Tray, CloseBehavior::Quit] {
+            assert_eq!(decide_close(b, false), CloseAction::Quit);
+        }
+        assert_eq!(decide_close(CloseBehavior::Ask, true), CloseAction::Ask);
+        assert_eq!(decide_close(CloseBehavior::Tray, true), CloseAction::Hide);
+        assert_eq!(decide_close(CloseBehavior::Quit, true), CloseAction::Quit);
+    }
+}

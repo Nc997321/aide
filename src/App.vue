@@ -55,6 +55,7 @@ import { useSettings } from "./composables/useSettings";
 import { useOnboarding } from "./composables/useOnboarding";
 import { useWindowFocus } from "./composables/useWindowFocus";
 import { useModal } from "./composables/useModal";
+import { installCloseConfirm } from "./composables/useCloseConfirm";
 import { useNotification } from "./composables/useNotification";
 import { useGit } from "./composables/useGit";
 import { useSearchProviders } from "./composables/useSearchProviders";
@@ -287,6 +288,7 @@ const onboarding = useOnboarding();
 
 // 「打开方式」事件监听句柄，onUnmounted 时释放
 let unlistenOpenFile: (() => void) | null = null;
+let unlistenCloseRequested: (() => void) | null = null;
 let unlistenOpenSessionFromNotification: (() => void) | null = null;
 let unlistenHostOpenFolder: (() => void) | null = null;
 const workbenchHeight = ref(settings.workbenchHeight || Math.floor(window.innerHeight * 0.45));
@@ -984,6 +986,10 @@ onMounted(async () => {
     const pending = await api.consumePendingOpenFile();
     if (pending) openFileViewer(pending);
   } catch (_) { /* best effort */ }
+  // 关最后一扇窗口：Rust 判定要问时发 close-requested，这里弹「关闭 Aide 窗口？」卡片
+  try {
+    unlistenCloseRequested = await installCloseConfirm();
+  } catch (_) { /* best effort：没装上时点 X 没反应，托盘「退出 Aide」仍可用 */ }
   try {
     unlistenOpenFile = await listen<string>("open-file-preview", (e) => {
       if (e.payload) openFileViewer(e.payload);
@@ -1081,6 +1087,7 @@ onUnmounted(() => {
   window.removeEventListener("keyup", handleKeyup, { capture: true });
   wb.dispose();
   unlistenOpenFile?.();
+  unlistenCloseRequested?.();
   unlistenOpenSessionFromNotification?.();
   unlistenHostOpenFolder?.();
 });

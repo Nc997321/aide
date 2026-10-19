@@ -5,6 +5,7 @@ import { useSettings } from "../composables/useSettings";
 import { useOnboarding } from "../composables/useOnboarding";
 import { useCustomizations } from "../composables/useCustomizations";
 import { api } from "../api";
+import type { CloseBehavior } from "@aide/sdk/types";
 import type { OutputStyle, SessionListStyle, VimBindings } from "../types";
 import { eventToVimKey } from "../extensions/vimKeybindings";
 import type { CustomizationItem } from "../types/customization";
@@ -24,6 +25,12 @@ const themeOptions = [
 const sessionListStyleOptions = [
   { value: "card", label: "卡片（渐变质感）" },
   { value: "row", label: "行式（简洁列表）" },
+];
+/** 关闭窗口时（通用 tab）：关最后一扇窗口的行为。桌面外壳自己的偏好，存本机（见 useCloseConfirm）。 */
+const closeBehaviorOptions: { value: CloseBehavior; label: string }[] = [
+  { value: "ask", label: "每次询问" },
+  { value: "tray", label: "最小化到托盘（Agent 继续运行）" },
+  { value: "quit", label: "退出应用" },
 ];
 /** 输出样式（通用 tab）：值域与 @aide/sdk 的 OutputStyle 同形——内置四款 + 默认。
  *  自定义样式走插件通道（plugin 的 output-styles 目录），不在这里列。 */
@@ -62,6 +69,16 @@ onMounted(async () => {
 });
 
 // ── Settings (通用) ──
+
+const closeBehavior = ref<CloseBehavior>("ask");
+onMounted(async () => {
+  closeBehavior.value = await api.closeBehavior().catch(() => "ask" as const);
+});
+function onCloseBehaviorChange(v: string) {
+  const next = v as CloseBehavior;
+  closeBehavior.value = next;
+  void api.setCloseBehavior(next).catch(() => {});
+}
 
 const { settings, update } = useSettings();
 const onboarding = useOnboarding();
@@ -485,6 +502,16 @@ function onOverlayClick(e: MouseEvent) {
                 <label class="field-label">工作台终端字体</label>
                 <FontSelect v-model="terminalFontFamilyLocal" />
                 <span class="field-hint">作用于工作台终端、聊天流 Bash 输出块与后台任务面板</span>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">关闭窗口时</label>
+                <ThemedSelect
+                  :model-value="closeBehavior"
+                  :options="closeBehaviorOptions"
+                  @update:model-value="onCloseBehaviorChange"
+                />
+                <span class="field-hint">点标题栏 × 关掉最后一个窗口时；托盘菜单「退出 Aide」始终是真退出</span>
               </div>
 
               <div class="settings-field">

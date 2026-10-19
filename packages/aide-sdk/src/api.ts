@@ -13,7 +13,7 @@ import type {
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
-  CallHierarchyResult, CallHierarchyDirection, InlayHintItem,
+  CallHierarchyResult, CallHierarchyDirection, InlayHintItem, CloseBehavior,
 } from "./types";
 import type { ModelOption, PermissionModeOption, UserMessageBlock, MetaField, SessionMetaPatch, SessionWorkspacePatch, SessionWorkspaceRef, IdentityDrift, SubsessionListItem } from "./types/chat";
 import type { PermissionRuleDraft } from "./types/permissions";
@@ -560,6 +560,17 @@ export const api = {
   /** 打开 WebView2 devtools；仅 dev/诊断 build 注册了命令，release 静默 reject。 */
   openDevtools(): Promise<void> {
     return getTransport().invoke("open_devtools");
+  },
+  /** 关最后一扇窗口时做什么（询问 / 收进托盘 / 退出）。桌面外壳自己的偏好，存本机，远端不走。 */
+  closeBehavior(): Promise<CloseBehavior> {
+    return getTransport().invoke("get_close_behavior");
+  },
+  setCloseBehavior(behavior: CloseBehavior): Promise<void> {
+    return getTransport().invoke("set_close_behavior", { behavior });
+  },
+  /** 真退出应用（先收常驻子进程）。桌面专用，不在 Link 暴露目录里。 */
+  quitApp(): Promise<void> {
+    return getTransport().invoke("quit_app");
   },
   /** 应用版本号（桌面 = Rust package_info；远端 PWA 不走此方法）。 */
   appVersion(): Promise<string> {

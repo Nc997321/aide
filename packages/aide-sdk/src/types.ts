@@ -191,6 +191,10 @@ export interface AppSettings {
   remote: RemoteSettings;
 }
 
+/** 关最后一扇窗口时做什么：ask = 每次弹询问卡片（缺省）；tray = 收进托盘；quit = 退出应用。
+ *  桌面外壳的偏好，存本机 state.json（不在 AppSettings 里——WSL / SSH 窗口的设置文档属于那台 Host）。 */
+export type CloseBehavior = "ask" | "tray" | "quit";
+
 /** 手机网关设置。permissionMode 决定远程会话的工具批准策略（auto / manual）。启停与配对状态不在设置里
  *  （见 linkApi）；中继地址是产品内置的固定值，不可配置。 */
 export interface RemoteSettings {
