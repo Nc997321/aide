@@ -181,6 +181,7 @@ mod tests {
             text: None,
             runtime_id: vec![],
             click_via: None,
+            takes_text: false,
         }
     }
 

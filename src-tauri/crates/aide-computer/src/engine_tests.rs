@@ -257,6 +257,22 @@ fn clicking_a_list_item_selects_it_instead_of_opening_it() {
 }
 
 #[test]
+fn typing_into_a_button_is_refused_with_a_hint() {
+    let mut r = rig();
+    let read = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1"}));
+    let save = ref_of(&read, "保存");
+    let act = call(&mut r, "s1", json!({"op": "act", "window_id": "0x1", "intent": "x",
+        "steps": [{"do": "type", "text": "1", "target": {"ref": save}}]}));
+    assert_eq!(act["data"]["executed"], 0);
+    assert!(act["data"]["stopped"].as_str().unwrap().contains("use click"), "{act}");
+    // 输入框照常
+    let edit = ref_of(&read, "文件名");
+    let ok = call(&mut r, "s1", json!({"op": "act", "window_id": "0x1", "intent": "x",
+        "steps": [{"do": "type", "text": "a.txt", "target": {"ref": edit}}]}));
+    assert_eq!(ok["data"]["executed"], 1, "{ok}");
+}
+
+#[test]
 fn refs_are_stable_across_reads() {
     let mut r = rig();
     let a = call(&mut r, "s1", json!({"op": "read", "window_id": "0x1"}));

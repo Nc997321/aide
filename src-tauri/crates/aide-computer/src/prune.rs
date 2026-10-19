@@ -7,7 +7,7 @@
 //! - 与最近一个留下的祖先同名的 Text 去掉（按钮里那行同名文字）；
 //! - 密码框不回值。
 
-use crate::model::{click_via, RawElement, ViewElement};
+use crate::model::{click_via, takes_text, RawElement, ViewElement};
 
 /// 一次读取最多回多少个元素；超出截断并告诉 agent 还剩多少。
 pub const MAX_ELEMENTS: usize = 400;
@@ -62,6 +62,7 @@ pub fn prune(raw: &[RawElement], mut assign_ref: impl FnMut(&[i32]) -> String) -
                 .map(|t| clip_tail(&t, MAX_TEXT)),
             runtime_id: e.runtime_id.clone(),
             click_via: click_via(&e.role, &e.patterns),
+            takes_text: takes_text(&e.role, &e.patterns),
         });
     }
     Pruned { elements: out, omitted }

@@ -227,6 +227,12 @@ fn parse_query_inner(event: &Value) -> Result<Query, String> {
 
 fn field<T: for<'de> Deserialize<'de>>(event: &Value, key: &str) -> Result<T, String> {
     let v = event.get(key).ok_or_else(|| format!("missing `{key}`"))?;
+    // 常见误用：把条件写成字符串。直接告诉正确形状，序列化库的报错术语对模型没用。
+    if key == "condition" {
+        if let Some(kind) = v.as_str() {
+            return Err(format!("`condition` must be an object, e.g. {{\"kind\": \"{kind}\"}}"));
+        }
+    }
     serde_json::from_value(v.clone()).map_err(|e| format!("invalid `{key}`: {e}"))
 }
 
@@ -316,6 +322,12 @@ mod tests {
         let v = json!({"type": "computer_query", "request_id": "r", "op": "wait",
             "condition": {"kind": "nope"}});
         assert!(matches!(q(v), Query::Malformed(_)));
+    }
+
+    #[test]
+    fn condition_as_a_string_gets_a_plain_hint() {
+        let v = json!({"type": "computer_query", "request_id": "r", "op": "wait", "condition": "text_stable"});
+        assert!(matches!(q(v), Query::Malformed(m) if m.contains(r#"{"kind": "text_stable"}"#)));
     }
 
     #[test]

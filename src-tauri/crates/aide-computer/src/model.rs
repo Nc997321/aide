@@ -112,6 +112,9 @@ pub struct ViewElement {
     /// 单击能不动鼠标地完成时用哪种方式（见 [`click_via`]）；`None` = 用真实鼠标。
     #[serde(skip)]
     pub click_via: Option<ClickVia>,
+    /// 能接收打字（输入框、文档、终端这类）。见 [`takes_text`]。
+    #[serde(skip)]
+    pub takes_text: bool,
 }
 
 /// 鼠标按键。
@@ -163,6 +166,14 @@ impl ClickVia {
     }
 }
 
+const TEXT_ROLES: &[&str] = &["Edit", "Document", "ComboBox"];
+
+/// 这个控件能不能接收打字：可写值、文字控件（文档 / 终端），或输入类控件。
+/// 按钮、列表项这类「点的」控件不收字——对它们 `type` 是用错了工具。
+pub fn takes_text(role: &str, p: &Patterns) -> bool {
+    p.value_editable || p.text || TEXT_ROLES.contains(&role)
+}
+
 const INVOKE_ROLES: &[&str] = &["Button", "Hyperlink", "MenuItem", "SplitButton"];
 const EXPAND_ROLES: &[&str] = &["ComboBox", "MenuItem"];
 
@@ -206,6 +217,15 @@ mod tests {
         // 只有 Invoke 的列表项：Invoke 是「打开」，改用真实鼠标
         assert_eq!(click_via("ListItem", &pats(|p| p.invoke = true)), None);
         assert_eq!(click_via("TreeItem", &pats(|p| { p.select = true; p.expand = true; })), Some(ClickVia::Select));
+    }
+
+    #[test]
+    fn what_takes_typed_text() {
+        assert!(takes_text("Edit", &Patterns::default()));
+        assert!(takes_text("Text", &pats(|p| p.text = true))); // 终端
+        assert!(takes_text("Group", &pats(|p| p.value_editable = true)));
+        assert!(!takes_text("Button", &pats(|p| p.invoke = true)));
+        assert!(!takes_text("ListItem", &pats(|p| p.select = true)));
     }
 
     #[test]

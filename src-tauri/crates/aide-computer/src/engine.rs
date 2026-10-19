@@ -443,7 +443,7 @@ impl<B: Backend> Engine<B> {
                     _ => (MouseButton::Left, 1),
                 };
                 let resolved = self.resolve_target(window, target).map_err(fail)?;
-                if let Resolved::Element { runtime_id, via: Some(via), label } = &resolved {
+                if let Resolved::Element { runtime_id, via: Some(via), label, .. } = &resolved {
                     if clicks == 1 && button == MouseButton::Left {
                         self.backend.pattern_click(window, runtime_id, *via).map_err(fail)?;
                         return Ok(format!("{} {label}", via.verb()));
@@ -459,6 +459,11 @@ impl<B: Backend> Engine<B> {
                 if let Some(t) = target {
                     let resolved = self.resolve_target(window, t).map_err(fail)?;
                     match &resolved {
+                        Resolved::Element { takes_text: false, label, .. } => {
+                            return Err(fail(format!(
+                                "{label} does not take typed text. To press it use click; to type into whatever has the focus, omit target."
+                            )));
+                        }
                         Resolved::Element { runtime_id, .. } => {
                             self.backend.focus_element(window, runtime_id).map_err(fail)?;
                             self.backend.bring_to_front(window).map_err(fail)?;
@@ -583,11 +588,12 @@ impl<B: Backend> Engine<B> {
                 let el = state.view.iter().find(|e| &e.ref_id == ref_id).ok_or_else(|| {
                     format!("{ref_id} is not in the latest read of this window — the UI changed. Call computer_read again.")
                 })?;
-                let (rid, role, via, label) = (el.runtime_id.clone(), el.role.clone(), el.click_via, describe(el));
+                let (rid, role, via, takes_text, label) =
+                    (el.runtime_id.clone(), el.role.clone(), el.click_via, el.takes_text, describe(el));
                 if rid.is_empty() || !self.backend.element_alive(window, &rid, &role)? {
                     return Err(format!("{label} is no longer there — the UI changed. Call computer_read again."));
                 }
-                Ok(Resolved::Element { runtime_id: rid, via, label })
+                Ok(Resolved::Element { runtime_id: rid, via, takes_text, label })
             }
             Target::Name { name, role } => {
                 if self.windows.get(window).is_none_or(|s| s.dirty) {
@@ -598,6 +604,7 @@ impl<B: Backend> Engine<B> {
                 Ok(Resolved::Element {
                     runtime_id: el.runtime_id.clone(),
                     via: el.click_via,
+                    takes_text: el.takes_text,
                     label: describe(el),
                 })
             }
@@ -762,7 +769,7 @@ fn subtree<'a>(elements: &'a [RawElement], rid: &[i32]) -> Option<&'a [RawElemen
 }
 
 enum Resolved {
-    Element { runtime_id: Vec<i32>, via: Option<ClickVia>, label: String },
+    Element { runtime_id: Vec<i32>, via: Option<ClickVia>, takes_text: bool, label: String },
     Point { x: i32, y: i32, label: String },
 }
 

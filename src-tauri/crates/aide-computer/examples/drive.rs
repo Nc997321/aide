@@ -7,6 +7,7 @@
 //! 每行可加 `"sleep_ms"` 在执行前等一会；`"session_id"` 缺省为 `drive`。
 //! `"save": {"w": "/data/window/id"}` 把回包里某处存成变量，后续行里的 `${w}` 会被替换；
 //! `"expect": {"/data/window/title": "记事本"}` 回包那处不含该文字就中止整个脚本（安全闸）。
+//! `--jsonl`：每条回包打成一行紧凑 JSON（截图留在 base64 里），给外部测试台逐行读。
 
 use std::collections::HashMap;
 use std::io::BufRead;
@@ -29,6 +30,7 @@ impl HostHooks for Hooks {
 
 fn main() {
     tracing_subscriber::fmt().with_writer(std::io::stderr).with_target(false).init();
+    let jsonl = std::env::args().any(|a| a == "--jsonl");
     let computer = Computer::start(Arc::new(Hooks));
     let stdin = std::io::stdin();
     let mut vars: HashMap<String, String> = HashMap::new();
@@ -60,7 +62,11 @@ fn main() {
             // {"signal":"user_message"} / {"signal":"completed"}：模拟会话事件
             let ev = json!({"type": q["signal"], "session_id": q["session_id"]});
             computer.observe_event(&ev);
-            println!("== signal {}", q["signal"]);
+            if jsonl {
+                println!("{}", json!({"signal": q["signal"]}));
+            } else {
+                println!("== signal {}", q["signal"]);
+            }
             continue;
         }
         let save = q.get("save").cloned();
@@ -70,6 +76,11 @@ fn main() {
         let started = Instant::now();
         let mut out = computer.answer_blocking(req);
         let ms = started.elapsed().as_millis();
+        if jsonl {
+            out["ms"] = json!(ms as u64);
+            println!("{out}");
+            continue;
+        }
         if let Some(b64) = out.pointer("/data/screenshot/png_base64").and_then(Value::as_str) {
             let bytes = base64::engine::general_purpose::STANDARD.decode(b64).unwrap_or_default();
             let path = format!("shot-{}.png", n + 1);
