@@ -105,6 +105,8 @@ const props = defineProps<{
   rollbackText?: string;
   /** 父层恒传（PaneGroup 的聚焦判定 computed），非可选 */
   focused: boolean;
+  /** 还没有会话时输入框草稿记在哪（PaneGroup：标签 id，无标签用分屏组 id），见 useComposerDrafts */
+  draftBlankKey?: string;
 }>();
 
 const emit = defineEmits<{
@@ -900,6 +902,7 @@ function onOpenBgDock(taskId: string) {
         :stow="inputStow"
         ref="inputBoxRef"
         :session-id="props.sessionId"
+        :blank-key="props.draftBlankKey"
         :workspace-path="props.workspacePath"
         :is-busy="props.isBusy"
         :is-hero="isHero"

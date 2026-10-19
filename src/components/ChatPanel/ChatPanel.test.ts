@@ -85,6 +85,9 @@ import { TURN_CHANGES_KEY } from "./turnChanges";
 import { useSessionProviders } from "../../composables/useSessionProviders";
 import { useProviders } from "../../composables/useProviders";
 import { __resetUsageTipsForTest } from "../../composables/useUsageTips";
+import { __resetComposerDraftsForTest } from "@aide/sdk/composables/useComposerDrafts";
+// 输入框草稿是模块级、按会话 / 空白键自持：每条用例收尾清掉，免得上一条写的字留到下一条
+afterEach(() => __resetComposerDraftsForTest());
 
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "", defaultOpusModel: "", defaultSonnetModel: "", defaultHaikuModel: "", subagent: "",
@@ -658,6 +661,40 @@ describe("ChatPanel — 新会话发送前问语言服务器", () => {
     await flush();
     await typeAndSend(wrapper);
     expect(wrapper.emitted("send")).toHaveLength(1);
+    wrapper.unmount();
+  });
+});
+
+describe("ChatPanel — 输入框草稿按会话自持", () => {
+  const ta = (w: VueWrapper) => w.find("textarea").element as HTMLTextAreaElement;
+
+  it("切会话：文字不串到别的会话，切回来还在", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "draft-A" }) });
+    await flush();
+    await wrapper.find("textarea").setValue("写给 A 的一半");
+    await wrapper.setProps({ sessionId: "draft-B" });
+    await flush();
+    expect(ta(wrapper).value).toBe("");
+    await wrapper.find("textarea").setValue("B 的");
+    await wrapper.setProps({ sessionId: "draft-A" });
+    await flush();
+    expect(ta(wrapper).value).toBe("写给 A 的一半");
+    await wrapper.setProps({ sessionId: "draft-B" });
+    await flush();
+    expect(ta(wrapper).value).toBe("B 的");
+    wrapper.unmount();
+  });
+
+  it("两个空白标签也各归各的", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ draftBlankKey: "tab-1" }) });
+    await flush();
+    await wrapper.find("textarea").setValue("标签一");
+    await wrapper.setProps({ draftBlankKey: "tab-2" });
+    await flush();
+    expect(ta(wrapper).value).toBe("");
+    await wrapper.setProps({ draftBlankKey: "tab-1" });
+    await flush();
+    expect(ta(wrapper).value).toBe("标签一");
     wrapper.unmount();
   });
 });

@@ -228,6 +228,7 @@ async function onPickMode(mode: ChatMode) {
     <ChatPanel
       :focused="focused"
       :session-id="activeTab?.sessionId ?? null"
+      :draft-blank-key="activeTab?.id ?? `group:${props.group.id}`"
       :workspace-path="effectiveWorkspacePath"
       :messages="messages"
       :is-busy="isBusy"

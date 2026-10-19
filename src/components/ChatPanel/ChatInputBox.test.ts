@@ -68,6 +68,9 @@ import { SCENES } from "./hero/scenes";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { __resetUsageTipsForTest } from "@/composables/useUsageTips";
 import { resetInputHistory } from "@/composables/useInputHistory";
+import { __resetComposerDraftsForTest } from "@aide/sdk/composables/useComposerDrafts";
+// 输入框草稿是模块级、按会话 / 空白键自持：每条用例收尾清掉，免得上一条写的字留到下一条
+afterEach(() => __resetComposerDraftsForTest());
 
 const WORKSPACE = "C:/repo";
 

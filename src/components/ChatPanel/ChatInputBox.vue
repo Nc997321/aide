@@ -36,6 +36,7 @@ import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
+import { blankDraftKey, useComposerDrafts, type ComposerMention } from "@aide/sdk/composables/useComposerDrafts";
 import { useToast } from "@/composables/useToast";
 import { pushInputHistory, useInputHistory } from "@/composables/useInputHistory";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
@@ -88,6 +89,9 @@ const props = defineProps<{
   stow?: "off" | "unless-draft" | "always";
   /** ＋ 菜单的「新建子会话」：null / 缺省 = 本会话不能派（子会话 / 还没定名），不显示 */
   subsession?: { running: number; max: number } | null;
+  /** 还没有会话时（空白标签 / 零标签欢迎态）草稿记在哪：PaneGroup 传标签 id（无标签用分屏组 id）。
+   *  有会话时草稿记在会话 id 上（useComposerDrafts）。 */
+  blankKey?: string;
 }>();
 
 const emit = defineEmits<{
@@ -547,7 +551,26 @@ function toggleBtwPanel() {
 }
 
 // ── 输入状态 ──
-const inputText = ref("");
+// 草稿（文字 / 图片 / 引用芯片）按会话自持，不挂在组件上：一个分屏组共用这一个输入框，
+// 挂组件上会让文字串到别的会话、图片芯片切走就丢（2026-10-19）。见 useComposerDrafts。
+const composerDrafts = useComposerDrafts();
+const draftKey = computed(() => props.sessionId ?? blankDraftKey(props.blankKey ?? "default"));
+// 空白标签发出首条消息拿到临时会话号：同一个标签上的草稿跟过去（下一条已经开始写了也不丢）。
+// 只认「同一个标签」——从空白标签切到别的 pending 会话不是这回事。sync：抢在下面建空草稿之前。
+watch(
+  () => [props.sessionId, props.blankKey] as const,
+  ([sid, blank], [prevSid, prevBlank]) => {
+    if (!prevSid && sid && blank === prevBlank && isPendingSession(sid)) {
+      composerDrafts.migrateDraft(blankDraftKey(blank ?? "default"), sid);
+    }
+  },
+  { flush: "sync" },
+);
+const draft = computed(() => composerDrafts.draftOf(draftKey.value));
+const inputText = computed({
+  get: () => draft.value.text,
+  set: (v: string) => { draft.value.text = v; },
+});
 // "/" 下拉的全部候选（命令注册表 + 本地技能 + 本会话的 SDK 清单）；skillList 留给
 // 发送路径内联 SKILL.md。
 const { options: slashOptions, localSkills: skillList } = useSlashCommands(
@@ -573,7 +596,10 @@ watch(
 const filteredSkills = computed(() =>
   slashDropdownVisible.value ? filterSlashCommands(slashOptions.value, slashFilter.value) : [],
 );
-const pendingImages = ref<Array<ImageAttachment & { previewUrl: string }>>([]);
+const pendingImages = computed({
+  get: () => draft.value.images,
+  set: (v: Array<ImageAttachment & { previewUrl: string }>) => { draft.value.images = v; },
+});
 const textareaEl = ref<HTMLTextAreaElement>();
 // 空时一行，逐行撑高到上限（12 行 / 会话面板高度 40%）后内滚，发送清空后回落
 useAutoGrow(textareaEl, inputText);
@@ -607,15 +633,13 @@ watch(inputText, (val) => {
   }
 });
 
-// 切换会话时清空待发图片/引用芯片
+// 切换会话：草稿各归各的（见上面 useComposerDrafts），这里只收欢迎态的场景选择。
 // （滚动/窗口复位 + 切入收紧与落位由 useChatScroll 自己 watch sessionId 处理）
 //
 // 注意:切会话绝不清理 btw 支线——线程按主会话记(useBtwSession),切走侧栏随之隐藏、
 // 切回重现,在途的问答照跑,答复经 onDone 回插主会话 store(模块级,切换不丢)。
 // 线程只在关 tab / 删会话时清(clearBtwHistory)。
 watch(() => props.sessionId, () => {
-  pendingImages.value = [];
-  pendingMentions.value = [];
   pickedScene.value = null;
 });
 
@@ -633,7 +657,10 @@ function selectSkill(skill: SlashCommandOption | undefined) {
 const mentionInserter = useMentionInserter();
 /** 输入框上方的文件引用芯片（同一文件的同一区间只留一份；整文件与区间引用互不覆盖）；
  *  发送时展开成 `@path` / `@path:12-48` 前缀拼进 prompt。 */
-const pendingMentions = ref<Array<{ path: string; isDir: boolean; range?: { start: number; end: number } }>>([]);
+const pendingMentions = computed({
+  get: () => draft.value.mentions,
+  set: (v: ComposerMention[]) => { draft.value.mentions = v; },
+});
 /** 芯片去重键：路径 + 区间（同一文件可以既整引又引其中一段）。 */
 function mentionKey(path: string, range?: { start: number; end: number }): string {
   return formatMentionPath(path, range);

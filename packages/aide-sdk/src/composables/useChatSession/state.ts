@@ -23,6 +23,7 @@ import { useSessionWorkspaces, persistWorkspaceIfDirty } from "../useSessionWork
 import { useSessionAttachedWorkspaces } from "../useSessionAttachedWorkspaces";
 import { sessionIdentityStore } from "../../composables/sessionIdentity";
 import { useBtwSession } from "../useBtwSession";
+import { useComposerDrafts, __resetComposerDraftsForTest } from "../useComposerDrafts";
 
 /**
  * useChatSession 的模块级单例状态与生命周期（拆分自原 2000+ 行宿主：
@@ -553,6 +554,7 @@ export function disposeSession(sid: string): void {
   useSessionAttachedWorkspaces().removeWorkspace(sid);
   // P2-3：btw 问答记忆随 owner 收口（后台仍跑的 btw 完成时重建单轮条目，无害）
   useBtwSession().clearBtwHistory(sid);
+  useComposerDrafts().clearDraft(sid);
 }
 
 /** 文本/思考 entry 的窄化联合（tool 变体无 text）。 */
@@ -651,6 +653,8 @@ export async function finalizeSession(tempId: string, realId: string) {
   // 待用标题跟随定名（session_title 早于本函数到达，暂存在 tempId 下；
   // 不迁则落盘方取不到，会话只能退回默认名「新会话 HH:MM:SS」）
   useSessionNames().migratePendingTitle(tempId, realId);
+  // 输入框草稿跟随定名（发出首条后、定名前又写了一半的下一条，切走 tab 也不丢）
+  useComposerDrafts().migrateDraft(tempId, realId);
   // 2. Runtime 内部管理 session 映射（SessionManager 的 Map），不需要 Rust 改名
   finalizedSids.add(realId); // 此后到达的 session_title 属于「已存在会话」，可安全改名
   // 3. 通知 App.vue：这是第一次创建，去写元数据、加侧栏、记最近访问
@@ -679,5 +683,6 @@ export function resetAllState(): void {
   for (const k of Object.keys(state)) removeSessionState(k);
   useSessionWorkspaces().clearAll(); // 归属注册表同属模块级状态，一并归零
   useSessionAttachedWorkspaces().clearAll(); // 附加目录账本同上
+  __resetComposerDraftsForTest(); // 输入框草稿同上
   useSessionNames().clearPendingTitles(); // 待用标题同上
 }
