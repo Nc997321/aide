@@ -2,6 +2,7 @@
 //!
 //! 钩子与热键**只在持锁期间**装（平时零开销、也不占用户的组合键）。
 //! 钩子回调用系统给的「注入」标记区分：我们自己 SendInput 的事件带标记，用户真实操作不带。
+//! 什么算接管见 `crate::takeover`（在 Aide 自己窗口里的操作、单纯移动鼠标都不算）。
 //! 提示条：置顶、鼠标穿透、不抢焦点、排除在截屏之外；颜色是原生绘制的固定值（不在前端主题系统里）。
 
 use std::cell::RefCell;
@@ -25,6 +26,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{RegisterHotKey, UnregisterHotK
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::port::{Guard, SharedSignals};
+use crate::takeover::{is_takeover, UserInput};
 
 pub const OVERLAY_CLASS: &str = "AideComputerOverlay";
 const HOTKEY_ID: i32 = 0xA1DE;
@@ -164,7 +166,15 @@ fn takeover(kind: &str) {
 unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let info = &*(lparam.0 as *const MSLLHOOKSTRUCT);
-        if info.flags & LLMHF_INJECTED == 0 {
+        let input = match wparam.0 as u32 {
+            WM_MOUSEMOVE => UserInput::MouseMove,
+            WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN => UserInput::MouseButtonDown,
+            WM_MOUSEWHEEL | WM_MOUSEHWHEEL => UserInput::Wheel,
+            _ => UserInput::MouseButtonUp,
+        };
+        let injected = info.flags & LLMHF_INJECTED != 0;
+        // 先用便宜的判断排除（移动 / 抬起 / 注入），可能算接管时才去查落点窗口。
+        if is_takeover(input, injected, false) && is_takeover(input, injected, on_aide(WindowFromPoint(info.pt))) {
             takeover("mouse");
         }
     }
@@ -174,11 +184,27 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     if code >= 0 {
         let info = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
-        if info.flags.0 & LLKHF_INJECTED.0 == 0 {
+        let input = match wparam.0 as u32 {
+            WM_KEYDOWN | WM_SYSKEYDOWN => UserInput::KeyDown,
+            _ => UserInput::KeyUp,
+        };
+        let injected = info.flags.0 & LLKHF_INJECTED.0 != 0;
+        if is_takeover(input, injected, on_aide(GetForegroundWindow())) {
             takeover("keyboard");
         }
     }
     CallNextHookEx(None, code, wparam, lparam)
+}
+
+/// 窗口属于 Aide 自己（执行器跑在 Aide 的 GUI 进程里）。
+unsafe fn on_aide(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+    let root = GetAncestor(hwnd, GA_ROOT);
+    let mut pid = 0u32;
+    GetWindowThreadProcessId(if root.0.is_null() { hwnd } else { root }, Some(&mut pid));
+    pid == std::process::id()
 }
 
 // ------------------------------------------------------------ 提示条

@@ -21,7 +21,7 @@
 
 ## 红线：跨平台
 
-主力是 Windows，但新代码必须兼容 macOS/Linux：路径用 `PathBuf`/`path.join`；平台特有逻辑（`creation_flags`、Windows 句柄类型、仅 Windows 存在的 crate API）必须 `#[cfg(windows)]` 隔离；dev.ps1 / dev.sh 功能对等；测试不许写死平台（用 `std::env::consts::OS`）。
+主力是 Windows，但新代码必须兼容 macOS/Linux：路径用 `PathBuf`/`path.join`；平台特有逻辑（`creation_flags`、Windows 句柄类型、仅 Windows 存在的 crate API）必须 `#[cfg(windows)]` 隔离；开发启动统一 `pnpm tauri dev`（无平台专属启动脚本）；测试不许写死平台（用 `std::env::consts::OS`）。
 
 macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foundation` 0.2.x 传递引入，错一代就编不过）；`Notification::app_id` 仅 Windows 存在，通知身份走 `host_door::apply_notification_identity`；`NSArray::iter` 要开 `NSEnumerator` feature。
 
@@ -101,6 +101,6 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 
 新增逻辑先问是不是 engine 职责，别默认"跟会话有关就进 sidecar"。内置 MCP/Hooks 新增必须同步登记前端镜像（`useCustomizations`）。引擎提供机制、宿主决定策略（browser facade / browser_agent 即此口径）。
 
-**电脑操作（aide-computer）**：agent 像人一样操作用户桌面。执行器在 **GUI 进程**（屏幕在用户眼前，Host 可能在 WSL/SSH），走与浏览器同一条查询桥（`computer_query` → `runtime/computer_agent.rs` → `computer_result`）；**工具面不出现应用名词、不为特定应用打补丁**；Win32/UIA 调用只准在 `crates/aide-computer/src/adapter/windows/`，策略层纯 Rust 可单测；读/等自动放行、做动作走权限审批；持锁期间用户一动鼠标键盘即停手。真机调试台：`cargo run -p aide-computer --example drive`。设计见 docs/superpowers/specs/2026-10-19-computer-use-design.md。
+**电脑操作（aide-computer）**：agent 像人一样操作用户桌面。执行器在 **GUI 进程**（屏幕在用户眼前，Host 可能在 WSL/SSH），走与浏览器同一条查询桥（`computer_query` → `runtime/computer_agent.rs` → `computer_result`）；**工具面不出现应用名词、不为特定应用打补丁**；Win32/UIA 调用只准在 `crates/aide-computer/src/adapter/windows/`，策略层纯 Rust 可单测；读/等自动放行、做动作走权限审批；持锁期间用户在别的窗口里点击 / 按键即停手（在 Aide 自己窗口里点审批、单纯移动鼠标不算，否则手动权限模式没法批准）。真机调试台：`cargo run -p aide-computer --example drive`。设计见 docs/superpowers/specs/2026-10-19-computer-use-design.md。
 
 **改 aide-browser 工具面前先读 [docs/browser-agent-feedback-log.md](docs/browser-agent-feedback-log.md)**（历轮 agent 反馈的取舍记录，含「不做」的理由与取舍原则）；每轮新反馈与实施结果都记回去。
