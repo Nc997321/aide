@@ -7,7 +7,7 @@ import { useStreamChunks } from "@/composables/useStreamChunks";
  *
  *  思考可能很长（实测上万字），用 details 原生折叠。流式期（streaming=true）默认展开看逐字
  *  生成，结束自动折叠；用户手动点一次后 userOverride 接管（用户意愿优先于流式默认）。
- *  视觉（2026-10-17）：折叠行与 ProcessGroup 同一种样子（一行灰字、悬停浮底色）；正文只靠
+ *  视觉（2026-10-17）：折叠行是一行灰字、悬停浮底色（与旁白行同一种样子）；正文只靠
  *  灰色小字 + 缩进区分正文——不加左边条（会和 .msg-turn 的书脊叠成两条平行线）、不用斜体
  *  （等宽斜体难读）。
  *  text 空时 sidecar 不发本组件，故此处 text 必非空。

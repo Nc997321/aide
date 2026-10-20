@@ -24,38 +24,28 @@ function mountBlock(over: Partial<SubagentBlock> = {}) {
   return mount(SubagentCallBlock, { props: { block: block(over) }, global: GL });
 }
 
-describe("SubagentCallBlock — 一行摘要（折叠态即全部）", () => {
-  it("运行中：胶囊写「● N 步」，并画 N 条步数墨线", () => {
+describe("SubagentCallBlock — 一句旁白", () => {
+  it("运行中：「助手正在「…」…（第 N 步）」带流光", () => {
     const wrapper = mountBlock({ entries: steps(3) });
-    expect(wrapper.find(".sa-chip").text()).toBe("● 3 步");
-    expect(wrapper.find(".sa-chip").classes()).toContain("sa-chip--run");
-    expect(wrapper.findAll(".sa-ticks i")).toHaveLength(3);
+    expect(wrapper.find(".sa-text").text()).toBe("助手正在「调研 XX」…（第 3 步）");
+    expect(wrapper.find(".sa-text").classes()).toContain("aide-narr-live");
   });
 
-  it("刚派发还没迈步：退化成「● 运行中」，不画墨线（0 步只是噪音）", () => {
+  it("刚派发还没迈步：不写步数", () => {
     const wrapper = mountBlock({ entries: [] });
-    expect(wrapper.find(".sa-chip").text()).toBe("● 运行中");
-    expect(wrapper.find(".sa-ticks").exists()).toBe(false);
+    expect(wrapper.find(".sa-text").text()).toBe("助手正在「调研 XX」…");
   });
 
-  it("已完成：✓ N 步，不画墨线（步数是静态事实，数字足够）", () => {
+  it("已完成：「派了一个助手去「…」，用了 N 步」", () => {
     const wrapper = mountBlock({ entries: steps(5), isPending: false, result: "结论" });
-    expect(wrapper.find(".sa-chip").text()).toBe("✓ 5 步");
-    expect(wrapper.find(".sa-chip").classes()).toContain("sa-chip--done");
-    expect(wrapper.find(".sa-ticks").exists()).toBe(false);
+    expect(wrapper.find(".sa-text").text()).toBe("派了一个助手去「调研 XX」，用了 5 步");
+    expect(wrapper.find(".sa-text").classes()).not.toContain("aide-narr-live");
   });
 
-  it("出错：✗ N 步 + 左条转危险色（折叠态也要看得出没跑成）", () => {
+  it("出错：说没成功，并标危险色", () => {
     const wrapper = mountBlock({ entries: steps(2), isPending: false, isError: true });
-    expect(wrapper.find(".sa-chip").text()).toBe("✗ 2 步");
-    expect(wrapper.find(".sa-chip").classes()).toContain("sa-chip--err");
+    expect(wrapper.find(".sa-text").text()).toBe("派了一个助手去「调研 XX」，2 步后没成功");
     expect(wrapper.classes()).toContain("sa--err");
-  });
-
-  it("步数墨线超上限截断：长跑子代理不把一行铺满", () => {
-    const wrapper = mountBlock({ entries: steps(30) });
-    expect(wrapper.find(".sa-chip").text()).toBe("● 30 步");
-    expect(wrapper.findAll(".sa-ticks i")).toHaveLength(12);
   });
 
   it("折叠态不渲染时间线；点开后原位展开（派发指令 + 工具步）", async () => {

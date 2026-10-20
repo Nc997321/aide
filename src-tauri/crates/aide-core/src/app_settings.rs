@@ -160,6 +160,10 @@ pub struct AppSettings {
     pub terminal_font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
+    /// 对话里显示 agent 的思考内容。默认关：模型照常思考，界面只在思考期间留一行
+    /// 「正在思考…」。纯显示开关，不影响请求。
+    #[serde(default)]
+    pub show_thinking: bool,
     /// （原「启用思考」设置项已删除，2026-09-19；旧配置里残留的 `thinkingEnabled`
     /// 键会被 serde 忽略，下次写盘自然消失。思考现在恒开。）
     /// 输出样式（Claude Code 内置样式名，见 DEFAULT_OUTPUT_STYLE 说明）。空串 =
@@ -290,6 +294,7 @@ impl Default for AppSettings {
             editor_font_family: String::new(),
             terminal_font_family: String::new(),
             notifications_enabled: default_notifications_enabled(),
+            show_thinking: false,
             output_style: default_output_style(),
             proxy: String::new(),
             shell_path: String::new(),

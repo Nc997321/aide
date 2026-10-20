@@ -10,6 +10,9 @@ import { estimateDiffHeight } from "@/utils/diffHeight";
 import { buildDiffRows, peekDiffWindow } from "@/utils/diffRows";
 import { diffNotice } from "@/utils/diffNotice";
 import { previewToolResult, summarizeToolInput, toolDisplayName } from "@/utils/toolSummary";
+import { narrate } from "@aide/sdk/utils/narration";
+import NarrationIcon from "./narration/NarrationIcon.vue";
+import NarrationText from "./narration/NarrationText.vue";
 import { readRangeLabel } from "@aide/sdk/utils/lspRelay";
 import { truncatedLabel } from "@/utils/messageBytes";
 import { parseToolDenial } from "@aide/sdk/utils/toolDenial";
@@ -145,6 +148,15 @@ const peek = computed(() => {
 
 const inputSummary = computed(() => summarizeToolInput(props.block.name, props.block.input));
 
+/** 工具行头行 = 一句旁白（2026-10-20 旁白改版：不再露工具名）。卡片外观（用户气泡里的
+ *  @引用）仍是「名字 + 摘要」——那是附件，不是 agent 在做事。 */
+const narration = computed(() => narrate([props.block]));
+
+/** 图标状态色：在跑 → accent；被拒 → warning；失败 → danger。 */
+const iconState = computed(() =>
+  props.block.isPending ? "run" : denial.value ? "deny" : props.block.isError ? "err" : "",
+);
+
 /** F 方案（Read 接力显示）：接力徽章（绿=沿 LSP 坐标区间读 / 黄=LSP 已给定位
  *  却整文件读，判定来自 utils/lspRelay.ts，结论已随块标注）。被拒的 Read 不显示
  *  ——「未接力」谈不上，拒绝态由 denial 徽章独自承担。 */
@@ -164,21 +176,24 @@ const readRange = computed(() =>
 </script>
 
 <template>
-  <div :class="['tool-item', { 'tool-item--line': asLine, 'tool-item--current': current }]">
+  <div :class="['tool-item', { 'tool-item--line': asLine, 'narr-row': asLine, 'tool-item--current': current }]">
     <button class="ti-row" :aria-expanded="expanded" @click="expanded = !expanded">
-      <span
-        :class="[
-          'ti-dot',
-          block.isPending ? 'ti-dot--run' : denial ? 'ti-dot--deny' : block.isError ? 'ti-dot--err' : '',
-        ]"
-      ></span>
-      <span class="ti-name">{{ toolDisplayName(block.name) }}</span>
-      <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
-           省略号落在路径头部、文件名始终可见 -->
-      <span
-        :class="['ti-summary', { 'ti-summary--head': asLine && block.name !== 'Read' }]"
-        v-tooltip="inputSummary"
-      ><bdo dir="ltr">{{ inputSummary }}</bdo></span>
+      <template v-if="asLine">
+        <span :class="['ti-icon', iconState && `ti-icon--${iconState}`]"><NarrationIcon :name="narration.icon" /></span>
+        <NarrationText class="ti-narr" :segs="narration.segs" :live="narration.live" v-tooltip="inputSummary" />
+      </template>
+      <template v-else>
+        <span
+          :class="[
+            'ti-dot',
+            block.isPending ? 'ti-dot--run' : denial ? 'ti-dot--deny' : block.isError ? 'ti-dot--err' : '',
+          ]"
+        ></span>
+        <span class="ti-name">{{ toolDisplayName(block.name) }}</span>
+        <!-- bdo dir=ltr：外层容器是 rtl（左侧省略），内层强制路径本身仍按 ltr 排，
+             省略号落在路径头部、文件名始终可见 -->
+        <span class="ti-summary" v-tooltip="inputSummary"><bdo dir="ltr">{{ inputSummary }}</bdo></span>
+      </template>
       <!-- 拒绝态（方案 B）：理由直接进头行，不展开就知道为什么被拒。长理由截断 +
            tooltip 给全文；没填理由就不显示这一项，只留状态徽章。 -->
       <span
@@ -196,13 +211,14 @@ const readRange = computed(() =>
       <!-- F 方案（Read 接力显示）：接力徽章 + 行号区间。仅 Read 有此元素，
            整文件 @mention 合成卡（无 offset/limit）与其它工具自然不显示；
            选区引用（@path:12-48）带 offset/limit，照常显示行区间。 -->
-      <span v-if="block.name === 'Read' && (relayPill || readRange)" class="ti-relay">
+      <span v-if="block.name === 'Read' && (relayPill || (readRange && !asLine))" class="ti-relay">
         <span
           v-if="relayPill"
           :class="['relay-pill', relayPill.cls]"
           v-tooltip="relayPill.tip"
         >{{ relayPill.text }}</span>
-        <span v-if="readRange" class="ti-range">{{ readRange }}</span>
+        <!-- 工具行的旁白里已经带了行号区间，只有卡片外观需要单独显示 -->
+        <span v-if="readRange && !asLine" class="ti-range">{{ readRange }}</span>
       </span>
       <!-- @目录 引用卡：右侧「目录」药丸（真 Read 恒缺省）。目录与文件在头行一眼可分。 -->
       <span v-if="block.isDir" class="ti-dirpill">
@@ -517,15 +533,8 @@ const readRange = computed(() =>
   -webkit-backdrop-filter: none;
 }
 .tool-item--line .ti-row {
-  gap: 8px;
-  padding: 1px 6px 1px 0;
+  gap: 9px;
   border-radius: var(--aide-radius-sm);
-}
-.tool-item--line .ti-row:hover {
-  background: none;
-}
-.tool-item--line .ti-row:hover .ti-summary {
-  color: var(--aide-text-primary);
 }
 .tool-item--line .ti-dot {
   width: 6px;
@@ -542,20 +551,39 @@ const readRange = computed(() =>
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
 }
-.tool-item--line .ti-name {
+/* 旁白头行（2026-10-20）：图标 + 一句话，正文色比回复淡一档 */
+.ti-icon {
+  flex-shrink: 0;
+  display: inline-flex;
+  color: var(--aide-text-muted);
+}
+.ti-icon--run { color: var(--aide-accent); }
+.ti-icon--err { color: var(--aide-danger); }
+.ti-icon--deny { color: var(--aide-warning); }
+.ti-narr {
+  flex: 0 1 auto;
   min-width: 0;
-}
-.tool-item--line .ti-summary {
+  font-size: 13px;
+  line-height: 1.6;
   color: var(--aide-text-secondary);
-  font-size: 11.5px;
-  transition: color var(--aide-ease-t);
 }
-/* 命令 / 搜索式：保开头（省略号在尾部）。路径（Read）仍走默认的左侧省略保文件名 */
-.ti-summary--head {
-  direction: ltr;
+.tool-item--line .ti-row {
+  padding: 2px 8px;
+  margin: 0 -8px;
+  width: calc(100% + 16px);
 }
+.tool-item--line .ti-row:hover {
+  background: var(--aide-surface-default);
+}
+/* 箭头只在悬停时浮出，提示可以点开 */
 .tool-item--line .ti-chev {
-  display: none;
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--aide-ease-t), transform var(--aide-ease-t);
+}
+.tool-item--line .ti-row:hover .ti-chev,
+.tool-item--line .ti-chev--open {
+  opacity: 1;
 }
 
 .ti-peek {

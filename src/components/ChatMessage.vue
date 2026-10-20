@@ -8,7 +8,8 @@ import StreamingText from "./StreamingText.vue";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import KbRefCard from "./KbRefCard.vue";
 import PageRefCard from "./PageRefCard.vue";
-import ProcessGroup from "./ProcessGroup.vue";
+import NarrationGroup from "./narration/NarrationGroup.vue";
+import NarrationIcon from "./narration/NarrationIcon.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
@@ -21,6 +22,7 @@ import { isModelInList } from "@/utils/modelSelect";
 import { effortLabel } from "@aide/sdk/utils/effort";
 import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
 import { useBtwSession } from "@/composables/useBtwSession";
+import { useSettings } from "@/composables/useSettings";
 
 const props = defineProps<{
   message: ChatMessage;
@@ -93,16 +95,18 @@ const wrapClass = computed(() => {
 });
 
 const { openResolved } = useFileResolver();
+const { settings } = useSettings();
 
-/** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；
- *  assistant 消息走 segmentBlocks：合计 ≥2 个连续过程项（思考/查询工具调用/子代理）
- *  收成一个过程胶囊，回复文本与变更卡留在原位不动。消息尾的那条命令是「当前这一步」，
- *  留在胶囊外带结果预览，等后面出现下一块（命令/思考/正文）才让位。
- *  留在外面的 tool_group 段逐条平铺，不套组内折叠壳（见 ProcessGroup 文件头）。 */
+/** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；assistant 消息走
+ *  segmentBlocks：相邻同类工具调用合成一句旁白，思考按「显示思考过程」开关显示或隐藏
+ *  （见 blockSegments.ts 文件头）。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
     ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
-    : segmentBlocks(props.message.blocks, { finalized: !props.message.streaming }),
+    : segmentBlocks(props.message.blocks, {
+        finalized: !props.message.streaming,
+        showThinking: settings.showThinking,
+      }),
 );
 
 // 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
@@ -153,26 +157,30 @@ function handleTextClick(e: MouseEvent) {
   >
     <div :class="wrapClass">
       <template v-for="seg in segments" :key="seg.index">
-        <!-- 工具组段：没进胶囊的逐条平铺成工具行，不套折叠壳。消息尾的那条是「当前
-             这一步」（seg.currentId），带结果预览；后面一有别的块它就让位。 -->
-        <template v-if="seg.kind === 'tool_group'">
+        <!-- 旁白段：一次调用 = 一行 ToolCallBlock（头行就是一句话，点开看细节）；相邻同类
+             多次 = 合成一句的 NarrationGroup（点开逐条）。消息尾那段是「当前这一步」。 -->
+        <template v-if="seg.kind === 'narration'">
           <ToolCallBlock
-            v-for="b in seg.blocks"
-            :key="b.id"
-            :block="b"
-            :current="b.id === seg.currentId"
+            v-if="seg.blocks.length === 1"
+            :block="seg.blocks[0]"
+            :current="seg.current"
+            :workspace-path="workspacePath"
+            :bg-tasks="bgTasks"
+            @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
+          />
+          <NarrationGroup
+            v-else
+            :blocks="seg.blocks"
             :workspace-path="workspacePath"
             :bg-tasks="bgTasks"
             @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
           />
         </template>
-        <ProcessGroup
-          v-else-if="seg.kind === 'process'"
-          :segments="seg.segments"
-          :workspace-path="workspacePath"
-          :bg-tasks="bgTasks"
-          @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
-        />
+        <!-- 思考被隐藏（默认）时，模型正在思考的那一刻只留一行提示，免得像卡住了 -->
+        <div v-else-if="seg.kind === 'thinking_live'" class="msg-thinking-live narr-row">
+          <span class="msg-thinking-icon"><NarrationIcon name="bulb" /></span>
+          <span class="aide-narr-live">正在思考…</span>
+        </div>
         <!-- 正文渲染收进 StreamingText（分段 + 渐显波；@click 靠单根 fallthrough
              落到 .msg-text 上，与工具块的文件码点击共用 handleTextClick）。 -->
         <StreamingText
@@ -424,11 +432,26 @@ function handleTextClick(e: MouseEvent) {
   word-break: break-word;
 }
 
-/* 工具组段平铺后，纵向间距统一由 .msg-turn 的 gap 说了算：清掉 ToolCallBlock 自带的
-   相邻 margin（.tool-item + .tool-item），否则工具条之间（gap+10px）比工具条与思考
-   块之间（gap）宽出一截，平铺后层级看着不齐（与 .pg-body 的处理同源）。 */
+/* 纵向间距统一由 .msg-turn 的 gap 说了算：清掉 ToolCallBlock 自带的相邻 margin。 */
 .msg-turn :deep(.tool-item + .tool-item) {
   margin-top: 0;
+}
+/* 连续几句旁白读起来是一段，行距收紧（gap 8px → 2px）；与正文之间仍是 8px */
+.msg-turn > :deep(.narr-row + .narr-row) {
+  margin-top: -6px;
+}
+
+.msg-thinking-live {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  line-height: 1.6;
+  padding: 2px 0;
+}
+.msg-thinking-icon {
+  display: inline-flex;
+  color: var(--aide-accent);
 }
 
 /* .msg-text 的 Markdown 正文样式已提到 styles/global.css（btw 抽屉共用）——

@@ -98,6 +98,7 @@ const fontFamilyLocal = ref(settings.fontFamily);
 const editorFontFamilyLocal = ref(settings.editorFontFamily);
 const terminalFontFamilyLocal = ref(settings.terminalFontFamily);
 const notificationsEnabledLocal = ref(settings.notificationsEnabled);
+const showThinkingLocal = ref(settings.showThinking);
 const proxyLocal = ref(settings.proxy);
 /** 本机自动检测到的活代理（设置在空时提示一键填入）；null = 未检测到。 */
 const proxyHint = ref<string | null>(null);
@@ -116,6 +117,7 @@ watch(fontFamilyLocal, (v) => { settings.fontFamily = v; update({ fontFamily: v 
 watch(editorFontFamilyLocal, (v) => { settings.editorFontFamily = v; update({ editorFontFamily: v }); });
 watch(terminalFontFamilyLocal, (v) => { settings.terminalFontFamily = v; update({ terminalFontFamily: v }); });
 watch(notificationsEnabledLocal, (v) => { settings.notificationsEnabled = v; update({ notificationsEnabled: v }); });
+watch(showThinkingLocal, (v) => { settings.showThinking = v; update({ showThinking: v }); });
 watch(proxyLocal, (v) => { settings.proxy = v; update({ proxy: v }); });
 watch(shellPathLocal, (v) => { settings.shellPath = v; update({ shellPath: v }); });
 watch(recentLimitLocal, (v) => {
@@ -520,6 +522,17 @@ function onOverlayClick(e: MouseEvent) {
                   <span class="field-hint">Claude 回复完成后发送通知</span>
                   <label class="toggle">
                     <input v-model="notificationsEnabledLocal" type="checkbox" />
+                    <span class="toggle-track"></span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="settings-field">
+                <label class="field-label">显示思考过程</label>
+                <div class="toggle-row">
+                  <span class="field-hint">在对话里显示 agent 的思考内容。关闭时只在思考期间显示「正在思考…」</span>
+                  <label class="toggle">
+                    <input v-model="showThinkingLocal" type="checkbox" />
                     <span class="toggle-track"></span>
                   </label>
                 </div>

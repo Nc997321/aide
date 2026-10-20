@@ -149,6 +149,8 @@ export interface AppSettings {
   /** 工作台终端字体（font-family 栈）。空 = 未设置，回退 fontFamily。 */
   terminalFontFamily: string;
   notificationsEnabled: boolean;
+  /** 对话里显示 agent 的思考内容。默认关（思考期间只留一行「正在思考…」）。纯显示开关。 */
+  showThinking: boolean;
   /** 首次安装引导是否已完成。首次启动若为 false 则弹全屏向导；完成或"跳过引导"后置 true，不再二次弹。 */
   onboarded: boolean;
   /** （原「启用思考」开关已删除，2026-09-19；旧配置里残留的 `thinkingEnabled`

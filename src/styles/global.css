@@ -174,6 +174,31 @@ html, body, #app {
   .aide-wave-chunk { animation: none; }
 }
 
+/* ── 旁白进行中的流光（「正在读 x.ts…」，见 components/narration） ──
+   文字本身做渐变底 + background-clip:text，一道亮带从右往左扫。 */
+.aide-narr-live {
+  background: linear-gradient(
+    90deg,
+    var(--aide-text-secondary) 0%,
+    var(--aide-text-secondary) 40%,
+    var(--aide-text-primary) 50%,
+    var(--aide-text-secondary) 60%,
+    var(--aide-text-secondary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: aide-narr-shimmer 1.8s linear infinite;
+}
+@keyframes aide-narr-shimmer {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aide-narr-live { animation: none; color: var(--aide-text-secondary); background: none; }
+}
+
 /* ── 定位高亮脉冲（变更面板点轮次 → 跳到该轮提问气泡时打一眼） ──
    class 由 useChatScroll.flashMessage 命令式摘挂，不是模板绑定（跨四层
    组件透传一个「刚跳过来的那条」prop 不划算）。时长与那里 LOCATE_FLASH_MS

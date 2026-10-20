@@ -79,6 +79,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         ui("settings.fontSize", json!(14), SettingValueKind::Number),
         ui("settings.fontFamily", json!("'Maple Mono NF CN', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', 'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace"), SettingValueKind::String),
         ui("settings.notificationsEnabled", json!(true), SettingValueKind::Boolean),
+        ui("settings.showThinking", json!(false), SettingValueKind::Boolean),
         user("settings.proxy", json!(""), SettingValueKind::String, "settings"),
         user("settings.shellPath", json!(""), SettingValueKind::String, "settings"),
         ui("settings.workbenchHeight", json!(0), SettingValueKind::Number),

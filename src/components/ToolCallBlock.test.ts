@@ -21,11 +21,11 @@ const mountBlock = (props: Record<string, unknown>) =>
   });
 
 describe("ToolCallBlock — 工具行", () => {
-  it("查询类工具是无框的工具行：人话摘要，头行不带状态文字", () => {
+  it("查询类工具是无框的工具行：头行是一句旁白，不露工具名", () => {
     const w = mountBlock({ block: block() });
     expect(w.classes()).toContain("tool-item--line");
-    expect(w.find(".ti-summary").text()).toBe('"foo" in src/');
-    expect(w.find(".ti-row").text()).toBe('Grep"foo" in src/');
+    expect(w.find(".ti-narr").text()).toBe("在项目里搜索了「foo」，找到 4 处");
+    expect(w.find(".ti-row").text()).not.toContain("Grep");
   });
 
   it("只有「当前这一步」带结果预览；被取代后只剩头行", () => {
@@ -44,15 +44,16 @@ describe("ToolCallBlock — 工具行", () => {
     expect(w.find(".ti-result").text()).toContain("d.ts");
   });
 
-  it("还没出结果 / 无匹配的当前项：只有圆点，不出「运行中」「无匹配」之类的文字", () => {
+  it("还没出结果：「正在…」带流光、图标亮起；无匹配：如实说没找到，不出预览", () => {
     const running = mountBlock({ block: block({ result: undefined, isPending: true }), current: true });
-    expect(running.find(".ti-dot--run").exists()).toBe(true);
+    expect(running.find(".ti-icon--run").exists()).toBe(true);
+    expect(running.find(".aide-narr-live").exists()).toBe(true);
     expect(running.find(".ti-peek").exists()).toBe(false);
-    expect(running.text()).toBe('Grep"foo" in src/');
+    expect(running.find(".ti-narr").text()).toBe("正在项目里搜索「foo」…");
 
     const none = mountBlock({ block: block({ result: "No matches found" }), current: true });
     expect(none.find(".ti-peek").exists()).toBe(false);
-    expect(none.text()).toBe('Grep"foo" in src/');
+    expect(none.find(".ti-narr").text()).toBe("在项目里搜索了「foo」，没找到");
   });
 
   it("强制 card 的调用点保持卡片外观，没有结果摘要", () => {

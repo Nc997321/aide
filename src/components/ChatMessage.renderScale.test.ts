@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 /**
- * 渲染规模回归守卫：**过程胶囊必须真的在收拢**，以及单个块组件的节点数不许膨胀。
+ * 渲染规模回归守卫：**相邻同类调用必须真的合成一句**（旁白，2026-10-20 取代过程胶囊），
+ * 以及单个块组件的节点数不许膨胀。
  *
  * 由来（2026-09-14 实测）：当时 ChatMessage 的 segments 在定稿后才走二阶段合并成
  * 过程胶囊，流式期是平铺。实测一条 170 块的长回合：**平铺 1355 节点 vs 收拢 82 节点
@@ -39,7 +40,7 @@ vi.mock("xterm-addon-fit", () => ({ FitAddon: t.FitAddon }));
 vi.mock("../utils/xterm", () => ({ buildXtermTheme: () => ({}) }));
 vi.mock("../utils/platform", () => ({ windowsPtyConfig: () => null }));
 vi.mock("../composables/useSettings", () => ({
-  useSettings: () => ({ settings: { terminalFontFamily: "", codeWrap: false } }),
+  useSettings: () => ({ settings: { terminalFontFamily: "", codeWrap: false, showThinking: true } }),
 }));
 
 import { mount } from "@vue/test-utils";
@@ -99,28 +100,21 @@ function longTurnBlocks(): ContentBlock[] {
 }
 
 describe("ChatMessage 渲染规模守卫", () => {
-  // 这个用例一回合就是 200+ 个块、要渲染两遍，**单独跑约 3.7s**——贴着默认的 5s
-  // 预算。全量跑时同时挂载的文件多，它会被挤出界（表现为 Test timed out）。
-  // 这里给的是与它实际成本相称的预算，不是把失败掩盖掉。
-  it("长回合的过程胶囊真的在收拢：平铺 ≥ 收拢的 10 倍", { timeout: 30_000 }, () => {
-    const blocks = longTurnBlocks();
-    // 平铺基线：工具全部未出结果 → 流式期一条都进不了胶囊
-    const pending = blocks.map((b) => (b.type === "tool_call" ? { ...b, isPending: true } : b));
-    const flat = measure(makeMessage(pending, true));
-    const folded = measure(makeMessage(blocks, false)); // 定稿后 = 过程胶囊（默认折叠）
-    const streamingFolded = measure(makeMessage(blocks, true)); // 流式期，工具都已出结果
-
-    // 数字进断言消息——失败时一眼看到量级，不用去翻日志（vitest 会吞 console）。
-    expect(
-      flat,
-      `平铺 ${flat} 节点 / 收拢 ${folded} 节点（${(flat / folded).toFixed(1)}×）——二阶段合并疑似失效`,
-    ).toBeGreaterThan(folded * 10);
-    // 流式期同样在收拢：跑完的工具调用不再逐条留在对话流里。倍数钉得比定稿松——
-    // 流式期正文走分段渐显，本身节点就多（实测 146 vs 定稿 82）
-    expect(
-      flat,
-      `平铺 ${flat} 节点 / 流式期收拢 ${streamingFolded} 节点——流式期合并疑似失效`,
-    ).toBeGreaterThan(streamingFolded * 5);
+  // 旁白改版（2026-10-20）后不再有过程胶囊；守的是同一个退化面——相邻同类调用必须
+  // 真的合成一句，而不是逐条平铺。合并句默认收起，15 次 Read 的节点数应与 1 次同量级。
+  it("相邻同类调用真的合成一句：15 次读文件 ≈ 1 次的节点数", { timeout: 30_000 }, () => {
+    const reads = (n: number): ContentBlock[] =>
+      Array.from({ length: n }, (_, i) => ({
+        type: "tool_call" as const,
+        id: nextId(),
+        name: "Read",
+        input: { file_path: `/w/f${i}.ts` },
+        result: "line\n".repeat(200),
+        isPending: false,
+      }));
+    const one = measure(makeMessage([...reads(1), text(0)], false));
+    const fifteen = measure(makeMessage([...reads(15), text(0)], false));
+    expect(fifteen, `1 次 ${one} 节点 / 15 次 ${fifteen} 节点——合并疑似失效`).toBeLessThan(one * 2);
   });
 
   // 它比上面那条更重（300 个组件实例：工具卡/思考/正文各 100），同样会被挤出 vitest 的 5s
