@@ -29,6 +29,9 @@ pub struct CustomizationItem {
     pub description: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+    /// 来源：`"builtin"` = Aide 内置（只读）；缺省 = 用户。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 // ── Path Helpers ──

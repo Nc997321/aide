@@ -2,6 +2,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
+import { markBuiltinSkillDir } from "./builtinSkill.js";
 
 /**
  * browser-inspect skill 自动落地（内建，免用户配置）。
@@ -183,4 +184,5 @@ export function ensureBrowserSkill(env: Env): void {
       /* 配置目录不可写等情况：跳过，不影响会话 */
     }
   }
+  markBuiltinSkillDir(browserSkillDir(env));
 }

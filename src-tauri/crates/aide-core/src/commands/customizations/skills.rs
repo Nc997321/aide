@@ -24,6 +24,26 @@ pub static COMMANDS: &[HostCommand] = &[
 
 use super::{extract_frontmatter_field, skills_dir, update_frontmatter_field, CustomizationItem};
 use std::fs;
+use std::path::Path;
+
+/// 内置技能标记：sidecar 写内置技能时放进目录（`agent-sidecar/src/extensions/builtinSkill.ts`
+/// 的 `BUILTIN_MARKER`，两边同名）。内置技能每次启动都会被写回，所以这里只读，不让改。
+const BUILTIN_MARKER: &str = ".aide-builtin";
+
+fn is_builtin(dir: &Path) -> bool {
+    dir.join(BUILTIN_MARKER).exists()
+}
+
+fn source_of(dir: &Path) -> Option<String> {
+    is_builtin(dir).then(|| "builtin".to_string())
+}
+
+fn reject_builtin(id: &str) -> Result<(), String> {
+    if is_builtin(&skills_dir().join(id)) {
+        return Err(format!("「{}」是 Aide 内置技能，不能修改或删除", id));
+    }
+    Ok(())
+}
 // ── Skill Commands ──
 
 #[derive(Deserialize)]
@@ -82,6 +102,7 @@ async fn list_skills(_core: Arc<Core>, a: ListSkillsArgs) -> Result<Vec<Customiz
                         id: name.to_string(),
                         name: name.to_string(),
                         r#type: "skill".to_string(),
+                        source: source_of(&path),
                         enabled,
                         path: path.to_string_lossy().to_string(),
                         description,
@@ -135,6 +156,7 @@ async fn get_skill(_core: Arc<Core>, a: GetSkillArgs) -> Result<CustomizationIte
         id: id.clone(),
         name: id,
         r#type: "skill".to_string(),
+        source: source_of(&path),
         enabled: true,
         path: path.to_string_lossy().to_string(),
         description,
@@ -188,6 +210,7 @@ async fn create_skill(_core: Arc<Core>, a: CreateSkillArgs) -> Result<Customizat
         id: name.to_string(),
         name: name.to_string(),
         r#type: "skill".to_string(),
+        source: None,
         enabled: true,
         path: dir.to_string_lossy().to_string(),
         description: Some(description.to_string()),
@@ -206,6 +229,7 @@ pub struct UpdateSkillArgs {
 async fn update_skill(_core: Arc<Core>, a: UpdateSkillArgs) -> Result<(), String> {
     let UpdateSkillArgs { id, data } = a;
     blocking(move || -> Result<(), String> {
+    reject_builtin(&id)?;
     let dir = skills_dir().join(&id);
     let skill_md = dir.join("SKILL.md");
     if !skill_md.exists() {
@@ -240,6 +264,7 @@ pub struct DeleteSkillArgs {
 async fn delete_skill(_core: Arc<Core>, a: DeleteSkillArgs) -> Result<(), String> {
     let DeleteSkillArgs { id } = a;
     blocking(move || -> Result<(), String> {
+    reject_builtin(&id)?;
     let dir = skills_dir().join(&id);
     if !dir.exists() {
         return Err(format!("Skill '{}' not found", id));
@@ -258,6 +283,7 @@ pub struct ToggleSkillArgs {
 async fn toggle_skill(_core: Arc<Core>, a: ToggleSkillArgs) -> Result<(), String> {
     let ToggleSkillArgs { id, enabled } = a;
     blocking(move || -> Result<(), String> {
+    reject_builtin(&id)?;
     let dir = skills_dir().join(&id);
     let enabled_path = dir.join("SKILL.md");
     let disabled_path = dir.join("SKILL.md.disabled");
@@ -331,6 +357,7 @@ pub struct WriteSkillScriptArgs {
 
 async fn write_skill_script(_core: Arc<Core>, a: WriteSkillScriptArgs) -> Result<(), String> {
     let WriteSkillScriptArgs { skill_id, filename, content } = a;
+    reject_builtin(&skill_id)?;
     let p = script_path(&skill_id, &filename)?;
     if let Some(parent) = p.parent() {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
@@ -348,6 +375,7 @@ pub struct DeleteSkillScriptArgs {
 
 async fn delete_skill_script(_core: Arc<Core>, a: DeleteSkillScriptArgs) -> Result<(), String> {
     let DeleteSkillScriptArgs { skill_id, filename } = a;
+    reject_builtin(&skill_id)?;
     let p = script_path(&skill_id, &filename)?;
     if p.exists() {
         fs::remove_file(&p).map_err(|e| e.to_string())?;
@@ -358,6 +386,19 @@ async fn delete_skill_script(_core: Arc<Core>, a: DeleteSkillScriptArgs) -> Resu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_marker_makes_skill_read_only() {
+        let tmp = std::env::temp_dir().join(format!("aide-skill-builtin-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+        assert!(!is_builtin(&tmp));
+        assert_eq!(source_of(&tmp), None);
+        fs::write(tmp.join(BUILTIN_MARKER), "").unwrap();
+        assert!(is_builtin(&tmp));
+        assert_eq!(source_of(&tmp).as_deref(), Some("builtin"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn sanitize_script_filename_rejects_traversal() {

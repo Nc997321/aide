@@ -1,4 +1,4 @@
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { toForwardSlashes, safeDirname } from "../engine/winPaths.js";
@@ -18,6 +18,35 @@ export function builtinSkillPath(env: SkillEnv, name: string): string {
   return path.join(toForwardSlashes(path.join(toForwardSlashes(dir), "skills", name)), "SKILL.md");
 }
 
+/**
+ * 内置标记文件名。Host 的技能列表（aide-core `customizations/skills.rs`）看到它就标 `source: "builtin"`
+ * 并拒绝删除 / 编辑 / 禁用——sidecar 每次启动都会写回内置技能，用户的修改本来就留不住。
+ * 两边约定同一个名字，内置名单只在 sidecar 这一处。
+ */
+export const BUILTIN_MARKER = ".aide-builtin";
+
+/** 给内置技能目录打标记，并清掉旧版允许禁用时留下的 `SKILL.md.disabled`。失败静默。 */
+export function markBuiltinSkillDir(dir: string): void {
+  try {
+    const marker = toForwardSlashes(path.join(dir, BUILTIN_MARKER));
+    let has = false;
+    try {
+      readFileSync(marker, "utf8");
+      has = true;
+    } catch {
+      /* 没有，下面写 */
+    }
+    if (!has) writeFileSync(marker, "Aide 内置技能：由 sidecar 维护，启动时自动更新。\n", "utf8");
+  } catch {
+    /* 跳过 */
+  }
+  try {
+    rmSync(toForwardSlashes(path.join(dir, "SKILL.md.disabled")), { force: true });
+  } catch {
+    /* 跳过 */
+  }
+}
+
 /** 幂等落地：内容不同才写。任何失败都跳过，不影响会话。 */
 export function ensureBuiltinSkill(env: SkillEnv, name: string, content: string): void {
   const file = builtinSkillPath(env, name);
@@ -35,6 +64,7 @@ export function ensureBuiltinSkill(env: SkillEnv, name: string, content: string)
       /* 不存在，下面写 */
     }
     if (current !== content) writeFileSync(file, content, "utf8");
+    markBuiltinSkillDir(safeDirname(file));
   } catch {
     /* 配置目录不可写等情况：跳过 */
   }

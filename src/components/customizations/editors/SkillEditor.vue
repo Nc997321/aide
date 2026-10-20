@@ -146,7 +146,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
     <div class="ed-actions" v-if="!readOnly" style="margin-top: 14px">
       <button class="btn btn-ghost" @click="emit('delete')">删除技能</button>
     </div>
-    <div class="readonly-note" v-else>插件来源 · 只读</div>
+    <div class="readonly-note" v-else>{{ item?.source === "builtin" ? "Aide 内置 · 只读（随应用更新）" : "插件来源 · 只读" }}</div>
     <div class="saved-msg" v-if="savedMsg">{{ savedMsg }}</div>
   </div>
 </template>

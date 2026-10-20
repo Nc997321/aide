@@ -130,7 +130,9 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
             :class="`src-${item.source ?? 'user'}`"
             v-if="item.source"
           >{{ sourceLabel(item.source) }}</span>
+          <span v-if="item.source === 'builtin'" class="lock-mark" v-tooltip="'内置技能随 Aide 更新，不能停用或删除'">🔒</span>
           <button
+            v-else
             class="toggle-btn"
             :class="{ active: item.enabled }"
             @click="handleToggle(item.id, $event)"
