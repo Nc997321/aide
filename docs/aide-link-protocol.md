@@ -353,7 +353,11 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 | `subsession_paused` | `pending`, `limit` | 连续 `limit` 次自动回报没有任何用户输入，暂停投递（攒着 `pending` 条）；用户在父会话发任意一条消息即恢复 |
 | `subsession_resumed` | — | 暂停解除 |
 
-**子会话自己的事件**与普通会话完全相同。注意它在 `session_init` 之前的路由键形如 `subsess_<id>`（不是客户端发起的
+**子会话自己的事件**与普通会话完全相同，另多一种（2026-10-20 新增，`session_id` 是**子会话**）：
+`session_slept`（无字段）——子会话空闲超时，Host 已把它的进程安静关掉。**不是出错、不是停止**：界面保持「空闲」，
+下一条消息照常发（带 resume id）就会原地续上。不认识可忽略。
+
+注意它在 `session_init` 之前的路由键形如 `subsess_<id>`（不是客户端发起的
 临时 id）：收到 `session_init{session_id: "subsess_…", sdk_session_id}` 时按「改名」处理，把之前收到的事件归到
 `sdk_session_id` 名下。
 

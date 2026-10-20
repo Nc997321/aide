@@ -108,6 +108,11 @@ export function unansweredDenyMessage(reason?: string): string {
 export class PermissionManager {
   private pending = new Map<string, PendingEntry>();
 
+  /** 还挂着几条等人回应的请求（子会话空闲休眠据此判断「在等批准 / 回答」）。 */
+  get pendingCount(): number {
+    return this.pending.size;
+  }
+
   /** Emit a `permission_request` and wait for `resolve()`. Returns
    *  `{ approved, updatedInput? }`. `updatedInput` is set only for
    *  AskUserQuestion (answers reshaped per the SDK contract). */

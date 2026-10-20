@@ -297,9 +297,13 @@ pub struct SendMessageArgs {
 /// 用户（任一客户端）发消息的命令入口。Host 内部发的（子会话派发 / 回报）走 `dispatch_send`，
 /// 不经这里——这里多做的一件事就是告诉子会话服务「这条是人发的」（防乒乓计数清零、
 /// 子会话本轮由用户触发，见 subsession.rs）。
+///
+/// 发给子会话的也要带上父会话 id：sidecar 靠它不挂子会话工具、收轮带回报正文、空闲计时休眠。
+/// 进程一直活着时第一条派发已经告诉过它，但休眠 / Host 重启后重新拉起的进程只认这一条。
 async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String> {
     core.subsessions.note_user_send(&a.session_id);
-    dispatch_send(core, a, SendExtra::default()).await
+    let subsession_parent = core.subsessions.resolve_parent(&a.session_id).await;
+    dispatch_send(core, a, SendExtra { subsession_parent }).await
 }
 
 /// 发送管线分段计时。用户气泡要等这条命令走完、sidecar 广播 user_message 才出现
@@ -699,6 +703,9 @@ async fn stop_chat_session(core: Arc<Core>, a: StopChatSessionArgs) -> Result<()
     // 不等 session_dead 事件就先落存活表：手机端点了停止就该立刻能换供应商，
     // 事件到达有 RTT（且进程已死时可能根本不来）。
     runtime_mgr.mark_session_dead(&session_id);
+    // 停的是父会话：名下空闲的子会话一并休眠（子会话不占 tab，没有自己的「关闭」）
+    let core2 = Arc::clone(&core);
+    tokio::spawn(async move { core2.subsessions.sleep_idle_children(&core2, &session_id).await });
     out
 }
 

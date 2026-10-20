@@ -56,6 +56,7 @@ import {
 } from "./mapper.js";
 import { handleQueryMessage, type TurnContext } from "./session-worker/turnMessages.js";
 import { BtwTurnLedger } from "./session-worker/btwTurnLedger.js";
+import { IdleSleep } from "./session-worker/idleSleep.js";
 import { query } from "@anthropic-ai/claude-agent-sdk";
 import type { SDKAssistantMessage, SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { CanUseTool, HookCallback, HookInput, PermissionMode } from "@anthropic-ai/claude-agent-sdk";
@@ -240,6 +241,14 @@ export class SessionWorker {
   private automationConfig?: AutomationConfig;
   /** 本会话是子会话时的父会话 id（Host 派发子会话的 send 带 subsession_parent）。 */
   private subsessionParent?: string;
+  /** 子会话空闲休眠（见 session-worker/idleSleep.ts）：只对子会话计时。 */
+  private readonly idleSleep = new IdleSleep({
+    busyReason: () => this.idleBusyReason(),
+    sleep: () => {
+      this.emit({ type: "session_slept" });
+      this.selfTeardown();
+    },
+  });
   /** send.config_dir：本会话转录所在的作用域配置根（见 subprocessConfigDir）。 */
   private sessionConfigDir?: string;
 
@@ -941,6 +950,8 @@ export class SessionWorker {
 
   private async handleSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): Promise<void> {
     if (this.stopped) return;
+    // 有新消息进来：不睡了（下一次收轮重新计时）
+    this.idleSleep.cancel();
     // 有新消息进来：值守的回报有人看，清零「连续无人回应」计数
     this.watches.userActivity();
     this.applySendRuntimeConfig(cmd);
@@ -1331,6 +1342,26 @@ export class SessionWorker {
     // 推迟到迭代体外，避免在 for-await 迭代中 close 自己。
     // （result 成功与错误子类型都走到这里，两条路都自毁。）
     if (this.automationConfig) setImmediate(() => this.selfTeardown());
+    // 子会话：开始空闲计时，到点没人理就休眠（进程关掉、下一条消息原地续上）
+    else if (this.subsessionParent) this.idleSleep.arm();
+  }
+
+  /** 还有关进程会断掉的活：返回原因；没有返回 null。 */
+  private idleBusyReason(): string | null {
+    if (this.stopped) return "stopped";
+    if (this.turnActive) return "turn";
+    if (this.queuedSends.size > 0) return "queued";
+    if (this.permMgr.pendingCount > 0) return "permission";
+    if (this.bgTaskTracker.runningCount > 0) return "bg_task";
+    if (this.subagentTracker.activeCount > 0) return "subagent";
+    if (this.watches.activeCount > 0) return "watch";
+    return null;
+  }
+
+  /** Host 叫它现在就睡（父会话被关掉时，名下空闲的子会话一并休眠）。只认子会话；还有活就不睡。 */
+  sleepIfIdle(): boolean {
+    if (!this.subsessionParent) return false;
+    return this.idleSleep.tryNow();
   }
 
   // ---- 图片 400 回滚 ----
@@ -1504,6 +1535,7 @@ export class SessionWorker {
   }
 
   stop(): void {
+    this.idleSleep.cancel();
     // 自动化一次性会话在回合中途被硬停（session_stop 等）：补一条终态事件，
     // 否则调度器永远等不到 message_stop，运行卡「运行中」直到重启自愈。
     // 自然终态（result→message_stop 已发）时 turnActive=false，不会补这条；

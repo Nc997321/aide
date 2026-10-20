@@ -25,7 +25,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -53,6 +53,18 @@ pub const REPORT_TEXT_MAX_CHARS: usize = 8000;
 /// 派发后等子会话 `session_init`（冷启动要拉 CLI 进程）。
 const INIT_TIMEOUT: Duration = Duration::from_secs(60);
 const TITLE_MAX_CHARS: usize = 24;
+/// 上一轮结束后多久内算「缓存还热」。SDK 的提示词缓存有效期是 5 分钟（部分账号 1 小时），
+/// 这里拿不到实际值，按保守的 5 分钟判断。
+const CACHE_WARM_FOR: Duration = Duration::from_secs(5 * 60);
+/// 上下文（输入框旁圆环的百分比）到这个比例就不再往里派新活：快到自动压缩线，旧活细节也会干扰新活。
+const REUSE_MAX_CONTEXT_PCT: f64 = 60.0;
+/// 缓存冷了：上下文在这以下复用很便宜（重读一遍也花不了多少）。
+const REUSE_CHEAP_TOKENS: u64 = 40_000;
+/// 缓存冷了：上下文在这以上，除非新活就是它旧活的直接延续，否则新开一个更划算。
+const REUSE_COSTLY_TOKENS: u64 = 100_000;
+/// 每个会话最多记多少个改过的文件（摘要只展示前几个）。
+const EDITED_FILES_CAP: usize = 40;
+const AREA_SHOWN: usize = 6;
 
 pub static COMMANDS: &[HostCommand] =
     &[command!("list_subsessions", list_subsessions), command!("spawn_subsession", spawn_subsession)];
@@ -119,6 +131,15 @@ struct State {
     /// 用户发消息解除了暂停、还没来得及告诉各端的父会话（note_user_send 手里没有 core，
     /// `subsession_resumed` 随下一次 try_flush 发）
     resume_notices: HashSet<String>,
+    // ── 复用判断用的事实（父会话派新活前，看哪个空闲子会话适合接；只在内存里，Host 重启后为空 = 「不知道」）──
+    /// 最近一次上下文用量：(token 数, 圆环百分比)
+    context: HashMap<String, (u64, f64)>,
+    /// 上一轮结束的时刻（算空闲多久、缓存还热不热）
+    ended_at: HashMap<String, Instant>,
+    /// 改过的文件（按首次出现的顺序，去重）
+    edited: HashMap<String, Vec<String>>,
+    /// 派发时的任务原文
+    tasks: HashMap<String, String>,
 }
 
 #[derive(Default)]
@@ -209,6 +230,7 @@ impl SubsessionService {
             "user_message" => {
                 self.st().busy.insert(sid.to_string());
             }
+            "context_usage" | "tool_use_start" => self.record_reuse_facts(ty, sid, event),
             "permission_request" => {
                 *self.st().awaiting_approval.entry(sid.to_string()).or_insert(0) += 1;
             }
@@ -253,6 +275,30 @@ impl SubsessionService {
         }
     }
 
+    /// 复用判断用的事实：上下文用量（与输入框旁圆环同一份）、改过的文件。纯内存。
+    fn record_reuse_facts(&self, ty: &str, sid: &str, event: &Value) {
+        match ty {
+            "context_usage" => {
+                let tokens = event.get("total_tokens").and_then(|v| v.as_u64());
+                let pct = event.get("percentage").and_then(|v| v.as_f64());
+                if let (Some(t), Some(p)) = (tokens, pct) {
+                    self.st().context.insert(sid.to_string(), (t, p));
+                }
+            }
+            "tool_use_start" => {
+                let name = event.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                if let Some(path) = edited_path(name, event.get("input")) {
+                    let mut st = self.st();
+                    let files = st.edited.entry(sid.to_string()).or_default();
+                    if files.len() < EDITED_FILES_CAP && !files.iter().any(|f| f == &path) {
+                        files.push(path);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// 子会话路由键 → SDK 真实 id：运行态随之过户，并叫醒等着拿 id 的派发。
     fn rekey(&self, routing: &str, real: &str) {
         let mut st = self.st();
@@ -272,6 +318,15 @@ impl SubsessionService {
             if let Some(n) = st.awaiting_approval.remove(routing) {
                 st.awaiting_approval.insert(real.to_string(), n);
             }
+            if let Some(c) = st.context.remove(routing) {
+                st.context.insert(real.to_string(), c);
+            }
+            if let Some(f) = st.edited.remove(routing) {
+                st.edited.insert(real.to_string(), f);
+            }
+            if let Some(t) = st.tasks.remove(routing) {
+                st.tasks.insert(real.to_string(), t);
+            }
         }
         if let Some(tx) = st.waiting_init.remove(routing) {
             let _ = tx.send(real.to_string());
@@ -280,7 +335,11 @@ impl SubsessionService {
 
     /// 一轮结束：会话本身若有待投递的回报 → 试着投；若它是子会话 → 组回报投给父会话。
     fn turn_ended(self: &Arc<Self>, core: &Arc<Core>, sid: &str, status: &'static str, text: String) {
-        self.st().busy.remove(sid);
+        {
+            let mut st = self.st();
+            st.busy.remove(sid);
+            st.ended_at.insert(sid.to_string(), Instant::now());
+        }
         let svc = Arc::clone(self);
         let core = Arc::clone(core);
         let sid = sid.to_string();
@@ -312,7 +371,8 @@ impl SubsessionService {
         }
     }
 
-    async fn resolve_parent(&self, sid: &str) -> Option<String> {
+    /// 这个会话的父会话（是子会话才有）。缓存优先，没缓存读档案。
+    pub(crate) async fn resolve_parent(&self, sid: &str) -> Option<String> {
         if let Some(cached) = self.st().parent_of.get(sid).cloned() {
             return cached;
         }
@@ -472,6 +532,20 @@ impl SubsessionService {
 
     async fn spawn(&self, core: &Arc<Core>, q: &Query) -> Result<Value, String> {
         let s = |k: &str| q.args.get(k).and_then(|v| v.as_str()).map(str::trim).filter(|v| !v.is_empty()).map(str::to_string);
+        // 名下有能接活的空闲子会话：先不新开，把它们摆给 agent 挑（上下文在它们那里，接着干往往更省）。
+        // agent 看过后仍要新开就带 new=true 再调一次。用户手动派不走这里——点「派给子会话」就是要新开。
+        let force_new = q.args.get("new").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !force_new {
+            let candidates: Vec<Value> = self
+                .children(&q.parent)
+                .await?
+                .into_iter()
+                .filter(|c| c["status"] == "idle" && c["reuse"] != "no")
+                .collect();
+            if !candidates.is_empty() {
+                return Ok(json!({ "started": false, "idle_children": candidates }));
+            }
+        }
         self.spawn_child(
             core,
             SpawnRequest {
@@ -568,6 +642,7 @@ impl SubsessionService {
             st.waiting_init.insert(routing.clone(), tx);
             st.parent_of.insert(routing.clone(), Some(parent.clone()));
             st.titles.insert(routing.clone(), title.clone());
+            st.tasks.insert(routing.clone(), task.clone());
             st.busy.insert(routing.clone());
             st.origin.insert(routing.clone(), if by == Spawner::User { Origin::UserTask } else { Origin::Task });
         }
@@ -666,6 +741,7 @@ impl SubsessionService {
         let p = parent.to_string();
         let list = blocking(move || Ok(our_session_children(&p))).await?;
         let st = self.st();
+        let now = Instant::now();
         Ok(list
             .into_iter()
             .map(|(id, name)| {
@@ -676,9 +752,45 @@ impl SubsessionService {
                 } else {
                     "idle"
                 };
-                json!({ "id": id, "title": name, "status": status, "last_report": st.last_report.get(&id) })
+                let ctx = st.context.get(&id).copied();
+                let idle_for = if status == "idle" { st.ended_at.get(&id).map(|t| now.duration_since(*t)) } else { None };
+                let files = st.edited.get(&id).map(Vec::as_slice).unwrap_or(&[]);
+                json!({
+                    "id": id,
+                    "title": name,
+                    "status": status,
+                    "last_report": st.last_report.get(&id),
+                    "task": st.tasks.get(&id).map(|t| first_line(t)),
+                    "context_tokens": ctx.map(|c| c.0),
+                    "context_pct": ctx.map(|c| c.1.round()),
+                    "idle_minutes": idle_for.map(|d| d.as_secs() / 60),
+                    "cache_warm": idle_for.map(|d| d < CACHE_WARM_FOR),
+                    "area": files.iter().take(AREA_SHOWN).map(|f| short_path(f)).collect::<Vec<_>>(),
+                    "area_more": files.len().saturating_sub(AREA_SHOWN),
+                    "reuse": reuse_verdict(ctx, idle_for),
+                })
             })
             .collect())
+    }
+
+    /// 父会话被停（关 tab / 停止）：它名下空闲的子会话现在就休眠，不等计时。
+    /// 在跑 / 在等批准的不动——跑完照常回报（父会话会被原地续上）。sidecar 那边还会再查一遍有没有活。
+    pub async fn sleep_idle_children(&self, core: &Arc<Core>, parent: &str) {
+        let p = parent.to_string();
+        let Ok(list) = blocking(move || Ok(our_session_children(&p))).await else { return };
+        let idle: Vec<String> = {
+            let st = self.st();
+            list.into_iter()
+                .map(|(id, _)| id)
+                .filter(|id| !st.busy.contains(id) && !st.awaiting_approval.contains_key(id))
+                .collect()
+        };
+        for id in idle {
+            if !core.runtime.is_session_alive(&id) {
+                continue;
+            }
+            let _ = core.runtime.send_to_runtime(&json!({ "cmd": "session_sleep", "session_id": id })).await;
+        }
     }
 
     fn running_children(&self, parent: &str) -> usize {
@@ -704,6 +816,44 @@ fn archive_field(id: &str, key: &str) -> Option<String> {
     let path = crate::paths::our_sessions_dir().join(format!("{id}.json"));
     let v: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
     v.get(key).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(str::to_string)
+}
+
+/// 写类工具改的是哪个文件（复用判断里的「它动过哪块」）。
+fn edited_path(tool: &str, input: Option<&Value>) -> Option<String> {
+    let key = match tool {
+        "Edit" | "MultiEdit" | "Write" => "file_path",
+        "NotebookEdit" => "notebook_path",
+        _ => return None,
+    };
+    input?.get(key)?.as_str().filter(|p| !p.is_empty()).map(str::to_string)
+}
+
+/// 路径只留最后三段，统一 `/`（摘要给模型看，够认出是哪块就行）。
+fn short_path(p: &str) -> String {
+    let parts: Vec<&str> = p.split(['/', '\\']).filter(|s| !s.is_empty()).collect();
+    let start = parts.len().saturating_sub(3);
+    parts[start..].join("/")
+}
+
+/// 这个空闲子会话适不适合接新活：
+/// - `no`：上下文已过 [`REUSE_MAX_CONTEXT_PCT`]（快压缩了）；
+/// - `cheap`：缓存还热，或上下文小——相关就接着派；
+/// - `costly`：缓存冷了且上下文大——只有新活就是它旧活的直接延续才派；
+/// - `moderate`：介于两者之间（或不知道上下文多大）——确实相关才派。
+pub fn reuse_verdict(context: Option<(u64, f64)>, idle_for: Option<Duration>) -> &'static str {
+    if let Some((_, pct)) = context {
+        if pct >= REUSE_MAX_CONTEXT_PCT {
+            return "no";
+        }
+    }
+    if idle_for.is_some_and(|d| d < CACHE_WARM_FOR) {
+        return "cheap";
+    }
+    match context {
+        Some((t, _)) if t <= REUSE_CHEAP_TOKENS => "cheap",
+        Some((t, _)) if t >= REUSE_COSTLY_TOKENS => "costly",
+        _ => "moderate",
+    }
 }
 
 // ── 文本 ──
@@ -984,6 +1134,37 @@ mod tests {
     fn derive_title_takes_first_non_empty_line() {
         assert_eq!(derive_title("\n  给 pyright 加语言包条目\n细节"), "给 pyright 加语言包条目");
         assert_eq!(derive_title(&"a".repeat(40)).chars().count(), TITLE_MAX_CHARS + 1);
+    }
+
+    #[test]
+    fn reuse_verdict_follows_the_ring_percentage_cache_and_size() {
+        let min = |m: u64| Some(Duration::from_secs(m * 60));
+        // 圆环过 60%：不管缓存冷热都不复用
+        assert_eq!(reuse_verdict(Some((130_000, 65.0)), min(1)), "no");
+        // 缓存还热：大也便宜
+        assert_eq!(reuse_verdict(Some((90_000, 45.0)), min(2)), "cheap");
+        // 冷了：小便宜、大只接延续、中间看相关度；不知道多大按中间算
+        assert_eq!(reuse_verdict(Some((30_000, 15.0)), min(20)), "cheap");
+        assert_eq!(reuse_verdict(Some((120_000, 12.0)), min(20)), "costly");
+        assert_eq!(reuse_verdict(Some((60_000, 30.0)), min(20)), "moderate");
+        assert_eq!(reuse_verdict(None, None), "moderate");
+    }
+
+    #[test]
+    fn reuse_facts_record_context_and_edited_files_and_follow_rekey() {
+        let svc = SubsessionService::new();
+        svc.record_reuse_facts("context_usage", "subsess_x", &json!({ "total_tokens": 38_400, "percentage": 19.2 }));
+        let edit = json!({ "name": "Edit", "input": { "file_path": "C:\\work\\notify\\domain\\Order.java" } });
+        svc.record_reuse_facts("tool_use_start", "subsess_x", &edit);
+        svc.record_reuse_facts("tool_use_start", "subsess_x", &edit); // 去重
+        svc.record_reuse_facts("tool_use_start", "subsess_x", &json!({ "name": "Read", "input": { "file_path": "/a/b.rs" } }));
+        svc.st().tasks.insert("subsess_x".into(), "搭骨架".into());
+        svc.rekey("subsess_x", "real-1");
+        let st = svc.st();
+        assert_eq!(st.context.get("real-1"), Some(&(38_400, 19.2)));
+        assert_eq!(st.edited.get("real-1").map(Vec::len), Some(1), "读文件不算动过");
+        assert_eq!(st.tasks.get("real-1").map(String::as_str), Some("搭骨架"));
+        assert_eq!(short_path(&st.edited["real-1"][0]), "notify/domain/Order.java");
     }
 
     #[test]

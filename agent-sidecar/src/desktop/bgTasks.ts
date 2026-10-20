@@ -165,6 +165,13 @@ export class BgTaskTracker {
     return this.tasks.has(taskId);
   }
 
+  /** 还在跑的后台任务数（子会话空闲休眠据此判断「后台命令在跑」）。 */
+  get runningCount(): number {
+    let n = 0;
+    for (const rec of this.tasks.values()) if (!rec.done) n++;
+    return n;
+  }
+
   private upsert(taskId: string): BgTaskRecord {
     let rec = this.tasks.get(taskId);
     if (!rec) {

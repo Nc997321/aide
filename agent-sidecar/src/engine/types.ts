@@ -483,6 +483,9 @@ export type ChatEvent =
   // 进程死亡：由 Rust（非 sidecar）合成——reader EOF 或看门狗超时。session_id 由
   // Rust 注入；detail 携带 stderr 尾部用于诊断。列在此处以统一 chat-event 协议真相源。
   | { type: "session_dead"; reason: "exit" | "heartbeat_timeout"; detail?: string }
+  // 子会话空闲休眠：进程已安静关掉（不是出事），下一条消息带 resume id 原地续上。
+  // 界面不变（仍是「空闲」）；Host 据此把它从存活表摘掉。见 session-worker/idleSleep.ts。
+  | { type: "session_slept" }
   // Runtime 健康快照：由 SessionManager 每 30s emit 一次，供前端诊断仪表盘消费。
   | {
       type: "health";
@@ -663,6 +666,8 @@ export type SidecarCommand =
   | { cmd: "set_permission_mode"; session_id: string; mode: string }
   // 停止一个会话：Runtime 内部调 worker.stop()（q.close() + 清理），不再由 Rust kill 进程。
   | { cmd: "session_stop"; session_id: string }
+  // 子会话：没活就现在休眠（父会话被关掉时 Host 对它名下的子会话发）。还有活 / 不是子会话 → 不动。
+  | { cmd: "session_sleep"; session_id: string }
   // btw 侧问（官方 side_question 控制通道）。与 send 的关键区别：**不走
   // getOrCreate**——主 worker 不存在即拒，不起新进程（设计决策 D2）。
   // 结果一律经 btw_answer 事件回来，本命令无返回值（fire-and-forget，与 send 同形）。

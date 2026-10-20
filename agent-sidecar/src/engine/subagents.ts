@@ -89,6 +89,11 @@ export class SubagentTracker {
     return this.active.has(id);
   }
 
+  /** 仍在跑的子代理数（子会话空闲休眠据此判断「异步子代理没回来」）。 */
+  get activeCount(): number {
+    return this.active.size;
+  }
+
   /** 子代理内部第一条可采信 assistant 消息的 model 只报一次：调用方应先确认这条
    *  消息确实可采信（如 isAdoptableAssistantModel），再调用本方法申领"上报名额"——
    *  返回 true 才把 model 字段带上，避免占位符/错误回声消耗掉唯一一次上报机会。 */

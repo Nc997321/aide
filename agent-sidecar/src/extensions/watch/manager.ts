@@ -126,6 +126,13 @@ export class WatchManager {
       }));
   }
 
+  /** 还在值守的条数（子会话空闲休眠据此判断「开着值守」）。 */
+  get activeCount(): number {
+    let n = 0;
+    for (const w of this.watches.values()) if (!w.ended) n++;
+    return n;
+  }
+
   /** 用户发了消息：回报有人看，清零「连续无人回应」计数。 */
   userActivity(): void {
     for (const w of this.watches.values()) w.streak = 0;

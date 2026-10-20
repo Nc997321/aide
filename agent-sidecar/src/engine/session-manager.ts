@@ -109,6 +109,12 @@ export class SessionManager {
       return;
     }
 
+    // session_sleep：子会话没活就休眠（worker 自毁时经 onSelfStop 摘出注册表）；没有 worker 即 no-op
+    if (cmd.cmd === "session_sleep") {
+      this.workers.get(cmd.session_id)?.sleepIfIdle();
+      return;
+    }
+
     // btw_ask：唯一 async 的命令分支（结果经 btw_answer 事件回来，不是返回值）。
     // 故意不 await——stdin 行处理器是同步的，await 会阻塞后续命令；结果本来就
     // 只走事件通道。catch 兜住以防解析前抛异常（不许静默吞）。
