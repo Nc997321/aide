@@ -99,7 +99,7 @@ function pickEffort(v: string) {
         @click="pickEffort(e.value)"
       >{{ e.label }}</button>
     </div>
-    <div class="mep-hint">快速 = 关闭思考；切换从下一轮起生效，不影响缓存</div>
+    <div class="mep-hint">档位 = 思考深度；切换从下一轮起生效，不影响缓存</div>
   </ComposerPopover>
 </template>
 

@@ -40,7 +40,6 @@ import { applyAttachExtension, decideAttach } from "./attachDirs.js";
 import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv, sessionEnvOf } from "./cliEnv.js";
-import { thinkingDisabledFor } from "./thinkingPolicy.js";
 import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
@@ -166,7 +165,7 @@ export class SessionWorker {
    *  MessageQueue 的 resolveNext 是单槽，abort 后旧迭代器还挂在 await 上，push 会被
    *  它 shift 走并卡死在 yield 挂起点（SDK 已 abort 不再 next()），下一轮新迭代器就
    *  永远拿不到（2026-08-21 实锤：注入未达 CLI → resume 0 事件退出，会话无后续）。
-   *  两个生产者：图片回滚（场景 B，模型得接着读文本）、思考值漂移的原地重启
+   *  两个生产者：图片回滚（场景 B，模型得接着读文本）、供应商漂移的原地重启
    *  （本条用户消息归重建后的 query）。 */
   private nextQueryInjections: SDKUserMessage[] = [];
 
@@ -193,7 +192,7 @@ export class SessionWorker {
   private readonly rateLimitReporter = new RateLimitReporter();
   private shouldForkNextConnect = false;
   /** 供应商连接身份漂移（send.provider_switched）待兑现：env 只在建 query 时落地，
-   *  所以要**原地 resume 重建** query（与思考值漂移同一条路）。回合进行中不拆，
+   *  所以要**原地 resume 重建** query。回合进行中不拆，
    *  留在账上等下一个空闲 send；建 query 时清账。 */
   private providerDriftPending = false;
   private turnActive = false;
@@ -203,20 +202,8 @@ export class SessionWorker {
   /** 缺省开启，普通会话无开关、恒命名。auto_title:false 是内部 opt-out——
    *  自动化运行（scheduler、smoke）不给会话起标题。 */
   private autoTitle = true;
-  /** 思考开关（send.thinking_enabled 下发），缺省开启。关闭 = 从能力上禁用思考：
-   *  ① 请求层——spawn 时 thinking: disabled（官方 API 真正不思考、省 token）；
-   *  ② 展示层——mapper 剥除 thinking 块（thinking_delta 流 / assistant 整块 /
-   *  子代理块），立即生效。例外：ollama 兼容端点不认 thinking 参数（请求体不带
-   *  thinking 字段=端点默认，模型总会出思考块，2026-08-21 mock 端点实锤），
-   *  无法能力级禁用，仅靠 ② 隐藏显示。 */
-  private thinkingEnabled = true;
-  /** 建**当前** query 时用的 thinking 值。值虽每条 send 都刷新，但只在建 query 时
-   *  落地——与本条 send 的值漂移就要原地重启（SDK 没有运行时 thinking setter，
-   *  applyFlagSettings 被 CLI 静默忽略）。与 currentEffort 同款分工，刻意不在
-   *  `!turnActive` 之外的地方提前记账：在飞的回合没能重启时，漂移得留在账上等下一轮。 */
-  private spawnedThinking = true;
   /** 主动拆 query 的归因标志（与 rollbackPending 同款）：catch 里据此把 abort 认成
-   *  「思考值漂移重启」而不是会话级故障——否则会 emit error 帧并 break 掉循环。 */
+   *  「供应商漂移重启」而不是会话级故障——否则会 emit error 帧并 break 掉循环。 */
   private restartPending = false;
   /** 本回合开头那条用户消息。模型还没任何输出时，用户亲手打断（Esc / 停止）可以把它整条
    *  撤回，对话里像没发过（对齐 Claude Code CLI）。hadHistory = 它之前已有对话——撤回要截
@@ -241,14 +228,14 @@ export class SessionWorker {
   /** 等某条消息命令生命周期结论的回调（撤回用，见 cancelInCli）。 */
   private readonly lifecycleWaiters = new Map<string, (outcome: "cancelled" | "started") => void>();
   /** 输出样式（send.output_style 下发，handleSend 归一后存这里）。null = 默认/未知，
-   *  建 query 后不下发。与 thinkingEnabled 同款：值每条 send 都刷新，但只在**新建
+   *  建 query 后不下发。值每条 send 都刷新，但只在**新建
    *  会话**（建 query）时落地——改动不影响已在跑的会话（见 session-worker/outputStyle.ts）。 */
   private outputStyle: OutputStyle | null = null;
   /** 每个 worker 只命名一次（防止 resume/多轮重复生成）。 */
   private titleAttempted = false;
 
   // ---- 自动化运行（无人值守，调度器发起） ----
-  // 非空时：policy hook 白名单裁决 + skills/plugins 关 + thinking 关 + partial 关
+  // 非空时：policy hook 白名单裁决 + skills/plugins 关 + partial 关
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
   /** 本会话是子会话时的父会话 id（Host 派发子会话的 send 带 subsession_parent）。 */
@@ -433,7 +420,7 @@ export class SessionWorker {
     images: ImageAttachment[] | undefined,
     display: UserMessageBlock[] | undefined,
     /** liveQuery（默认）= 喂给当前活着的 query；nextQuery = 当前 query 正要被拆掉
-     *  （思考值漂移重启），预置给重建后的那一轮——走共享队列会被孤儿迭代器吞。 */
+     *  （供应商漂移重启），预置给重建后的那一轮——走共享队列会被孤儿迭代器吞。 */
     target: "liveQuery" | "nextQuery" = "liveQuery",
   ): string {
     const text = userTextOf(prompt, display);
@@ -687,11 +674,11 @@ export class SessionWorker {
     return true;
   }
 
-  /** spawn 期参数在会话中变了（快速 ⇒ 关思考 / 换供应商）：拆掉当前 query，让本条
+  /** spawn 期参数在会话中变了（换供应商）：拆掉当前 query，让本条
    *  消息由**重建后的** query 承接。
    *
    *  链路：abort → for await 抛 AbortError → catch 的 AbortError 分支（retireIterators
-   *  作废旧迭代器 → while 再迭代一轮）→ 用新 thinking 值重建。重建是**原地 resume**：
+   *  作废旧迭代器 → while 再迭代一轮）→ 用新 env 重建。重建是**原地 resume**：
    *  resumeSource 已由 session_init 过户成真实会话 id，且不设 shouldForkNextConnect，
    *  故 forkSession 不生效、会话 id 不变（三端不 re-key）。
    *
@@ -958,7 +945,6 @@ export class SessionWorker {
     this.watches.userActivity();
     this.applySendRuntimeConfig(cmd);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
-    if (cmd.thinking_enabled !== undefined) this.thinkingEnabled = cmd.thinking_enabled;
     // 归一在入口完成（守门）：非法/未知值绝不进 worker 状态，applyOutputStyle 只
     // 面对值域内的值或 null。
     if (cmd.output_style !== undefined) this.outputStyle = normalizeOutputStyle(cmd.output_style);
@@ -1049,14 +1035,10 @@ export class SessionWorker {
       return;
     }
 
-    // spawn 期参数漂移（思考值：快速 ⇒ 关思考；供应商连接身份）：本条消息归重建后的
-    // query。只在回合空闲时拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在
-    // 账上，下一个空闲的 send 再兑现。
-    if (
-      this.currentQuery &&
-      !this.turnActive &&
-      (this.thinkingEnabled !== this.spawnedThinking || this.providerDriftPending)
-    ) {
+    // spawn 期参数漂移（供应商连接身份）：本条消息归重建后的 query。只在回合空闲时
+    // 拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在账上，下一个空闲的 send
+    // 再兑现。档位（含快速）是热切的（applyFlagSettings），不重启、也不关思考。
+    if (this.currentQuery && !this.turnActive && this.providerDriftPending) {
       this.markTurnHead(this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery"), cmd.prompt, cmd.display);
       this.restartQueryInPlace();
       return;
@@ -1089,20 +1071,12 @@ export class SessionWorker {
           // 已经落进共享队列了——上一轮若异常终止，它的孤儿迭代器此刻还挂在
           // resolveNext 上，会把那条消息 shift 走（详见 retireIterators 注释）。
           this.queue.retireIterators();
-          // 本条 query 的思考值：**唯一推导点**（thinkingPolicy）。下面还有 await
-          //（prepareQueryContext），而档位被每条 send 刷新——算一次落定，env 与 SDK
-          // 选项消费同一个值，不让它们在装配窗口里劈叉。
-          const thinkingDisabled = thinkingDisabledFor({
-            automation: !!this.automationConfig,
-            thinkingEnabled: this.thinkingEnabled,
-          });
           // 构造显式 env 传给 CLI subprocess（组装规矩见 engine/cliEnv.ts：进程 env 为底
-          // → per-session 覆盖 → automation 会话目录 → effort 显式删除 → 思考值注入 → 固定注入）
+          // → per-session 覆盖 → automation 会话目录 → effort / EXTRA_BODY 显式删除 → 固定注入）
           const cliEnv = buildCliEnv({
             processEnv: process.env,
             envOverrides: this.envOverrides,
             configDirOverride: this.automationConfig?.sessionDir || this.sessionConfigDir,
-            thinkingDisabled,
           });
 
           // query 前置准备：内建 MCP 注册 / Aide 指令 / hooks 与 mcpServers 终装
@@ -1141,7 +1115,7 @@ export class SessionWorker {
           // 每次迭代新建 abort 信号：abort 过的 controller 不能复用（回滚后
           // 下一轮 query 需要全新的）。回滚时 abort 杀 CLI 进程、停一切写入。
           this.abortController = new AbortController();
-          // 预置注入（图片回滚 / 思考值漂移重启）先 yield——私有迭代器，无共享
+          // 预置注入（图片回滚 / 供应商漂移重启）先 yield——私有迭代器，无共享
           // queue 竞态；再 yield* 共享 queue（后续用户消息走 MessageQueue 正常通道）。
           const injections = this.nextQueryInjections;
           this.nextQueryInjections = [];
@@ -1181,15 +1155,12 @@ export class SessionWorker {
               model: {
                 sdkModel: this.currentModel ? this.modelRoster.toSdkModel(this.currentModel) : "",
                 effort: this.currentEffort,
-                thinkingDisabled,
               },
               fork: { resumeSource: this.resumeSource ?? "", shouldFork: this.shouldForkNextConnect },
             }),
           });
           this.currentQuery = q;
           loopQuery = q;
-          // 记账：本条 query 落地的 thinking 值——下一条 send 据此判漂移（见字段注释）。
-          this.spawnedThinking = this.thinkingEnabled;
           this.providerDriftPending = false; // 新 env 已随本次 spawn 落地
           this.shouldForkNextConnect = false;
           // 输出样式：必须在首轮 prompt 被 CLI 取走之前落地（晚一步 = 第一条消息
@@ -1261,7 +1232,7 @@ export class SessionWorker {
             this.restartPending = false;
           } else if (this.restartPending) {
             // spawn 期参数漂移的主动拆：不是错误、更不是回合结束——清账后继续 while，
-            // 下一轮用新 thinking 值 / 新供应商 env 重建（原地 resume）。
+            // 下一轮用新供应商 env 重建（原地 resume）。
             //
             // 判据必须是**标志位**，不能靠 e.name === "AbortError"：实测真 SDK 的
             // abort 抛出来的 message 是 "Operation aborted"，名字不是 AbortError
@@ -1295,7 +1266,7 @@ export class SessionWorker {
     }
   }
 
-  /** mapper 依赖包（每轮迭代重建——partialMode/showThinking 捕获当轮支线状态）。 */
+  /** mapper 依赖包（每轮迭代重建——partialMode 捕获当轮支线状态）。 */
   private buildMapperDeps(): MapperDeps {
     return {
       tasks: this.taskTracker,
@@ -1315,9 +1286,6 @@ export class SessionWorker {
         stopTail: (id) => this.stopBgTaskTail(id),
       },
       partialMode: true,
-      // 思考展示开关：关闭时剥掉 thinking 块（ollama 端点不认 thinking 参数，
-      // API 层关不掉，只能展示层剥——见 mapper.ts emitSubagentBlocks 注释）。
-      showThinking: this.thinkingEnabled,
       includeResult: !!this.subsessionParent,
     };
   }

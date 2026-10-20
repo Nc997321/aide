@@ -15,7 +15,7 @@ export interface TurnContext {
   setTurnActive: (v: boolean) => void;
   applyPlanMode: () => void;
   emit: (e: ChatEvent) => void;
-  /** worker 每轮迭代构建一次（partialMode/showThinking 捕获当轮支线状态）。 */
+  /** worker 每轮迭代构建一次（partialMode 捕获当轮支线状态）。 */
   mapperDeps: MapperDeps;
   /** CLI 回显了一条主线程用户消息（`--replay-user-messages`）= 它被模型接入的那一刻。 */
   onUserReplay: (id: string) => void;

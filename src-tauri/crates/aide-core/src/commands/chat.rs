@@ -101,7 +101,6 @@ struct SendOptions<'a> {
     /// 排队消息的 id（客户端生成的 UUID）：sidecar 拿它当 SDK 消息 uuid，撤回 / 接入事件按它对账。
     queue_id: Option<String>,
     provider_switched: bool,
-    thinking_enabled: bool,
     /// 输出样式名（见 settings.rs 的 DEFAULT_OUTPUT_STYLE）。**非默认才落字段**——
     /// 空串与 `"default"` 都不落，sidecar 缺席即按默认处理（判据在 attach_output_style）。
     output_style: String,
@@ -187,7 +186,6 @@ fn base_send_command(
         "prompt": prompt,
         "cwd": cwd,
         "env": env_vars,
-        "thinking_enabled": opts.thinking_enabled,
     })
 }
 
@@ -245,18 +243,6 @@ fn attach_flag(cmd: &mut serde_json::Value, key: &str, on: bool) {
     if on {
         cmd[key] = json!(true);
     }
-}
-
-/// 本会话该不该思考：**档位是唯一事实源**（2026-09-19 决策——快速 ⇒ 关思考）。
-///
-/// 原先还有一个「设置→通用 → 启用思考」的独立开关，已删除：两个事实源必然打架
-/// （切了快速却又开着思考），而档位本身就表达了这个意图。
-///
-/// `effort` 缺席（旧端/鸿蒙不带该字段）→ 思考保持开启（与历史默认一致），
-/// 不拿默认值当快速。大小写不敏感：provider 配置里的默认档位是大写（如 `LOW`，
-/// 见 attach_env_override 注）。历史档位 medium/xhigh 归一后是进阶/极致，不会误判。
-fn thinking_enabled_for_effort(effort: Option<&str>) -> bool {
-    !effort.is_some_and(|e| e.eq_ignore_ascii_case("low"))
 }
 
 /// 该工作区配得上 LSP 的语言（sidecar 据此决定挂不挂 aide-lsp 工具）。
@@ -417,7 +403,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         resolve_send_provider(settings_service.clone(), &session_id, provider).await?;
     timer.mark("provider");
     let snapshot_service = settings_service.clone();
-    // 读设置失败不阻塞发送（proxy / thinking / output_style 各有兜底），但不能无声：
+    // 读设置失败不阻塞发送（proxy / output_style 各有兜底），但不能无声：
     // 用户选了非默认输出样式却读不到设置时，这条日志是唯一线索（同上方登记工作区的
     // 「失败不阻塞但不静默」处理）。
     let read_service = settings_service.clone();
@@ -447,13 +433,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         &session_id,
         crate::provider::roster_cache::speaks_catalog_aliases(active.kind, &provider_env),
     );
-    // 思考开关下发 sidecar：**档位是唯一事实源**（快速关、其余开，见
-    // thinking_enabled_for_effort）。**只在 spawn（建 query）时生效**——SDK 没有
-    // 运行时的 thinking setter，`applyFlagSettings({alwaysThinkingEnabled})` 被 CLI
-    // 静默忽略（2026-09-19 实测，见 agent-sidecar 注释），所以档位漂移由 sidecar 在
-    // 下一条 send 时**原地 resume 重启**兑现，本条字段就是那次重建的依据。
-    let thinking_enabled = thinking_enabled_for_effort(initial_effort.as_deref());
-    // 输出样式下发 sidecar（设置读取失败时按默认）：生效时机与 thinking 同款——
+    // 输出样式下发 sidecar（设置读取失败时按默认）：
     // sidecar 只在新建会话（建 query）时落地，改动不影响已在跑的会话。
     let output_style = settings
         .as_ref()
@@ -486,7 +466,6 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
             jump_queue: jump_queue.unwrap_or(false),
             queue_id,
             provider_switched,
-            thinking_enabled,
             output_style,
             attach,
         },
@@ -940,12 +919,8 @@ mod tests {
         );
     }
 
-    /// 默认开 thinking_enabled（与 send_message 生产路径的默认一致）。
     fn base_opts() -> SendOptions<'static> {
-        SendOptions {
-            thinking_enabled: true,
-            ..Default::default()
-        }
+        SendOptions::default()
     }
 
     /// @目录 授权：过闸的进 `additional_dirs`（数组），被拒的进 `attach_rejected`
@@ -1257,23 +1232,6 @@ mod tests {
         assert_eq!(cmd2["env"]["CLAUDE_CODE_EFFORT_LEVEL"], "LOW");
     }
 
-    /// 快速 ⇒ 关思考（2026-09-19 决策）。**档位是唯一事实源**——那个独立的
-    /// 「启用思考」设置已删除，所以这里不再有"设置关掉"这条臂。
-    /// 大小写不敏感是硬要求：provider 配置里的默认档位是大写 `LOW`。
-    #[test]
-    fn fast_effort_disables_thinking() {
-        assert!(!thinking_enabled_for_effort(Some("low")));
-        assert!(!thinking_enabled_for_effort(Some("LOW")));
-        // 其余档位恒开
-        assert!(thinking_enabled_for_effort(Some("high")));
-        assert!(thinking_enabled_for_effort(Some("max")));
-        // 历史档位归一后不是快速，不能误判
-        assert!(thinking_enabled_for_effort(Some("medium")));
-        assert!(thinking_enabled_for_effort(Some("xhigh")));
-        // 档位缺席（旧端/鸿蒙不带该字段）→ 保持开，不拿默认值当快速
-        assert!(thinking_enabled_for_effort(None));
-    }
-
     /// permission_mode 非空才落字段；空串不落。
     #[test]
     fn build_send_command_carries_permission_mode() {
@@ -1389,23 +1347,11 @@ mod tests {
         assert_eq!(cmd["provider_switched"], true);
     }
 
-    /// 思考开关（settings.thinkingEnabled）随 send 命令下发给 sidecar：
-    /// false 时 spawn 的 thinking 参数为 disabled（会话内无效，只影响新建会话）。
+    /// 思考不再随 send 下发（2026-10-20：思考恒开，档位只管深度）。
     #[test]
-    fn build_send_command_carries_thinking_enabled_flag() {
-        let on = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
-        assert_eq!(on["thinking_enabled"], true);
-        let off = build_send_command(
-            "s",
-            "hi",
-            "/tmp",
-            &HashMap::new(),
-            SendOptions {
-                thinking_enabled: false,
-                ..base_opts()
-            },
-        );
-        assert_eq!(off["thinking_enabled"], false);
+    fn build_send_command_has_no_thinking_field() {
+        let cmd = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(cmd.get("thinking_enabled").is_none());
     }
 
     /// 输出样式（settings.outputStyle）随 send 命令下发给 sidecar：非默认才落字段。

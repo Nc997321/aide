@@ -266,12 +266,6 @@ export function emitSubagentBlocks(
    *  tool_use 的 id。emitSubagentProgress 用它算嵌套深度并发 nesting 警告。
    *  subagentOutputTail 的 .output 回放路径不传（async 回放不告警）。 */
   onNestedSpawn?: (childToolUseId: string) => void,
-  /** 思考展示开关（「设置→通用」下发）：关闭 = 从能力上禁用思考（请求层
-   *  thinking: disabled 对官方 API 生效）；此处是展示层兜底——ollama 等兼容
-   *  端点不认 thinking 参数（2026-08-21 实测：disabled 时请求体根本不带
-   *  thinking 字段，端点默认=模型自决），推理模型无法能力级禁用，只能剥掉
-   *  thinking 块。缺省 true 兼容旧调用。 */
-  showThinking: boolean = true,
 ) {
   // 子代理内部的工具产出：user 消息里的 tool_result block。按 tool_use_id（子代理
   // 内部那次工具调用的 id）发 subagent_tool_result，前端据此把产出回填到对应步骤——
@@ -298,7 +292,7 @@ export function emitSubagentBlocks(
   for (const block of msg.message.content) {
     if (block.type === "text" && block.text) {
       emit({ type: "subagent_text_delta", id, delta: block.text });
-    } else if (block.type === "thinking" && block.thinking && showThinking) {
+    } else if (block.type === "thinking" && block.thinking) {
       emit({ type: "subagent_thinking_delta", id, delta: block.thinking });
     }
   }
@@ -348,9 +342,6 @@ export interface MapperDeps {
   /** partial=on 标志：主会话 true（thinking 逐字流式、text 走整块、子代理走整块）；
    *  缺省 false（partial=off / btw / titleGenerator / 测试），现状不变。 */
   partialMode?: boolean;
-  /** 思考展示开关（「设置→通用」下发，见 emitSubagentBlocks 的 showThinking）：
-   *  关闭时剥掉主线程 thinking_delta 流与 assistant thinking 整块。缺省 true 兼容旧调用。 */
-  showThinking?: boolean;
   /** 本会话是子会话（父会话派来的活）：成功收轮的 message_stop 带上 SDK 的 `result`
    *  （本轮最终回复全文），Host 据此组回报投给父会话。普通会话不带——每轮多发一份全文没有读者。 */
   includeResult?: boolean;
@@ -378,7 +369,6 @@ function emitSubagentProgress(
   // 子代理消息自带 agent_id（SDK ≥0.3.292）——登记后权限弹窗才能按 agentID 查到名字。
   if (typeof msg.agent_id === "string" && msg.agent_id) deps.subagents.linkAgentId(msg.agent_id, parentId);
   const partialMode = deps.partialMode ?? false;
-  const showThinking = deps.showThinking ?? true;
 
   // partial=on（主会话）时丢弃子代理逐字 delta——子代理走下方 emitSubagentBlocks 整块
   // （与 partial=off 现状一致），避免开 partial 连带让子代理 text/thinking 也逐字流式。
@@ -391,7 +381,7 @@ function emitSubagentProgress(
     if (ev?.type === "content_block_delta") {
       if (ev.delta?.type === "text_delta" && ev.delta.text) {
         emit({ type: "subagent_text_delta", id: parentId, delta: ev.delta.text });
-      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
+      } else if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
         emit({ type: "subagent_thinking_delta", id: parentId, delta: ev.delta.thinking });
       }
     }
@@ -410,12 +400,11 @@ function emitSubagentProgress(
         emit({ type: "subagent_nesting_warning", depth, threshold: NESTING_WARN_THRESHOLD });
       }
     },
-    showThinking,
   );
 }
 
 /** 子代理内部消息（parent_tool_use_id 非空）：委托 emitSubagentProgress
- *  （只依赖 subagents + partialMode/showThinking 两个展示开关）。 */
+ *  （只依赖 subagents + partialMode 展示开关）。 */
 function mapSubagentMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
   emitSubagentProgress(msg, emit, deps);
 }
@@ -426,7 +415,7 @@ function mapSubagentMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapper
  * queue-operation。一条 if 链按 type 分派，每分支单一职责。
  */
 function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDeps): void {
-  const { tasks, subagents, tools, resolveModelLabel, outputTailHooks, bgTaskHooks, partialMode, showThinking } = deps;
+  const { tasks, subagents, tools, resolveModelLabel, outputTailHooks, bgTaskHooks, partialMode } = deps;
 
   if (msg.type === "system" && msg.subtype === "init") {
     emit({ type: "session_init", session_id: msg.session_id });
@@ -556,7 +545,7 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
     if (!partialMode) return;
     const ev = msg.event;
     if (ev?.type !== "content_block_delta") return;
-    if (ev.delta?.type === "thinking_delta" && ev.delta.thinking && showThinking) {
+    if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
       emit({ type: "thinking_delta", delta: ev.delta.thinking });
       return;
     }
@@ -591,9 +580,7 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
         // 主线程 thinking block 整块。partial=on 时已被 stream_event 的 thinking_delta
         // 逐字发过，此处跳过去重；partial=off 时这是唯一来源（整块转发）。文本为空
         // 时跳过——provider 用 display=omitted 时 block 在但 text 空，两边都不发。
-        // 思考开关关闭（showThinking=false）时剥除——ollama 兼容端点不认 thinking
-        // 参数，模型总会出思考块，API 层关不掉，只能这里剥（2026-08-21 实测）。
-        if (block.thinking && !partialMode && showThinking) emit({ type: "thinking", text: block.thinking });
+        if (block.thinking && !partialMode) emit({ type: "thinking", text: block.thinking });
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置

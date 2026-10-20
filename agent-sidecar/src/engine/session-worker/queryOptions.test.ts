@@ -34,7 +34,7 @@ function parts(over: {
     },
     workspace: { trusted: true, cwd: "/proj", cwdParam: undefined, cwdWorker: undefined, lspLanguages: [], ...over.workspace },
     branch: { automationConfig: undefined, ...over.branch },
-    model: { sdkModel: "", effort: "", thinkingDisabled: false, ...over.model },
+    model: { sdkModel: "", effort: "", ...over.model },
     fork: { resumeSource: "", shouldFork: false, ...over.fork },
   };
 }
@@ -152,9 +152,10 @@ describe("buildSpawnQueryOptions", () => {
     expect(set.effort).toBe("high");
   });
 
-  it("thinking 两臂：关 disabled；开 adaptive+summarized（automation 恒关在 thinkingPolicy 推导）", () => {
-    expect((buildSpawnQueryOptions(parts({ model: { thinkingDisabled: true } })) as Opts).thinking).toEqual({ type: "disabled" });
+  it("thinking 恒开：adaptive+summarized（档位、automation 都不关）", () => {
     expect((buildSpawnQueryOptions(parts()) as Opts).thinking).toEqual({ type: "adaptive", display: "summarized" });
+    const automation = { taskId: "t", runId: "r", preset: "auto" as const, tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" };
+    expect((buildSpawnQueryOptions(parts({ branch: { automationConfig: automation } })) as Opts).thinking).toEqual({ type: "adaptive", display: "summarized" });
   });
 
   it("cwd 优先级：入参 > worker.cwd > 不带键", () => {

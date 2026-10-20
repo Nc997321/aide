@@ -42,19 +42,11 @@ export interface EffortSwitchParams {
  * 会被 CLI 静默接受但请求体一字不变（2026-09-19 实测：resolve 成功、零效果，
  * 且是单向锁死，关了再开也回不来）。
  *
- * 「快速 ⇒ 关思考」因此在**上层**实现，不在本模块：
- *   Rust send 路径算 thinking_enabled = 设置开关 && 档位非快速
- *   （commands/chat.rs 的 effective_thinking_enabled）
- *   → sidecar 发现该值与当前 query 的 spawn 值漂移时，在下一条 send **原地 resume
- *     重启**兑现（session-worker 的 restartQueryForThinking）。
- * 也就是说：effort 走热通道即时生效，思考只能等下一轮重建 query——两者生效时机
- * 不同，是刻意保留的差异（UI 文案据此区分，别合并成一句）。
- *
- * ⚠️ 另一层前提：即使重建了 query、spawn 参数写了 disabled，CLI 也可能**不发**这个
- * 参数——它按模型名查本地能力表，对不认识的模型名（deepseek-* / 本地 ollama 模型等）
- * 整个 `thinking` 字段都不发，兼容端点于是默认开推理（2026-09-19 实测）。真正的兜底
- * 是 cliEnv 注入的 CLAUDE_CODE_EXTRA_BODY：它绕过那份名单直接写请求体，既不依赖模型名、
- * 也不依赖端点认 Claude 名（见 docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md）。
+ * 思考恒开（2026-10-20）：**Opus 5.5 不允许关思考，请求带 thinking disabled 直接报错**。
+ * 快速档原先会关思考（思考只能在建 query 时设定，切快速就得原地重启会话），automation
+ * 也曾恒关——都去掉了，档位只管深度、只走 effort 热通道。别再加回「关思考」。
+ * 关思考在第三方端点上的坑（CLI 对名单外模型名不发 thinking 参数）记在
+ * docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md，要恢复先读它。
  */
 export function applyEffortSwitch(p: EffortSwitchParams): void {
   const next = normalizeEffort(p.effort);

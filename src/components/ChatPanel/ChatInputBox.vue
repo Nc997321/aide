@@ -256,17 +256,9 @@ watch(
 // → "high"（见 effortDefault.ts）。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、
 // 实测不碰 prompt 缓存）；进程没起时选择随下一条消息的 initialEffort（env 通道）带上。
-// sidecar 坐实/回滚由 props.currentEffort 同步。**快速(low) 另外会请求关掉思考**，
-// 但不是在这里生效的：Rust 侧按档位算出 thinking_enabled（chat.rs 的
-// thinking_enabled_for_effort），sidecar 发现该值与当前 query 的 spawn 值漂移时，
-// 在下一条 send 原地 resume 重启兑现（session-worker 的 restartQueryForThinking）
-// ——所以 effort 是热生效、思考要等下一轮。
-//
-// ⚠️ 「请求了关闭」≠「端点一定不推理」：CLI 按模型名查本地能力表，对不认识的模型名
-// （deepseek-* / 本地 ollama 模型等）**根本不发 thinking 参数**，兼容端点「无该字段
-// = 默认开推理」（2026-09-19 实测）。sidecar 已在 cliEnv 注入 CLAUDE_CODE_EXTRA_BODY
-// 绕过那份名单，实测有效：deepseek 与本地 ollama 的 /v1/messages 都认 disabled，也都
-// 不会因为多这个字段而 400。见 docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md。
+// sidecar 坐实/回滚由 props.currentEffort 同步。档位只管思考深度，思考恒开、切档不重启
+// 会话（2026-10-20：快速档原先连带关思考，而思考只能在建 query 时设定，切快速就得原地
+// 重启会话——两样都去掉了）。
 const selectedEffort = ref("high");
 
 /** ThemedSelect 的 options 收 mutable 数组；SDK 的 EFFORT_OPTIONS 是 as const
@@ -328,11 +320,7 @@ watch(() => props.currentEffort, (v) => {
     lastEffortToastValue = nv;
     const label = EFFORT_OPTIONS.find((o) => o.value === nv)?.label ?? nv;
     showToast(
-      // 快速档多一句：effort 是热生效的，思考关不关要等下一轮重建 query（见文件头
-      // 注释）。**措辞只说"已请求"**——CLI 对不认识的模型名会丢掉 thinking 参数，
-      // 兼容端点于是默认开推理（2026-09-19 实测），那时只有显示被隐藏、token 照烧。
-      // 说成"已关闭"就是又一次「徽章说假话」。
-      nv === "low" ? `${label}已生效 · 已请求关闭思考（下一条消息起）` : `effort 已切换为 ${label}`,
+      `effort 已切换为 ${label}`,
       "success",
     );
   }
@@ -1639,7 +1627,7 @@ const { actions: quickActions } = useQuickActions();
       <div class="composer-foot-side composer-foot-side--end">
         <!-- 模型 · 档位合一：选择仍各走 handleModelChange / handleEffortChange。
              effort 是会话级思考深度，切换即时生效（sidecar applyFlagSettings，不重启进程、
-             不碰 prompt 缓存）；快速=关闭思考，进阶/极致=开启思考。 -->
+             不碰 prompt 缓存）。三档都思考，只是深浅不同。 -->
         <ModelEffortPicker
           :models="modelSelectOptions"
           :model="selectedModel"

@@ -151,10 +151,9 @@ export interface AppSettings {
   notificationsEnabled: boolean;
   /** 首次安装引导是否已完成。首次启动若为 false 则弹全屏向导；完成或"跳过引导"后置 true，不再二次弹。 */
   onboarded: boolean;
-  /** （原「启用思考」开关已删除，2026-09-19：思考由**档位**唯一决定——快速档关、
-   *  进阶/极致开。两个事实源会打架：切了快速却又开着思考。旧配置里残留的
-   *  `thinkingEnabled` 键会被后端忽略，下次写盘自然消失。） */
-  /** 输出样式（内置四款 + "default"）。生效时机与 thinking 同款：值随每条 send
+  /** （原「启用思考」开关已删除，2026-09-19；旧配置里残留的 `thinkingEnabled`
+   *  键会被后端忽略，下次写盘自然消失。思考现在恒开。） */
+  /** 输出样式（内置四款 + "default"）。生效时机：值随每条 send
    *  下发，但 sidecar 只在新建会话（建 query）时落地——改动对已在跑的会话无效。 */
   outputStyle: OutputStyle;
   proxy: string;

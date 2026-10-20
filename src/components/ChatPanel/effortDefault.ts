@@ -5,8 +5,8 @@
  * 优先级：**会话记住的（用户显式改过）> 日常快速 > provider 默认**。
  * 日常排在 provider 之前是刻意的 —— 日常的定位就是快（spec 2026-09-20）。
  *
- * 注意「快速(low)」会连带请求关掉思考（Rust 的 thinking_enabled_for_effort），
- * 即日常会话默认不推理：更快、更省 token。用户手动切档即离开这个默认。
+ * 快速(low) 只是思考得浅（不关思考），日常会话因此更快、更省 token。
+ * 用户手动切档即离开这个默认。
  */
 import { normalizeEffortOption } from "@aide/sdk/utils/effort";
 

@@ -160,12 +160,10 @@ pub struct AppSettings {
     pub terminal_font_family: String,
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
-    /// （原「启用思考」设置项已删除，2026-09-19：思考由**档位**唯一决定——
-    /// 快速档关、进阶/极致开，见 commands/chat.rs 的 thinking_enabled_for_effort。
-    /// 两个事实源会打架：切了快速却又开着思考。旧配置里残留的 `thinkingEnabled`
-    /// 键会被 serde 忽略，下次写盘自然消失。）
+    /// （原「启用思考」设置项已删除，2026-09-19；旧配置里残留的 `thinkingEnabled`
+    /// 键会被 serde 忽略，下次写盘自然消失。思考现在恒开。）
     /// 输出样式（Claude Code 内置样式名，见 DEFAULT_OUTPUT_STYLE 说明）。空串 =
-    /// 未设置，按默认处理。与 thinking 同款的生效时机：值随每条 send 下发，但
+    /// 未设置，按默认处理。生效时机：值随每条 send 下发，但
     /// sidecar 只在**新建会话**（建 query）时落地——改动对已在跑的会话无效。
     #[serde(default = "default_output_style")]
     pub output_style: String,

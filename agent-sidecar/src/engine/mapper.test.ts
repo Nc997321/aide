@@ -209,12 +209,12 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
   function assistantThinking(thinking: string) {
     return { type: "assistant", message: { content: [{ type: "thinking", thinking }] } };
   }
-  /** 用 partialMode / showThinking 调 mapSdkMessage，返回 emit 的事件列表。subagents/tools 可传入共享。 */
-  function mapPartial(msg: any, partialMode: boolean, subagents = new SubagentTracker(), tools = new ToolLifecycleTracker(), showThinking = true): ChatEvent[] {
+  /** 用 partialMode 调 mapSdkMessage，返回 emit 的事件列表。subagents/tools 可传入共享。 */
+  function mapPartial(msg: any, partialMode: boolean, subagents = new SubagentTracker(), tools = new ToolLifecycleTracker()): ChatEvent[] {
     const events: ChatEvent[] = [];
     mapSdkMessage(msg,
   (e) => events.push(e),
-  { tasks: new TaskTracker(), subagents: subagents, tools: tools, partialMode: partialMode, showThinking: showThinking });
+  { tasks: new TaskTracker(), subagents: subagents, tools: tools, partialMode: partialMode });
     return events;
   }
 
@@ -268,42 +268,6 @@ describe("mapSdkMessage streaming (includePartialMessages)", () => {
   it("partial=on: 空 thinking（display=omitted）两边都不发", () => {
     expect(mapPartial({ type: "stream_event", parent_tool_use_id: null, event: { type: "content_block_delta", delta: { type: "thinking_delta", thinking: "" } } }, true)).toEqual([]);
     expect(mapPartial({ type: "assistant", message: { content: [{ type: "thinking", thinking: "" }] } }, true)).toEqual([]);
-  });
-
-  // 思考开关关闭（showThinking=false）：ollama 兼容端点不认 thinking 参数、模型总会
-  // 出思考块（2026-08-21 mock 端点实锤：disabled 时请求体无 thinking 字段），API 层
-  // 关不掉，只能在展示层剥——thinking_delta 流 / assistant 整块 / 子代理块全剥，text 照发。
-  it("showThinking=false: partial=on 剥 thinking_delta 流，text 只补戳", () => {
-    expect(mapPartial(streamThinkingDelta("我在想"), true, undefined, undefined, false)).toEqual([]);
-    expect(mapPartial(assistantText("完整文本"), true, undefined, undefined, false)).toEqual([{ type: "text_delta", delta: "" }]);
-  });
-
-  it("showThinking=false: partial=off 剥 assistant thinking 整块（ollama 主路径），text 照发", () => {
-    const msg = {
-      type: "assistant",
-      message: { content: [{ type: "thinking", thinking: "思考" }, { type: "text", text: "正文" }] },
-    };
-    expect(mapPartial(msg, false, undefined, undefined, false)).toEqual([{ type: "text_delta", delta: "正文" }]);
-  });
-
-  it("showThinking=false: 剥子代理 thinking 整块（subagent_thinking_delta 不发）", () => {
-    const events: ChatEvent[] = [];
-    const tasks = new TaskTracker();
-    const subagents = new SubagentTracker();
-    const tools = new ToolLifecycleTracker();
-    mapSdkMessage(assistantToolUse("a1", "Agent", { subagent_type: "general-purpose", description: "调研" }),
-  (e) => events.push(e),
-  { tasks: tasks, subagents: subagents, tools: tools });
-    events.length = 0;
-    const step = {
-      type: "assistant",
-      parent_tool_use_id: "a1",
-      message: { model: "x", content: [{ type: "thinking", thinking: "子代理思考" }, { type: "text", text: "子代理文本" }] },
-    };
-    mapSdkMessage(step,
-  (e) => events.push(e),
-  { tasks: tasks, subagents: subagents, tools: tools, partialMode: true, showThinking: false });
-    expect(events).toEqual([{ type: "subagent_text_delta", id: "a1", delta: "子代理文本" }]);
   });
 
   it("子代理消息的 agent_id 登记进 tracker——权限弹窗按 agentID 才查得到名字", () => {

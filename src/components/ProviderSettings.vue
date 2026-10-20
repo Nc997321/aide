@@ -34,7 +34,7 @@ import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 import { hostApi } from "@aide/sdk";
 
-// 三档制：快速(low)=关闭思考模式、进阶(high)/极致(max)=开启思考。
+// 三档制：快速(low) / 进阶(high) / 极致(max)，只管思考深度，三档都思考。
 // 历史档位 MEDIUM/XHIGH 由 normalizeEffortOption 迁移到相邻档位，不再出现在选择器。
 const effortOptions = [
   { value: "", label: "默认" },
@@ -548,7 +548,7 @@ const modelSuggestions = computed<string[]>(() => {
             block
             @update:model-value="form.effortLevel = $event"
           />
-          <span class="form-hint">新开会话的初始档位；快速=关闭思考模式、进阶/极致=开启；会话中可在输入框工具栏随时切换</span>
+          <span class="form-hint">新开会话的初始档位（思考深度）；会话中可在输入框工具栏随时切换</span>
         </div>
 
         <!-- 自动压缩：CLAUDE_CODE_AUTO_COMPACT_WINDOW + CLAUDE_AUTOCOMPACT_PCT_OVERRIDE。

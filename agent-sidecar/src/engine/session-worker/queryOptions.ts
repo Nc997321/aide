@@ -51,9 +51,6 @@ export interface QuerySpawnParts {
     sdkModel: string;
     /** 会话级 effort（"" = 不带；spawn 通道，会话中切换走 applyFlagSettings）。 */
     effort: string;
-    /** 本条 query 是否关思考。来自 thinkingPolicy.thinkingDisabledFor——**唯一推导点**，
-     *  同一个值也喂给 cliEnv（EXTRA_BODY 注入），别在这里再推一遍。 */
-    thinkingDisabled: boolean;
   };
   fork: {
     resumeSource: string;
@@ -144,14 +141,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // 请求可读思考文本：Claude 官方模型 thinking.display 默认 omitted（block
     // 在但 text 空），显式 summarized 才回可读摘要。GLM 等第三方不一定认此
     // 参数但无害——主线程思考展示的兜底保险（诊断见 docs/mockups/）。
-    // 值来自 thinkingDisabled（唯一推导点 thinkingPolicy.ts：automation 恒关、否则档位
-    // 说了算）。注意这一项**只对 CLI 认识的模型名有效**——名单外的名字 CLI 会把整个字段
-    // 丢掉，靠 cliEnv 注入的 CLAUDE_CODE_EXTRA_BODY 补上（2026-09-19 实测，见
-    // docs/discussions/2026-09-19-thinking-disable-on-third-party-endpoints.md）。
-    // 与 effort 解耦（2026-08-21 决策：effort 切换不再联动 thinking）。
-    thinking: p.model.thinkingDisabled
-      ? { type: "disabled" }
-      : { type: "adaptive", display: "summarized" },
+    // 思考恒开：档位只管深度，automation 也不关（2026-10-20 决策）。
+    thinking: { type: "adaptive", display: "summarized" },
     ...(p.workspace.cwdParam ? { cwd: p.workspace.cwdParam } : {}),
     ...(p.workspace.cwdWorker && !p.workspace.cwdParam ? { cwd: p.workspace.cwdWorker } : {}),
     // 附加目录（@目录 账本，见 attachDirs.ts）：空/缺省不落字段。只给文件访问权、

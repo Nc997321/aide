@@ -11,7 +11,7 @@
 // 这一行是启动路径上的同步点：CLI 若活着但不回控制响应，startLoop 会停在这里，故
 // 应用失败必须吞成告警而非抛出）。晚于首轮 = 第一条消息吃不到样式。
 //
-// 已知不继承的两条支线（刻意，与 thinking_enabled 现状一致）：btw 支线
+// 已知不继承的两条支线（刻意）：btw 支线
 // （src-tauri/src/commands/chat.rs 的 start_btw_session 自建 send JSON，不下发本
 // 字段）与 automation 运行（src-tauri/src/automation/scheduler.rs 自建）。代价一条：
 // 这两条与主会话的 prompt cache 前缀不再逐字节一致。要让 btw 跟随，需在 chat.rs
