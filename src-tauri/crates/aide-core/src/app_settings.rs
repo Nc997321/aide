@@ -10,7 +10,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 
-use crate::paths::{config_path, state_path};
+use crate::paths::state_path;
 use crate::registry::{blocking, Command};
 use crate::settings::{SettingsError, SettingsScope, SettingsService};
 use crate::{command, Core};
@@ -183,8 +183,7 @@ pub struct AppSettings {
     pub theme: String,
     /// 已注册到 Windows「打开方式」的扩展名（小写、无前导点）。
     /// 持久化于此，`set_open_with_extensions` 负责同步注册表。
-    /// `alias` 兼容落盘为 snake_case 的旧 config.json。
-    #[serde(default, alias = "open_with_extensions")]
+    #[serde(default)]
     pub open_with_extensions: Vec<String>,
     /// 「最近访问」每类列表保留条数（会话与文件共用），默认 10。
     #[serde(default = "default_recent_limit")]
@@ -205,7 +204,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub jdk_registry: Vec<crate::commands::jdk::JdkEntry>,
     /// 「检测到 Java 项目但运行配置未选 JDK」提示的「稍后」关闭记录——按工作区
-    /// 路径键控。落盘到 config.json（非 localStorage），重启不丢。Rust 只存取，
+    /// 路径键控。落盘到 settings.json（非 localStorage），重启不丢。Rust 只存取，
     /// 语义/判定全在前端。一旦该工作区任一 Java 运行配置选了 JDK，前端即不再提示。
     #[serde(default)]
     pub jdk_prompt_dismissed: Vec<String>,
@@ -337,18 +336,6 @@ pub fn save_state(v: &Value) -> Result<(), String> {
     save_json_at(&state_path(), v)
 }
 
-/// 读 legacy `config.json`。仅「读老格式做迁移」的路径使用（provider schema
-/// 迁移 / state 播种 / 设置体系导入）——活状态一律走 `load_state`/`with_state_mut`。
-pub fn load_legacy_config() -> Value {
-    load_json_at(&config_path())
-}
-
-/// 写回 legacy `config.json`。仅 provider schema 迁移原地规范化老文件（供紧随
-/// 其后的设置迁移/state 播种消费）时使用，新代码不应调用。
-pub fn save_legacy_config(v: &Value) -> Result<(), String> {
-    save_json_at(&config_path(), v)
-}
-
 fn load_json_at(path: &Path) -> Value {
     if path.exists() {
         if let Ok(content) = fs::read_to_string(path) {
@@ -375,51 +362,6 @@ fn save_json_at(path: &Path, v: &Value) -> Result<(), String> {
         return Err(e);
     }
     Ok(())
-}
-
-/// 新设置体系（`settings.json` descriptor store）已接管的 legacy 顶层 key——
-/// state 播种时跳过，只把其余的 live key 搬到 `state.json`。
-pub const SETTINGS_OWNED_KEYS: &[&str] = &[
-    "settings",
-    "providers",
-    "activeProvider",
-    "active_provider",
-    "system_default_model_mappings",
-];
-
-/// 一次性把 legacy `config.json` 中的 live key（未被设置体系接管的顶层 key）
-/// 搬到 `state.json`：missing-only 合并（state 已有的 key 不覆盖），幂等。
-///
-/// 两个调用点：①启动早期（任何读 state 的代码之前，lib.rs setup）；②设置迁移
-/// 删除 legacy 文件之前。两处都跑也不会重复——第二处看到 state 已有 key 全跳过。
-/// 返回 Err 时调用方**不得删除 legacy 文件**，留下次启动重试。
-pub fn seed_state_from_legacy(legacy_path: &Path, state_path: &Path) -> Result<(), String> {
-    let legacy = load_json_at(legacy_path);
-    let Some(legacy_obj) = legacy.as_object() else {
-        return Ok(()); // legacy 不存在或不是对象：没什么可搬
-    };
-    let mut state = load_json_at(state_path);
-    if state.is_null() {
-        state = serde_json::json!({});
-    }
-    let state_obj = state
-        .as_object_mut()
-        .ok_or_else(|| format!("{} 不是 JSON 对象，拒绝合并", state_path.display()))?;
-    let mut moved = 0u32;
-    for (key, value) in legacy_obj {
-        if SETTINGS_OWNED_KEYS.contains(&key.as_str()) {
-            continue;
-        }
-        if state_obj.contains_key(key) {
-            continue;
-        }
-        state_obj.insert(key.clone(), value.clone());
-        moved += 1;
-    }
-    if moved == 0 {
-        return Ok(());
-    }
-    save_json_at(state_path, &state)
 }
 
 /// 原子替换：同文件系统 rename 是原子的。Windows 上杀软锁目标文件时 rename
@@ -738,56 +680,6 @@ mod tests {
         assert_eq!(fs::read_to_string(tmp.join("state.json.corrupt")).unwrap(), "{ not json");
     }
 
-    #[test]
-    fn seed_moves_live_keys_and_skips_settings_owned() {
-        let tmp = seed_tmp("moves_live");
-        let legacy = tmp.join("config.json");
-        let state = tmp.join("state.json");
-        fs::write(
-            &legacy,
-            r#"{"settings":{"theme":"glass"},"providers":[],"active_provider":"x","workspace":"C--p","claudeMigrationDone":true}"#,
-        )
-        .unwrap();
-        seed_state_from_legacy(&legacy, &state).unwrap();
-        let seeded: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
-        assert!(seeded.get("settings").is_none());
-        assert!(seeded.get("providers").is_none());
-        assert!(seeded.get("active_provider").is_none());
-        assert_eq!(seeded["workspace"], "C--p");
-        assert_eq!(seeded["claudeMigrationDone"], true);
-    }
-
-    #[test]
-    fn seed_is_missing_only_and_idempotent() {
-        let tmp = seed_tmp("missing_only");
-        let legacy = tmp.join("config.json");
-        let state = tmp.join("state.json");
-        fs::write(&legacy, r#"{"workspace":"legacy-ws","extra":1}"#).unwrap();
-        fs::write(&state, r#"{"workspace":"live-ws"}"#).unwrap();
-        seed_state_from_legacy(&legacy, &state).unwrap();
-        let seeded: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
-        assert_eq!(seeded["workspace"], "live-ws", "state 已有 key 不覆盖");
-        assert_eq!(seeded["extra"], 1, "缺失 key 补齐");
-        // 第二次跑：内容不变
-        seed_state_from_legacy(&legacy, &state).unwrap();
-        let again: Value = serde_json::from_str(&fs::read_to_string(&state).unwrap()).unwrap();
-        assert_eq!(again, seeded);
-    }
-
-    #[test]
-    fn seed_noops_when_nothing_to_move() {
-        let tmp = seed_tmp("noop");
-        let legacy = tmp.join("config.json");
-        let state = tmp.join("state.json");
-        // legacy 只有设置体系接管的 key → 不创建 state.json
-        fs::write(&legacy, r#"{"settings":{"theme":"glass"}}"#).unwrap();
-        seed_state_from_legacy(&legacy, &state).unwrap();
-        assert!(!state.exists());
-        // legacy 不存在 → Ok 且不创建
-        seed_state_from_legacy(&tmp.join("nope.json"), &state).unwrap();
-        assert!(!state.exists());
-    }
-
     /// `set_settings` 收的是 `serde_json::Value`，Tauri 不转换 Value 内部 key，
     /// 前端发 camelCase 就以 camelCase 落盘。`AppSettings` 用 `rename_all = "camelCase"`
     /// 后，`get_settings` 必须能按 camelCase 反序列化多词字段，且再序列化仍出 camelCase。
@@ -826,15 +718,6 @@ mod tests {
         assert!(!out.contains("font_size"));
         assert!(!out.contains("workbench_height"));
         assert!(!out.contains("recent_limit"));
-    }
-
-    /// 旧 config.json 把 `open_with_extensions` 落盘为 snake_case；`alias` 让新代码
-    /// 仍能读旧数据，避免迁移丢失「打开方式」扩展名。
-    #[test]
-    fn app_settings_reads_legacy_snake_case_open_with_extensions() {
-        let json = r#"{"open_with_extensions": [".py"]}"#;
-        let s: AppSettings = serde_json::from_str(json).unwrap();
-        assert_eq!(s.open_with_extensions, vec![".py".to_string()]);
     }
 
     /// Vim 设置随 AppSettings 落盘/读取：vimMode/vimKeybindings camelCase 一致、

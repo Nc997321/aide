@@ -53,14 +53,6 @@ fn relay_allowed_in_this_build() -> bool {
 }
 
 pub fn run() {
-    // 数据目录改名（~/.claude-code-desktop/ → ~/.aide/，原子 rename）必须在
-    // init_logging / load_workspace_state 之前——它们都会触碰 ~/.aide/（建 log/、读
-    // state.json），先 rename 才不会把 ~/.aide/ 提前建出来导致老数据卡住迁不过来。
-    // 失败（杀软锁等）用 eprintln（此时 tracing 还没 init），下次启动重试。
-    if let Err(e) = crate::commands::migration::ensure_aide_data_dir_migrated() {
-        eprintln!("[aide] aide data dir migration failed: {e}");
-    }
-
     init_logging();
 
     // Log panics before the crash dialog appears

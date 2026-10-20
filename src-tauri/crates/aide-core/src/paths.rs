@@ -53,10 +53,8 @@ pub fn scoped_claude_home(kind: &str, id: &str) -> PathBuf {
 
 /// Aide 自管理配置根目录：`~/.aide/`。
 ///
-/// 历史路径是 `~/.claude-code-desktop/`；启动时 `migration::ensure_aide_data_dir_migrated()`
-/// 会把老目录原子 rename 到此处（同文件系统、瞬时、无需用户确认）。所有 Aide 自有数据
-/// （state.json / sessions / recent / notifications / diagnostics / log /
-/// 以及 claude/ 子目录）都在这棵树下。
+/// 所有 Aide 自有数据（settings.json / state.json / sessions / recent / notifications /
+/// diagnostics / log / 以及 claude/ 子目录）都在这棵树下。
 pub fn our_config_dir() -> PathBuf {
     user_home()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -65,13 +63,6 @@ pub fn our_config_dir() -> PathBuf {
 
 pub fn our_sessions_dir() -> PathBuf {
     our_config_dir().join("sessions")
-}
-
-/// legacy `config.json`——**纯遗留导入源**：老版本的设置+状态都写在这个文件里，
-/// 设置体系迁移（`settings::migration`）读它一次、导入 `settings.json` 后即可整体
-/// 删除。没有任何活代码应该再读写它；运行时状态的家是 `state_path()`。
-pub fn config_path() -> PathBuf {
-    our_config_dir().join("config.json")
 }
 
 /// `state.json`——应用自记账的运行时状态（当前工作区、隐藏工作区黑名单、

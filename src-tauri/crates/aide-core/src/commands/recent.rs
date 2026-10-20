@@ -182,8 +182,7 @@ static RECENT: Lazy<Mutex<RecentState>> = Lazy::new(|| Mutex::new(load_recent_fi
 /// 从设置体系（settings.json）读取 recent_limit，默认 10。
 ///
 /// `set_settings` 落盘到 SettingsService（values.settings.recentLimit），这里必须
-/// 从同一个家读——曾读 config.json 的 settings 子树，设置体系迁移后那个家没了，
-/// 用户改的条数静默失效、永远拿默认 10。
+/// 从同一个家读，否则用户改的条数静默失效、永远拿默认 10。
 pub fn current_limit(service: &crate::settings::SettingsService) -> usize {
     crate::app_settings::public_settings(service)
         .map(|s| s.recent_limit as usize)

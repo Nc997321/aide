@@ -27,8 +27,6 @@ pub enum SettingValueKind {
 pub struct SettingDescriptor {
     /// Canonical identifier for the new settings document schema.
     pub id: &'static str,
-    /// Legacy config.json identifiers that migrate to this canonical descriptor.
-    pub legacy_ids: &'static [&'static str],
     pub default: Value,
     pub kind: SettingValueKind,
     pub scopes: &'static [SettingsScope],
@@ -55,7 +53,6 @@ impl SettingDescriptor {
     fn new(meta: DescriptorMeta) -> Self {
         Self {
             id: meta.id,
-            legacy_ids: &[],
             default: meta.default,
             kind: meta.kind,
             scopes: meta.scopes,
@@ -63,11 +60,6 @@ impl SettingDescriptor {
             sensitive: meta.sensitive,
             project_overridable: meta.project_overridable,
         }
-    }
-
-    fn with_legacy_ids(mut self, legacy_ids: &'static [&'static str]) -> Self {
-        self.legacy_ids = legacy_ids;
-        self
     }
 }
 
@@ -90,8 +82,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
             json!([]),
             SettingValueKind::Array,
             "file-assoc",
-        )
-        .with_legacy_ids(&["settings.open_with_extensions"]),
+        ),
         ui("settings.recentLimit", json!(10), SettingValueKind::Number),
         ui("settings.paneLayouts", Value::Null, SettingValueKind::Object),
         user("settings.enabledMarketplaces", json!([]), SettingValueKind::Array, "marketplace"),
@@ -105,36 +96,22 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         user("providers[].kind", json!("custom"), SettingValueKind::String, "provider"),
         user("providers[].name", json!(""), SettingValueKind::String, "provider"),
         user("providers[].icon", json!(""), SettingValueKind::String, "provider"),
-        user("providers[].baseUrl", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].base_url"]),
-        secret("providers[].apiKey", "provider").with_legacy_ids(&["providers[].api_key"]),
-        secret("providers[].authToken", "provider")
-            .with_legacy_ids(&["providers[].auth_token"]),
+        user("providers[].baseUrl", json!(""), SettingValueKind::String, "provider"),
+        secret("providers[].apiKey", "provider"),
+        secret("providers[].authToken", "provider"),
         user("providers[].model", json!(""), SettingValueKind::String, "provider"),
-        user("providers[].modelMappings", json!({}), SettingValueKind::Object, "provider")
-            .with_legacy_ids(&["providers[].model_mappings"]),
-        user("providers[].modelMappings.anthropicModel", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].model_mappings.anthropic_model"]),
-        user("providers[].modelMappings.defaultOpusModel", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].model_mappings.default_opus_model"]),
-        user("providers[].modelMappings.defaultSonnetModel", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].model_mappings.default_sonnet_model"]),
-        user("providers[].modelMappings.defaultHaikuModel", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].model_mappings.default_haiku_model"]),
-        user("providers[].modelMappings.subagent", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].model_mappings.subagent"]),
-        user("providers[].effortLevel", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].effort_level"]),
-        user("providers[].autoCompactWindow", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].auto_compact_window"]),
-        user("providers[].autocompactPctOverride", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].autocompact_pct_override"]),
-        user("providers[].maxContextTokens", json!(""), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["providers[].max_context_tokens"]),
-        user("providers[].knownModels", json!([]), SettingValueKind::Array, "provider")
-            .with_legacy_ids(&["providers[].known_models"]),
-        user("activeProvider", json!("__system_default__"), SettingValueKind::String, "provider")
-            .with_legacy_ids(&["active_provider"]),
+        user("providers[].modelMappings", json!({}), SettingValueKind::Object, "provider"),
+        user("providers[].modelMappings.anthropicModel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].modelMappings.defaultOpusModel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].modelMappings.defaultSonnetModel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].modelMappings.defaultHaikuModel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].modelMappings.subagent", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].effortLevel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].autoCompactWindow", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].autocompactPctOverride", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].maxContextTokens", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].knownModels", json!([]), SettingValueKind::Array, "provider"),
+        user("activeProvider", json!("__system_default__"), SettingValueKind::String, "provider"),
         user("workspace", Value::Null, SettingValueKind::String, "workspace"),
         user("hiddenWorkspaces", json!([]), SettingValueKind::Array, "workspace"),
         user(
@@ -142,43 +119,37 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
             json!({}),
             SettingValueKind::Object,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings"]),
+        ),
         user(
             "systemDefaultModelMappings.anthropicModel",
             json!(""),
             SettingValueKind::String,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings.anthropic_model"]),
+        ),
         user(
             "systemDefaultModelMappings.defaultOpusModel",
             json!(""),
             SettingValueKind::String,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings.default_opus_model"]),
+        ),
         user(
             "systemDefaultModelMappings.defaultSonnetModel",
             json!(""),
             SettingValueKind::String,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings.default_sonnet_model"]),
+        ),
         user(
             "systemDefaultModelMappings.defaultHaikuModel",
             json!(""),
             SettingValueKind::String,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings.default_haiku_model"]),
+        ),
         user(
             "systemDefaultModelMappings.subagent",
             json!(""),
             SettingValueKind::String,
             "provider",
-        )
-        .with_legacy_ids(&["system_default_model_mappings.subagent"]),
+        ),
         user("claudeMigrationDone", json!(false), SettingValueKind::Boolean, "migration"),
         user("claudeMigrationDismissed", json!(false), SettingValueKind::Boolean, "migration"),
         SettingDescriptor::new(DescriptorMeta {
@@ -205,20 +176,12 @@ pub fn descriptor(id: &str) -> Option<&'static SettingDescriptor> {
     all_descriptors().iter().find(|entry| entry.id == id)
 }
 
-#[cfg(test)]
-pub fn descriptor_for_legacy_id(legacy_id: &str) -> Option<&'static SettingDescriptor> {
-    all_descriptors()
-        .iter()
-        .find(|entry| entry.legacy_ids.contains(&legacy_id))
-}
-
 pub fn validate_descriptor_catalog() -> Result<(), String> {
     validate_descriptor_entries(all_descriptors())
 }
 
 pub(crate) fn validate_descriptor_entries(entries: &[SettingDescriptor]) -> Result<(), String> {
     let mut canonical_ids = BTreeSet::new();
-    let mut legacy_ids = BTreeSet::new();
     for entry in entries {
         if entry.id.trim().is_empty() {
             return Err("setting descriptor id must not be empty".to_string());
@@ -248,26 +211,6 @@ pub(crate) fn validate_descriptor_entries(entries: &[SettingDescriptor]) -> Resu
                 "project-overridable setting has no project/local scope: {}",
                 entry.id
             ));
-        }
-    }
-    for entry in entries {
-        for &legacy_id in entry.legacy_ids {
-            if legacy_id.trim().is_empty() {
-                return Err(format!(
-                    "legacy setting descriptor id must not be empty: {}",
-                    entry.id
-                ));
-            }
-            if canonical_ids.contains(legacy_id) {
-                return Err(format!(
-                    "legacy setting descriptor id conflicts with canonical id: {legacy_id}"
-                ));
-            }
-            if !legacy_ids.insert(legacy_id) {
-                return Err(format!(
-                    "duplicate legacy setting descriptor id: {legacy_id}"
-                ));
-            }
         }
     }
     Ok(())

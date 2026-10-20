@@ -546,8 +546,7 @@ pub(super) fn resolve_and_install(
 }
 
 // ── 启用键读写 helpers ──
-// 全部经 SettingsService 落到 settings.json 的 user-scope `settings` 子对象；
-// 旧 config.json 路径（with_config_mut / load_config）迁移后已失效。
+// 全部经 SettingsService 落到 settings.json 的 user-scope `settings` 子对象。
 
 fn enabled_key(market: &str, plugin: &str) -> String {
     format!("{plugin}@{market}")

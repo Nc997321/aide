@@ -163,7 +163,7 @@ export function useSettings() {
   }
 
   // 「检测到 Java 项目」提示的「稍后」关闭：把工作区键加入落盘的 dismissal 列表。
-  // 存 config.json 而非 localStorage——重启 / WebView2 清缓存都不丢。整块写回，
+  // 存 settings.json 而非 localStorage——重启 / WebView2 清缓存都不丢。整块写回，
   // 避免并发 append 互相覆盖（与 setJdkRegistry 同模式）。
   async function dismissJdkPrompt(wsKey: string): Promise<void> {
     const list = settings.jdkPromptDismissed ?? [];

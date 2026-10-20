@@ -1,11 +1,7 @@
-//! 两类一次性迁移：
-//!
-//! 1. **Aide 数据目录改名**（`ensure_aide_data_dir_migrated`，启动时自动）：把老根
-//!    `~/.claude-code-desktop/` 原子 rename 到 `~/.aide/`。Aide 自有数据，无需用户确认。
-//! 2. **Claude CLI 数据迁移**（`migrate_claude_data`，用户弹窗触发）：把用户系统
-//!    `~/.claude/` 下的 Claude 数据拷到 `~/.aide/claude/`（即 `claude_home()`），让现有
-//!    用户升级后无缝保留 MCP / skills / agents / 全局指令 / 历史会话，且 Aide 不再依赖
-//!    系统 Claude CLI。
+//! **Claude CLI 数据迁移**（`migrate_claude_data`，用户弹窗触发）：把用户系统
+//! `~/.claude/` 下的 Claude 数据拷到 `~/.aide/claude/`（即 `claude_home()`），让现有
+//! 用户升级后无缝保留 MCP / skills / agents / 全局指令 / 历史会话，且 Aide 不再依赖
+//! 系统 Claude CLI。
 //!
 //! 设计要点：
 //! - **拷贝不是移动**：原 `~/.claude/` 保留不动，让同时使用 Claude CLI 的用户不受
@@ -39,7 +35,7 @@ use serde::Serialize;
 use std::path::{Path, PathBuf};
 
 use crate::app_settings::{load_state, with_state_mut};
-use crate::paths::{claude_home, our_config_dir, user_home};
+use crate::paths::{claude_home, user_home};
 
 /// 迁移源：用户系统老 `~/.claude/`（Claude CLI 数据）
 fn legacy_claude_dir() -> PathBuf {
@@ -51,47 +47,6 @@ fn legacy_claude_dir() -> PathBuf {
 /// 迁移目标：`<claude_home>` == `~/.aide/claude/`
 fn target_dir() -> PathBuf {
     claude_home()
-}
-
-/// Aide 老数据目录：`~/.claude-code-desktop/`（改名前的自管理根）。
-fn legacy_aide_data_dir() -> PathBuf {
-    user_home()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".claude-code-desktop")
-}
-
-/// 启动时自动把老数据目录 `~/.claude-code-desktop/` 原子 rename 到 `~/.aide/`。
-///
-/// 这是 Aide **自有数据目录**的升级（区别于 `~/.claude/` 的 Claude CLI 数据迁移——
-/// 那个走用户弹窗，因为涉及外部 CLI 的数据）。本函数无需用户确认：同文件系统 rename
-/// 瞬时完成，把 config.json（legacy）/ state.json / sessions / recent / notifications /
-/// diagnostics / log / claude/ 等整棵树搬到新根。
-///
-/// **必须在任何读 state.json 之前调用**（lib.rs setup 第一步），否则 `our_config_dir()`
-/// 已指向 `~/.aide/` 而 state 还在老目录，provider 设置会读空。
-///
-/// 幂等：`~/.aide/` 已存在（已迁移或新用户首次写入后）→ 直接 Ok；老目录不存在（新用户）
-/// → Ok。rename 失败（杀软锁等）→ 返回 Err，下次启动重试，不标记任何状态。
-pub fn ensure_aide_data_dir_migrated() -> Result<(), String> {
-    migrate_aide_data_dir(&legacy_aide_data_dir(), &our_config_dir())
-}
-
-/// 参数化版本，便于单测（参照 `find_session_jsonl_in` 的可测设计）。
-fn migrate_aide_data_dir(old_dir: &Path, new_dir: &Path) -> Result<(), String> {
-    if new_dir.exists() {
-        return Ok(()); // 已迁移或新用户已建
-    }
-    if !old_dir.exists() {
-        return Ok(()); // 新用户，无老数据可迁
-    }
-    // 同文件系统（都在 $HOME 下）原子 rename。new_dir 已确认不存在，dir rename 安全。
-    std::fs::rename(old_dir, new_dir).map_err(|e| {
-        format!(
-            "rename {} -> {} failed: {e}（下次启动会重试）",
-            old_dir.display(),
-            new_dir.display()
-        )
-    })
 }
 
 const DONE_KEY: &str = "claudeMigrationDone";
@@ -441,55 +396,4 @@ mod tests {
         assert_eq!(fs::read_to_string(&dst.join("CLAUDE.md")).unwrap(), "rules");
     }
 
-    #[test]
-    fn aide_data_dir_rename_moves_tree_when_target_absent() {
-        let tmp = unique_tmp("aide_rename");
-        let old = tmp.join("old/.claude-code-desktop");
-        let new = tmp.join("old/.aide");
-        write(
-            &old.join("config.json"),
-            r#"{"settings":{"theme":"warm-dark"}}"#,
-        );
-        write(&old.join("sessions/abc.json"), "{}");
-        write(&old.join("claude/settings.json"), r#"{"mcpServers":{}}"#);
-        migrate_aide_data_dir(&old, &new).unwrap();
-        assert!(new.is_dir(), "新目录应存在");
-        assert!(!old.exists(), "老目录应被 rename 走");
-        assert_eq!(
-            fs::read_to_string(&new.join("config.json")).unwrap(),
-            r#"{"settings":{"theme":"warm-dark"}}"#
-        );
-        assert!(new.join("sessions/abc.json").exists());
-        assert!(
-            new.join("claude/settings.json").exists(),
-            "claude/ 子树一并搬走"
-        );
-    }
-
-    #[test]
-    fn aide_data_dir_rename_skips_when_target_present() {
-        let tmp = unique_tmp("aide_skip");
-        let old = tmp.join("old/.claude-code-desktop");
-        let new = tmp.join("old/.aide");
-        write(&old.join("config.json"), r#"{"old":1}"#);
-        write(&new.join("config.json"), r#"{"new":1}"#);
-        // 目标已存在 → Ok 且不动（已迁移 / 新用户）
-        migrate_aide_data_dir(&old, &new).unwrap();
-        assert!(old.exists(), "老目录保留（不强行覆盖目标）");
-        assert_eq!(
-            fs::read_to_string(&new.join("config.json")).unwrap(),
-            r#"{"new":1}"#
-        );
-    }
-
-    #[test]
-    fn aide_data_dir_rename_ok_when_neither_present() {
-        let tmp = unique_tmp("aide_neither");
-        let old = tmp.join("nope/.claude-code-desktop");
-        let new = tmp.join("nope/.aide");
-        // 都不存在（新用户）→ Ok，不创建任何目录
-        migrate_aide_data_dir(&old, &new).unwrap();
-        assert!(!old.exists());
-        assert!(!new.exists());
-    }
 }

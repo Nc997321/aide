@@ -9,7 +9,6 @@ use serde_json::{Map, Value};
 use super::descriptors::{
     all_descriptors, validate_descriptor_catalog, SettingDescriptor, SettingValueKind,
 };
-use super::migration::run_legacy_migration;
 use super::schema::{SettingsDocument, SettingsScope, SETTINGS_SCHEMA_VERSION};
 use super::secrets::SecretStore;
 use super::SettingsError;
@@ -20,9 +19,6 @@ pub struct SettingsPaths {
     user_document: PathBuf,
     project_file_name: String,
     local_file_name: String,
-    legacy_config: PathBuf,
-    legacy_backup: PathBuf,
-    state: PathBuf,
 }
 
 impl SettingsPaths {
@@ -34,9 +30,6 @@ impl SettingsPaths {
             user_document: user_config.join("settings.json"),
             project_file_name: ".aide/settings.json".to_string(),
             local_file_name: ".aide/settings.local.json".to_string(),
-            legacy_config: crate::paths::config_path(),
-            legacy_backup: user_config.join("config.json.migrated.bak"),
-            state: crate::paths::state_path(),
         })
     }
 
@@ -47,9 +40,6 @@ impl SettingsPaths {
             user_document: root.join("user").join("settings.json"),
             project_file_name: ".aide/settings.json".to_string(),
             local_file_name: ".aide/settings.local.json".to_string(),
-            legacy_config: root.join("config.json"),
-            legacy_backup: root.join("config.json.migrated.bak"),
-            state: root.join("state.json"),
         }
     }
 
@@ -67,19 +57,6 @@ impl SettingsPaths {
 
     pub fn project_local(&self, project_root: Option<&Path>) -> Option<PathBuf> {
         project_root.map(|root| root.join(&self.local_file_name))
-    }
-
-    pub fn legacy_config(&self) -> &Path {
-        &self.legacy_config
-    }
-
-    pub fn legacy_backup(&self) -> &Path {
-        &self.legacy_backup
-    }
-
-    /// `state.json`——非设置体系运行时状态的家（state 播种的写入目标）。
-    pub fn state(&self) -> &Path {
-        &self.state
     }
 }
 
@@ -306,7 +283,6 @@ impl SettingsService {
 
     pub fn initialize_blocking(&self) -> Result<(), SettingsError> {
         validate_descriptor_catalog().map_err(SettingsError::Validation)?;
-        run_legacy_migration(&self.store, self.secrets.as_ref())?;
         let user_document = self
             .store
             .read(self.store.paths().user(), SettingsScope::User)?
@@ -684,15 +660,6 @@ fn is_uuid(value: &str) -> bool {
             .iter()
             .enumerate()
             .all(|(index, byte)| [8, 13, 18, 23].contains(&index) || byte.is_ascii_hexdigit())
-}
-
-pub fn validate_legacy_config(value: &Value) -> Result<(), SettingsError> {
-    if !value.is_object() && !value.is_null() {
-        return Err(SettingsError::Validation(
-            "legacy settings root must be an object".to_string(),
-        ));
-    }
-    Ok(())
 }
 
 fn merge_values(target: &mut Value, source: &Value) {

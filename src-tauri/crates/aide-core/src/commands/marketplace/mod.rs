@@ -196,9 +196,7 @@ fn atomic_write(path: &std::path::Path, content: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 读 user-scope `settings` 子对象的克隆（settings.json 迁移后是唯一真源；
-/// 键缺失返回 None）。市场模块禁止再走 `load_config`/`with_config_mut`——
-/// 旧 config.json 已删除，那条路径会读到 Null 并报 "settings missing"。
+/// 读 user-scope `settings` 子对象的克隆（settings.json 是唯一真源；键缺失返回 None）。
 fn read_user_settings(service: &SettingsService) -> Result<Option<serde_json::Value>, String> {
     let effective = service
         .effective_document_blocking(None)
@@ -208,7 +206,7 @@ fn read_user_settings(service: &SettingsService) -> Result<Option<serde_json::Va
 
 /// 在 user-scope `settings` 子对象上做一次原子改写（读→改→校验→写）。
 /// `settings` 键缺失时播种为 `{}`，闭包内可直接 `entry()/insert`。与 `set_settings`
-/// 同一条 `mutate_scope_blocking` 路径，确保落盘到 settings.json 而非复活的 config.json。
+/// 同一条 `mutate_scope_blocking` 路径落盘到 settings.json。
 fn mutate_user_settings<F>(service: &SettingsService, f: F) -> Result<(), String>
 where
     F: FnOnce(&mut serde_json::Map<String, serde_json::Value>) -> Result<(), String>,

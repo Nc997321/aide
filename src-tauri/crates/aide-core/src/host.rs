@@ -13,13 +13,6 @@ use crate::{Core, WorkspaceState};
 /// 第一段（建 Core 之前，同步）：数据迁移 + 日常目录 + 恢复活动工作区，返回活动工作区状态。
 /// 每一步失败都只留痕、不阻断启动（下次启动重试）。
 pub fn prepare_workspace() -> WorkspaceState {
-    // state.json 播种（legacy config.json → state.json）必须在读活动工作区之前。
-    if let Err(e) = crate::app_settings::seed_state_from_legacy(
-        &crate::paths::config_path(),
-        &crate::paths::state_path(),
-    ) {
-        tracing::warn!("state.json seeding failed: {e}");
-    }
     // 工作区显式注册表一次性迁移必须在恢复之前——恢复路径优先查注册表。
     if let Err(e) = crate::commands::workspace::ensure_registry_migrated() {
         tracing::warn!("workspace registry migration failed: {e}");
@@ -54,10 +47,6 @@ pub fn start(core: &Arc<Core>) {
     // 界面状态搬出 settings.json（幂等；失败不挡启动，读取侧会退回旧值）。
     if let Err(e) = crate::app_settings::migrate_ui_state_out_of_settings(&core.settings) {
         tracing::warn!("ui state migration failed: {e}");
-    }
-    // 老 provider schema 迁移（幂等）——必须在 runtime 取 env 之前。
-    if let Err(e) = crate::provider::ensure_migrated() {
-        tracing::error!("provider schema migration failed: {e}（继续用旧配置）");
     }
     {
         let core = Arc::clone(core);

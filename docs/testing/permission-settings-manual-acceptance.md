@@ -17,7 +17,6 @@
 ## 安全行为
 
 - **API key / auth token / CodeGraph key** 只存 **OS 凭据库**（Windows Credential Manager / macOS Keychain / Linux secret service），**绝不**写入任何 `settings*.json`、不返回 Vue、不进日志/测试快照/错误字符串。UI 只显示「已配置 / 未配置」，不能导出明文。
-- **首次启动**把旧 `~/.aide/config.json` 一次性迁移为 `~/.aide/settings.json`：秘密抽进 keychain，并写一份**脱敏**备份 `config.json.migrated.bak`（API key / auth token / CodeGraph key 字段被替换为 `{"configured": true}`，不保留明文）。迁移**幂等**：新 document 已存在后不再读旧文件。
 - **原子写入**：临时文件 + `sync_all` + rename，失败时旧文件与内存缓存都保持原样，不更新活动 snapshot。
 - 任何 `SettingsError` 的 `Display` 只显示逻辑 secret key（如 `aide/settings/provider/p1/apiKey`），绝不格式化 value。
 
@@ -39,39 +38,32 @@
 
 启动 `pnpm tauri dev`，逐项验证并勾选。验收前确认跑的是新 bundle（旧 WebView2 缓存会让人误判"修完不生效"）。
 
-### 1. 旧 config.json 迁移
-- [ ] 从含 Provider、CodeGraph key、workspace layout、普通偏好的旧 `~/.aide/config.json` 启动
-- [ ] `~/.aide/settings.json` 无秘密（grep 不到 apiKey / authToken 明文）
-- [ ] keychain 配置状态正确（设置 → 模型 / 设置 → 代码索引 显示「已配置」）
-- [ ] 布局 / 偏好不丢失
-- [ ] `config.json.migrated.bak` 存在且脱敏（无明文 key / token）
-
-### 2. 用户层 Bash prefix allow + shell chaining 防护
+### 1. 用户层 Bash prefix allow + shell chaining 防护
 - [ ] 用户层新增 `allow Bash prefix "pnpm test"`
 - [ ] （临时让 Auto classifier 不可用）运行 `pnpm test --runInBand` → 直接放行
 - [ ] 运行 `pnpm test && rm -rf build` → 不因 prefix 规则放行（走原 permission mode）
 
-### 3. managed deny 跨层压过 local allow
+### 2. managed deny 跨层压过 local allow
 - [ ] managed 写 `deny Bash prefix "rm"`
 - [ ] project local 写 `allow Bash prefix "rm -rf build"`
 - [ ] 运行 `rm -rf build` → 最终 deny
 - [ ] 解释面板展示 managed rule 为 winner，local allow 标 `overridden_by_deny`
 
-### 4. 删除规则即时生效，旧确认框不被结算
+### 3. 删除规则即时生效，旧确认框不被结算
 - [ ] 删除规则后不重启会话，执行同一调用
 - [ ] 下一次走原 permission mode
 - [ ] 当前已打开的旧确认框不被自动结算
 
-### 5. 不可写 / 只读 scope 文案
+### 4. 不可写 / 只读 scope 文案
 - [ ] 无 project 时 project/local 按钮 disabled，reason「尚未打开项目」
 - [ ] project 只读时 reason 显示实际路径「目录不可写」
 - [ ] managed 显示只读 banner，无 add / edit / delete 控件
 
-### 6. 主题化
+### 5. 主题化
 - [ ] warm-dark / catppuccin / glass 下：tab、scope states、modal、toast、focus、explanation panel 全部随主题变化
 - [ ] 无原生浏览器 UI（tooltip / alert / confirm / prompt）、无白底、无硬编码色
 
-### 7. 既有流程不回归
+### 6. 既有流程不回归
 - [ ] AskUserQuestion 仍正常（答案重组进 `updatedInput`）
 - [ ] ExitPlanMode 仍正常（nextMode 选择保留）
 - [ ] 子代理 permission attribution 仍正常（来源标注）
@@ -79,7 +71,7 @@
 - [ ] 图片 Read guard 仍正常（policy hook 排在 image guard 之前）
 - [ ] 普通 PermissionDialog 只显示「允许 / 拒绝」（无 always allow 按钮）
 
-### 8. 「允许并记住」对话框内一键持久化
+### 7. 「允许并记住」对话框内一键持久化
 权限确认框新增「允许并记住」按钮：本次放行 + 就地推导一条 `allow` 规则写到默认作用域（项目本地优先，不可写回退用户全局），替代被移除的旧「总是允许」。推导规则：Bash→命令前缀（在首个未引用 shell 控制符处截断）、Write/Edit/MultiEdit→所在文件夹、NotebookEdit→notebook 所在文件夹、WebFetch→完整 URL equals、其它→工具级。
 
 - [ ] 启动 `pnpm tauri dev` 并打开一个项目（让 local scope 可写），确认跑的是新 bundle（旧 WebView2 缓存会误判"修完不生效"）

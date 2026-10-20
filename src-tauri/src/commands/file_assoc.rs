@@ -247,13 +247,9 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
     let new_exts: Vec<String> = new_exts.iter().filter_map(|e| sanitize_ext(e)).collect();
 
     let (added, removed) = with_state_mut(move |config| {
-        // 读取旧值：优先 camelCase（新约定），回退 snake_case（旧 config.json）。
         let old: Vec<String> = config
             .get("settings")
-            .and_then(|s| {
-                s.get("openWithExtensions")
-                    .or_else(|| s.get("open_with_extensions"))
-            })
+            .and_then(|s| s.get("openWithExtensions"))
             .and_then(|v| serde_json::from_value::<Vec<String>>(v.clone()).ok())
             .unwrap_or_default()
             .into_iter()
@@ -265,10 +261,6 @@ pub fn set_open_with_extensions(new_exts: Vec<String>) -> Result<(), String> {
             .get("settings")
             .cloned()
             .unwrap_or(serde_json::json!({}));
-        // 迁移：若残留旧 snake_case key，先清掉，避免双键并存。
-        if let Some(obj) = merged.as_object_mut() {
-            obj.remove("open_with_extensions");
-        }
         merged["openWithExtensions"] =
             serde_json::to_value(&new_exts).map_err(|e| e.to_string())?;
         config["settings"] = merged;

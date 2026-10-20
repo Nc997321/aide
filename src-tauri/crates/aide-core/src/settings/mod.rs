@@ -1,5 +1,4 @@
 mod descriptors;
-mod migration;
 mod schema;
 mod secrets;
 mod store;
@@ -9,8 +8,6 @@ mod schema_test;
 #[cfg(test)]
 mod store_test;
 
-#[cfg(test)]
-pub(crate) use descriptors::validate_descriptor_entries;
 // Descriptor query helpers + catalog types are only consumed by the settings
 // test modules (schema_test/store_test). Non-test code in `store.rs` imports
 // `all_descriptors`/`validate_descriptor_catalog` directly from `super::descriptors`,
@@ -18,7 +15,7 @@ pub(crate) use descriptors::validate_descriptor_entries;
 // `cargo build --lib` (which doesn't compile the test harness).
 #[cfg(test)]
 pub use descriptors::{
-    all_descriptors, descriptor, descriptor_for_legacy_id, validate_descriptor_catalog,
+    all_descriptors, descriptor, validate_descriptor_catalog,
     SettingDescriptor, SettingValueKind,
 };
 pub use schema::{

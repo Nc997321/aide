@@ -64,7 +64,7 @@ pub fn project_root_for(ws: &WorkspaceState, cwd: Option<&str>) -> PathBuf {
 // ── Path Helpers（Host 数据目录布局，住在 aide-core） ──
 
 pub use aide_core::paths::{
-    claude_home, claude_projects_dir, claude_sessions_dir, config_path, our_config_dir,
+    claude_home, claude_projects_dir, claude_sessions_dir, our_config_dir,
     our_sessions_dir, scoped_claude_home, session_config_roots, session_config_roots_in, state_path,
     user_home,
 };

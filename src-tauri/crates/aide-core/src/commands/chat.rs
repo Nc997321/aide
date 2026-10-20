@@ -162,7 +162,7 @@ fn attach_additional_dirs(
 /// 「与缺席同义」的边界要说清：对**新建** worker 成立（`outputStyle` 初值 null →
 /// 不发控制请求）；对**已存在的 worker** 不成立——字段缺席时 sidecar 保留上次的
 /// 值，query 重建后仍吃旧样式。即设置改动不回灌正在跑的会话（含其 query 重建），
-/// 与「新会话生效」的口径一致。空串仅手改 config.json 能造出来，属防御。
+/// 与「新会话生效」的口径一致。空串仅手改 settings.json 能造出来，属防御。
 ///
 /// 注：btw / automation 两条支线不下发本字段、不继承输出样式（见
 /// agent-sidecar/src/engine/session-worker/outputStyle.ts 头注）。
@@ -1371,7 +1371,7 @@ mod tests {
         );
         assert!(defaulted.get("output_style").is_none());
 
-        // 空串（仅手改 config.json 能造出来）同样不落。
+        // 空串（仅手改 settings.json 能造出来）同样不落。
         let blank = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
         assert!(blank.get("output_style").is_none());
 

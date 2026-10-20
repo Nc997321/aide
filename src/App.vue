@@ -643,7 +643,7 @@ function onSelectRunConfig(id: string) {
 // 共享（Maven/Gradle 反应堆只有一个启动 JDK，per-module 是错误粒度，2026-08-08
 // 拍板）；confirm 程序化展开标题栏 LSP 面板（工作区选择器 + 注册表扫描都在那里；
 // 运行配置对话框已改只读展示，不再承载配置动作）。「稍后」落盘 dismiss 到
-// config.json（AppSettings.jdkPromptDismissed，按 wsKey 键控）——重启 / 清
+// settings.json（AppSettings.jdkPromptDismissed，按 wsKey 键控）——重启 / 清
 // WebView2 缓存都不丢。判定「Java 命令」看命令字含 mvn/gradle/gradlew/java，
 // 零 IO、足够准（javascript/javadoc 等 \b 边界不命中）。
 

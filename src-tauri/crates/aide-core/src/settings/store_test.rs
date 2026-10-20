@@ -3,12 +3,11 @@ use std::sync::Arc;
 use serde_json::{json, Value};
 
 use super::{
-    MemorySecretStore, SecretStore, SettingsError, SettingsPaths, SettingsScope, SettingsService,
+    MemorySecretStore, SettingsError, SettingsPaths, SettingsScope, SettingsService,
 };
 
 struct TestStore {
     paths: SettingsPaths,
-    secrets: Arc<MemorySecretStore>,
     service: SettingsService,
 }
 
@@ -17,29 +16,10 @@ impl TestStore {
         let root = temp_root();
         let paths = SettingsPaths::for_test(root);
         let secrets = Arc::new(MemorySecretStore::default());
-        let service = SettingsService::new(paths.clone(), secrets.clone());
+        let service = SettingsService::new(paths.clone(), secrets);
         service.initialize_blocking().unwrap();
         Self {
             paths,
-            secrets,
-            service,
-        }
-    }
-
-    fn with_legacy_config(config: Value) -> Self {
-        let root = temp_root();
-        let paths = SettingsPaths::for_test(root);
-        std::fs::create_dir_all(paths.legacy_config().parent().unwrap()).unwrap();
-        std::fs::write(
-            paths.legacy_config(),
-            serde_json::to_string_pretty(&config).unwrap(),
-        )
-        .unwrap();
-        let secrets = Arc::new(MemorySecretStore::default());
-        let service = SettingsService::new(paths.clone(), secrets.clone());
-        Self {
-            paths,
-            secrets,
             service,
         }
     }
@@ -260,156 +240,6 @@ fn managed_layer_is_loaded_before_user_project_and_local_layers() {
             SettingsScope::Local
         ]
     );
-}
-
-#[test]
-fn migration_moves_secret_and_never_keeps_it_in_settings_json() {
-    let fixture = TestStore::with_legacy_config(json!({
-        "settings": {"codegraphEmbedder": {"apiKey": "cg-secret"}},
-        "providers": [{"id": "p1", "apiKey": "provider-secret", "authToken": "token"}]
-    }));
-    fixture.service().initialize_blocking().unwrap();
-    let text = std::fs::read_to_string(fixture.paths.user()).unwrap();
-    assert!(
-        !text.contains("cg-secret") && !text.contains("provider-secret") && !text.contains("token")
-    );
-    assert_eq!(
-        fixture
-            .secrets
-            .get("codegraph/default/apiKey")
-            .unwrap()
-            .as_deref(),
-        Some("cg-secret")
-    );
-    assert!(!fixture.paths.legacy_config().exists());
-    assert!(fixture.paths.legacy_backup().exists());
-}
-
-#[test]
-fn invalid_legacy_document_does_not_persist_collected_secrets() {
-    let fixture = TestStore::with_legacy_config(json!({
-        "settings": {
-            "theme": 42,
-            "codegraphEmbedder": {"apiKey": "cg-secret"}
-        }
-    }));
-
-    assert!(fixture.service().initialize_blocking().is_err());
-    assert_eq!(
-        fixture
-            .secrets
-            .get("codegraph/default/apiKey")
-            .unwrap()
-            .as_deref(),
-        None
-    );
-    assert!(!fixture.paths.user().exists());
-}
-
-#[test]
-fn migration_is_idempotent_and_does_not_read_legacy_after_new_document_exists() {
-    let fixture = TestStore::with_legacy_config(json!({"settings": {"theme": "glass"}}));
-    fixture.service().initialize_blocking().unwrap();
-    std::fs::write(
-        fixture.paths.legacy_config(),
-        r#"{"settings":{"theme":"bad"}}"#,
-    )
-    .unwrap();
-    fixture.service().initialize_blocking().unwrap();
-    assert_eq!(fixture.service().cached_theme(), "glass");
-}
-
-#[test]
-fn migration_cleanup_is_non_fatal_and_retries_after_a_new_document_exists() {
-    let fixture = TestStore::new();
-    fixture.write_user(document(json!({"settings": {"theme": "glass"}})));
-    std::fs::create_dir_all(fixture.paths.legacy_config()).unwrap();
-
-    fixture.service().initialize_blocking().unwrap();
-    assert_eq!(fixture.service().cached_theme(), "glass");
-
-    std::fs::remove_dir(fixture.paths.legacy_config()).unwrap();
-    std::fs::write(
-        fixture.paths.legacy_config(),
-        r#"{"settings":{"codegraphEmbedder":{"apiKey":"legacy-secret"}}}"#,
-    )
-    .unwrap();
-    fixture.service().initialize_blocking().unwrap();
-    assert!(!fixture.paths.legacy_config().exists());
-    let backup = std::fs::read_to_string(fixture.paths.legacy_backup()).unwrap();
-    assert!(!backup.contains("legacy-secret"));
-    assert_eq!(fixture.service().cached_theme(), "glass");
-}
-
-#[test]
-fn migration_cleanup_moves_live_keys_to_state_and_deletes_legacy() {
-    // legacy config.json 里仍住着非设置体系的 live key（workspace / 迁移标记等）：
-    // 清理时必须先把它们搬到 state.json（missing-only），再整体删除 legacy 文件。
-    // 曾直接整删，导致 claudeMigrationDone 每次启动被抹掉、迁移引导弹窗反复出现。
-    let fixture = TestStore::with_legacy_config(json!({
-        "settings": {"theme": "glass"},
-        "providers": [],
-        "active_provider": "__system_default__",
-        "workspace": "C--proj",
-        "claudeMigrationDone": true,
-        "claudeMigrationDismissed": false
-    }));
-    fixture.service().initialize_blocking().unwrap();
-    assert!(
-        !fixture.paths.legacy_config().exists(),
-        "live key 搬走后 legacy 文件应整体删除"
-    );
-    let text = std::fs::read_to_string(fixture.paths.state()).unwrap();
-    let state: Value = serde_json::from_str(&text).unwrap();
-    assert!(
-        state.get("settings").is_none(),
-        "settings 归设置文档，不进 state"
-    );
-    assert!(
-        state.get("providers").is_none(),
-        "providers 归设置文档，不进 state"
-    );
-    assert!(state.get("active_provider").is_none());
-    assert_eq!(
-        state.get("workspace").and_then(Value::as_str),
-        Some("C--proj")
-    );
-    assert_eq!(
-        state.get("claudeMigrationDone").and_then(Value::as_bool),
-        Some(true)
-    );
-    // 再来一次启动（重试清理路径）：state.json 不被覆盖、不丢 key
-    fixture.service().initialize_blocking().unwrap();
-    let text = std::fs::read_to_string(fixture.paths.state()).unwrap();
-    let state: Value = serde_json::from_str(&text).unwrap();
-    assert_eq!(
-        state.get("claudeMigrationDone").and_then(Value::as_bool),
-        Some(true)
-    );
-}
-
-#[test]
-fn migration_backup_is_redacted_and_unknown_safe_fields_are_preserved() {
-    let fixture = TestStore::with_legacy_config(json!({
-        "settings": {
-            "theme": "warm-dark",
-            "futureSafe": {"enabled": true},
-            "codegraphEmbedder": {"backend": "http", "apiKey": "cg-secret"}
-        },
-        "providers": [{"id": "p2", "future": true, "apiKey": "provider-secret"}]
-    }));
-    fixture.service().initialize_blocking().unwrap();
-
-    let user = fixture.read_user();
-    assert_eq!(user["values"]["settings"]["futureSafe"]["enabled"], true);
-    assert_eq!(user["values"]["providers"][0]["future"], true);
-    assert!(!user.to_string().contains("cg-secret"));
-    assert!(!user.to_string().contains("provider-secret"));
-
-    let backup_text = std::fs::read_to_string(fixture.paths.legacy_backup()).unwrap();
-    assert!(backup_text.contains("configured"));
-    assert!(!backup_text.contains("cg-secret"));
-    assert!(!backup_text.contains("provider-secret"));
 }
 
 #[test]

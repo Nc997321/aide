@@ -171,7 +171,7 @@ export interface AppSettings {
    *  机器级资源，非按工作区。 */
   jdkRegistry?: JdkEntry[];
   /** 「检测到 Java 项目但运行配置未选 JDK」提示的「稍后」关闭记录——按工作区路径键控。
-   *  落盘到 config.json（非 localStorage），重启不丢、WebView2 清缓存也不丢。
+   *  落盘到 settings.json（非 localStorage），重启不丢、WebView2 清缓存也不丢。
    *  仅对「点了稍后却一直不配 JDK」的用户抑制重复弹窗；一旦该工作区任一 Java
    *  运行配置选了 JDK，needsJdk 即为 false，本列表对该键再无意义。 */
   jdkPromptDismissed?: string[];
