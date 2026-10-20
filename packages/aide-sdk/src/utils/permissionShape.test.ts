@@ -241,3 +241,23 @@ describe("电脑操作的审批展示", () => {
     ]);
   });
 });
+
+describe("值守的审批展示", () => {
+  it("watch_start 写明盯什么、多久一次、多久结束；命令来源单独标出", () => {
+    expect(
+      permissionInputRows("mcp__aide-watch__watch_start", {
+        title: "构建进度", focus: "进展到哪了", command: "tail -n 50 build.log", every_seconds: 60, mode: "every",
+      }),
+    ).toEqual([
+      { label: "值守", value: "构建进度" },
+      { label: "关注", value: "进展到哪了" },
+      { label: "反复执行的命令", value: "tail -n 50 build.log" },
+      { label: "节奏", value: "每 60 秒看一次 · 每次都汇报 · 120 分钟后自动结束" },
+    ]);
+    expect(
+      permissionInputRows("mcp__aide-watch__watch_start", {
+        title: "QQ", focus: "新消息", window_id: "0x1", scope: "e5", every_seconds: 10, mode: "on_change", max_minutes: 30,
+      })?.[2],
+    ).toEqual({ label: "盯的窗口", value: "0x1（只看 e5）" });
+  });
+});

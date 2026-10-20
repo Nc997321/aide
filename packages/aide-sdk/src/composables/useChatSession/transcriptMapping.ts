@@ -5,9 +5,10 @@ import type {
   SubsessionReportBlock,
   TextBlock,
   ThinkingBlock,
-  ToolCallBlock,
+  ToolCallBlock, WatchReportBlock
 } from "../../types/chat";
 import { parseInstructionPrompt, parseReportPrompt } from "../../utils/subsessionText";
+import { parseWatchPrompt } from "../../utils/watchText";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
 import { splitMentionSections } from "../../utils/fileMentions";
 import { splitKbRefSections } from "../../utils/kbRefs";
@@ -46,7 +47,7 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
 function historyBlockToContentBlocks(
   block: HistoryBlock,
   isUser: boolean,
-): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock | SubsessionReportBlock | SubsessionInstructionBlock)[] {
+): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock | SubsessionReportBlock | SubsessionInstructionBlock | WatchReportBlock)[] {
   if (block.type === "tool_call") {
     return [{
       type: "tool_call",
@@ -66,6 +67,9 @@ function historyBlockToContentBlocks(
   if (!isUser) return [{ type: "text", text: block.text }];
   // 子会话回报 / 父会话派来的任务（Host 投递的消息）：按 Host 的固定格式拆回卡片，
   // 与实时路径（display 的 subsession_* 块）同形。
+  // 值守回报（会话自己的值守投进来的消息）：按 sidecar 的固定格式拆回卡片。
+  const watch = parseWatchPrompt(block.text);
+  if (watch) return [{ type: "watch_report" as const, ...watch }];
   const reports = parseReportPrompt(block.text);
   if (reports) return reports.map((r) => ({ type: "subsession_report" as const, ...r }));
   const instruction = parseInstructionPrompt(block.text);

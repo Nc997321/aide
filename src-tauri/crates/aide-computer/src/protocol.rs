@@ -38,6 +38,8 @@ pub enum Query {
         /// 只读这个元素（ref）下面的部分；之后对该窗口的内部读取（动作回报、按名字找、等待）沿用，
         /// 直到一次不带 scope 的读取。
         scope: Option<String>,
+        /// 值守的定时读取：屏幕上常驻「Aide 值守中 · 标题」，不再每次闪「正在查看」。
+        watch: Option<WatchHint>,
     },
     Act {
         window_id: String,
@@ -64,6 +66,14 @@ impl Query {
             Self::Malformed(_) => "malformed",
         }
     }
+}
+
+/// 值守读取的提示条信息。
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct WatchHint {
+    pub label: String,
+    /// 值守间隔：提示条在最后一次读取后再留这么久（加余量）才消失。
+    pub every_ms: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -198,6 +208,7 @@ fn parse_query_inner(event: &Value) -> Result<Query, String> {
             screenshot: event.get("screenshot").and_then(Value::as_bool).unwrap_or(false),
             text_tail: event.get("text_tail").and_then(Value::as_u64).map(|n| n.min(2000) as u32),
             scope: opt_str("scope"),
+            watch: event.get("watch").and_then(|w| serde_json::from_value(w.clone()).ok()),
         }),
         "act" => {
             let window_id = opt_str("window_id").ok_or("act requires `window_id`")?;

@@ -137,6 +137,28 @@ export type UserMessageBlock =
       origin: string;
       truncated?: boolean;
     }
+  // 值守回报（sidecar 的值守投进本会话，见 extensions/watch/manager.ts）：渲染成系统卡片，不是用户气泡。
+  // 与 aide-sdk/src/types/chat.ts 的 `WatchReport` **必须同形**。设计：docs/superpowers/specs/2026-10-20-watch-design.md
+  | {
+      type: "watch_report";
+      watchId: string;
+      title: string;
+      /** 用户要盯什么 */
+      focus: string;
+      /** 来源的可读描述（窗口 / 命令） */
+      source: string;
+      /** 本地时间 HH:MM:SS */
+      at: string;
+      /** change = 有变化；ended = 值守结束 */
+      kind: "change" | "ended";
+      /** 新出现的内容（按行） */
+      added: string[];
+      /** 消失的行数 */
+      removed: number;
+      truncated?: boolean;
+      /** 结束原因（kind=ended） */
+      reason?: string;
+    }
   // 父会话派给子会话的任务 / 追加指令（Host 投给子会话）。与 aide-sdk 的 `SubsessionInstruction` **必须同形**。
   | {
       type: "subsession_instruction";

@@ -151,10 +151,13 @@ export type ContentBlock =
   | PageRefBlock
   | KbRefBlock
   | SubsessionReportBlock
-  | SubsessionInstructionBlock;
+  | SubsessionInstructionBlock
+  | WatchReportBlock;
 
 /** 子会话回报（Host 投给父会话的那条消息里的一块）：渲染成系统卡片，不是用户气泡。 */
 export type SubsessionReportBlock = { type: "subsession_report" } & SubsessionReport;
+/** 值守回报（会话自己的值守投进来的那条消息里的一块）：渲染成系统卡片，不是用户气泡。 */
+export type WatchReportBlock = { type: "watch_report" } & WatchReport;
 /** 父会话派给子会话的任务 / 追加指令：子会话里渲染成「来自父会话」气泡。 */
 export type SubsessionInstructionBlock = { type: "subsession_instruction" } & SubsessionInstruction;
 
@@ -469,7 +472,31 @@ export type UserMessageBlock =
   /** 子会话回报（Host 投给父会话）：渲染成系统卡片，不是用户气泡。 */
   | ({ type: "subsession_report" } & SubsessionReport)
   /** 父会话派给子会话的任务 / 追加指令：子会话里渲染成「来自父会话」气泡。 */
-  | ({ type: "subsession_instruction" } & SubsessionInstruction);
+  | ({ type: "subsession_instruction" } & SubsessionInstruction)
+  /** 值守回报：渲染成系统卡片，不是用户气泡。 */
+  | ({ type: "watch_report" } & WatchReport);
+
+/** 值守回报（docs/superpowers/specs/2026-10-20-watch-design.md）：会话的值守发现变化 / 结束时投进本会话。
+ *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `watch_report` 块**必须同形**。 */
+export interface WatchReport {
+  watchId: string;
+  title: string;
+  /** 用户要盯什么 */
+  focus: string;
+  /** 来源的可读描述（窗口 / 命令） */
+  source: string;
+  /** 本地时间 HH:MM:SS */
+  at: string;
+  /** change = 有变化；ended = 值守结束 */
+  kind: "change" | "ended";
+  /** 新出现的内容（按行） */
+  added: string[];
+  /** 消失的行数 */
+  removed: number;
+  truncated?: boolean;
+  /** 结束原因（kind=ended） */
+  reason?: string;
+}
 
 /** 子会话回报（docs/superpowers/specs/2026-10-16-subsessions-design.md）。
  *  ⚠️ 与 `agent-sidecar/src/engine/types.ts` 的 `subsession_report` 块**必须同形**。 */

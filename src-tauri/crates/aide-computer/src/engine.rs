@@ -96,8 +96,11 @@ impl<B: Backend> Engine<B> {
                 self.flash_viewing(sid);
                 self.list_windows()
             }
-            Query::Read { window_id, screenshot, text_tail, scope } => {
-                self.flash_viewing(sid);
+            Query::Read { window_id, screenshot, text_tail, scope, watch } => {
+                match watch {
+                    Some(w) => self.show_watching(w),
+                    None => self.flash_viewing(sid),
+                }
                 self.read(window_id.as_deref(), *screenshot, *text_tail, scope.as_deref())
             }
             Query::Wait { window_id, condition, timeout_ms } => {
@@ -192,6 +195,15 @@ impl<B: Backend> Engine<B> {
             _ => "Aide 正在查看".to_string(),
         };
         self.guard.show(Some(text), Some(Duration::from_secs(2)));
+    }
+
+    /// 值守读取：常驻「值守中」提示，最后一次读取后过一个间隔（加余量）自动消失。
+    fn show_watching(&self, w: &crate::protocol::WatchHint) {
+        if self.lock.is_some() {
+            return;
+        }
+        let linger = Duration::from_millis(w.every_ms.clamp(1_000, 3_600_000) + 15_000);
+        self.guard.show(Some(format!("Aide 值守中 · {}", w.label)), Some(linger));
     }
 
     /// 动作执行中检查：急停 / 用户接管 / 本轮已结束。

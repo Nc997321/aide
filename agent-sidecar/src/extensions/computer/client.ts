@@ -11,7 +11,7 @@ import type { ChatEvent } from "../../engine/types.js";
 export type ComputerCall =
   | { op: "windows" }
   | { op: "window"; action: string; window_id?: string; app?: string }
-  | { op: "read"; window_id?: string; screenshot?: boolean; text_tail?: number; scope?: string }
+  | { op: "read"; window_id?: string; screenshot?: boolean; text_tail?: number; scope?: string; watch?: { label: string; every_ms: number } }
   | { op: "act"; window_id: string; intent: string; steps: unknown[] }
   | { op: "wait"; window_id?: string; condition: unknown; timeout_ms?: number };
 

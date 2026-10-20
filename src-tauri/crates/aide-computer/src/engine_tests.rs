@@ -455,6 +455,13 @@ fn text_stable_waits_for_output_to_settle() {
 }
 
 #[test]
+fn watch_reads_show_a_standing_watch_hint() {
+    let mut r = rig();
+    call(&mut r, "s1", json!({"op": "read", "window_id": "0x1", "watch": {"label": "QQ 新消息", "every_ms": 10000}}));
+    assert_eq!(r.screen.shown.lock().unwrap().last().unwrap().as_deref(), Some("Aide 值守中 · QQ 新消息"));
+}
+
+#[test]
 fn reading_flashes_viewing_hint_without_lock() {
     let mut r = rig();
     call(&mut r, "s1", json!({"op": "windows"}));

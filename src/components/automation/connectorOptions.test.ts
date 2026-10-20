@@ -12,10 +12,10 @@ import { automationConnectorOptions } from "./connectorOptions";
 const names = (user: string[] = []) => automationConnectorOptions(user).map((c) => c.name);
 
 describe("自动化连接器候选", () => {
-  it("内置 MCP 全部可选——除了自动化里挂不上的 aide-lsp / aide-sessions", () => {
+  it("内置 MCP 全部可选——除了自动化里挂不上的 aide-lsp / aide-sessions / aide-watch", () => {
     const builtin = builtinMcpServers.value.map((s) => s.id);
-    expect(builtin).toEqual(expect.arrayContaining(["aide-lsp", "aide-sessions"])); // 镜像里有，这里刻意不列
-    expect(names()).toEqual(builtin.filter((id) => id !== "aide-lsp" && id !== "aide-sessions"));
+    expect(builtin).toEqual(expect.arrayContaining(["aide-lsp", "aide-sessions", "aide-watch"])); // 镜像里有，这里刻意不列
+    expect(names()).toEqual(builtin.filter((id) => !["aide-lsp", "aide-sessions", "aide-watch"].includes(id)));
     expect(names()).toEqual(expect.arrayContaining(["aide-docs", "aide-knowledge", "aide-memory", "aide-browser"]));
   });
 

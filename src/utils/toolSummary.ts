@@ -17,6 +17,9 @@ const TOOL_DISPLAY_NAMES: Record<string, string> = {
   "mcp__aide-computer__computer_act": "操作电脑",
   "mcp__aide-computer__computer_wait": "等待界面",
   "mcp__aide-computer__computer_window": "窗口操作",
+  "mcp__aide-watch__watch_start": "开始值守",
+  "mcp__aide-watch__watch_stop": "停止值守",
+  "mcp__aide-watch__watch_list": "查看值守",
 };
 
 export function toolDisplayName(name: string): string {
@@ -54,6 +57,8 @@ export function summarizeToolInput(name: string, input: unknown): string {
   }
   if (name === "mcp__aide-sessions__session_message") return str(record.text);
   // 电脑操作：做动作看目的，窗口操作看动作与对象，看 / 等看窗口与条件
+  if (name === "mcp__aide-watch__watch_start") return str(record.title);
+  if (name === "mcp__aide-watch__watch_stop") return str(record.id);
   if (name === "mcp__aide-computer__computer_act") return str(record.intent);
   if (name === "mcp__aide-computer__computer_window") {
     return str(record.action) === "launch" ? `启动 ${str(record.app)}` : `${str(record.action)} ${str(record.window_id)}`.trim();

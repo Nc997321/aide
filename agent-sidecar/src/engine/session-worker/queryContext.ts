@@ -8,6 +8,8 @@ import { knowledgeMcpRegistration } from "../../extensions/knowledgeMcp.js";
 import type { KbScopeStore } from "../../extensions/knowledge/scope.js";
 import { browserMcpRegistration } from "../../extensions/browserMcp.js";
 import { computerMcpRegistration } from "../../extensions/computerMcp.js";
+import { watchMcpRegistration } from "../../extensions/watchMcp.js";
+import type { WatchManager } from "../../extensions/watch/manager.js";
 import { lspMcpRegistration } from "../../extensions/lspTools.js";
 import { lspToolsMounted, type LspGate } from "../../extensions/lspGate.js";
 import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } from "../../extensions/builtinHooks/index.js";
@@ -38,6 +40,8 @@ export interface QueryContextDeps {
   /** 本会话的「用户在知识库里圈选的范围」登记簿（由 worker 持有、随用户消息更新）；
    *  知识库工具据此把写入限制在圈选范围内。 */
   kbScopes?: KbScopeStore;
+  /** 本会话的值守管理器（worker 持有、跨回合存活）。缺省 = 不挂值守工具。 */
+  watches?: WatchManager;
   automationConfig: AutomationConfig | undefined;
   /** 本会话是子会话（Host 派发时下发 subsession_parent）：不挂子会话工具（深度 1）。 */
   isSubsession?: boolean;
@@ -82,6 +86,12 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 操作用户的电脑（读窗口控件 / 真实鼠标键盘）：注册条件=!trusted 跳过、AIDE_COMPUTER_TOOLS=off 跳过。
   // 带 emit，同浏览器走 request_id 桥回桌面进程（aide-computer）。
   const computerMcp = computerMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
+  // 值守（定时看窗口 / 命令输出，有变化时自己汇报）：受信任、非自动化运行（无人值守的运行不留定时器）。
+  const watchMcp = watchMcpRegistration(deps.watches, {
+    trusted: deps.trusted,
+    automation: !!deps.automationConfig,
+    env: deps.processEnv,
+  });
   // agent LSP 工具：闸门任一不满足即 null（不挂载 → 工具对模型不存在）。
   // 闸门数据 lspLanguages 由主进程算好下发（与 trusted 同一条政策值通道）。
   // **闸门算一次给三处用**（本文件的挂载、queryOptions 的内置插件退役、下面提示注入）：
@@ -146,6 +156,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
       ...(memoryMcp ?? {}),
       ...(browserMcp ?? {}),
       ...(computerMcp ?? {}),
+      ...(watchMcp ?? {}),
       ...(lspMcp ?? {}),
       ...(subsessionMcp ?? {}),
     },

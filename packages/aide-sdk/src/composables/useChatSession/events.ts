@@ -218,6 +218,9 @@ function blocksFromDisplay(
           return b.childId ? { ...b } : null;
         case "subsession_instruction":
           return typeof b.text === "string" ? { ...b } : null;
+        // 值守回报（会话自己的值守投进来）：缺关键字段跳过。
+        case "watch_report":
+          return Array.isArray(b.added) && typeof b.title === "string" ? { ...b } : null;
         default:
           return null;
       }
@@ -857,6 +860,18 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "notification": {
+      // 值守「没有变化」的提示：同一个值守连着来时原地更新最后一条，不刷屏
+      // （「每 10 秒告诉我一次」会一小时来几百条）。
+      if (e["notification_type"] === "watch") {
+        const text = `${e["message"]}`;
+        const key = text.slice(0, text.indexOf("」") + 1);
+        const last = store.messages[store.messages.length - 1];
+        const lastText = last?.role === "assistant" && last.blocks.length === 1 && last.blocks[0].type === "text" ? last.blocks[0].text : "";
+        if (key && lastText.startsWith(key)) {
+          last.blocks = [{ type: "text", text }];
+          break;
+        }
+      }
       // 非致命通知（如供应商切换后会话迁移提示）
       store.messages.push({
         id: crypto.randomUUID(),

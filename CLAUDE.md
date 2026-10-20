@@ -103,4 +103,6 @@ Java/jdtls 专属配置**只准**在 `aide-core/src/lsp/profiles/java.rs`；公�
 
 **电脑操作（aide-computer）**：agent 像人一样操作用户桌面。执行器在 **GUI 进程**（屏幕在用户眼前，Host 可能在 WSL/SSH），走与浏览器同一条查询桥（`computer_query` → `runtime/computer_agent.rs` → `computer_result`）；**工具面不出现应用名词、不为特定应用打补丁**；Win32/UIA 调用只准在 `crates/aide-computer/src/adapter/windows/`，策略层纯 Rust 可单测；读/等自动放行、做动作走权限审批；持锁期间用户在别的窗口里点击 / 按键即停手（在 Aide 自己窗口里点审批、单纯移动鼠标不算，否则手动权限模式没法批准）。真机调试台：`cargo run -p aide-computer --example drive`。设计见 docs/superpowers/specs/2026-10-19-computer-use-design.md。
 
+**值守（aide-watch）**：会话定时看窗口 / 只读命令输出，**看与比对不调模型**，有变化才把增量作为一条 `watch_report` 回报投进本会话（忙时攒着合并）；住 sidecar `extensions/watch/`（窗口经电脑操作的桥、命令在 Host 上跑）。回报文字格式与前端解析器有往返测试。设计见 docs/superpowers/specs/2026-10-20-watch-design.md。
+
 **改 aide-browser 工具面前先读 [docs/browser-agent-feedback-log.md](docs/browser-agent-feedback-log.md)**（历轮 agent 反馈的取舍记录，含「不做」的理由与取舍原则）；每轮新反馈与实施结果都记回去。

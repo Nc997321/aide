@@ -45,6 +45,8 @@ import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { cancelAllLspQueries, syncLspWarmth } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
 import { cancelAllComputerQueries } from "../extensions/computer/client.js";
+import { WatchManager, watchReportPrompt, type WatchReport } from "../extensions/watch/manager.js";
+import { makeReader } from "../extensions/watch/sources.js";
 import { rollbackImageHistory } from "./imageRollback.js";
 import {
   buildUserMessage,
@@ -120,6 +122,16 @@ export class SessionWorker {
       cwd: this.cwd,
     }),
     automationVerdict: automationHookVerdict,
+  });
+  /** 值守（extensions/watch）：定时看窗口 / 命令输出，有变化时把增量作为一条消息投进本会话。
+   *  定时器随 worker 存活（跨回合），会话停止时全部结束。 */
+  readonly watches = new WatchManager({
+    read: makeReader((e) => this.emit(e), () => this.cwd),
+    deliver: (r) => this.deliverWatchReport(r),
+    notify: (message) => this.emit({ type: "notification", message, notification_type: "watch" }),
+    now: () => Date.now(),
+    setTimer: (fn, ms) => setTimeout(fn, ms),
+    clearTimer: (h) => clearTimeout(h as ReturnType<typeof setTimeout>),
   });
   readonly taskTracker = new TaskTracker();
   readonly subagentTracker = new SubagentTracker();
@@ -398,6 +410,18 @@ export class SessionWorker {
     this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
   }
 
+  /** 值守回报投进本会话：只在空闲（query 活着、没有在飞的回合）时投，忙就交回 false 让值守稍后重试。
+   *  走与用户消息同一条路（pushUserMessage → 广播 user_message），所有客户端都看得见；
+   *  display 带 watch_report 块，桌面渲染成系统卡片。 */
+  private deliverWatchReport(r: WatchReport): boolean {
+    if (this.stopped) return true; // 会话没了，丢弃
+    if (!this.currentQuery || this.turnActive) return false;
+    this.taskTracker.markResetOnNextCreate();
+    this.pushUserMessage(watchReportPrompt(r), undefined, [{ type: "watch_report", ...r }]);
+    this.turnActive = true;
+    return true;
+  }
+
   /** spawn 期参数在会话中变了（快速 ⇒ 关思考 / 换供应商）：拆掉当前 query，让本条
    *  消息由**重建后的** query 承接。
    *
@@ -674,6 +698,8 @@ export class SessionWorker {
 
   private async handleSend(cmd: Extract<SidecarCommand, { cmd: "send" }>): Promise<void> {
     if (this.stopped) return;
+    // 有新消息进来：值守的回报有人看，清零「连续无人回应」计数
+    this.watches.userActivity();
     this.applySendRuntimeConfig(cmd);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
     if (cmd.thinking_enabled !== undefined) this.thinkingEnabled = cmd.thinking_enabled;
@@ -846,6 +872,7 @@ export class SessionWorker {
             sessionEnv: sessionEnvOf(process.env, this.envOverrides),
             emit: (e) => this.emit(e),
             kbScopes: this.kbScopes,
+            watches: this.watches,
             automationConfig: this.automationConfig,
             isSubsession: !!this.subsessionParent,
             subsessionContext: () => ({
@@ -1278,6 +1305,8 @@ export class SessionWorker {
     cancelAllLspQueries("session stopped");
     cancelAllBrowserQueries("session stopped");
     cancelAllComputerQueries("session stopped");
+    // 值守的定时器随会话结束（不再读、不再投递）
+    this.watches.dispose();
     this.stopAllOutputTails();
     this.stopAllBgTaskTails();
     // 挂起中的切换确认按 deny 收尾（进程都没了，确认没有继续等的意义）

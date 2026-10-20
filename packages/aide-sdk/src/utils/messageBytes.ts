@@ -51,6 +51,9 @@ export function estimateBlockBytes(block: ContentBlock): number {
     case "subsession_report":
     case "subsession_instruction":
       return block.text.length * 2;
+    // 值守回报：载荷是新增的那几行
+    case "watch_report":
+      return (block.added.join("\n").length + block.title.length + block.focus.length) * 2;
   }
 }
 

@@ -13,6 +13,7 @@ import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
 import SubsessionReportCard from "./subsession/SubsessionReportCard.vue";
+import WatchReportCard from "./watch/WatchReportCard.vue";
 import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
@@ -74,7 +75,8 @@ const isActionChip = computed(
  *  都不套铜底用户气泡。 */
 const subsessionKind = computed<"report" | "instruction" | null>(() => {
   if (!isUser.value || props.message.blocks.length === 0) return null;
-  if (props.message.blocks.every((b) => b.type === "subsession_report")) return "report";
+  // 值守回报同样是系统卡片（会话自己的值守送来的，不是用户说的话）
+  if (props.message.blocks.every((b) => b.type === "subsession_report" || b.type === "watch_report")) return "report";
   if (props.message.blocks.every((b) => b.type === "subsession_instruction")) return "instruction";
   return null;
 });
@@ -262,6 +264,8 @@ function handleTextClick(e: MouseEvent) {
         <PageRefCard v-else-if="seg.block.type === 'pageref'" :block="seg.block" />
         <!-- 子会话回报（父会话里）/ 父会话派来的任务（子会话里）：Host 投递，不是用户说的话 -->
         <SubsessionReportCard v-else-if="seg.block.type === 'subsession_report'" :block="seg.block" />
+        <!-- 值守回报：会话的值守发现变化 / 结束时送来，不是用户说的话 -->
+        <WatchReportCard v-else-if="seg.block.type === 'watch_report'" :block="seg.block" />
         <template v-else-if="seg.block.type === 'subsession_instruction'">
           <div class="msg-parent-head">
             {{ seg.block.by === "user" ? "你从父会话" : "来自父会话" }}{{ seg.block.parentTitle ? `「${seg.block.parentTitle}」` : "" }} · {{ seg.block.kind === "task" ? (seg.block.by === "user" ? "派来的任务" : "任务") : "追加指令" }}

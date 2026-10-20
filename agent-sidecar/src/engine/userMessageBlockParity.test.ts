@@ -68,6 +68,10 @@ describe("UserMessageBlock 两份定义同形", () => {
     expect(sidecarBlock("subsession_instruction")).toEqual(sdkInterface("SubsessionInstruction"));
   });
 
+  it("watch_report：字段（含可选性）一致", () => {
+    expect(sidecarBlock("watch_report")).toEqual(sdkInterface("WatchReport"));
+  });
+
   it("mention：字段一致（抽取器自检：对一个老块也成立）", () => {
     const sdkAt = sdkSrc.indexOf('{ type: "mention"');
     const sdk = topLevelFields(braceBody(sdkSrc, sdkAt));

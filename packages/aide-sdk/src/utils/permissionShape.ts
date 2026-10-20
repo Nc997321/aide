@@ -137,6 +137,7 @@ export function permissionInputRows(name: string, input: unknown): PermissionInp
   if (name === "Write" || name === "Edit") return [{ label: "文件", value: String(r?.file_path ?? "") }];
   if (name === "WebFetch") return [{ label: "URL", value: String(r?.url ?? "") }];
   if (name === "mcp__aide-computer__computer_act") return computerActRows(r);
+  if (name === "mcp__aide-watch__watch_start") return watchStartRows(r);
   if (name === "mcp__aide-computer__computer_window") {
     const action = String(r?.action ?? "");
     return action === "launch"
@@ -185,6 +186,25 @@ export function describeComputerStep(step: unknown): string {
     default:
       return JSON.stringify(step);
   }
+}
+
+// 开始值守：审批时看清盯什么、多久一次、多久结束——命令来源之后会无人确认地反复执行。
+function watchStartRows(r: Record<string, unknown> | undefined | null): PermissionInputRow[] {
+  const every = Number(r?.every_seconds ?? 0);
+  const minutes = Number(r?.max_minutes ?? 120);
+  const source =
+    typeof r?.command === "string"
+      ? { label: "反复执行的命令", value: r.command }
+      : { label: "盯的窗口", value: `${String(r?.window_id ?? "")}${typeof r?.scope === "string" ? `（只看 ${r.scope}）` : ""}` };
+  return [
+    { label: "值守", value: String(r?.title ?? "") },
+    { label: "关注", value: String(r?.focus ?? "") },
+    source,
+    {
+      label: "节奏",
+      value: `每 ${every} 秒看一次 · ${r?.mode === "every" ? "每次都汇报" : "有变化才汇报"} · ${minutes} 分钟后自动结束`,
+    },
+  ];
 }
 
 function computerActRows(r: Record<string, unknown> | undefined | null): PermissionInputRow[] {
