@@ -319,12 +319,22 @@ export class LiveActivity {
   }
 }
 
-/** 忙碌排队的待发消息快照（jump_promoted 时 flush 成用户气泡）。 */
+/**
+ * 忙时发出、已交给桌面 CLI 排队、还没被模型接入的消息（排队提示条一项）。
+ * 桌面不再截断当前回合：CLI 在两轮工具调用之间把它并进回合；接入时由
+ * user_message 出气泡、jump_promoted 按 id 撤条，撤回走 jump_withdrawn。
+ */
 export class PendingJump {
+  /** 排队 id（发起方生成，= 桌面 SDK 消息 uuid）：撤回 / 接入按它对账。 */
+  id: string = '';
   text: string = '';
+  /** 点了 × 但桌面已接入：条目改显示「已送达」，等气泡出现后消失。 */
+  withdrawFailed: boolean = false;
 
-  constructor(text: string) {
+  constructor(id: string, text: string, withdrawFailed: boolean) {
+    this.id = id;
     this.text = text;
+    this.withdrawFailed = withdrawFailed;
   }
 }
 

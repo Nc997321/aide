@@ -255,6 +255,18 @@ export struct ChatPage {
 
   // ── 滚动反应 ──
 
+  /** 撤回的文字退回输入框（排队条 × / 停止时的撤回）：放在已有草稿前面——它本来就排在
+   *  草稿之前发出，不覆盖正在打的字。消费后清空，同值再来也能再触发。 */
+  @Monitor('store.restoreText')
+  onRestoreText(monitor: IMonitor): void {
+    const text: string = this.store.restoreText;
+    if (text === '') {
+      return;
+    }
+    this.draft = this.draft.trim() !== '' ? `${text}\n\n${this.draft}` : text;
+    this.store.restoreText = '';
+  }
+
   @Monitor('store.tailAt')
   onTail(monitor: IMonitor): void {
     // 跟尾只在跟尾位有效时生效（读历史不被拽走）；底部起建保证跟随时尾部恒已
@@ -1278,19 +1290,31 @@ export struct ChatPage {
   @Builder
   pendingJumpsView() {
     Column({ space: 4 }) {
-      ForEach(this.store.pendingJumps, (pj: PendingJump, i: number) => {
+      ForEach(this.store.pendingJumps, (pj: PendingJump) => {
         Row({ space: 6 }) {
-          Text('待发出').fontSize(11).fontColor($r('app.color.status_warn'))
+          Text('排队').fontSize(11).fontColor($r('app.color.status_warn'))
           Text(pj.text)
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
             .textOverflow({ overflow: TextOverflow.Ellipsis })
             .layoutWeight(1)
+          if (pj.withdrawFailed) {
+            Text('已送达').fontSize(11).fontColor($r('app.color.text_secondary'))
+          } else {
+            // 撤回：文字放回输入框（桌面已接入则改显示「已送达」）
+            Text('×')
+              .fontSize(16)
+              .fontColor($r('app.color.text_secondary'))
+              .padding({ left: 8, right: 4 })
+              .onClick(() => {
+                void this.model.withdrawQueued(pj.id);
+              })
+          }
         }
         .width('100%')
         .alignItems(VerticalAlign.Center)
-      }, (pj: PendingJump, i: number) => `jump-${i}`)
+      }, (pj: PendingJump) => `jump-${pj.id}-${pj.withdrawFailed ? 1 : 0}`)
     }
     .width('100%')
     .padding({ left: 16, right: 16, top: 2, bottom: 2 })

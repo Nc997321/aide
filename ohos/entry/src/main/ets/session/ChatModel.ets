@@ -228,9 +228,9 @@ export class ChatModel {
   }
 
   /**
-   * 发消息。忙碌（上一轮还在生成）走排队：带 jumpQueue 透传给 sidecar，由它在
-   * 安全边界（当前工具跑完）interrupt 后再发；等待期间消息暂存 pendingJumps
-   * 显示「待发出」条。离线直接拒绝（对照 PWA offline 禁用输入）。
+   * 发消息。忙碌（上一轮还在生成）走排队：带 jumpQueue + queueId 透传，桌面交给 CLI
+   * 排队、不打断当前回合（两轮工具调用之间并进回合）；排队期间显示「排队」条，可点 ×
+   * 撤回。离线直接拒绝（对照 PWA offline 禁用输入）。
    * 新会话（空态）发送 = spawn：本地 uuid 作路由键 + resumeId 缺省由桌面现拉起
    * 进程（对照 PWA sendMessage 空白面板首发），workspaceRoot 取手机侧所选
    * 工作区；真实 id 由 session_init 回执过户（finalizeSpawn，见 ChatEvents）。
@@ -278,21 +278,27 @@ export class ChatModel {
     const wasBusy: boolean = this.store.isBusy;
     this.store.isBusy = true;
     this.store.sysNote = '';
+    let queueId: string | null = null;
     if (!spawn && wasBusy) {
-      // 排队：只登记"待发出"提示条——气泡等 sidecar 真正接入这条消息时广播的
-      // user_message 渲染。不 finishStreaming（当前 assistant 仍在流式，提前收尾
-      // 会让工具结果/后续文本错位新建）。
+      // 排队：只登记提示条——气泡等桌面真正接入这条消息时广播的 user_message
+      // 渲染。不 finishStreaming（当前 assistant 仍在流式，提前收尾会让工具结果/
+      // 后续文本错位新建）。
+      queueId = uuid();
       this.store.pendingJumps = this.store.pendingJumps
-        .concat([new PendingJump(text !== '' ? text : '附件消息')]);
+        .concat([new PendingJump(queueId, text !== '' ? text : '附件消息', false)]);
+      this.store.ownQueued = this.store.ownQueued.concat([queueId]);
     }
+    // 新的一条发出去了：上一次停止的撤回意图作废（别让迟到的撤回事件把文字塞回来）
+    this.store.turnWithdrawRequested = false;
     // 直发路径同样不落气泡：与桌面端同源，统一由 user_message 事件渲染。本地乐观
     // 渲染意味着只有发起方看得见自己提的问题——手机上发的在桌面端消失，反之亦然。
-    this.dispatchSend(sid, full, images, display, wasBusy, spawn);
+    this.dispatchSend(sid, full, images, display, wasBusy, spawn, queueId);
   }
 
   /** 真实发送（fire-and-forget；失败兜底复位——对照上游 sendQueued 的 catch）。 */
   private async dispatchSend(sid: string, text: string, images: SendImage[] | null,
-    display: SendDisplayBlock[] | null, wasBusy: boolean, spawn: boolean): Promise<void> {
+    display: SendDisplayBlock[] | null, wasBusy: boolean, spawn: boolean,
+    queueId: string | null): Promise<void> {
     try {
       await api.sendMessage({
         sessionId: sid,
@@ -312,7 +318,8 @@ export class ChatModel {
         // 热切 effort 不关思考块）
         initialEffort: this.store.effort !== '' ? this.store.effort : null,
         permissionMode: null,
-        jumpQueue: wasBusy
+        jumpQueue: wasBusy,
+        queueId: queueId
       });
     } catch (e) {
       if (this.store.sid !== sid) {
@@ -328,6 +335,26 @@ export class ChatModel {
     }
   }
 
+  /**
+   * 撤回一条排队消息（提示条上的 ×）。撤成 → jump_withdrawn 撤条、文字退回本端输入框；
+   * 桌面已接入 → 条目改显示「已送达」，气泡随后出现。
+   */
+  async withdrawQueued(queueId: string): Promise<void> {
+    const sid: string = this.store.sid;
+    if (sid === '' || connModel.state !== 'authed') {
+      return;
+    }
+    if (!this.store.withdrawRequests.includes(queueId)) {
+      this.store.withdrawRequests = this.store.withdrawRequests.concat([queueId]);
+    }
+    try {
+      await api.withdrawQueuedMessage(sid, queueId);
+    } catch (e) {
+      this.store.withdrawRequests = this.store.withdrawRequests.filter((x: string) => x !== queueId);
+      this.store.sysNote = `撤回失败：${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
   /** 新会话（抽屉「＋」）：回空态等待首条消息 spawn（对照原型 showEmpty）。 */
   newSession(): void {
     ttsModel.stop(); // 离开当前会话即停（对照原型 showEmpty）
@@ -337,14 +364,22 @@ export class ChatModel {
     void this.syncModelEffort();
   }
 
-  /** 中断当前生成（sidecar 仍存活）：复位忙碌态并收尾流式消息。 */
+  /**
+   * 中断当前生成（sidecar 仍存活）：复位忙碌态并收尾流式消息。对齐 Claude Code CLI
+   * 的 Esc：排队消息退回本端输入框；模型还没任何输出时，触发这一轮的那条消息也整条
+   * 撤回（对话里像没发过）——两者都由桌面的撤回事件兑现，这里只记下「是本端要的」。
+   */
   async interrupt(): Promise<void> {
     const sid: string = this.store.sid;
     if (sid === '') {
       return;
     }
+    const ids: string[] = this.store.pendingJumps.map((p: PendingJump) => p.id);
+    this.store.withdrawRequests = this.store.withdrawRequests
+      .concat(ids.filter((id: string) => !this.store.withdrawRequests.includes(id)));
+    this.store.turnWithdrawRequested = true;
     try {
-      await api.interruptSession(sid);
+      await api.interruptSession(sid, true);
     } finally {
       if (this.store.sid === sid) {
         // 用户主动打断：待排队消息一并作废（sidecar 同）；权限队列同样清空

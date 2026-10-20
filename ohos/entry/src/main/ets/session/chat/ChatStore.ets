@@ -51,8 +51,16 @@ export class ChatStore {
   @Trace spawnWsKey: string = '';
   /** 挂起的权限请求队列（FIFO，弹层永远显示队头；并行工具会同时发多条）。 */
   @Trace pendingPermissions: PermissionRequest[] = [];
-  /** 已派发、等安全边界的排队消息（jump_promoted 时 flush）。 */
+  /** 忙时排队、还没被模型接入的消息（jump_queued 写入，jump_promoted / jump_withdrawn 按 id 撤）。 */
   @Trace pendingJumps: PendingJump[] = [];
+  /** 本端发起撤回的排队 id（× / 停止）：撤成时文字退回本端输入框。只是本端意图。 */
+  withdrawRequests: string[] = [];
+  /** 本端发出的排队 id：被别处打断 / 回合出错退回时，文字回到发出它的这一端。 */
+  ownQueued: string[] = [];
+  /** 本端点了停止：开头那条消息被整条撤回（user_message_withdrawn）时退回本端输入框。 */
+  turnWithdrawRequested: boolean = false;
+  /** 待退回输入框的文字（撤回事件写入，会话页 @Monitor 消费后清空）。 */
+  @Trace restoreText: string = '';
   /** 上滚取回进行中。 */
   @Trace loadingOlder: boolean = false;
   /**
@@ -261,6 +269,10 @@ export class ChatStore {
     this.isBusy = false;
     this.pendingPermissions = [];
     this.pendingJumps = [];
+    this.withdrawRequests = [];
+    this.ownQueued = [];
+    this.turnWithdrawRequested = false;
+    this.restoreText = '';
     this.sysNote = '';
     this.tailOffset = 0;
     this.cursorReady = false;
@@ -487,6 +499,20 @@ export class ChatStore {
     }
     const label: string = str(p, 'modelLabel');
     msg.modelLabel = label !== '' ? label : m;
+  }
+
+  /** 撤回的文字退回输入框：连着撤回多条按顺序拼起来，不互相覆盖。 */
+  restoreToInput(text: string): void {
+    if (text === '') {
+      return;
+    }
+    this.restoreText = this.restoreText !== '' ? `${this.restoreText}\n\n${text}` : text;
+  }
+
+  /** 这条排队消息已了结（接入或撤回）：清掉本端意图账。 */
+  forgetQueued(id: string): void {
+    this.withdrawRequests = this.withdrawRequests.filter((x: string) => x !== id);
+    this.ownQueued = this.ownQueued.filter((x: string) => x !== id);
   }
 
   /** 运行时状态复位（中断 / 会话死 / 错误兜底共用）——不碰 messages（历史保留）。 */

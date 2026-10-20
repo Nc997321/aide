@@ -34,7 +34,7 @@ import {
   ContentBlock, TextBlock, ThinkingBlock, SubagentEntry, SubagentBlock,
   ChatMessage, PermissionRequest, LiveActivity, BgTask, SUBAGENT_ENTRY_CAP,
   appendSubagentTextEntry, appendBgOutput, ToolCallBlock, ImageBlock, VideoBlock,
-  SubsessionReportBlock, SubsessionInstructionBlock, isSubsessionBlock
+  SubsessionReportBlock, SubsessionInstructionBlock, isSubsessionBlock, PendingJump
 } from './ChatBlocks';
 import { parseQuestions } from './PermissionShape';
 import { uuid, str, bool, obj, num, emptyRecord, isEditTool } from './ChatWire';
@@ -253,9 +253,49 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       }
       break;
     }
-    case 'jump_queued':
-      // 忙碌排队时已暂存 pendingJumps；sidecar 此处回传仅作确认，不重复入队
+    case 'jump_queued': {
+      // 排队消息（任一端发的）：本端发的已在 send 里先行写入（免 RTT），按 id 去重
+      const qid: string = str(payload, 'id');
+      if (qid !== '' && !store.pendingJumps.some((p: PendingJump) => p.id === qid)) {
+        store.pendingJumps = store.pendingJumps.concat([new PendingJump(qid, str(payload, 'prompt'), false)]);
+      }
       break;
+    }
+    case 'jump_withdrawn': {
+      // 排队消息被撤回、没进对话：撤条；本端点的 ×（或本端发的消息被打断 / 回合出错退回）
+      // 把文字放回输入框
+      const wid: string = str(payload, 'id');
+      store.pendingJumps = store.pendingJumps.filter((p: PendingJump) => p.id !== wid);
+      const mine: boolean = store.withdrawRequests.includes(wid) ||
+        (str(payload, 'reason') !== 'user' && store.ownQueued.includes(wid));
+      if (mine) {
+        store.restoreToInput(str(payload, 'text'));
+      }
+      store.forgetQueued(wid);
+      break;
+    }
+    case 'jump_withdraw_failed': {
+      // 撤不回：桌面已接入，气泡马上由 user_message 出现
+      const fid: string = str(payload, 'id');
+      store.pendingJumps = store.pendingJumps.map((p: PendingJump) =>
+        p.id === fid ? new PendingJump(p.id, p.text, true) : p);
+      store.withdrawRequests = store.withdrawRequests.filter((x: string) => x !== fid);
+      break;
+    }
+    case 'user_message_withdrawn': {
+      // 本回合开头那条消息被整条撤回（停止时模型还没输出）：删气泡，点了停止的这端拿回文字
+      const mid: string = str(payload, 'id');
+      const idx: number = store.messages.findIndex((m: ChatMessage) => m.role === 'user' && m.id === mid);
+      if (idx >= 0) {
+        store.replaceAllMessages(store.messages.filter((m: ChatMessage, i: number) => i !== idx));
+      }
+      if (store.turnWithdrawRequested) {
+        store.restoreToInput(str(payload, 'text'));
+      }
+      store.turnWithdrawRequested = false;
+      store.bumpTail();
+      break;
+    }
     case 'user_message': {
       // 用户气泡的**唯一渲染点**（与桌面端同源）：本地、桌面端、PWA 发的消息
       // 全部落到这里。发送方不再本地乐观渲染，所以不会重复、不需要 id 去重；
@@ -267,7 +307,13 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       // 消息退 userText 单文本块。
       ttsModel.stop(); // 用户发新消息（本机/桌面/PWA 同源）= 不再念旧回复
       store.finishStreaming();
-      store.appendMessage(parseUserDisplay(payload['display'], str(payload, 'text')));
+      const userMsg: ChatMessage = parseUserDisplay(payload['display'], str(payload, 'text'));
+      // 桌面给的 id = 这条消息的 SDK uuid，撤回（user_message_withdrawn）按它删气泡
+      const umid: string = str(payload, 'id');
+      if (umid !== '') {
+        userMsg.id = umid;
+      }
+      store.appendMessage(userMsg);
       store.isBusy = true;
       store.bumpTail();
       break;
@@ -276,7 +322,14 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       // 安全边界到达：排队的消息已被 sidecar 接入模型，气泡由紧邻其前的
       // user_message 事件渲染（sidecar 逐条入队、逐条广播）。这里只清提示条 +
       // 补忙碌态——新轮次由 sidecar 直接发起，不经过发送链路。
-      store.pendingJumps = [];
+      // 按 id 撤掉那一条（旧版桌面不带 id：全部撤掉）
+      const pid: string = str(payload, 'id');
+      if (pid !== '') {
+        store.pendingJumps = store.pendingJumps.filter((p: PendingJump) => p.id !== pid);
+        store.forgetQueued(pid);
+      } else {
+        store.pendingJumps = [];
+      }
       store.isBusy = true;
       store.bumpTail();
       break;

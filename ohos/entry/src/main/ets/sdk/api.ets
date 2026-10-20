@@ -96,8 +96,10 @@ export interface SendMessageParams {
   initialEffort: string | null;
   /** 每条消息透传当前权限模式；null = 远程网关回落桌面「远程控制」设置。 */
   permissionMode: string | null;
-  /** 排队发送标记：sidecar 在安全边界自行 interrupt 后再发。 */
+  /** 忙时发送标记：桌面交给 CLI 排队（不打断当前回合）。 */
   jumpQueue: boolean;
+  /** 排队 id（本端生成的 UUID）：提示条 / 撤回 / 接入按它对账；null = 非排队。 */
+  queueId: string | null;
 }
 
 /** permission_response 的完整负载（镜像上游 PermissionResponseParams；可空项 null = Rust None）。 */
@@ -201,11 +203,28 @@ export class AideApi {
     if (params.permissionMode !== null) {
       args['permissionMode'] = params.permissionMode;
     }
+    if (params.queueId !== null) {
+      args['queueId'] = params.queueId;
+    }
     return getTransport().invoke<void>('send_message', args);
   }
 
-  interruptSession(sessionId: string): Promise<void> {
-    return getTransport().invoke<void>('interrupt_session', { 'sessionId': sessionId });
+  /**
+   * withdraw：用户亲手停止——这一轮还没任何输出时连同触发它的消息整条撤回
+   * （user_message_withdrawn）。排队消息两种都撤回（jump_withdrawn）。
+   */
+  interruptSession(sessionId: string, withdraw: boolean): Promise<void> {
+    const args: Record<string, Object> = { 'sessionId': sessionId };
+    if (withdraw) {
+      args['withdraw'] = true;
+    }
+    return getTransport().invoke<void>('interrupt_session', args);
+  }
+
+  /** 撤回一条还在排队的消息。结果只走事件：jump_withdrawn / jump_withdraw_failed。 */
+  withdrawQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+    const args: Record<string, Object> = { 'sessionId': sessionId, 'queueId': queueId };
+    return getTransport().invoke<void>('withdraw_queued_message', args);
   }
 
   /**
