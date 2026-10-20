@@ -133,6 +133,8 @@ const emit = defineEmits<{
   "open-session": [sessionId: string];
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
+  /** 排队条上点了 ×：撤回这条排队消息 */
+  "withdraw-queued": [queueId: string];
 }>();
 
 /** 回合变更结算卡的数据（App 唯一实例的投影，见 turnChanges.ts）。没有它的宿主
@@ -961,6 +963,8 @@ function onOpenBgDock(taskId: string) {
         @set-effort="(e) => emit('set-effort', e)"
         @set-permission-mode="(m) => emit('set-permission-mode', m)"
         @rollback-text-consumed="emit('rollback-text-consumed')"
+        @withdraw-queued="(id) => emit('withdraw-queued', id)"
+        @interrupt="emit('interrupt')"
         @hero-model-name="heroModelName = $event"
         @permission-mode-changed="permissionMode = $event"
         :subsession="plusSubsession"

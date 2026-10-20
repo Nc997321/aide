@@ -15,7 +15,9 @@ import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import { BgTaskTracker } from "../desktop/bgTasks.js";
 import { BgTaskTail } from "../desktop/bgTaskOutputTail.js";
-import { JumpQueueController } from "../desktop/jumpQueue.js";
+import { QueuedSendLedger, type QueuedSend } from "../desktop/jumpQueue.js";
+import { truncateTranscriptAt } from "../desktop/withdrawTurn.js";
+import { randomUUID } from "node:crypto";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
 import { reapSessionSubprocess } from "./subprocessReaper.js";
@@ -72,6 +74,14 @@ import { ModelRoster } from "./modelRoster.js";
 import { emitContextUsage, RateLimitReporter } from "./queryTelemetry.js";
 import type { PermissionRuleDraft } from "./types.js";
 
+/** 气泡 / 提示条显示的文本：优先 display 里的原始输入，而非 @引用展开后的 prompt——
+ *  只渲染 text 的接收端（鸿蒙 v1）不该看到那一坨。 */
+function userTextOf(prompt: string, display: UserMessageBlock[] | undefined): string {
+  return (
+    display?.find((b): b is Extract<UserMessageBlock, { type: "text" }> => b.type === "text")?.text ?? prompt
+  );
+}
+
 // ---- 进程级常量已归位各自域模块（拆分迁出） ----
 // buildPluginsOption → extensions/dispatchPlugins.ts（插件域，批 1）
 // PERMISSION_MODES / EXTRA_MODE_LABELS / EDIT_* → engine/permissionModes.ts（批 2）
@@ -86,6 +96,15 @@ import type { PermissionRuleDraft } from "./types.js";
  *  收不了尾（`currentQuery` 为空，或 CLI 卡在端点上不兑现）——见 handleCommand 的
  *  interrupt 分支与 settleInterruptedTurn。 */
 export const INTERRUPT_SETTLE_GRACE_MS = 10_000;
+/** 撤回后等 CLI 给出结论（命令生命周期 cancelled / started）的上限。 */
+const CANCEL_SETTLE_MS = 5_000;
+/** 撤回请求可能先于消息到达 CLI：开新回合的消息 CLI 会记下待撤，并进回合的排队消息不会
+ *  （请求直接作废）——没拿到结论就隔一会儿重发，次数有限。 */
+const CANCEL_RESEND_MS = 150;
+const CANCEL_RESENDS = 5;
+/** 打断没兑现时补打：间隔与次数（之后仍由 INTERRUPT_SETTLE_GRACE_MS 兜底）。 */
+const REINTERRUPT_AFTER_MS = 1_000;
+const REINTERRUPT_ATTEMPTS = 3;
 
 export interface SessionWorkerOptions {
   cwd?: string;
@@ -136,7 +155,8 @@ export class SessionWorker {
   readonly taskTracker = new TaskTracker();
   readonly subagentTracker = new SubagentTracker();
   readonly toolLifecycle = new ToolLifecycleTracker();
-  readonly jumpQueueCtl = new JumpQueueController();
+  /** 忙时排队、已交给 CLI 但还没被模型接入的消息（见 desktop/jumpQueue.ts）。 */
+  readonly queuedSends = new QueuedSendLedger();
   readonly coalescer: DeltaCoalescer;
   /** 图片 400 回滚：检测到 synthetic 400 后置位，abort 当前 query，catch 里执行回滚。 */
   private rollbackPending = false;
@@ -198,6 +218,28 @@ export class SessionWorker {
   /** 主动拆 query 的归因标志（与 rollbackPending 同款）：catch 里据此把 abort 认成
    *  「思考值漂移重启」而不是会话级故障——否则会 emit error 帧并 break 掉循环。 */
   private restartPending = false;
+  /** 本回合开头那条用户消息。模型还没任何输出时，用户亲手打断（Esc / 停止）可以把它整条
+   *  撤回，对话里像没发过（对齐 Claude Code CLI）。hadHistory = 它之前已有对话——撤回要截
+   *  transcript 再原地 resume，会话的第一条消息之前没有可回到的历史。 */
+  private turnHead: {
+    id: string;
+    text: string;
+    outputSeen: boolean;
+    hadHistory: boolean;
+    /** CLI 已开始执行它（command_lifecycle started / 回显）。之前它还在 CLI 的命令队列里
+     *  （CLI 上一轮收尾、发问前准备都要时间，实测可达 2 秒多），这时打断拦不住它（interrupt
+     *  回 still_queued，消息照跑）——得用 cancelAsyncMessage 撤。 */
+    started: boolean;
+  } | null = null;
+  /** 本 worker 已收尾的回合数（含被打断的）；配合 resumedFromHistory 判 hadHistory。 */
+  private settledTurns = 0;
+  /** 首条 send 带了 resume_session_id（重开的老会话）：磁盘上已有历史。 */
+  private resumedFromHistory = false;
+  /** 撤回执行中消息的待办（与 restartPending 同款归因）：本回合 result 到达后拆 query，
+   *  catch 里截 transcript、广播撤回，再原地 resume。 */
+  private withdrawPending: { id: string; text: string } | null = null;
+  /** 等某条消息命令生命周期结论的回调（撤回用，见 cancelInCli）。 */
+  private readonly lifecycleWaiters = new Map<string, (outcome: "cancelled" | "started") => void>();
   /** 输出样式（send.output_style 下发，handleSend 归一后存这里）。null = 默认/未知，
    *  建 query 后不下发。与 thinkingEnabled 同款：值每条 send 都刷新，但只在**新建
    *  会话**（建 query）时落地——改动不影响已在跑的会话（见 session-worker/outputStyle.ts）。 */
@@ -393,12 +435,13 @@ export class SessionWorker {
     /** liveQuery（默认）= 喂给当前活着的 query；nextQuery = 当前 query 正要被拆掉
      *  （思考值漂移重启），预置给重建后的那一轮——走共享队列会被孤儿迭代器吞。 */
     target: "liveQuery" | "nextQuery" = "liveQuery",
-  ): void {
-    const text =
-      display?.find((b): b is Extract<UserMessageBlock, { type: "text" }> => b.type === "text")
-        ?.text ?? prompt;
+  ): string {
+    const text = userTextOf(prompt, display);
+    const id = randomUUID();
     const msg: SDKUserMessage = {
       type: "user",
+      // uuid 让 CLI 回显 / transcript 行 / 撤回都能按它认出这条消息
+      uuid: id as SDKUserMessage["uuid"],
       message: buildUserMessage(prompt, images ?? []),
       parent_tool_use_id: null,
     };
@@ -407,7 +450,229 @@ export class SessionWorker {
     this.btwLedger.recordUser(text);
     if (target === "nextQuery") this.nextQueryInjections.push(msg);
     else this.queue.push(msg);
-    this.emit({ type: "user_message", text, ...(display?.length ? { display } : {}) });
+    this.emit({ type: "user_message", id, text, ...(display?.length ? { display } : {}) });
+    return id;
+  }
+
+  /** 回合空闲时用户发的消息开启新回合：记为回合开头（Esc 撤回的对象）。 */
+  private markTurnHead(id: string, prompt: string, display: UserMessageBlock[] | undefined): void {
+    this.turnHead = {
+      id,
+      text: userTextOf(prompt, display),
+      outputSeen: false,
+      hadHistory: this.settledTurns > 0 || this.resumedFromHistory,
+      started: false,
+    };
+  }
+
+  // ---- 排队消息（忙时发送；与 Claude Code CLI 同一种排队，见 desktop/jumpQueue.ts） ----
+
+  /** 交给 CLI 排队：priority "next" = 在两轮工具调用之间并进当前回合，回合已在收尾就作为
+   *  下一轮；斜杠命令用 "later"（/compact 这类必须作为独立回合执行）。气泡不在这里广播——
+   *  等 CLI 接入时回显（onUserReplay），各端看到气泡的时机 = 模型收到它的时机。 */
+  private enqueueQueuedSend(
+    queueId: string | undefined,
+    prompt: string,
+    images: ImageAttachment[] | undefined,
+    display: UserMessageBlock[] | undefined,
+  ): void {
+    const id = queueId && !this.queuedSends.has(queueId) ? queueId : randomUUID();
+    const text = userTextOf(prompt, display);
+    const message: SDKUserMessage = {
+      type: "user",
+      uuid: id as SDKUserMessage["uuid"],
+      message: buildUserMessage(prompt, images ?? []),
+      parent_tool_use_id: null,
+      priority: prompt.trimStart().startsWith("/") ? "later" : "next",
+    };
+    this.queuedSends.add({ id, text, display, message });
+    this.queue.push(message);
+    this.emit({ type: "jump_queued", id, prompt: text });
+  }
+
+  /** CLI 回显了一条用户消息（`--replay-user-messages`），即它被模型接入的那一刻。只认排队
+   *  账本里的——首条 / 续发在入队时已经广播过。 */
+  /** CLI 的命令生命周期帧（msg_lifecycle_v1）。撤回的权威结论在这里：cancelAsyncMessage 的
+   *  返回值不可信——撤回请求先于消息到达时 CLI 记下待撤、消息一入队就撤掉并发 cancelled，
+   *  回给请求的却是 false（2026-10-20 冒烟实锤）。 */
+  private onCommandLifecycle(id: string, state: string): void {
+    if (state === "started") {
+      if (this.turnHead?.id === id) this.turnHead.started = true;
+      this.resolveLifecycle(id, "started");
+    } else if (state === "cancelled") {
+      if (this.lifecycleWaiters.has(id)) {
+        this.resolveLifecycle(id, "cancelled");
+        return;
+      }
+      // 没人在等（结论来得比等待上限还晚）：照样兑现，消息不能就此悬在半空
+      const item = this.queuedSends.take(id);
+      if (item) this.emit({ type: "jump_withdrawn", id, text: item.text, reason: "interrupted" });
+      if (this.turnHead?.id === id && !this.turnHead.started) this.settleCancelledHead(this.turnHead);
+    }
+  }
+
+  private resolveLifecycle(id: string, outcome: "cancelled" | "started"): void {
+    const resolve = this.lifecycleWaiters.get(id);
+    this.lifecycleWaiters.delete(id);
+    resolve?.(outcome);
+  }
+
+  private onUserReplay(id: string): void {
+    if (this.turnHead?.id === id) this.turnHead.started = true;
+    this.resolveLifecycle(id, "started");
+    const item = this.queuedSends.take(id);
+    if (!item || this.stopped) return;
+    this.kbScopes.replaceFromDisplay(item.display);
+    this.btwLedger.recordUser(item.text);
+    if (this.turnActive) {
+      // 并进了正在跑的回合：这一轮不再只是开头那条消息，不能整条撤回
+      if (this.turnHead) this.turnHead.outputSeen = true;
+    } else {
+      // 上一回合已收尾，CLI 拿它开了新回合
+      this.turnActive = true;
+      this.taskTracker.markResetOnNextCreate();
+      this.markTurnHead(id, item.text, item.display);
+      if (this.turnHead) this.turnHead.started = true; // 回显即开跑
+    }
+    this.emit({ type: "user_message", id, text: item.text, ...(item.display?.length ? { display: item.display } : {}) });
+    this.emit({ type: "jump_promoted", id });
+  }
+
+  /** 撤回一条排队消息。撤成 → jump_withdrawn；CLI 已接入 → jump_withdraw_failed（只回给
+   *  有人点了 × 的情况，打断连带撤回失败时回显照常到达，不必再提示）。 */
+  private async withdrawQueued(id: string, reason: "user" | "interrupted"): Promise<void> {
+    if (!this.queuedSends.has(id)) {
+      if (reason === "user") this.emit({ type: "jump_withdraw_failed", id });
+      return;
+    }
+    const cancelled = (await this.cancelInCli(id)) === "cancelled";
+    const item = cancelled ? this.queuedSends.take(id) : undefined;
+    if (item) this.emit({ type: "jump_withdrawn", id, text: item.text, reason });
+    else if (reason === "user") this.emit({ type: "jump_withdraw_failed", id });
+  }
+
+  /** 从 CLI 的命令队列里撤掉一条消息，结论以命令生命周期为准（见 onCommandLifecycle）：
+   *  cancelled = 撤掉了；started = CLI 已取走它（撤不回）；timeout = 等不到结论（按撤不回算）。 */
+  private async cancelInCli(id: string): Promise<"cancelled" | "started" | "timeout"> {
+    // cancelAsyncMessage 是 SDK Query 的运行时方法（0.3.296 的 .d.ts 没列出），缺席即当撤不回
+    const q = this.currentQuery as unknown as { cancelAsyncMessage?: (uuid: string) => Promise<boolean> } | null;
+    if (!q?.cancelAsyncMessage) return "timeout";
+    // 先挂上等待再发请求：结论帧可能和回执一起到
+    const outcome = new Promise<"cancelled" | "started" | "timeout">((resolve) => {
+      const timer = setTimeout(() => {
+        this.lifecycleWaiters.delete(id);
+        resolve("timeout");
+      }, CANCEL_SETTLE_MS);
+      this.lifecycleWaiters.set(id, (o) => {
+        clearTimeout(timer);
+        resolve(o);
+      });
+    });
+    let settled = false;
+    void outcome.then(() => { settled = true; });
+    for (let attempt = 0; attempt < CANCEL_RESENDS && !settled; attempt++) {
+      let acked = false;
+      try {
+        acked = (await q.cancelAsyncMessage(id)) === true;
+      } catch {
+        break;
+      }
+      if (acked) {
+        this.resolveLifecycle(id, "cancelled");
+        break;
+      }
+      await Promise.race([outcome, new Promise((r) => setTimeout(r, CANCEL_RESEND_MS))]);
+    }
+    return outcome;
+  }
+
+  /** 本回合的消息还没开跑就被撤掉了：当场收尾（CLI 不用重启，模型根本没收到它）。 */
+  private settleCancelledHead(head: NonNullable<SessionWorker["turnHead"]>): void {
+    if (this.turnHead !== head) return;
+    this.withdrawPending = null;
+    this.clearInterruptFallback();
+    this.turnHead = null;
+    this.turnActive = false;
+    this.emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null });
+    // 气泡必须撤掉（否则对话里有一条模型不知道的消息）
+    this.emit({ type: "user_message_withdrawn", id: head.id, text: head.text });
+  }
+
+  /** 打断：先撤回全部排队消息（对齐 CLI 的 Esc：排队的退回输入框，不在打断后接着跑），
+   *  再打断当前回合。顺序要紧——排队消息在 CLI 里，先打断的话它们会立刻开下一轮。
+   *  本回合的消息若还没开始执行（CLI 没回显），直接从队列撤掉它、当场收尾：打断拦不住
+   *  还在排队的消息，CLI 也不用重启。 */
+  private async interruptAndWithdrawQueue(): Promise<void> {
+    await Promise.all(this.queuedSends.ids().map((id) => this.withdrawQueued(id, "interrupted")));
+    const head = this.turnHead;
+    if (head && !head.started && this.turnActive) {
+      if ((await this.cancelInCli(head.id)) === "cancelled") {
+        this.settleCancelledHead(head);
+        return;
+      }
+      if (this.turnHead !== head || !this.turnActive) return; // 等结论期间本轮已收尾
+    }
+    // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
+    await this.currentQuery?.interrupt().catch(() => {});
+    // 打断恰好落在「消息刚开跑、本轮的 abort 还没就位」的空档会被吞掉（2026-10-20 冒烟实锤：
+    // interrupt 回执正常，模型照写，只能等 10 秒兜底杀进程）。本轮 1 秒内没收尾就再打一次。
+    const turnNo = this.settledTurns;
+    for (let i = 0; i < REINTERRUPT_ATTEMPTS; i++) {
+      await new Promise((r) => setTimeout(r, REINTERRUPT_AFTER_MS));
+      if (this.stopped || !this.turnActive || this.settledTurns !== turnNo || !this.currentQuery) return;
+      await this.currentQuery.interrupt().catch(() => {});
+    }
+  }
+
+  /** 本回合开头那条消息能不能整条撤回：模型还没任何输出、之前有可回到的历史、能定位 transcript。 */
+  private withdrawableTurnHead(): { id: string; text: string } | null {
+    const head = this.turnHead;
+    if (!this.turnActive || !head || head.outputSeen || !head.hadHistory) return null;
+    if (this.automationConfig || !this.resumeSource || !this.subprocessConfigDir()) return null;
+    return { id: head.id, text: head.text };
+  }
+
+  /** 主线程 assistant 消息：出现正文或工具调用 = 本回合已有输出，开头那条不再可撤回
+   *  （只有思考不算——思考丢了不可惜，CLI 也照撤）。 */
+  private noteAssistantOutput(msg: SDKAssistantMessage): void {
+    if (!this.turnHead || this.turnHead.outputSeen) return;
+    const blocks = msg.message?.content;
+    if (Array.isArray(blocks) && blocks.some((b) => b.type === "text" || b.type === "tool_use")) {
+      this.turnHead.outputSeen = true;
+    }
+  }
+
+  /** 撤回的收尾（query 已拆、CLI 已退出，文件不再被写）：把 transcript 从这条消息起截掉，
+   *  广播撤回。截断失败 = 只算普通打断（消息留在对话里），不报错打扰。 */
+  private completeWithdraw(w: { id: string; text: string }): void {
+    const configDir = this.subprocessConfigDir();
+    if (!configDir || !this.resumeSource) return;
+    try {
+      truncateTranscriptAt(configDir, this.resumeSource, w.id);
+    } catch (e) {
+      console.error("[withdraw] truncate transcript failed, message kept:", e);
+      return;
+    }
+    this.emit({ type: "user_message_withdrawn", id: w.id, text: w.text });
+  }
+
+  /** query 被拆掉（abort）而 while 要重建：CLI 里排着的消息跟着进程没了，按原样预置给
+   *  重建后的 query（去掉 priority——新 CLI 空闲，直接当新回合）。仍留在账本里，回显时照常广播。 */
+  private requeueQueuedSends(): void {
+    if (this.stopped) return;
+    for (const id of this.queuedSends.ids()) {
+      const item = this.queuedSends.take(id) as QueuedSend;
+      const { priority: _p, ...message } = item.message;
+      this.queuedSends.add({ ...item, message });
+      this.nextQueryInjections.push(message);
+    }
+  }
+
+  /** 回合出错、循环退出（不会重建）：排队消息没机会执行了，退回给发出它的那一端。 */
+  private dropQueuedSends(): void {
+    for (const item of this.queuedSends.takeAll()) {
+      this.emit({ type: "jump_withdrawn", id: item.id, text: item.text, reason: "turn_failed" });
+    }
   }
 
   /** 值守回报投进本会话：只在空闲（query 活着、没有在飞的回合）时投，忙就交回 false 让值守稍后重试。
@@ -472,22 +737,10 @@ export class SessionWorker {
     if (!this.turnActive) return;
     this.turnActive = false;
     this.emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null });
+    // 主动拆：catch 必须认出这次 abort（真 SDK 抛的不是 AbortError），否则会报一条错并
+    // break 掉循环——下一条消息就没人接了（2026-10-20 冒烟实锤）。
+    if (this.currentQuery) this.restartPending = true;
     this.abortController?.abort();
-  }
-
-  /** 从当前轮安全边界接入插队消息；会话已关闭时丢弃，禁止向 closed queue 写入。 */
-  private promoteJumpQueue(): boolean {
-    const jumps = this.jumpQueueCtl.takeAll();
-    if (!jumps.length || this.stopped) return false;
-    // 多条插队逐条 push（不合并）：/compact 这类斜杠命令作为独立用户消息才能
-    // 被 CLI 正确执行。权限模式不在此回放——存活期间用户切模式走
-    // set_permission_mode 实时通道已生效，入队快照只会把新模式回退成旧值。
-    for (const jump of jumps) {
-      this.pushUserMessage(jump.prompt, jump.images, jump.display);
-    }
-    this.emit({ type: "jump_promoted" });
-    this.turnActive = true;
-    return true;
   }
 
   /** SDK canUseTool 回调：无人应答支线守卫逻辑归位 permissions.ts 的
@@ -644,19 +897,22 @@ export class SessionWorker {
       this.applyPermissionPolicy(cmd.policy);
 
     } else if (cmd.cmd === "interrupt") {
-      // 用户主动打断：待插队消息一并作废（对齐旧"排队消息作废"语义）；挂起的权限确认
+      // 打断：排队消息撤回（退回输入框，见 interruptAndWithdrawQueue）；挂起的权限确认
       // 也一并撤销（policy hook 的 ask 路径没有 SDK signal，靠 cancelAll 兜底）。
       this.permMgr.cancelAll();
-      this.jumpQueueCtl.clear();
       cancelAllLspQueries("interrupted");
       // 内嵌浏览器挂起查询同理：用户已打断，继续等 Rust 回包没有意义（回包来了也会被静默丢弃）。
       cancelAllBrowserQueries("interrupted");
       cancelAllComputerQueries("interrupted");
-      // interrupt 的拒绝是预期结果（用户已点中断，SDK 侧无事可打断）——契约性吞掉。
-      this.currentQuery?.interrupt().catch(() => {});
+      // 用户亲手打断、模型还没任何输出：开头那条消息整条撤回（本回合 result 到达后兑现，见 finishTurn）
+      if (cmd.withdraw) this.withdrawPending = this.withdrawableTurnHead();
+      void this.interruptAndWithdrawQueue();
       // 兜底：打断不保证兑现——没有 query 可打断时整句是空操作，CLI 卡在端点上时投出去
       // 也没人应答。两种情况这一轮都永远收不了尾，网关的会话状态机就回不到干净态。
       this.armInterruptFallback();
+
+    } else if (cmd.cmd === "withdraw_queued") {
+      void this.withdrawQueued(cmd.queue_id, "user");
 
     } else if (cmd.cmd === "stop_bg_task") {
       // 终止后台任务：SDK stopTask 后 CLI 会发 task_notification(status:"stopped")，
@@ -760,7 +1016,10 @@ export class SessionWorker {
       if (cmd.permission_mode) this.applyPermissionMode(cmd.permission_mode);
       // 重开已有会话：resume_session_id → resumeSource，startLoop 据此 resume。
       // 普通新会话不带这字段，resumeSource 保持空 → 全新会话。
-      if (cmd.resume_session_id) this.resumeSource = cmd.resume_session_id;
+      if (cmd.resume_session_id) {
+        this.resumeSource = cmd.resume_session_id;
+        this.resumedFromHistory = true;
+      }
       // 自动命名：只有「全新会话」（非 resume / 非 btw / 非供应商切换 fork）
       // 才生成标题——老会话已有名字，fork 会话语义上属于源会话。标题由首条
       // 用户消息规则提炼，发消息时同步产出，不等回复、不调模型。
@@ -777,25 +1036,16 @@ export class SessionWorker {
         cmd.trusted !== false,
         cmd.lsp_languages ?? [],
       );
-      this.pushUserMessage(cmd.prompt, images, cmd.display);
+      this.markTurnHead(this.pushUserMessage(cmd.prompt, images, cmd.display), cmd.prompt, cmd.display);
       this.turnActive = true;
       return;
     }
 
-    // 插队
-    if (cmd.jump_queue && this.currentQuery && this.turnActive) {
-      this.jumpQueueCtl.request({
-        prompt: cmd.prompt,
-        images,
-        display: cmd.display,
-      });
-      if (this.toolLifecycle.isIdle()) {
-        // interrupt 拒绝 = 没有可打断的回合（用户已插队）——契约性吞掉。
-        this.currentQuery.interrupt().catch(() => {});
-      } else {
-        // 有工具在跑：要等安全边界，通知前端显示"待发出"提示条
-        this.emit({ type: "jump_queued", prompt: cmd.prompt });
-      }
+    // 忙时发送：交给 CLI 排队，不打断当前回合。前面还有排队消息时（回合刚收尾、CLI 正要
+    // 拿它开下一轮），后来的这条也得排在它后面、等回显再广播——否则气泡顺序和模型收到的
+    // 顺序对不上。
+    if (this.currentQuery && ((cmd.jump_queue && this.turnActive) || this.queuedSends.size > 0)) {
+      this.enqueueQueuedSend(cmd.queue_id, cmd.prompt, images, cmd.display);
       return;
     }
 
@@ -807,7 +1057,7 @@ export class SessionWorker {
       !this.turnActive &&
       (this.thinkingEnabled !== this.spawnedThinking || this.providerDriftPending)
     ) {
-      this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery");
+      this.markTurnHead(this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery"), cmd.prompt, cmd.display);
       this.restartQueryInPlace();
       return;
     }
@@ -817,7 +1067,8 @@ export class SessionWorker {
     // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
     // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
     // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
-    this.pushUserMessage(cmd.prompt, images, cmd.display);
+    const id = this.pushUserMessage(cmd.prompt, images, cmd.display);
+    if (!this.turnActive) this.markTurnHead(id, cmd.prompt, cmd.display);
     this.turnActive = true;
   }
 
@@ -954,19 +1205,16 @@ export class SessionWorker {
             markImageRollback: () => { this.rollbackPending = true; this.abortController?.abort(); },
             isAutomation: () => !!this.automationConfig,
             setTurnActive: (v) => { this.turnActive = v; },
-            promoteJumpQueue: () => this.promoteJumpQueue(),
-            resetToolLifecycle: () => this.toolLifecycle.reset(),
-            telemetry: (qq) => {
-              void emitContextUsage(qq, (e) => this.emit(e));
-              void this.rateLimitReporter.report(qq, (e) => this.emit(e));
-            },
             applyPlanMode: () => this.applyPermissionMode("plan"),
             emit: (e) => this.emit(e),
             mapperDeps: this.buildMapperDeps(),
-            shouldInterruptForJump: () => this.jumpQueueCtl.has() && this.toolLifecycle.isIdle(),
-            interruptQuery: () => { this.currentQuery?.interrupt().catch(() => {}); },
+            onUserReplay: (id) => this.onUserReplay(id),
+            onCommandLifecycle: (id, state) => this.onCommandLifecycle(id, state),
             onSessionInit: (newSid, qq) => this.handleSessionInit(newSid, qq),
-            onMainThreadAssistant: (m) => this.adoptAssistantModel(m),
+            onMainThreadAssistant: (m) => {
+              this.noteAssistantOutput(m);
+              this.adoptAssistantModel(m);
+            },
             onResult: (qq) => this.finishTurn(qq),
           };
           let errorTerminated = false;
@@ -987,6 +1235,7 @@ export class SessionWorker {
             }
           }
           if (errorTerminated) {
+            this.dropQueuedSends();
             // 错误终态（F3）：主动回收 CLI 子进程（N4 孤儿红线）。close 放在迭代
             // 结束之后——迭代中 close 自己是已知陷阱（见 finishTurn 的 setImmediate
             // 先例）。worker 不 stopped：下一条 send 走 handleSend 的 !currentQuery
@@ -1004,6 +1253,12 @@ export class SessionWorker {
             // 回滚本身失败时静默（会话保持现状），不把 AbortError 当错误上报。
             this.rollbackPending = false;
             this.performImageRollback();
+          } else if (this.withdrawPending) {
+            // 用户撤回执行中的消息（finishTurn 拆的 query）：截 transcript、广播撤回，
+            // 然后同 restartPending 一样继续 while、原地 resume 重建（CLI 内存里的旧历史随进程丢掉）。
+            this.completeWithdraw(this.withdrawPending);
+            this.withdrawPending = null;
+            this.restartPending = false;
           } else if (this.restartPending) {
             // spawn 期参数漂移的主动拆：不是错误、更不是回合结束——清账后继续 while，
             // 下一轮用新 thinking 值 / 新供应商 env 重建（原地 resume）。
@@ -1028,7 +1283,7 @@ export class SessionWorker {
           // 先作废它，否则下面 promote 的插队消息会被它 shift 走，下一轮 query
           // 收不到——与 2026-08-21「abort 后注入丢失」同一机制，见 retireIterators。
           this.queue.retireIterators();
-          this.promoteJumpQueue();
+          this.requeueQueuedSends();
         }
       }
     } finally {
@@ -1089,6 +1344,15 @@ export class SessionWorker {
    *  分支，批 3 纯移动）。 */
   private finishTurn(q: Awaited<ReturnType<typeof query>>): void {
     this.toolLifecycle.reset();
+    this.settledTurns += 1;
+    const head = this.turnHead;
+    this.turnHead = null;
+    // 撤回待办：本回合确实还没输出（打断和自然收尾可能赛跑）才兑现——拆掉 query，
+    // catch 里截 transcript。abort 在迭代体里调用与图片回滚同款（下一次 next 抛出）。
+    if (this.withdrawPending) {
+      if (head && head.id === this.withdrawPending.id && !head.outputSeen) this.abortController?.abort();
+      else this.withdrawPending = null;
+    }
     void emitContextUsage(q, (e) => this.emit(e));
     void this.rateLimitReporter.report(q, (e) => this.emit(e));
     // btw/自动化都是一次性会话：回合结束即自毁释放 claude.exe。streaming-input

@@ -1231,6 +1231,105 @@ describe("useChatSession per-session store", () => {
     expect(chat.pendingJumps.value.length).toBe(0);
   });
 
+  it("排队带 queueId 下发；别的端排的按 jump_queued 显示、按 id 去重；jump_promoted 按 id 只撤那一条", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+    await flush();
+
+    invokeMock.mockClear();
+    await chat.sendMessage("本端排的");
+    const sendCall = invokeMock.mock.calls.find((c) => c[0] === "send_message");
+    const myId = (sendCall?.[1] as { queueId: string; jumpQueue: boolean }).queueId;
+    expect(myId).toEqual(expect.any(String));
+    expect((sendCall?.[1] as { jumpQueue: boolean }).jumpQueue).toBe(true);
+
+    emit({ type: "jump_queued", id: myId, prompt: "本端排的", session_id: "uuid-a" });
+    emit({ type: "jump_queued", id: "phone-1", prompt: "手机排的", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value.map((p) => p.text)).toEqual(["本端排的", "手机排的"]);
+
+    emit({ type: "user_message", id: "phone-1", text: "手机排的", session_id: "uuid-a" });
+    emit({ type: "jump_promoted", id: "phone-1", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value.map((p) => p.id)).toEqual([myId]);
+  });
+
+  it("点 × 撤回：撤成 → 提示条消失、文字回到本端输入框；撤不回 → 标「已送达」", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+    await flush();
+    await chat.sendMessage("想撤的");
+    const id = chat.pendingJumps.value[0].id;
+
+    invokeMock.mockClear();
+    await chat.withdrawQueued(id);
+    expect(invokeMock).toHaveBeenCalledWith("withdraw_queued_message", { sessionId: "uuid-a", queueId: id });
+    emit({ type: "jump_withdrawn", id, text: "想撤的", reason: "user", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value).toEqual([]);
+    expect(chat.rollbackText.value).toBe("想撤的");
+    chat.consumeRollbackText();
+
+    // 别的端点 × 撤回的：本端不回填
+    emit({ type: "jump_queued", id: "other", prompt: "别人的", session_id: "uuid-a" });
+    emit({ type: "jump_withdrawn", id: "other", text: "别人的", reason: "user", session_id: "uuid-a" });
+    await flush();
+    expect(chat.rollbackText.value).toBe("");
+
+    await chat.sendMessage("晚了一步");
+    const late = chat.pendingJumps.value[0].id;
+    await chat.withdrawQueued(late);
+    emit({ type: "jump_withdraw_failed", id: late, session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value[0]).toMatchObject({ id: late, withdrawFailed: true });
+  });
+
+  it("打断：带 withdraw 下发；排队的退回本端输入框，开头那条被撤回时删气泡并退回文字", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+    emit({ type: "user_message", id: "head-1", text: "刚发的", session_id: "uuid-a" });
+    await flush();
+    await chat.sendMessage("排着的");
+    const qid = chat.pendingJumps.value[0].id;
+
+    invokeMock.mockClear();
+    await chat.interrupt();
+    expect(invokeMock).toHaveBeenCalledWith("interrupt_session", { sessionId: "uuid-a", withdraw: true });
+    // 提示条只认事件：撤回事件到之前还在
+    expect(chat.pendingJumps.value.length).toBe(1);
+
+    emit({ type: "jump_withdrawn", id: qid, text: "排着的", reason: "interrupted", session_id: "uuid-a" });
+    emit({ type: "message_stop", stop_reason: "interrupted", total_cost_usd: null, usage: null, session_id: "uuid-a" });
+    emit({ type: "user_message_withdrawn", id: "head-1", text: "刚发的", session_id: "uuid-a" });
+    await flush();
+    expect(chat.pendingJumps.value).toEqual([]);
+    expect(chat.messages.value.some((m) => m.id === "head-1")).toBe(false);
+    expect(chat.rollbackText.value).toBe("排着的\n\n刚发的");
+  });
+
+  it("别的端打断导致本端排的消息退回：文字回到本端（发出它的那一端）", async () => {
+    const sid = ref<string | null>("uuid-a");
+    const chat = useChatSession(sid);
+    await flush();
+    await sendViaSidecar(chat, "uuid-a", "q");
+    await flush();
+    await chat.sendMessage("我排的");
+    const id = chat.pendingJumps.value[0].id;
+    emit({ type: "jump_withdrawn", id, text: "我排的", reason: "interrupted", session_id: "uuid-a" });
+    // 别的端按 Esc 撤回了开头那条：本端只删气泡，不回填
+    emit({ type: "user_message", id: "h", text: "别人的头", session_id: "uuid-a" });
+    emit({ type: "user_message_withdrawn", id: "h", text: "别人的头", session_id: "uuid-a" });
+    await flush();
+    expect(chat.rollbackText.value).toBe("我排的");
+    expect(chat.messages.value.some((m) => m.id === "h")).toBe(false);
+  });
+
   it("远程客户端发的消息只带 user_message 事件 → 桌面端照样出气泡并进入忙碌", async () => {
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);

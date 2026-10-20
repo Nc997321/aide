@@ -305,7 +305,7 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 
 | 组 | 方法 |
 |---|---|
-| `chat` 聊天控制 | `send_message` `permission_response` `interrupt_session` `stop_chat_session` `stop_bg_task` `set_model` `set_effort` `set_permission_mode` `btw_ask` `get_default_models` `get_default_permission_modes` |
+| `chat` 聊天控制 | `send_message` `permission_response` `interrupt_session` `withdraw_queued_message` `stop_chat_session` `stop_bg_task` `set_model` `set_effort` `set_permission_mode` `btw_ask` `get_default_models` `get_default_permission_modes` |
 | `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` |
 | `workspace` 工作区 | `list_workspaces` `daily_workspace` `get_active_workspace` `is_workspace_trusted` `trust_workspace` `untrust_workspace` |
 | `settings` 设置与供应商 | `get_settings` `set_settings` `get_providers` `set_providers` `get_active_provider_id` `set_active_provider_id` `get_provider_catalog` `refresh_models` `claude_credentials_exist` `load_notifications` `save_notifications` |

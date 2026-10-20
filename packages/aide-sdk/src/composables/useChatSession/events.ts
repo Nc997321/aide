@@ -50,6 +50,7 @@ import {
   stores,
   aliasMap,
   finalizedSids,
+  type SessionStore,
 } from "./state";
 import { maybeEvict } from "./evict";
 import {
@@ -235,6 +236,19 @@ function blocksFromDisplay(
  * `session_dead` 会再来，所以在这里对**每个正忙的会话**走与 `session_dead` 同一套收尾——
  * 否则流式气泡与忙碌态会永远挂着。闲置会话不动：它们没有进行中的轮次，下一条消息会重新拉起运行时。
  */
+/** 撤回的文字退回输入框：走与图片回滚同一条 rollbackText 通道（ChatInputBox 消费后清空）；
+ *  连着撤回多条时按顺序拼起来，不互相覆盖。 */
+function restoreToInput(store: SessionStore, text: string): void {
+  if (!text) return;
+  store.rollbackText = store.rollbackText ? `${store.rollbackText}\n\n${text}` : text;
+}
+
+/** 这条排队消息已了结（接入或撤回）：清掉本端意图账。 */
+function forgetQueued(store: SessionStore, id: string): void {
+  store.withdrawRequests = store.withdrawRequests.filter((x) => x !== id);
+  store.ownQueued = store.ownQueued.filter((x) => x !== id);
+}
+
 function handleRuntimeDead(e: Record<string, unknown>): void {
   const { setSessionState } = useSessionState();
   const reason = e["reason"] as string | undefined;
@@ -812,9 +826,38 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "jump_queued": {
-      // dispatchSend 在忙碌排队时已把消息暂存进 pendingJumps 并显示提示条——
-      // sidecar 此处回传仅作确认（工具在跑、需等安全边界），不再重复 push，否则
-      // 提示条会重复出现两条。工具空闲路径不发此事件，直接走 jump_promoted。
+      // 排队消息（任一端发的）：本端发的已在 sendMessage 里先行写入（免 RTT），按 id 去重。
+      const id = String(e["id"] ?? "");
+      if (id && !store.pendingJumps.some((p) => p.id === id)) {
+        store.pendingJumps.push({ id, text: String(e["prompt"] ?? "") });
+      }
+      break;
+    }
+    case "jump_withdrawn": {
+      // 排队消息被撤回、没进对话：撤掉提示条；本端发起的撤回（或本端发的消息被打断 /
+      // 回合出错退回）把文字放回本端输入框。
+      const id = String(e["id"] ?? "");
+      store.pendingJumps = store.pendingJumps.filter((p) => p.id !== id);
+      const mine = store.withdrawRequests.includes(id) || (e["reason"] !== "user" && store.ownQueued.includes(id));
+      if (mine) restoreToInput(store, String(e["text"] ?? ""));
+      forgetQueued(store, id);
+      break;
+    }
+    case "jump_withdraw_failed": {
+      // 撤不回：CLI 已接入，气泡马上由 user_message 出现
+      const id = String(e["id"] ?? "");
+      const p = store.pendingJumps.find((x) => x.id === id);
+      if (p) p.withdrawFailed = true;
+      store.withdrawRequests = store.withdrawRequests.filter((x) => x !== id);
+      break;
+    }
+    case "user_message_withdrawn": {
+      // 本回合开头那条消息被整条撤回（打断时模型还没输出）：各端删气泡，按了 Esc 的那端拿回文字
+      const id = String(e["id"] ?? "");
+      const idx = store.messages.findIndex((m) => m.role === "user" && m.id === id);
+      if (idx >= 0) store.messages.splice(idx, 1);
+      if (store.turnWithdrawRequested) restoreToInput(store, String(e["text"] ?? ""));
+      store.turnWithdrawRequested = false;
       break;
     }
     case "jump_promoted": {
@@ -823,7 +866,14 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // 全部发完才发 jump_promoted）。新轮次由 sidecar 直接发起、不经过
       // dispatchSend，这里把忙碌态补回来（否则按钮区会闪"发送"且没有停止按钮）。
       // 上一轮若留下失败说明，也不能覆盖已经开始的下一轮。
-      store.pendingJumps.length = 0;
+      // 按 id 撤掉那一条（旧版 sidecar 不带 id：全部撤掉）
+      const promotedId = e["id"] as string | undefined;
+      if (promotedId) {
+        store.pendingJumps = store.pendingJumps.filter((p) => p.id !== promotedId);
+        forgetQueued(store, promotedId);
+      } else {
+        store.pendingJumps.length = 0;
+      }
       store.contextCompaction = null;
       store.isBusy = true;
       setSessionState(sid, "running");
@@ -843,7 +893,8 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         e["text"] as string,
       );
       store.messages.push({
-        id: crypto.randomUUID(),
+        // sidecar 给的 id = 这条消息的 SDK uuid，撤回（user_message_withdrawn）按它删气泡
+        id: typeof e["id"] === "string" && e["id"] ? (e["id"] as string) : crypto.randomUUID(),
         role: "user",
         blocks: userBlocks,
         timestamp: Date.now(),

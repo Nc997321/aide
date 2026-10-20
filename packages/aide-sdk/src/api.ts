@@ -41,8 +41,10 @@ export interface SendMessageParams {
   initialEffort?: string | null;
   /** 每条消息透传当前权限模式，sidecar 幂等 */
   permissionMode?: string | null;
-  /** 排队发送标记：sidecar 在安全边界自行 interrupt 后再发 */
+  /** 忙时发送标记：sidecar 交给 CLI 排队（不打断当前回合） */
   jumpQueue?: boolean | null;
+  /** 排队 id（发起方生成的 UUID）：提示条 / 撤回 / 接入按它对账 */
+  queueId?: string | null;
   /** **客户端已知的附加目录全量**（非"本条新增"）：Rust 裁定（只认已注册工作区）后下发
    *  sidecar 做并集合并，幂等——重连/换端把已知全量再报一遍即可自愈（worker 账本随进程
    *  消失，见方案 D9）。与 `workspaceRoot`（会话主根/归属）语义不同。 */
@@ -154,8 +156,14 @@ export const api = {
   stopChatSession(sessionId: string): Promise<void> {
     return getTransport().invoke("stop_chat_session", { sessionId });
   },
-  interruptSession(sessionId: string): Promise<void> {
-    return getTransport().invoke("interrupt_session", { sessionId });
+  /** withdraw：用户亲手打断（Esc / 停止）——这一轮还没任何输出时连同触发它的消息整条撤回。
+   *  不带 = 只打断（程序化打断不改写历史）。排队消息两种都撤回。 */
+  interruptSession(sessionId: string, opts: { withdraw?: boolean } = {}): Promise<void> {
+    return getTransport().invoke("interrupt_session", { sessionId, ...(opts.withdraw ? { withdraw: true } : {}) });
+  },
+  /** 撤回一条还在排队的消息。结果只走事件：jump_withdrawn / jump_withdraw_failed。 */
+  withdrawQueuedMessage(sessionId: string, queueId: string): Promise<void> {
+    return getTransport().invoke("withdraw_queued_message", { sessionId, queueId });
   },
   /** 发送一条用户消息（fire-and-forget 语义由调用方决定：新会话 Rust 现拉起
    *  进程较慢，调用点通常 .catch 兜底不 await）。DTO 字段即 send_message 参数；

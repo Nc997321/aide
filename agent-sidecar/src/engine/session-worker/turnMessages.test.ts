@@ -24,14 +24,11 @@ function stubCtx(over: Partial<TurnContext> = {}): TurnContext {
     isAutomation: () => false,
     markImageRollback: vi.fn(),
     setTurnActive: vi.fn(),
-    promoteJumpQueue: () => false,
-    resetToolLifecycle: vi.fn(),
-    telemetry: vi.fn(),
     applyPlanMode: vi.fn(),
     emit: vi.fn(),
     mapperDeps: {} as TurnContext["mapperDeps"],
-    shouldInterruptForJump: () => false,
-    interruptQuery: vi.fn(),
+    onUserReplay: vi.fn(),
+    onCommandLifecycle: vi.fn(),
     onSessionInit: vi.fn(),
     onMainThreadAssistant: vi.fn(),
     onResult: vi.fn(),
@@ -60,18 +57,25 @@ describe("handleQueryMessage", () => {
     expect(autCtx.markImageRollback).not.toHaveBeenCalled();
   });
 
-  it("result + 插队接入成功 → 复位工具生命周期 + 遥测 + 返回 continue（跳过后续分派）", () => {
-    const ctx = stubCtx({ promoteJumpQueue: () => true });
-    const out = handleQueryMessage(msg({ type: "result" }), q, ctx);
+  it("用户消息回显 → onUserReplay(uuid) + continue，不进 mapper；子代理回显不认", () => {
+    const ctx = stubCtx();
+    const out = handleQueryMessage(msg({ type: "user", isReplay: true, uuid: "q-1", parent_tool_use_id: null, message: { content: "hi" } }), q, ctx);
     expect(out).toBe("continue");
-    expect(ctx.setTurnActive).toHaveBeenCalledWith(false);
-    expect(ctx.resetToolLifecycle).toHaveBeenCalled();
-    expect(ctx.telemetry).toHaveBeenCalledWith(q);
-    expect(ctx.onResult).not.toHaveBeenCalled(); // continue 提前返回
+    expect(ctx.onUserReplay).toHaveBeenCalledWith("q-1");
+    expect(mapSdkMessage).not.toHaveBeenCalled();
+    handleQueryMessage(msg({ type: "user", isReplay: true, uuid: "q-2", parent_tool_use_id: "t", message: { content: "x" } }), q, ctx);
+    expect(ctx.onUserReplay).toHaveBeenCalledTimes(1);
+  });
+
+  it("命令生命周期帧 → onCommandLifecycle(uuid, state) + continue，不进 mapper", () => {
+    const ctx = stubCtx();
+    const out = handleQueryMessage(msg({ type: "command_lifecycle", command_uuid: "u1", state: "started" }), q, ctx);
+    expect(out).toBe("continue");
+    expect(ctx.onCommandLifecycle).toHaveBeenCalledWith("u1", "started");
     expect(mapSdkMessage).not.toHaveBeenCalled();
   });
 
-  it("result 无插队 → 正常走 mapSdkMessage + onResult", () => {
+  it("result → 正常走 mapSdkMessage + onResult", () => {
     const ctx = stubCtx();
     const out = handleQueryMessage(msg({ type: "result" }), q, ctx);
     expect(out).toBeUndefined();
@@ -86,14 +90,6 @@ describe("handleQueryMessage", () => {
     expect(out).toBe("terminate");
     expect(mapSdkMessage).toHaveBeenCalled();          // 错误帧必须先发出去
     expect(ctx.onResult).toHaveBeenCalledWith(q);      // 遥测/自毁调度不受影响
-  });
-
-  it("错误终态但有插队待接入 → continue 优先（插队回合接管，终止推迟到它的 result）", () => {
-    isErrorResult.mockReturnValue(true);
-    const ctx = stubCtx({ promoteJumpQueue: () => true });
-    const out = handleQueryMessage(msg({ type: "result", subtype: "error_during_execution" }), q, ctx);
-    expect(out).toBe("continue");
-    expect(ctx.onResult).not.toHaveBeenCalled();
   });
 
   it("良性打断（interrupt）result 不 terminate——isErrorResult 为 false 即原 query 存活（B5 契约）", () => {
@@ -133,15 +129,6 @@ describe("handleQueryMessage", () => {
       ctx.emit,
       ctx.mapperDeps,
     );
-  });
-
-  it("插队挂起且工具空闲 → interruptQuery；否则不打断", () => {
-    const ctx = stubCtx({ shouldInterruptForJump: () => true });
-    handleQueryMessage(msg({ type: "stream_event" }), q, ctx);
-    expect(ctx.interruptQuery).toHaveBeenCalledTimes(1);
-    const idleCtx = stubCtx({ shouldInterruptForJump: () => false });
-    handleQueryMessage(msg({ type: "stream_event" }), q, idleCtx);
-    expect(idleCtx.interruptQuery).not.toHaveBeenCalled();
   });
 
   it("system/init → onSessionInit(session_id, q)；不走 assistant/result 分支", () => {

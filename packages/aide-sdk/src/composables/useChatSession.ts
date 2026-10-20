@@ -246,7 +246,7 @@ function sendQueued(
   sid: string,
   item: QueuedSend,
   display: UserMessageBlock[],
-  opts: { resumeId?: string; jumpQueue?: boolean },
+  opts: { resumeId?: string; jumpQueue?: boolean; queueId?: string },
 ) {
   // 会话已收口：不再向已销毁会话发 send_message（会复活 sidecar 进程）
   if (disposedSids.has(sid)) return;
@@ -280,9 +280,10 @@ function sendQueued(
     initialEffort: item.effort || null,
     // 每条消息都带当前选中的权限模式，sidecar 侧幂等（同值跳过）
     permissionMode: item.permissionMode || null,
-    // 排队：不在这里打断，原样透传给 sidecar，由它在安全边界（当前工具调用
-    // 跑完）自己决定何时真正 interrupt——见 jumpQueue 分支的调用处。
+    // 排队：不打断当前回合，sidecar 交给 CLI 排队（两轮工具调用之间并进当前回合）。
+    // queueId 是本端生成的排队 id，提示条 / 撤回按它对账。
     jumpQueue: opts.jumpQueue || null,
+    queueId: opts.queueId ?? null,
     // 附加目录授权（D9：客户端已知全量）。Rust 裁定合法性 → sidecar 并集落账。
     additionalDirs: item.additionalDirs?.length ? item.additionalDirs : null,
   }).catch((e) => {
@@ -394,10 +395,9 @@ export function useChatSession(sessionId: Ref<string | null>) {
    * "创建会话"（写元数据 / 加侧栏 / 记最近访问）推迟到 SDK 用 session_init 确认
    * 真实 id 之后才发生，见 finalizeSession。
    *
-   * 会话忙碌（上一轮还在生成）时一律走排队：带 jumpQueue 标记透传给 sidecar，
-   * 由它在安全边界（当前工具调用跑完，没有工具在跑就是立刻）interrupt 当前轮
-   * 再发出——不在前端 interrupt_session，那会腰斩还没跑完的工具调用。等待安全
-   * 边界期间 sidecar 会发 jump_queued，输入区上方显示"待发出"提示条。
+   * 会话忙碌（上一轮还在生成）时一律走排队（与 Claude Code CLI 同一种排队）：不打断
+   * 当前回合，sidecar 交给 CLI，在两轮工具调用之间并进当前回合（回合已在收尾就作为
+   * 下一轮）。排队期间输入区上方显示「排队」提示条，可点 × 撤回。
    */
   async function sendMessage(prompt: string, opts: SendOptions = {}): Promise<string | undefined> {
     let sid = sessionId.value;
@@ -469,12 +469,18 @@ export function useChatSession(sessionId: Ref<string | null>) {
     // 排队：输入区上方立刻显示"待发出"提示条——不等 sidecar 的 jump_queued 回传
     // （有 RTT，手机端尤其明显）。气泡本身不在这里画：sidecar 真正接入这条消息
     // 时会广播 user_message，由 events.ts 统一渲染。
+    let queueId: string | undefined;
     if (queued === "queued") {
-      store.pendingJumps.push({ text: lastDispatchedPrompt[sid] });
+      queueId = crypto.randomUUID();
+      store.pendingJumps.push({ id: queueId, text: lastDispatchedPrompt[sid] });
+      store.ownQueued.push(queueId);
     }
+    // 新的一条发出去了：上一次 Esc 的撤回意图作废（别让迟到的撤回事件把文字塞回来）
+    store.turnWithdrawRequested = false;
     sendQueued(sid, item, buildUserDisplay(item), {
       resumeId: resolvedResumeId,
       jumpQueue: queued === "queued",
+      queueId,
     });
     return sid;
   }
@@ -496,21 +502,42 @@ export function useChatSession(sessionId: Ref<string | null>) {
     await respondPermissionFor(sid, id, approved, opts);
   }
 
+  /** 用户打断（Esc / 停止按钮），对齐 Claude Code CLI 的 Esc：排队消息退回本端输入框；
+   *  模型还没任何输出时，触发这一轮的那条消息也整条撤回（对话里像没发过）。两者都由
+   *  sidecar 的撤回事件兑现——提示条 / 气泡的增删只认事件，这里只记下「是本端要的」。 */
   async function interrupt() {
     const sid = sessionId.value;
     if (!sid) return;
     const store = getStore(sid);
+    for (const p of store.pendingJumps) {
+      if (!store.withdrawRequests.includes(p.id)) store.withdrawRequests.push(p.id);
+    }
+    store.turnWithdrawRequested = true;
     try {
-      await api.interruptSession(sid);
+      await api.interruptSession(sid, { withdraw: true });
+    } catch (e) {
+      // 命令没送到（运行时不在）：不会有撤回事件，提示条就地清掉，别悬着
+      store.pendingJumps.length = 0;
+      store.turnWithdrawRequested = false;
+      throw e;
     } finally {
       store.isBusy = false;
       store.contextCompaction = null;
       store.pendingPermissions = [];
-      store.pendingJumps.length = 0; // 用户主动打断：待排队消息一并作废（sidecar 同）
       finishStreaming(store);
       const { setSessionState } = useSessionState();
       setSessionState(sid, "waiting"); // sidecar 仍存活
     }
+  }
+
+  /** 撤回一条排队消息（提示条上的 ×）。撤成 → jump_withdrawn 撤掉提示条、文字退回本端
+   *  输入框；CLI 已接入 → 提示条改显示「已发出」，气泡随后出现。 */
+  async function withdrawQueued(queueId: string) {
+    const sid = sessionId.value;
+    if (!sid) return;
+    const store = getStore(sid);
+    if (!store.withdrawRequests.includes(queueId)) store.withdrawRequests.push(queueId);
+    await api.withdrawQueuedMessage(sid, queueId);
   }
 
   /** 注册会话落地回调（tempId → realId）。返回解绑函数——组件卸载时必须调用，
@@ -695,6 +722,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     sendBtw,
     respondPermission,
     interrupt,
+    withdrawQueued,
     onSessionCreated,
     setModel,
     rollbackModelChoice,

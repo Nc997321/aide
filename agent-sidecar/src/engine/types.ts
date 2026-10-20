@@ -284,11 +284,21 @@ export type ChatEvent =
   // 全部附加目录；rejected = 本次被 Rust 判掉（未注册/非法）的条目；error = 活体扩根
   // （applyFlagSettings）失败的原文。后两者是"别静默"的回声，不参与授权。
   | { type: "workspace_attached"; dirs: string[]; rejected?: string[]; error?: string }
-  // 插队消息已登记、在等安全边界（当前工具调用跑完）才真正 interrupt——前端据此
-  // 显示"待发出"提示条。prompt 供提示条展示原文。
-  | { type: "jump_queued"; prompt: string }
-  // 待插队消息已全部接入后续轮次（或不再需要提示）——前端清掉提示条。
-  | { type: "jump_promoted" }
+  // 忙时发的消息已交给 CLI 排队（不打断当前回合）——各端据此显示「排队」提示条。
+  // id = 发起方生成的排队 id（同时是 SDK 消息 uuid），撤回 / 接入按它对账；prompt 供提示条展示原文。
+  | { type: "jump_queued"; id: string; prompt: string }
+  // 这条排队消息已被模型接入（CLI 回显的那一刻；紧跟在它的 user_message 之后）——撤掉提示条。
+  // id 缺省（旧版）= 全部撤掉。
+  | { type: "jump_promoted"; id?: string }
+  // 排队消息被撤回，没进对话。reason：user = 有人点了 ×；interrupted = 打断时连带撤回
+  // （对齐 CLI 的 Esc：排队的退回输入框）；turn_failed = 回合出错、CLI 退出，消息没机会执行。
+  // text 是原始输入，发起撤回 / 发出这条消息的那一端据此回填输入框。
+  | { type: "jump_withdrawn"; id: string; text: string; reason: "user" | "interrupted" | "turn_failed" }
+  // 撤不回：CLI 已经把它接入了（气泡随后由 user_message 出现）。
+  | { type: "jump_withdraw_failed"; id: string }
+  // 本回合开头那条消息被整条撤回（用户打断时模型还没任何输出）：对话里像没发过，
+  // 各端按 id 删掉气泡；发起打断的那一端把 text 退回输入框。
+  | { type: "user_message_withdrawn"; id: string; text: string }
   // 用户消息已入队的权威广播——**三端（桌面/鸿蒙/PWA）只认这条事件渲染用户气泡**，
   // 不再本地乐观渲染。这是「命令 → 事件」回灌闭环缺失的那一环：send 走命令通道，
   // agent 回复走事件通道，于是两端都能看见回复、只有发起方能看见自己提的问题。
@@ -297,7 +307,8 @@ export type ChatEvent =
   // 重复渲染，也不需要 message_id 去重。
   // 时序：插队消息在真正接入（promoteJumpQueue）时才发，不是登记（jump_queued）时发
   // ——接收端看到气泡的时机与模型真正收到这条消息的时机一致。
-  | { type: "user_message"; text: string; display?: UserMessageBlock[] }
+  // id：这条消息的 SDK uuid（撤回按它删气泡）；旧版缺省。
+  | { type: "user_message"; id?: string; text: string; display?: UserMessageBlock[] }
   // sdk_roster：SDK 原始清单（SDK 自己的 value + 带版本的显示名，未去重），只在 spawn
   // 坐实那一发带。宿主用它给「未起会话时的静态别名清单」贴版本标签；UI 不读。
   | { type: "models_available"; models: ModelOption[]; current: string; sdk_roster?: ModelOption[] }
@@ -544,8 +555,10 @@ export type SidecarCommand =
       attach_rejected?: string[];
       // 供应商连接身份真的漂移了才带 true——worker 原地 resume 重建 query（不 fork，会话 id 不变）。
       provider_switched?: boolean;
-      // 忙碌时的"插队"标记：不在当前轮立刻打断，等安全边界再 interrupt。
+      // 忙碌时发的标记：交给 CLI 排队（priority:"next"，在两轮工具调用之间并进当前回合），
+      // 不打断。queue_id = 发起方生成的排队 id（SDK 消息 uuid），撤回 / 接入按它对账。
       jump_queue?: boolean;
+      queue_id?: string;
       // btw 支线对话:命中 → 下一次建 query() 时 resume fork_from + forkSession:true。
       // fork_from 是 fork 源会话 ID（BTW 自己的 session_id 仅用于路由，不传给 SDK）。
       // fork_from 省略/空 = 不 fork,全新会话——btw 任务支线(git-commit)走这条路:
@@ -634,7 +647,11 @@ export type SidecarCommand =
       // 随放行原子入库，worker 销毁即消失。纯内存态，不持久化、不进策略快照。
       sessionRules?: PermissionRuleDraft[];
     }
-  | { cmd: "interrupt"; session_id: string }
+  // withdraw：用户亲手打断（Esc / 停止按钮）——本回合还没任何输出时连同开头那条消息整条撤回。
+  // 缺省 = 只打断（自动化超时等程序化打断不许改写历史）。排队消息两种都会撤回。
+  | { cmd: "interrupt"; session_id: string; withdraw?: boolean }
+  // 撤回一条还在排队的消息（排队条上的 ×）。结果只走事件：jump_withdrawn / jump_withdraw_failed。
+  | { cmd: "withdraw_queued"; session_id: string; queue_id: string }
   // 终止一个后台任务（provider-agnostic：任何 provider 的"停掉后台命令"都映射成它）。
   // 成功后任务会走正常终态通道（bg_task_ended, status:"stopped"），不需要额外回执事件。
   | { cmd: "stop_bg_task"; session_id: string; task_id: string }

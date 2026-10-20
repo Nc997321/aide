@@ -163,6 +163,9 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
       ? { pathToClaudeCodeExecutable: resolveClaudeExe() }
       : {}),
     ...forkResumeOptions(p.fork.resumeSource, p.fork.shouldFork),
+    // CLI 把接入模型的每条用户消息按 uuid 回显：忙时排队的消息什么时候被并进回合只有 CLI
+    // 知道，worker 靠回显在那一刻广播气泡（见 desktop/jumpQueue.ts）。
+    extraArgs: { "replay-user-messages": null },
     // 任务支线(tools 白名单)在此覆盖前面的统一 allowedTools;问答支线
     // 只带 persistSession:false,不碰工具列表(缓存前缀红线)。
     // 自动化:tools 收成白名单 + maxTurns/maxBudgetUsd 护栏透传。

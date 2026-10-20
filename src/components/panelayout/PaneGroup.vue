@@ -69,6 +69,7 @@ const {
   sendMessage,
   sendBtw,
   interrupt,
+  withdrawQueued,
   setModel,
   setEffort,
   setPermissionMode,
@@ -278,6 +279,7 @@ async function onPickMode(mode: ChatMode) {
       @set-permission-mode="setPermissionMode"
       @respond-permission="onRespondPermission"
       @rollback-text-consumed="consumeRollbackText"
+      @withdraw-queued="withdrawQueued"
     />
     <BtwPanel :owner-sid="sessionIdRef" @ask="onSendBtw" />
     </div>

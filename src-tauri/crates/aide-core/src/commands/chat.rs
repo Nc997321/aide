@@ -16,6 +16,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("send_message", send_message),
     command!("permission_response", permission_response),
     command!("interrupt_session", interrupt_session),
+    command!("withdraw_queued_message", withdraw_queued_message),
     command!("stop_bg_task", stop_bg_task),
     command!("set_model", set_model),
     command!("model_switch_confirm_decision", model_switch_confirm_decision),
@@ -97,6 +98,8 @@ struct SendOptions<'a> {
     initial_effort: Option<String>,
     permission_mode: Option<String>,
     jump_queue: bool,
+    /// 排队消息的 id（客户端生成的 UUID）：sidecar 拿它当 SDK 消息 uuid，撤回 / 接入事件按它对账。
+    queue_id: Option<String>,
     provider_switched: bool,
     thinking_enabled: bool,
     /// 输出样式名（见 settings.rs 的 DEFAULT_OUTPUT_STYLE）。**非默认才落字段**——
@@ -130,6 +133,9 @@ fn build_send_command(
     attach_env_override(&mut cmd, "CLAUDE_CODE_EFFORT_LEVEL", opts.initial_effort);
     attach_permission_mode(&mut cmd, opts.permission_mode);
     attach_flag(&mut cmd, "jump_queue", opts.jump_queue);
+    if let Some(id) = opts.queue_id {
+        cmd["queue_id"] = json!(id);
+    }
     attach_flag(&mut cmd, "provider_switched", opts.provider_switched);
     attach_output_style(&mut cmd, &opts.output_style);
     attach_additional_dirs(&mut cmd, opts.attach.as_ref());
@@ -287,6 +293,9 @@ pub struct SendMessageArgs {
     pub(crate) permission_mode: Option<String>,
     #[serde(default)]
     pub(crate) jump_queue: Option<bool>,
+    /// 排队消息 id（见 SendOptions.queue_id）。
+    #[serde(default)]
+    pub(crate) queue_id: Option<String>,
     #[serde(default)]
     pub(crate) workspace_root: Option<String>,
     /// @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
@@ -305,6 +314,45 @@ pub struct SendMessageArgs {
 async fn send_message(core: Arc<Core>, a: SendMessageArgs) -> Result<(), String> {
     core.subsessions.note_user_send(&a.session_id);
     dispatch_send(core, a, SendExtra::default()).await
+}
+
+/// 发送管线分段计时。用户气泡要等这条命令走完、sidecar 广播 user_message 才出现
+/// （UI 只认事件通道），所以这里每一段的耗时都直接是「点了发送、气泡迟迟不出」的时长。
+/// 慢的时候（≥ SLOW_SEND_MS）记一条 warn 列出各段，慢在哪一步从日志里一眼看出。
+struct SendTimer {
+    start: std::time::Instant,
+    last: std::time::Instant,
+    stages: Vec<(&'static str, u128)>,
+}
+
+const SLOW_SEND_MS: u128 = 300;
+
+impl SendTimer {
+    fn new() -> Self {
+        let now = std::time::Instant::now();
+        Self { start: now, last: now, stages: Vec::new() }
+    }
+
+    fn mark(&mut self, stage: &'static str) {
+        let now = std::time::Instant::now();
+        self.stages.push((stage, now.duration_since(self.last).as_millis()));
+        self.last = now;
+    }
+
+    fn report(&self, session_id: &str) {
+        let total = self.start.elapsed().as_millis();
+        let stages = self
+            .stages
+            .iter()
+            .map(|(k, ms)| format!("{k}={ms}ms"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        if total >= SLOW_SEND_MS {
+            tracing::warn!(session_id, total_ms = total as u64, %stages, "send_message 慢：气泡要等这条命令走完才出现");
+        } else {
+            tracing::debug!(session_id, total_ms = total as u64, %stages, "send_message 耗时");
+        }
+    }
 }
 
 /// Host 内部发送附带的、客户端不能填的字段。
@@ -327,10 +375,12 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         initial_effort,
         permission_mode,
         jump_queue,
+        queue_id,
         workspace_root,
         additional_dirs,
         provider,
     } = a;
+    let mut timer = SendTimer::new();
     let runtime_mgr = &core.runtime;
     let workspace_state = core.workspace.clone();
     let settings_service = core.settings.clone();
@@ -340,6 +390,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     // 须在 session_cwd 之前——它可能先给存量会话补上 wsPath。
     let sid_for_scope = session_id.clone();
     let scoped_config_root = blocking(move || Ok(adopt_scoped_session(&sid_for_scope))).await?;
+    timer.mark("scope");
     let cwd = session_cwd(&session_id, &workspace_root, &workspace_state);
     // 工作目录必须真在：不在时 sidecar 起 claude 会 ENOENT，SDK 把它误报成「二进制与 libc 不匹配」
     // ——用户拿到一条完全错误的线索（2026-09-30 真机）。如实说是哪个目录不在。
@@ -347,6 +398,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     if !blocking(move || Ok(crate::workspace::present(&cwd_check))).await? {
         return Err(format!("会话工作目录不存在：{}", cwd.display()));
     }
+    timer.mark("cwd");
     let cwd_str = cwd.to_string_lossy().to_string();
 
     // 显式注册：会话 cwd 在发送前幂等落账进工作区注册表（新装首聊回落 home
@@ -359,9 +411,11 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
             tracing::warn!(?e, cwd = %cwd.display(), "send_message: register workspace failed");
         }
     }
+    timer.mark("register");
 
     let active =
         resolve_send_provider(settings_service.clone(), &session_id, provider).await?;
+    timer.mark("provider");
     let snapshot_service = settings_service.clone();
     // 读设置失败不阻塞发送（proxy / thinking / output_style 各有兜底），但不能无声：
     // 用户选了非默认输出样式却读不到设置时，这条日志是唯一线索（同上方登记工作区的
@@ -381,6 +435,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
             None
         }
     };
+    timer.mark("settings");
     let proxy = settings
         .as_ref()
         .map(|s| s.proxy.clone())
@@ -429,6 +484,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
             initial_effort,
             permission_mode,
             jump_queue: jump_queue.unwrap_or(false),
+            queue_id,
             provider_switched,
             thinking_enabled,
             output_style,
@@ -446,7 +502,9 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     // （挂载条件与 trusted 并列，见 lspTools.ts 的四档闸门）。
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
     // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
+    timer.mark("build");
     cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
+    timer.mark("lsp_langs");
     // 本工作区的 LSP 开关：sidecar 据此决定预热 / 作废就绪记录（工具照挂，关时 Host 回 disabled）。
     // 把关仍在 ensure_server——这里只是让 sidecar 少发注定被拒的预热。
     cmd["lsp_enabled"] = json!(crate::commands::workspace::lsp_switch_on(&cwd_str));
@@ -462,6 +520,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     {
         cmd["permission_policy"] = json!(snapshot);
     }
+    timer.mark("policy");
 
     if let Some(parent) = extra.subsession_parent {
         cmd["subsession_parent"] = json!(parent);
@@ -475,9 +534,13 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     // 而不是回一个「Runtime not spawned」。已在跑时这里只是一次内存判断。
     if !runtime_mgr.is_running() {
         crate::runtime::start(&app).await?;
+        timer.mark("runtime_start");
     }
 
-    runtime_mgr.send_to_runtime(&cmd).await
+    let sent = runtime_mgr.send_to_runtime(&cmd).await;
+    timer.mark("write");
+    timer.report(&session_id);
+    sent
 }
 
 #[derive(Deserialize)]
@@ -532,13 +595,33 @@ async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Resu
 #[serde(rename_all = "camelCase")]
 pub struct InterruptSessionArgs {
     session_id: String,
+    /// 用户亲手打断（Esc / 停止按钮）：这一轮还没任何输出时，连同触发它的消息整条撤回
+    /// （对话里像没发过）。缺省 false = 只打断——自动化超时等程序化打断不许改写历史。
+    #[serde(default)]
+    withdraw: bool,
 }
 
 async fn interrupt_session(core: Arc<Core>, a: InterruptSessionArgs) -> Result<(), String> {
-    let InterruptSessionArgs { session_id } = a;
+    let InterruptSessionArgs { session_id, withdraw } = a;
     let runtime_mgr = &core.runtime;
-    let cmd = json!({ "cmd": "interrupt", "session_id": session_id });
+    let mut cmd = json!({ "cmd": "interrupt", "session_id": session_id });
+    attach_flag(&mut cmd, "withdraw", withdraw);
     runtime_mgr.send_to_runtime(&cmd).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WithdrawQueuedMessageArgs {
+    session_id: String,
+    queue_id: String,
+}
+
+/// 撤回一条还在排队（没被模型接入）的消息。结果只走事件：撤成 → `jump_withdrawn`，
+/// 已被接入 → `jump_withdraw_failed`（气泡随后由 `user_message` 出现）。
+async fn withdraw_queued_message(core: Arc<Core>, a: WithdrawQueuedMessageArgs) -> Result<(), String> {
+    let WithdrawQueuedMessageArgs { session_id, queue_id } = a;
+    let cmd = json!({ "cmd": "withdraw_queued", "session_id": session_id, "queue_id": queue_id });
+    core.runtime.send_to_runtime(&cmd).await
 }
 
 #[derive(Deserialize)]
@@ -1217,6 +1300,21 @@ mod tests {
             },
         );
         assert!(blank.get("permission_mode").is_none());
+    }
+
+    /// queue_id 有值才落字段：sidecar 拿它当排队消息的 SDK uuid（撤回 / 接入对账）。
+    #[test]
+    fn build_send_command_carries_queue_id() {
+        let on = build_send_command(
+            "s",
+            "hi",
+            "/tmp",
+            &HashMap::new(),
+            SendOptions { jump_queue: true, queue_id: Some("q-1".into()), ..base_opts() },
+        );
+        assert_eq!(on["queue_id"], "q-1");
+        let off = build_send_command("s", "hi", "/tmp", &HashMap::new(), base_opts());
+        assert!(off.get("queue_id").is_none());
     }
 
     /// jump_queue 仅 true 落字段（false 与缺省一致，不落）。

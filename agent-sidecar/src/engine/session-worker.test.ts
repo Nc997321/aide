@@ -29,33 +29,6 @@ async function flushPromises() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
-describe("SessionWorker — jump queue", () => {
-  it("does not promote a pending jump send after the worker stops", async () => {
-    let releaseQuery!: () => void;
-    const queryGate = new Promise<void>((resolve) => { releaseQuery = resolve; });
-    let markQueryStarted!: () => void;
-    const queryStarted = new Promise<void>((resolve) => { markQueryStarted = resolve; });
-    const worker = new SessionWorker("s1", () => {}, {
-      queryFn: (() => (async function* () {
-        markQueryStarted();
-        await queryGate;
-        throw new Error("query cancelled");
-      })()) as any,
-    });
-    const pushed: unknown[] = [];
-    (worker.queue as any).push = (message: unknown) => pushed.push(message);
-
-    void worker.startLoop();
-    await queryStarted;
-    worker.jumpQueueCtl.request({ prompt: "不应在关闭后发送" });
-    worker.stop();
-    releaseQuery();
-    await flushPromises();
-
-    expect(pushed).toEqual([]);
-  });
-});
-
 /**
  * 2026-09-14 事故回归：「余额不足（HTTP 402）」等错误终态之后重发，界面永远停在
  * 「正在思考」，CLI 起来了却一句话不说。
@@ -134,9 +107,11 @@ describe("SessionWorker — user_message 广播", () => {
     expect(pushed).toHaveLength(1);
     expect(pushed[0].type).toBe("user");
     // UI 侧：广播给所有客户端——远程客户端（手机）发的消息靠这条才在桌面端出现
+    // id = 交给 CLI 的消息 uuid（撤回按它删气泡）
     expect(events.filter((e) => e.type === "user_message")).toEqual([
-      { type: "user_message", text: "你好" },
+      { type: "user_message", id: pushed[0].uuid, text: "你好" },
     ]);
+    expect(pushed[0].uuid).toEqual(expect.any(String));
   });
 
   it("display 原样回灌；text 取原始输入而非展开后的 prompt", async () => {
@@ -161,29 +136,7 @@ describe("SessionWorker — user_message 广播", () => {
     expect(um.text).toBe("看看这个文件");
   });
 
-  it("插队消息：登记时不广播，promote 真正接入时才广播", async () => {
-    const { worker, events } = workerWithStubbedQueue();
-    // 伪造「有活 query + 轮次进行中」以走插队分支
-    (worker as any).currentQuery = { interrupt: () => Promise.resolve() };
-    (worker as any).turnActive = true;
-    worker.handleCommand({
-      cmd: "send",
-      session_id: "s1",
-      prompt: "插队",
-      jump_queue: true,
-      cwd: "/tmp",
-    } as any);
-    await flushPromises();
-    // 登记阶段只应有提示条事件，不该冒出用户气泡（否则气泡会插在上轮回复中间）
-    expect(events.filter((e) => e.type === "user_message")).toHaveLength(0);
-
-    // 安全边界到达 → 接入
-    (worker as any).promoteJumpQueue();
-    await flushPromises();
-    expect(events.filter((e) => e.type === "user_message").map((e: any) => e.text)).toEqual([
-      "插队",
-    ]);
-  });
+  // 排队消息「入队不广播、回显才广播」见下方「排队消息与撤回」。
 });
 
 describe("SessionWorker — fork source / routing key invariants", () => {
@@ -1634,28 +1587,263 @@ describe("SessionWorker — 错误终态终止循环（F3）", () => {
   });
 });
 
-describe("SessionWorker — result 时插队 promote 的 continue 臂（循环不退出）", () => {
-  it("第一条 result 接入插队 → continue：不 close 不重启，循环继续消费后续消息", async () => {
-    const state = { spawns: 0, closes: 0 };
-    const queryFn = (() => {
-      state.spawns++;
+/**
+ * 忙时发送 = 交给 CLI 排队（与 Claude Code CLI 同一种排队），不再截断当前回合。
+ *
+ * - 排队消息带 priority:"next" + uuid=queue_id 写进 CLI 输入流；气泡不在入队时广播，
+ *   等 CLI 回显（接入模型的那一刻）才广播 user_message + jump_promoted。
+ * - 撤回走 cancelAsyncMessage：撤成 → jump_withdrawn；已接入 → jump_withdraw_failed。
+ * - 打断先撤回排队消息再打断（排队消息在 CLI 里，先打断它们会立刻开下一轮）。
+ * - 用户亲手打断、模型还没输出：开头那条消息整条撤回（截 transcript + 原地 resume）。
+ */
+describe("SessionWorker — 排队消息与撤回", () => {
+  /** 可控假 query：记下输入、按需吐出 SDK 消息、abort 时抛出（与真 SDK 同形）。 */
+  function makeCtlQuery() {
+    const ctl = {
+      spawns: 0,
+      inputs: [] as any[],
+      options: [] as any[],
+      out: (_m: any) => {},
+      calls: [] as string[],
+      cancelResult: true,
+    };
+    const queryFn = ((args: any) => {
+      ctl.spawns++;
+      ctl.options.push(args.options);
+      const outQ: any[] = [];
+      let wake: (() => void) | null = null;
+      ctl.out = (m) => { outQ.push(m); wake?.(); wake = null; };
+      void (async () => { for await (const m of args.prompt) ctl.inputs.push(m); })();
+      const signal: AbortSignal | undefined = args.options?.abortController?.signal;
       const gen = (async function* () {
-        yield { type: "result", subtype: "success" }; // 第一条：promote 插队 → continue
-        yield { type: "result", subtype: "success" }; // 第二条：无插队 → 正常分派
-        await new Promise(() => {}); // 模拟 streaming-input CLI 挂住
+        while (true) {
+          if (signal?.aborted) throw new Error("Operation aborted");
+          if (outQ.length) { yield outQ.shift(); continue; }
+          await new Promise<void>((r) => { wake = r; signal?.addEventListener("abort", () => r(), { once: true }); });
+        }
       })();
-      (gen as any).close = () => { state.closes++; };
+      Object.assign(gen, {
+        cancelAsyncMessage: async (id: string) => { ctl.calls.push(`cancel:${id}`); return ctl.cancelResult; },
+        interrupt: async () => { ctl.calls.push("interrupt"); },
+        close: () => {},
+      });
       return gen;
     }) as any;
+    return { ctl, queryFn };
+  }
+
+  const send = (sid: string, prompt: string, extra: Record<string, unknown> = {}) =>
+    ({ cmd: "send", session_id: sid, prompt, cwd: "/tmp", env: {}, auto_title: false, ...extra }) as any;
+
+  /** started=true：像真 CLI 一样在开跑时回显开头那条（之后打断走 interrupt）。 */
+  async function busyWorker(extraFirst: Record<string, unknown> = {}, started = true) {
+    const { ctl, queryFn } = makeCtlQuery();
     const events: ChatEvent[] = [];
-    const worker = new SessionWorker("s-jump", (e) => events.push(e), { queryFn });
-    worker.jumpQueueCtl.request({ prompt: "插队消息" }); // 启动前挂上插队
-    worker.handleCommand({ cmd: "send", session_id: "s-jump", prompt: "一", cwd: "/tmp", env: {}, auto_title: false } as any);
+    const worker = new SessionWorker("s-q", (e) => events.push(e), { queryFn });
+    worker.handleCommand(send("s-q", "一", extraFirst));
+    await vi.waitFor(() => expect(ctl.inputs.length).toBe(1));
+    if (started) {
+      ctl.out({ type: "command_lifecycle", command_uuid: ctl.inputs[0].uuid, state: "started" });
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    return { ctl, events, worker };
+  }
+
+  it("忙时发送：priority next + uuid=queue_id 交给 CLI，不打断；回显时才广播气泡", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
+    await vi.waitFor(() => expect(ctl.inputs.length).toBe(2));
+    expect(ctl.inputs[1]).toMatchObject({ uuid: "q-2", priority: "next" });
+    expect(ctl.calls).not.toContain("interrupt");
+    expect(events.filter((e) => e.type === "jump_queued")).toEqual([{ type: "jump_queued", id: "q-2", prompt: "二" }]);
+    expect(events.filter((e: any) => e.type === "user_message" && e.text === "二")).toHaveLength(0);
+
+    ctl.out({ type: "user", isReplay: true, uuid: "q-2", parent_tool_use_id: null, message: { role: "user", content: "二" } });
     await vi.waitFor(() => expect(events.some((e) => e.type === "jump_promoted")).toBe(true));
-    expect(state.closes).toBe(0);   // continue 臂：循环存活
-    expect(state.spawns).toBe(1);   // 未重启
-    expect(events.filter((e) => e.type === "message_stop").length).toBeGreaterThanOrEqual(1); // 第二条 result 正常收轮
+    const tail = events.slice(-2);
+    expect(tail[0]).toMatchObject({ type: "user_message", id: "q-2", text: "二" });
+    expect(tail[1]).toEqual({ type: "jump_promoted", id: "q-2" });
     worker.stop();
+  });
+
+  it("斜杠命令排队用 priority later（/compact 必须作为独立回合）", async () => {
+    const { ctl, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "/compact", { jump_queue: true, queue_id: "q-c" }));
+    await vi.waitFor(() => expect(ctl.inputs.length).toBe(2));
+    expect(ctl.inputs[1].priority).toBe("later");
+    worker.stop();
+  });
+
+  it("撤回排队消息：撤成 → jump_withdrawn；CLI 已接入 → jump_withdraw_failed", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
+    worker.handleCommand({ cmd: "withdraw_queued", session_id: "s-q", queue_id: "q-2" } as any);
+    await vi.waitFor(() => expect(events.some((e) => e.type === "jump_withdrawn")).toBe(true));
+    expect(events.find((e) => e.type === "jump_withdrawn")).toEqual({ type: "jump_withdrawn", id: "q-2", text: "二", reason: "user" });
+    expect(ctl.calls).toEqual(["cancel:q-2"]);
+
+    ctl.cancelResult = false;
+    worker.handleCommand(send("s-q", "三", { jump_queue: true, queue_id: "q-3" }));
+    worker.handleCommand({ cmd: "withdraw_queued", session_id: "s-q", queue_id: "q-3" } as any);
+    await new Promise((r) => setTimeout(r, 10));
+    // CLI 已取走它（并进回合 = 回显）→ 撤不回，气泡照常出现
+    ctl.out({ type: "user", isReplay: true, uuid: "q-3", parent_tool_use_id: null, message: { role: "user", content: "三" } });
+    await vi.waitFor(() => expect(events.some((e) => e.type === "jump_withdraw_failed")).toBe(true));
+    await vi.waitFor(() => expect(events.some((e: any) => e.type === "user_message" && e.id === "q-3")).toBe(true));
+    worker.stop();
+  });
+
+  it("打断：先撤回排队消息再打断，排队的退回（reason interrupted）", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
+    worker.handleCommand({ cmd: "interrupt", session_id: "s-q" } as any);
+    await vi.waitFor(() => expect(ctl.calls).toContain("interrupt"));
+    expect(ctl.calls).toEqual(["cancel:q-2", "interrupt"]);
+    expect(events.find((e) => e.type === "jump_withdrawn")).toMatchObject({ id: "q-2", reason: "interrupted" });
+    worker.stop();
+  });
+
+  it("打断落进空档被 CLI 吞掉（本轮迟迟不收尾）：1 秒后补打一次", async () => {
+    const { ctl, worker } = await busyWorker();
+    worker.handleCommand({ cmd: "interrupt", session_id: "s-q" } as any);
+    await vi.waitFor(() => expect(ctl.calls.filter((c) => c === "interrupt").length).toBe(2), { timeout: 2500 });
+    // 收尾后不再补打
+    ctl.out({ type: "result", subtype: "error_during_execution", is_error: false });
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(ctl.calls.filter((c) => c === "interrupt").length).toBe(2);
+    worker.stop();
+  });
+
+  it("回合收尾后 CLI 拿排队消息开新回合：回显把会话翻回忙碌", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
+    ctl.out({ type: "result", subtype: "success" });
+    await vi.waitFor(() => expect(worker.isActive()).toBe(false));
+    // 回合刚收尾、前面还有排队的：后来的也排在它后面（等回显再广播），顺序不乱
+    worker.handleCommand(send("s-q", "三", { queue_id: "q-3" }));
+    await vi.waitFor(() => expect(ctl.inputs.length).toBe(3));
+    expect(events.filter((e: any) => e.type === "user_message" && e.text === "三")).toHaveLength(0);
+    ctl.out({ type: "user", isReplay: true, uuid: "q-2", parent_tool_use_id: null, message: { role: "user", content: "二" } });
+    await vi.waitFor(() => expect(worker.isActive()).toBe(true));
+    worker.stop();
+  });
+
+  it("回合出错退出：排队消息退回（reason turn_failed），不悬空", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
+    ctl.out({ type: "result", subtype: "error_during_execution", is_error: true, errors: ["boom"] });
+    await vi.waitFor(() => expect(events.some((e) => e.type === "jump_withdrawn")).toBe(true));
+    expect(events.find((e) => e.type === "jump_withdrawn")).toMatchObject({ id: "q-2", reason: "turn_failed" });
+    worker.stop();
+  });
+
+  describe("撤回执行中的消息（Esc：模型还没输出）", () => {
+    function seedTranscript(sid: string) {
+      const configDir = mkdtempSync(path.join(os.tmpdir(), "aide-withdraw-"));
+      const dir = path.join(configDir, "projects", "-tmp");
+      mkdirSync(dir, { recursive: true });
+      const file = path.join(dir, `${sid}.jsonl`);
+      return { configDir, file };
+    }
+
+    it("截掉 transcript 里这条消息起的内容，广播撤回，原地 resume 重建", async () => {
+      const { configDir, file } = seedTranscript("sid-w");
+      const { ctl, events, worker } = await busyWorker({ resume_session_id: "sid-w", config_dir: configDir });
+      const head = ctl.inputs[0].uuid as string;
+      const kept = JSON.stringify({ type: "assistant", uuid: "a-0", message: { content: [{ type: "text", text: "旧" }] } }) + "\n";
+      writeFileSync(file, kept + JSON.stringify({ type: "user", uuid: head, message: { content: "一" } }) + "\n" + '{"type":"user","uuid":"x","message":{"content":"[Request interrupted by user]"}}\n');
+
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q", withdraw: true } as any);
+      await vi.waitFor(() => expect(ctl.calls).toContain("interrupt"));
+      ctl.out({ type: "result", subtype: "error_during_execution", is_error: false });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(true));
+      expect(events.find((e) => e.type === "user_message_withdrawn")).toEqual({ type: "user_message_withdrawn", id: head, text: "一" });
+      const { readFileSync } = await import("node:fs");
+      expect(readFileSync(file, "utf8")).toBe(kept);
+      await vi.waitFor(() => expect(ctl.spawns).toBe(2)); // 原地重建（CLI 内存里的旧历史随进程丢掉）
+      expect(ctl.options[1].resume).toBe("sid-w");
+      worker.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    });
+
+    it("消息还没开始执行（CLI 没回显）：从 CLI 队列撤掉、当场收尾，不打断不重启", async () => {
+      const { configDir } = seedTranscript("sid-p");
+      const { ctl, events, worker } = await busyWorker({ resume_session_id: "sid-p", config_dir: configDir }, false);
+      const head = ctl.inputs[0].uuid as string;
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q", withdraw: true } as any);
+      await vi.waitFor(() => expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(true));
+      expect(ctl.calls).toEqual([`cancel:${head}`]);
+      expect(events.filter((e) => e.type === "message_stop")).toHaveLength(1);
+      expect(worker.isActive()).toBe(false);
+      expect(ctl.spawns).toBe(1);
+      worker.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    });
+
+    it("cancel 回执说 false、生命周期却报 cancelled（撤回先于消息到达）：以生命周期为准", async () => {
+      const { ctl, events, worker } = await busyWorker();
+      ctl.cancelResult = false;
+      worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-r" }));
+      worker.handleCommand({ cmd: "withdraw_queued", session_id: "s-q", queue_id: "q-r" } as any);
+      await new Promise((r) => setTimeout(r, 10));
+      ctl.out({ type: "command_lifecycle", command_uuid: "q-r", state: "cancelled" });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "jump_withdrawn")).toBe(true));
+      expect(events.some((e) => e.type === "jump_withdraw_failed")).toBe(false);
+      worker.stop();
+    });
+
+    it("还没开跑的消息：cancel 回 false、随后生命周期 cancelled → 当场收尾撤回", async () => {
+      const { ctl, events, worker } = await busyWorker({}, false);
+      ctl.cancelResult = false;
+      const head = ctl.inputs[0].uuid as string;
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q", withdraw: true } as any);
+      await new Promise((r) => setTimeout(r, 10));
+      ctl.out({ type: "command_lifecycle", command_uuid: head, state: "cancelled" });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(true));
+      expect(ctl.calls).not.toContain("interrupt");
+      worker.stop();
+    });
+
+    it("模型已有正文输出：只打断，不撤回", async () => {
+      const { configDir } = seedTranscript("sid-o");
+      const { ctl, events, worker } = await busyWorker({ resume_session_id: "sid-o", config_dir: configDir });
+      ctl.out({ type: "assistant", parent_tool_use_id: null, message: { content: [{ type: "text", text: "好的" }] } });
+      await new Promise((r) => setTimeout(r, 20));
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q", withdraw: true } as any);
+      ctl.out({ type: "result", subtype: "error_during_execution", is_error: false });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(false);
+      expect(ctl.spawns).toBe(1);
+      worker.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    });
+
+    it("会话第一条消息（之前没有历史）：只打断，不撤回", async () => {
+      const { configDir } = seedTranscript("sid-f");
+      const { ctl, events, worker } = await busyWorker({ config_dir: configDir });
+      ctl.out({ type: "system", subtype: "init", session_id: "sid-f" });
+      await new Promise((r) => setTimeout(r, 20));
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q", withdraw: true } as any);
+      ctl.out({ type: "result", subtype: "error_during_execution", is_error: false });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(false);
+      worker.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    });
+
+    it("不带 withdraw 的打断（自动化超时等）不改写历史", async () => {
+      const { configDir } = seedTranscript("sid-n");
+      const { ctl, events, worker } = await busyWorker({ resume_session_id: "sid-n", config_dir: configDir });
+      worker.handleCommand({ cmd: "interrupt", session_id: "s-q" } as any);
+      ctl.out({ type: "result", subtype: "error_during_execution", is_error: false });
+      await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+      await new Promise((r) => setTimeout(r, 20));
+      expect(events.some((e) => e.type === "user_message_withdrawn")).toBe(false);
+      worker.stop();
+      rmSync(configDir, { recursive: true, force: true });
+    });
   });
 });
 

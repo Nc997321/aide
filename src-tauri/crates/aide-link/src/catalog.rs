@@ -35,6 +35,7 @@ pub static GROUPS: &[Group] = &[
             "send_message",
             "permission_response",
             "interrupt_session",
+            "withdraw_queued_message",
             "stop_chat_session",
             "stop_bg_task",
             "set_model",

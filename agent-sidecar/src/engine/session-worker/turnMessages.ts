@@ -13,18 +13,14 @@ export interface TurnContext {
   /** 自动化一次性会话：400 后进程自毁，没有"下一轮重放干净历史"，故不回滚。 */
   isAutomation: () => boolean;
   setTurnActive: (v: boolean) => void;
-  /** 插队消息接入：true = 已接入本条 result 之后的新回合（本条消息跳过后续处理）。 */
-  promoteJumpQueue: () => boolean;
-  resetToolLifecycle: () => void;
-  /** 上下文用量 + 订阅额度上报（fire-and-forget，worker 侧 void + 内部吞错）。 */
-  telemetry: (q: Query) => void;
   applyPlanMode: () => void;
   emit: (e: ChatEvent) => void;
   /** worker 每轮迭代构建一次（partialMode/showThinking 捕获当轮支线状态）。 */
   mapperDeps: MapperDeps;
-  /** jumpQueueCtl.has() && toolLifecycle.isIdle()（首条消息后插队的打断窗口）。 */
-  shouldInterruptForJump: () => boolean;
-  interruptQuery: () => void;
+  /** CLI 回显了一条主线程用户消息（`--replay-user-messages`）= 它被模型接入的那一刻。 */
+  onUserReplay: (id: string) => void;
+  /** CLI 命令生命周期帧（queued / started / completed / cancelled，按消息 uuid）。 */
+  onCommandLifecycle: (id: string, state: string) => void;
   /** system/init：供应商切换 fork 通知 + resumeSource 过户 + 模型名册采纳。
    *  newSid 可空语义与原实现一致（undefined 时保留旧 resumeSource）。 */
   onSessionInit: (newSid: string | undefined, q: Query) => void;
@@ -45,13 +41,20 @@ export function handleQueryMessage(
   if (!turn.isAutomation() && detectImageUnsupported(msg)) {
     turn.markImageRollback();
   }
+  // 用户消息回显：不是模型产出，不进 mapper（content 是用户原文，字符串分支会拿它当
+  // task-notification 解析）。只用来认出排队消息被接入的时机。
+  if (msg.type === "user" && (msg as { isReplay?: boolean }).isReplay) {
+    const id = (msg as { uuid?: string }).uuid;
+    if (!msg.parent_tool_use_id && id) turn.onUserReplay(id);
+    return "continue";
+  }
+  if ((msg as { type: string }).type === "command_lifecycle") {
+    const m = msg as unknown as { command_uuid?: string; state?: string };
+    if (m.command_uuid && m.state) turn.onCommandLifecycle(m.command_uuid, m.state);
+    return "continue";
+  }
   if (msg.type === "result") {
     turn.setTurnActive(false);
-    if (turn.promoteJumpQueue()) {
-      turn.resetToolLifecycle();
-      turn.telemetry(q);
-      return "continue";
-    }
   }
 
   // 检测模型主动进入计划模式（auto 等模式下 SDK 可能不经 canUseTool
@@ -72,11 +75,6 @@ export function handleQueryMessage(
   }
 
   mapSdkMessage(msg, turn.emit, turn.mapperDeps);
-
-  if (turn.shouldInterruptForJump()) {
-    // interrupt 拒绝 = 无在跑回合（首条消息后插队）——契约性吞掉。
-    turn.interruptQuery();
-  }
 
   if (msg.type === "system" && msg.subtype === "init") {
     turn.onSessionInit(msg.session_id, q);

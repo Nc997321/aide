@@ -38,7 +38,8 @@ macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foun
 
 - **会话元数据落盘**（名字/模型/档位/provider/工作区归属）必须等 `session_init` 定名（`finalizeSession` → `onSessionCreated`）；早到的值暂存、随注册表搬迁（pendingTitles / `identity.migrateBinding` / `useSessionWorkspaces().migrate`）；判据用 `finalizedSids`，**不用「本端是否 pending」**。
 - **工作区归属是会话自持属性**：`wsPath`/`wsKey` 落 `~/.aide/sessions/<id>.json`，唯一入口 `set_session_workspace` / `session_workspace`。send 的 cwd 解析只有三级：客户端 `workspaceRoot` → 档案 `wsPath`（须 `exists`）→ **活动工作区 + `tracing::warn`**；末级就是"跑错项目"的来源，**不许无声**。前端 `useSessionWorkspaces` 只是可回种的缓存，别造第三份来源。
-- **用户气泡只认 sidecar 广播的 `user_message`**，不本地渲染；**禁止加"超时兜底本地渲染"**（jumpQueue 排队消息会误触发）。插队消息在 promote 时广播。
+- **用户气泡只认 sidecar 广播的 `user_message`**，不本地渲染；**禁止加"超时兜底本地渲染"**（排队消息会误触发）。
+- **忙时发送 = 交给 CLI 排队，不截断**（与 Claude Code CLI 同一种排队）：`priority:"next"` + uuid=queue_id 写进输入流，CLI 在两轮工具调用之间并进当前回合；气泡等 CLI 回显（`--replay-user-messages`）才广播。撤回（排队条 × / Esc / 停止）以 CLI 的 `command_lifecycle` 帧为准——`cancelAsyncMessage` 的返回值不可信。模型还没输出就按 Esc = 整条撤回（截 transcript + 原地 resume）。见 `desktop/jumpQueue.ts`、`desktop/withdrawTurn.ts`。
 - **`permission_cancelled` = 「这条请求已终结」**（批准/拒绝/abort/连带放行都发），不是"被取消"。`permissions.ts` 的 `resolve()` 无条件发，新增任何终结挂起请求的路径都要发。
 - 事件到手机按订阅投递（`subscribe` 可按会话过滤、`since` 续传）。
 - **`display` 渲染描述通道**：`prompt` 是 @引用展开后的纯文本、sidecar 无法还原「正文/引用卡片/动作胶囊」边界，所以渲染信息随 send 下发再回灌（Rust `attach_display` 原样搬运不校验）。**⚠️ `UserMessageBlock` 在 `agent-sidecar/src/types.ts` 与 `packages/aide-sdk/src/types/chat.ts` 各一份且必须同形**，漂移会让 display **静默失效**；新增 block 形态两边一起改。display 缺失/未知 → 降级成纯文本或跳过该块，**整条消息不能消失**。

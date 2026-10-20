@@ -38,8 +38,12 @@ import { useComposerDrafts, __resetComposerDraftsForTest } from "../useComposerD
  *  （方案 C 单一渲染来源）。以前这里存 blocks 供 jump_promoted 时 flush 成气泡，
  *  那样做意味着只有发起方能看见自己提的问题。 */
 export interface PendingJump {
+  /** 排队 id（发起方生成，= SDK 消息 uuid）：撤回 / 接入按它对账。 */
+  id: string;
   /** 提示条显示文本（与用户气泡标题一致：action.label 优先，否则 prompt）。 */
   text: string;
+  /** 点了 × 但 CLI 已经接入了：提示条改显示「已发出」，等气泡出现后消失。 */
+  withdrawFailed?: boolean;
 }
 
 export interface SessionStore {
@@ -98,10 +102,17 @@ export interface SessionStore {
   /** SDK 权威 slash commands 清单；null 表示本会话还没收到过（会话未开始，
    *  或 provider 不支持该概念）。一旦非 null，下拉框数据源单向切换，不回退。 */
   slashCommands: string[] | null;
-  /** 已派发、正在 sidecar 里等安全边界（当前工具跑完）的排队消息——忙碌排队时
-   *  dispatchSend 不立即渲染成对话气泡，只暂存到这里，输入区上方显示"待发出"
-   *  提示条；jump_promoted 时 flush 成用户气泡并清空。 */
+  /** 忙时发出、已交给 CLI 排队、还没被模型接入的消息——输入区上方显示「排队」提示条
+   *  （各端都有：jump_queued 事件写入，本端发送时先行写入免 RTT）。jump_promoted /
+   *  jump_withdrawn 按 id 撤掉；气泡只由 user_message 渲染。 */
   pendingJumps: PendingJump[];
+  /** 本端发起撤回的排队 id（× / 打断）——撤成时把文字退回**本端**输入框。只是本端意图，
+   *  提示条增删仍只认事件。 */
+  withdrawRequests: string[];
+  /** 本端发出的排队 id：被别处打断 / 回合出错退回时，文字回到发出它的这一端。 */
+  ownQueued: string[];
+  /** 本端按了 Esc / 停止：开头那条消息被整条撤回（user_message_withdrawn）时退回本端输入框。 */
+  turnWithdrawRequested: boolean;
   /** 图片 400 回滚后待放回输入框的文本（image_input_rollback 事件写入；空串 =
    *  无待回填）。ChatPanel 消费后经 consumeRollbackText 清空，避免重复回填。 */
   rollbackText: string;
@@ -434,6 +445,9 @@ export function getStore(sid: string): SessionStore {
       currentPermissionMode: "",
       slashCommands: null,
       pendingJumps: [],
+      withdrawRequests: [],
+      ownQueued: [],
+      turnWithdrawRequested: false,
       rollbackText: "",
     });
     stores[sid] = store;

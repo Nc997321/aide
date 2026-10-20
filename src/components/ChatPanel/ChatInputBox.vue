@@ -107,6 +107,10 @@ const emit = defineEmits<{
   "set-permission-mode": [mode: string];
   /** 图片 400 回滚文本已回填进输入框（父组件据此清空 store.rollbackText） */
   "rollback-text-consumed": [];
+  /** 排队条上点了 ×：撤回这条排队消息 */
+  "withdraw-queued": [queueId: string];
+  /** 生成中按 Esc：打断（同停止按钮；排队的和还没回复的那条退回输入框） */
+  interrupt: [];
   /** hero 头展示的模型名（选中模型变化时上报，ChatPanel 的 hero 标题行用） */
   "hero-model-name": [name: string];
   /** 权限模式变化（用户切换/侧边同步/会话切换）——ChatPanel 的 PermissionDialog
@@ -588,7 +592,9 @@ watch(
   () => props.rollbackText,
   (text) => {
     if (!text) return;
-    inputText.value = text;
+    // 撤回的文字放在已有草稿前面（它本来就排在草稿之前发出），不覆盖用户正在打的字
+    const cur = inputText.value;
+    inputText.value = cur.trim() ? `${text}\n\n${cur}` : text;
     emit("rollback-text-consumed");
   },
 );
@@ -810,10 +816,19 @@ function onEnterKey() {
   return handleSend();
 }
 
-/** Esc：两套补全一起关（文本保留）。 */
-function onEscapeKey() {
-  hideSuggest();
-  slashDropdownVisible.value = false;
+/** Esc：有补全菜单先关菜单（文本保留）；否则生成中就打断，与 Claude Code CLI 的 Esc 一致——
+ *  排队的消息、以及模型还没回复的那条，退回输入框。输入法组字时的 Esc 归输入法。 */
+function onEscapeKey(e: KeyboardEvent) {
+  if (e.isComposing) return;
+  if (suggestVisible.value || slashDropdownVisible.value) {
+    hideSuggest();
+    slashDropdownVisible.value = false;
+    return;
+  }
+  if (props.isBusy) {
+    e.preventDefault();
+    emit("interrupt");
+  }
 }
 
 /** → 只在「@ 菜单开着且高亮的是目录」时接管：进该目录继续列子项。 */
@@ -1456,10 +1471,21 @@ const { actions: quickActions } = useQuickActions();
       <button type="button" class="input-tip-x" v-tooltip="'知道了，不再提示'" @click="dismissInputHint">×</button>
     </div>
     <div v-if="pendingJumps?.length" class="jump-strip">
-      <div v-for="(p, i) in pendingJumps" :key="i" class="jump-item">
+      <div v-for="p in pendingJumps" :key="p.id" class="jump-item">
         <span class="jump-item-tag">排队</span>
         <span class="jump-item-text">{{ p.text }}</span>
-        <span class="jump-item-hint">等当前回合结束发出</span>
+        <template v-if="p.withdrawFailed">
+          <span class="jump-item-hint">已送达，撤不回了</span>
+        </template>
+        <template v-else>
+          <span class="jump-item-hint">当前这一步做完就送达</span>
+          <button
+            type="button"
+            class="jump-item-x"
+            v-tooltip="'撤回，文字放回输入框'"
+            @click="emit('withdraw-queued', p.id)"
+          >×</button>
+        </template>
       </div>
     </div>
     <!-- 欢迎页场景条：选场景 → 换成该场景的示例提示词 -->
@@ -2134,6 +2160,23 @@ const { actions: quickActions } = useQuickActions();
   flex-shrink: 0;
   font-size: 10px;
   color: var(--aide-text-muted);
+}
+
+.jump-item-x {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--aide-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  padding: 0 4px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+
+.jump-item-x:hover {
+  color: var(--aide-text-secondary);
+  background: var(--aide-surface-hover);
 }
 
 /* ── 文件引用芯片 ── */
