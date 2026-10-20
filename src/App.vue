@@ -1418,13 +1418,13 @@ onUnmounted(() => {
   box-shadow: var(--aide-shadow-lg);
 }
 
-/* 贴边热区：平时唯一接收 hover 的触发条（12px），z 高于 overlay 侧栏 */
+/* 贴边热区：平时唯一接收 hover 的触发条（24px），z 高于 overlay 侧栏 */
 .left-edge-hotzone {
   position: absolute;
   left: 0;
   top: 0;
   bottom: 0;
-  width: 12px;
+  width: 24px;
   z-index: 95;
 }
 
