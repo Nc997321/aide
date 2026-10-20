@@ -431,9 +431,10 @@ export class SessionWorker {
     /** liveQuery（默认）= 喂给当前活着的 query；nextQuery = 当前 query 正要被拆掉
      *  （供应商漂移重启），预置给重建后的那一轮——走共享队列会被孤儿迭代器吞。 */
     target: "liveQuery" | "nextQuery" = "liveQuery",
+    /** 指定消息 id（发起方以为要排队、实际直发时沿用它的排队 id，见 directSend）。 */
+    id: string = randomUUID(),
   ): string {
     const text = userTextOf(prompt, display);
-    const id = randomUUID();
     const msg: SDKUserMessage = {
       type: "user",
       // uuid 让 CLI 回显 / transcript 行 / 撤回都能按它认出这条消息
@@ -447,6 +448,21 @@ export class SessionWorker {
     if (target === "nextQuery") this.nextQueryInjections.push(msg);
     else this.queue.push(msg);
     this.emit({ type: "user_message", id, text, ...(display?.length ? { display } : {}) });
+    return id;
+  }
+
+  /** 不排队、直接喂给模型的一条 send。发起方可能以为会话还忙、已经亮了排队提示条
+   *  （带 queue_id）——它看到的回合状态比 sidecar 晚一拍（上一回合的 result 已到、
+   *  message_stop 还在路上）。这时沿用它的排队 id 并发 jump_promoted，各端按 id
+   *  撤掉提示条；否则提示条永远挂在输入框上方。 */
+  private directSend(
+    cmd: { prompt: string; display?: UserMessageBlock[]; queue_id?: string },
+    images: ImageAttachment[] | undefined,
+    target: "liveQuery" | "nextQuery" = "liveQuery",
+  ): string {
+    const queueId = cmd.queue_id && !this.queuedSends.has(cmd.queue_id) ? cmd.queue_id : undefined;
+    const id = this.pushUserMessage(cmd.prompt, images, cmd.display, target, queueId);
+    if (queueId) this.emit({ type: "jump_promoted", id });
     return id;
   }
 
@@ -1033,7 +1049,7 @@ export class SessionWorker {
         cmd.trusted !== false,
         cmd.lsp_languages ?? [],
       );
-      this.markTurnHead(this.pushUserMessage(cmd.prompt, images, cmd.display), cmd.prompt, cmd.display);
+      this.markTurnHead(this.directSend(cmd, images), cmd.prompt, cmd.display);
       this.turnActive = true;
       return;
     }
@@ -1050,7 +1066,7 @@ export class SessionWorker {
     // 拆——在飞的回合不为此牺牲（拆了就是丢输出），漂移留在账上，下一个空闲的 send
     // 再兑现。档位（含快速）是热切的（applyFlagSettings），不重启、也不关思考。
     if (this.currentQuery && !this.turnActive && this.providerDriftPending) {
-      this.markTurnHead(this.pushUserMessage(cmd.prompt, images, cmd.display, "nextQuery"), cmd.prompt, cmd.display);
+      this.markTurnHead(this.directSend(cmd, images, "nextQuery"), cmd.prompt, cmd.display);
       this.restartQueryInPlace();
       return;
     }
@@ -1060,7 +1076,7 @@ export class SessionWorker {
     // 发送时刻的快照——handleSend 可能被图片 probe 推迟（enqueueSend 串行化），
     // 等待期间用户切的新模式会被这里的旧值回退。模式随消息携带只保留给
     // 上面「首条消息」分支（进程未起时 set_permission_mode 静默失败的兜底）。
-    const id = this.pushUserMessage(cmd.prompt, images, cmd.display);
+    const id = this.directSend(cmd, images);
     if (!this.turnActive) this.markTurnHead(id, cmd.prompt, cmd.display);
     this.turnActive = true;
   }

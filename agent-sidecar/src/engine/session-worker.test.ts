@@ -1517,6 +1517,23 @@ describe("SessionWorker — 排队消息与撤回", () => {
     return { ctl, events, worker };
   }
 
+  it("发起方以为还忙、sidecar 已收尾：直发但沿用 queue_id，并发 jump_promoted 撤提示条", async () => {
+    const { ctl, events, worker } = await busyWorker();
+    ctl.out({ type: "result", subtype: "success", is_error: false, result: "", usage: {} });
+    await vi.waitFor(() => expect(events.some((e) => e.type === "message_stop")).toBe(true));
+    worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-late" }));
+    await vi.waitFor(() => expect(ctl.inputs.length).toBe(2));
+    expect(ctl.inputs[1].uuid).toBe("q-late");
+    expect(ctl.inputs[1].priority).toBeUndefined();
+    const tail = events.filter((e: any) => (e.type === "user_message" && e.text === "二") || e.type === "jump_promoted");
+    expect(tail).toEqual([
+      { type: "user_message", id: "q-late", text: "二" },
+      { type: "jump_promoted", id: "q-late" },
+    ]);
+    expect(events.some((e) => e.type === "jump_queued")).toBe(false);
+    worker.stop();
+  });
+
   it("忙时发送：priority next + uuid=queue_id 交给 CLI，不打断；回显时才广播气泡", async () => {
     const { ctl, events, worker } = await busyWorker();
     worker.handleCommand(send("s-q", "二", { jump_queue: true, queue_id: "q-2" }));
