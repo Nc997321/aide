@@ -92,8 +92,10 @@ export const CHUNK_CHARS = 2;
 /** 同一次到达内相邻块的错峰间隔；块多时按比例压缩。 */
 export const STAGGER_MS = 12;
 
-/** 错峰总摊开的上限——再长用户就等不到最后一块浮现了。 */
-export const STAGGER_CAP_MS = 200;
+/** 错峰总摊开的上限 = sidecar 的增量合并窗口（deltaCoalescer 的 FLUSH_INTERVAL_MS，40ms）：
+ *  一批刚好摊完下一批就到，波连成一片。原先是 200ms——吐字快时每 40ms 就来一批，
+ *  一批没摊完下一批又压上来，尾巴越拖越长，看起来跟不上模型（2026-10-20 调）。 */
+export const STAGGER_CAP_MS = 40;
 
 export interface AnimatedChunk {
   text: string;

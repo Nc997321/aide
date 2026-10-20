@@ -164,7 +164,8 @@ html, body, #app {
    新到达的一片字淡入，密集重叠成一"道"推过去的波。只碰 opacity——合成层属性，
    不用为一个槽位去改全部主题文件（glass 正文本身已是 #eef0f8，白闪几乎看不见）。 */
 .aide-wave-chunk {
-  animation: aide-wave-in 0.46s cubic-bezier(0.22, 0.75, 0.3, 1) both;
+  /* 0.25s（原 0.46s）：吐字快时淡入太长，屏幕上总拖着一截半透明的尾巴，像跟不上模型 */
+  animation: aide-wave-in 0.25s cubic-bezier(0.22, 0.75, 0.3, 1) both;
 }
 @keyframes aide-wave-in {
   from { opacity: 0; }
