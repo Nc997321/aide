@@ -403,7 +403,7 @@ fn write_clipboard_files_impl(paths: &[String], op: ClipboardOp) -> Result<(), S
             .args(&argv[1..])
             .stdin(Stdio::piped())
             .spawn()
-            .map_err(|e| format!("启动 {argv[0]} 失败: {e}"))?;
+            .map_err(|e| format!("启动 {} 失败: {e}", argv[0]))?;
         // stdin 写失败 = wl-copy/xclip 早已崩死、复制必败——必须上抛，不能
         // 让命令按成功收尾（用户以为复制了，粘贴却是旧内容）。
         if let Some(mut stdin) = child.stdin.take() {
