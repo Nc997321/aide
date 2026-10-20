@@ -6,6 +6,7 @@ import { usePaneLayout } from "../composables/usePaneLayout";
 import { useMentionInserter } from "../composables/useMentionInserter";
 import { api } from "../api";
 import { forgetSubsession, useSubsessions } from "../composables/useSubsessions";
+import { requestCloseWindow, closeOtherWindows } from "../components/fileviewer/closeWindow";
 
 function sep(): MenuItem {
   return { label: "", separator: true };
@@ -441,5 +442,22 @@ export function paneTabMenuItems(groupId: string, tabId: string): MenuItem[] {
     sep(),
     { label: "关闭", action: () => { void pane.closeTab(groupId, tabId); } },
     { label: "关闭其他", action: () => { void pane.closeOtherTabs(groupId, tabId); } },
+  ];
+}
+
+// ── 文件窗口标题栏右键（与 pane tab 同款：关闭 / 关闭其他） ──
+
+export function fileWindowMenuItems(winId: string): MenuItem[] {
+  const viewer = useFileViewer();
+  const hasOthers = viewer.windows.value.some((w) => w.id !== winId);
+  return [
+    {
+      label: "关闭",
+      action: () => {
+        const win = viewer.windows.value.find((w) => w.id === winId);
+        if (win) void requestCloseWindow(win);
+      },
+    },
+    { label: "关闭其他", disabled: !hasOthers, action: () => { void closeOtherWindows(winId); } },
   ];
 }

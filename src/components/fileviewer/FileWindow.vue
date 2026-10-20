@@ -4,7 +4,6 @@ import { useFileViewer, isWindowDirty } from "../../composables/useFileViewer";
 import type { FileWindowState, MarkdownMode } from "../../composables/useFileViewer";
 import { useGotoDefinition } from "../../composables/useGotoDefinition";
 import { useCallHierarchy } from "../../composables/useCallHierarchy";
-import { useModal } from "../../composables/useModal";
 import { useNotifications } from "../../composables/useNotifications";
 import type { QueryResult } from "../../types";
 import CodeEditor from "../CodeEditor.vue";
@@ -15,6 +14,8 @@ import { firstChangedLine } from "./diffLocate";
 import { extToLang, highlightCode } from "../../utils/highlight";
 import { formatContent } from "../../utils/format";
 import { useContextMenu, type MenuItem } from "../../composables/useContextMenu";
+import { fileWindowMenuItems } from "../../menus/contextMenus";
+import { requestCloseWindow } from "./closeWindow";
 import { useMentionInserter } from "../../composables/useMentionInserter";
 import { isHtmlFilePath } from "../../utils/fileLink";
 import { openHtmlInBuiltinBrowser } from "../../composables/useOpenHtml";
@@ -27,10 +28,9 @@ const props = defineProps<{
   bounds: { w: number; h: number };
 }>();
 
-const { closeWindow, save, projectRoot, gotoOwnerId, revealInTreePath, navigateInPlace, navigateBack, navStackHasDirty, openAndScrollTo } = useFileViewer();
+const { closeWindow, save, projectRoot, gotoOwnerId, revealInTreePath, navigateInPlace, navigateBack, openAndScrollTo } = useFileViewer();
 const goto = useGotoDefinition();
 const callHierarchy = useCallHierarchy();
-const modal = useModal();
 const { push: pushNotification } = useNotifications();
 const { show: showContextMenu } = useContextMenu();
 const mentionInserter = useMentionInserter();
@@ -97,34 +97,21 @@ function onPreviewClick(e: MouseEvent) {
   handleMarkdownAnchorClick(e, e.currentTarget as HTMLElement);
 }
 
-// ── 关闭：干净直接关；当前文件或栈内文件有未保存修改时让用户选 ──
-const stackDirty = computed(() => navStackHasDirty(props.win));
+// ── 关闭：干净直接关；有未保存修改时让用户选（逻辑在 closeWindow.ts，与右键「关闭其他」共用） ──
+async function requestClose() {
+  await requestCloseWindow(props.win);
+}
 
-// 保存并关闭：保存失败（error 已显示）就停，别静默丢内容
+// 保存并关闭（:wq）：保存失败（error 已显示）就停，别静默丢内容
 async function saveAndClose() {
   await save(props.win.id);
   if (isWindowDirty(props.win)) return;
   closeWindow(props.win.id);
 }
 
-async function requestClose() {
-  if (dirty.value || stackDirty.value) {
-    const msg = dirty.value
-      ? stackDirty.value
-        ? `「${props.win.fileName}」和跳转前打开的文件都有未保存的修改。「保存并关闭」只保存当前文件。`
-        : `「${props.win.fileName}」有未保存的修改。`
-      : "跳转前打开的文件有未保存的修改，关闭将丢弃。";
-    const res = await modal.choice(
-      "关闭文件",
-      msg,
-      { confirmLabel: "保存并关闭", altLabel: "放弃修改" },
-    );
-    if (res === "cancel") return;
-    if (res === "confirm") {
-      await saveAndClose();
-    }
-  }
-  closeWindow(props.win.id);
+// 标题栏右键：替换浏览器自带菜单，与 pane tab 同款
+function onHeaderContextMenu(e: MouseEvent) {
+  showContextMenu(e.clientX, e.clientY, fileWindowMenuItems(props.win.id));
 }
 
 // ── vim ex 命令（CodeEditor 转发）：:w 保存 / :wq 保存并关闭 /
@@ -534,7 +521,7 @@ function runClipboardAction(p: Promise<void> | undefined): void {
 
 <template>
   <div class="fw-window" :class="{ 'fw-window--dragging': dragging }" tabindex="-1" @keydown="onKeydown">
-    <div class="fw-header" @pointerdown="onHeaderPointerDown">
+    <div class="fw-header" @pointerdown="onHeaderPointerDown" @contextmenu.prevent.stop="onHeaderContextMenu">
       <!-- 导航栈后退箭头：跳转定义/引用就地覆盖后出现，逐级弹回 -->
       <button
         v-if="win.navStack.length > 0"

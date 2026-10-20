@@ -146,12 +146,23 @@ describe("FileWindow vim ex commands", () => {
 
   it("q_dirty_asks_and_save_close_on_confirm", async () => {
     dirtyState = true;
+    saveMock.mockImplementationOnce(async () => { dirtyState = false; }); // 保存成功
     choiceMock.mockResolvedValue("confirm");
     mountWindow();
     wrapper!.findComponent(CodeEditor).vm.$emit("vim-ex", "q");
     await vi.waitFor(() => expect(choiceMock).toHaveBeenCalled());
     await vi.waitFor(() => expect(closeWindowMock).toHaveBeenCalledWith("w1"));
     expect(saveMock).toHaveBeenCalledWith("w1");
+  });
+
+  it("q_dirty_confirm_but_save_fails_keeps_open", async () => {
+    dirtyState = true; // save 后仍 dirty ⇒ 保存失败：不许关掉丢修改
+    choiceMock.mockResolvedValue("confirm");
+    mountWindow();
+    wrapper!.findComponent(CodeEditor).vm.$emit("vim-ex", "q");
+    await vi.waitFor(() => expect(saveMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 0));
+    expect(closeWindowMock).not.toHaveBeenCalled();
   });
 
   it("q_dirty_cancel_keeps_open", async () => {
