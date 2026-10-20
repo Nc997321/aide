@@ -16,6 +16,7 @@ import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } fr
 import { loadUserMcpServers, loadAppMcp, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
+import { CHAT_DISPLAY_HINT } from "../displayHint.js";
 import { loadLspHint } from "../lspHint.js";
 import { crossMemoryMcpRegistration } from "../crossMemory.js";
 import { subsessionMcpRegistration, type SubsessionContext } from "../../extensions/subsessions.js";
@@ -123,7 +124,8 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     configDir,
     trusted: deps.trusted,
     attached: deps.attachedDirs,
-    builtinHint: await loadLspHint(configDir, lspGate),
+    // Aide 自己的指令块：图片显示（恒在）+ 内置 LSP 提示（按闸门）
+    builtinHint: [CHAT_DISPLAY_HINT, await loadLspHint(configDir, lspGate)].filter(Boolean).join("\n\n"),
   });
   // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
   // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard

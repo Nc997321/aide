@@ -16,8 +16,9 @@
  * 顺带减负：今天是每个增量全量重解析 markdown，拆完前缀只在跨段落时重渲一次。
  * 分段规则与降级判据全在 `@aide/sdk/utils/streamSplit`（纯函数，独立可测）。
  */
-import { computed } from "vue";
+import { computed, onMounted, onUpdated, ref } from "vue";
 import { renderMarkdown, renderStreaming } from "@/utils/markdown";
+import { hydrateLocalImages } from "@/utils/localImages";
 import { splitStreamingText, stripInlineMarks } from "@aide/sdk/utils/streamSplit";
 import { useStreamChunks } from "@/composables/useStreamChunks";
 
@@ -26,7 +27,16 @@ const props = defineProps<{
   text: string;
   /** 是否是该消息的流式尾块。 */
   streaming: boolean;
+  /** 工作区根：回复里 `![](相对路径)` 的图片按它解析。 */
+  workspacePath?: string;
 }>();
+
+/** 本地图片（`![](路径)`）经 Host 读出来再显示。v-html 只在 HTML 串变化时重建 DOM，
+ *  每次更新后补一遍即可，已处理的图会跳过。 */
+const root = ref<HTMLElement | null>(null);
+const hydrate = () => hydrateLocalImages(root.value, props.workspacePath);
+onMounted(hydrate);
+onUpdated(hydrate);
 
 const split = computed(() => (props.streaming ? splitStreamingText(props.text) : null));
 
@@ -69,7 +79,7 @@ const { chunks } = useStreamChunks(tailText, { maxChunks: Infinity });
 </script>
 
 <template>
-  <div class="msg-text">
+  <div ref="root" class="msg-text">
     <template v-if="streaming">
       <div v-if="frozenHtml" class="msg-frozen" v-html="frozenHtml" />
       <!-- 尾巴二选一：可动画走逐块 span；否则整段 markdown（仍以段落为界） -->

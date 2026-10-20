@@ -9,9 +9,9 @@
  * 稳定判定（点开后由 FileViewer 自己报"文件不存在"）。
  */
 
-/** 可跳转的文件扩展名白名单——与 FileViewer 能打开的类型对齐 */
+/** 可跳转的文件扩展名白名单——与 FileViewer 能打开的类型对齐（图片由查看器按图显示） */
 const FILE_EXTENSIONS =
-  "ts|tsx|vue|rs|js|jsx|mjs|cjs|css|scss|less|html|json|jsonc|md|toml|yaml|yml|sh|ps1|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock|txt|ini|cfg|conf";
+  "png|jpe?g|gif|webp|bmp|svg|ts|tsx|vue|rs|js|jsx|mjs|cjs|css|scss|less|html|json|jsonc|md|toml|yaml|yml|sh|ps1|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock|txt|ini|cfg|conf";
 
 /**
  * 结构：[可选盘符][目录段/]文件名.白名单扩展名[:行号]

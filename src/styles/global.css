@@ -221,6 +221,27 @@ html, body, #app {
   background: var(--aide-accent);
   color: var(--aide-text-on-accent);
 }
+/* 回复里的图片（网络图 + 经 Host 读出的本地图，见 utils/localImages.ts） */
+.msg-text img {
+  max-width: 100%;
+  max-height: 480px;
+  border-radius: var(--aide-radius-sm);
+}
+.msg-text img.aide-local-img {
+  display: block;
+  margin: 6px 0;
+  cursor: zoom-in;
+}
+/* 读取中 / 读取失败：没有 src 的 img 只显示 alt 文字，给它一个看得出是「图」的框 */
+.msg-text img.aide-local-img:not([data-aide-state="ok"]) {
+  min-width: 120px;
+  min-height: 48px;
+  padding: 8px 12px;
+  border: 1px dashed var(--aide-border);
+  color: var(--aide-text-muted);
+  font-size: 12px;
+  cursor: pointer;
+}
 .msg-text pre {
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);

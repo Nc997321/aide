@@ -129,6 +129,13 @@ function handleTextClick(e: MouseEvent) {
     return;
   }
 
+  // 回复里的本地图片：点开用文件查看器看大图
+  const localImg = target.closest<HTMLElement>("img.aide-local-img");
+  if (localImg?.dataset.aideSrc) {
+    void openResolved(localImg.dataset.aideSrc, props.workspacePath);
+    return;
+  }
+
   const codeEl = target.closest("code.aide-file-link");
   if (!codeEl) return;
   const link = parseFileLink(codeEl.textContent?.trim() ?? "");
@@ -172,6 +179,7 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'text'"
           :text="seg.block.text"
           :streaming="isStreamingTail(seg.index)"
+          :workspace-path="workspacePath"
           @click="handleTextClick"
         />
         <ThinkingBlock

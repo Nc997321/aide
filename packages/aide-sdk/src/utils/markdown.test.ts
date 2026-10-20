@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, headingSlug, renderStreaming, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
+import { renderMarkdown, headingSlug, renderStreaming, localImagePath, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
  *  语法高亮只在定稿态出现。见 utils/markdown.ts 的注释与
@@ -48,6 +48,38 @@ describe("裸 HTML 一律转义成可见原文（XSS 收口）", () => {
     const html = renderMarkdown('<img src=x onerror="alert(1)">');
     expect(html).not.toContain("<img");
     expect(html).toContain("&lt;img");
+  });
+
+  it("本地图片：打标记、不进 src（由宿主经 Host 读出来再填）", () => {
+    const html = renderMarkdown("![图表](/home/u/out/chart.png)");
+    expect(html).toContain('class="aide-local-img"');
+    expect(html).toContain('data-aide-src="/home/u/out/chart.png"');
+    expect(html).toContain('alt="图表"');
+    expect(html).not.toContain(" src=");
+  });
+
+  it("本地图片：盘符 / 相对 / file:// / 百分号转义都认", () => {
+    expect(localImagePath("C:\\work\\a.png")).toBe("C:\\work\\a.png");
+    expect(localImagePath("out/a.jpg")).toBe("out/a.jpg");
+    expect(localImagePath("./a.svg")).toBe("./a.svg");
+    expect(localImagePath("file:///C:/x/a.png")).toBe("C:/x/a.png");
+    expect(localImagePath("file:///tmp/a.webp")).toBe("/tmp/a.webp");
+    expect(localImagePath("out/a%20b.png")).toBe("out/a b.png");
+  });
+
+  it("本地图片：网络图 / 其它协议 / 非图片扩展名不算", () => {
+    expect(localImagePath("https://x.test/a.png")).toBeNull();
+    expect(localImagePath("//cdn.test/a.png")).toBeNull();
+    expect(localImagePath("javascript:alert(1)//.png")).toBeNull();
+    expect(localImagePath("data:image/png;base64,AAA")).toBeNull();
+    expect(localImagePath("/etc/passwd")).toBeNull();
+    expect(renderMarkdown("![a](https://x.test/i.png)")).toContain('src="https://x.test/i.png"');
+  });
+
+  it("本地图片：alt / 路径里的引号与尖括号被转义", () => {
+    const html = renderMarkdown('![a"><script>](<x" onerror="y.png>)');
+    expect(html).not.toContain("<script>");
+    expect(html).not.toMatch(/onerror="y/);
   });
 
   it("流式实例（第二份独立实例）同样收口", () => {

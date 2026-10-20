@@ -8,9 +8,10 @@
 // capped at 256 KiB; oversize or unreadable files yield a short diagnostics line
 // so the query is never aborted, and a missing file is silently skipped.
 //
-// One block does not come from a file at all: Aide's own LSP navigation hint
-// (lspHint.ts), injected only when the built-in LSP channel is live — see that
-// module for why. The caller computes it and passes it in as `builtinHint`:
+// One block does not come from a file at all: Aide's own hints — the chat
+// image-display hint (displayHint.ts, always) and the LSP navigation hint
+// (lspHint.ts), injected only when the built-in LSP channel is live — see those
+// modules for why. The caller computes it and passes it in as `builtinHint`:
 // the decision needs the LSP gate (trusted / languages / env), which the caller
 // (queryContext) already holds, and this module stays a pure file assembler.
 // It goes first so Aide's layer reads above user rules.

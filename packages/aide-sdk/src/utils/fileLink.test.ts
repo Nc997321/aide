@@ -29,7 +29,11 @@ describe("parseFileLink 文件路径判定", () => {
     expect(parseFileLink("a === b")).toBeNull();
     expect(parseFileLink("permissionMode")).toBeNull();
     expect(parseFileLink("obj.method")).toBeNull(); // 无白名单扩展名
-    expect(parseFileLink("image.png")).toBeNull(); // 不在可打开白名单里
+  });
+
+  it("图片路径可点（查看器按图显示）", () => {
+    expect(parseFileLink("image.png")).toEqual({ path: "image.png", line: undefined });
+    expect(parseFileLink("out/chart.jpeg")).toEqual({ path: "out/chart.jpeg", line: undefined });
   });
 
   it("拒绝含空白与超长文本", () => {

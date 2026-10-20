@@ -95,8 +95,48 @@ function safeLink(this: Renderer, token: Tokens.Link): string {
 /** 图片：URL 不在白名单 → 退化成 alt 文本。token.text 是未转义的原始文本，
  *  且这里落在文本位而非属性位，故转义 &<> 即可。 */
 function safeImage(this: Renderer, token: Tokens.Image): string {
+  const local = localImagePath(token.href);
+  if (local !== null) {
+    const title = token.title ? ` title="${escapeAttr(token.title)}"` : "";
+    return `<img class="aide-local-img" data-aide-src="${escapeAttr(local)}" alt="${escapeAttr(token.text)}"${title}>`;
+  }
   if (safeUrl(token.href) !== null) return defaultRenderer.image.call(this, token);
   return escapeHtml(token.text);
+}
+
+/** 本地图片：`![说明](路径)` 里的路径指向 Host 上的一张图（agent 生成的图表、截图…）。
+ *
+ *  不能直接进 `src`：webview 会拿它去**应用自己的源**上找（`/home/a.png` →
+ *  `tauri://localhost/home/a.png`），盘符路径更是连白名单都过不去——以前的表现就是
+ *  坏图或只剩 alt 字。图又可能在 WSL / SSH Host 上，GUI 本机根本没有这个文件。
+ *  所以这里只打标记（`data-aide-src`，无 `src`），由宿主经 Host 读出字节后填 blob URL
+ *  （桌面见 src/utils/localImages.ts）。不认识这个标记的客户端看到的是 alt 文字。
+ *
+ *  判据：不是任何 URL 协议（盘符不算协议；`file://` 剥成路径），且扩展名是图片——
+ *  只读图片，标记不会让任意文件被读进界面。相对路径由宿主按工作区根解析。 */
+const LOCAL_IMAGE_EXT_RE = /\.(?:png|jpe?g|gif|webp|bmp|svg|avif|ico|tiff?)$/i;
+
+export function localImagePath(raw: string): string | null {
+  let v = raw.trim();
+  if (v === "" || v.startsWith("//")) return null; // 协议相对 URL 不是本地文件
+  if (/^file:\/\//i.test(v)) {
+    v = v.replace(/^file:\/\/(?:localhost)?/i, "");
+    if (/^\/[A-Za-z]:[\\/]/.test(v)) v = v.slice(1); // file:///C:/x.png
+  } else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(v) && !/^[A-Za-z]:[\\/]/.test(v)) {
+    return null; // http / data / javascript … 一切带协议的
+  }
+  if (v.includes("%")) {
+    try {
+      v = decodeURI(v); // `![](a%20b.png)`：markdown 里写空格只能这么转义
+    } catch {
+      /* 非法转义按原文 */
+    }
+  }
+  return LOCAL_IMAGE_EXT_RE.test(v) ? v : null;
+}
+
+function escapeAttr(text: string): string {
+  return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
 /** ── 输出样式的 Insight 旁注块 ──

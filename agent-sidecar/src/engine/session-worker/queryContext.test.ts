@@ -42,6 +42,7 @@ describe("prepareQueryContext", () => {
   it("CLAUDE_CONFIG_DIR 缺席 → 指令加载走空串根（?? 臂）；hooks 恒 policy 打头", async () => {
     const ctx = await prepareQueryContext(deps());
     expect(typeof ctx.instructions).toBe("string");
+    expect(ctx.instructions).toContain("Showing images to the user"); // 图片显示提示恒在
     expect(ctx.hooks.PreToolUse[0].matcher).toBe(".*");
     expect(ctx.hookManifest.some((m) => m.id === "policy")).toBe(true);
     expect(ctx.mcpServers).toEqual({}); // 无用户配置、内建未注册
