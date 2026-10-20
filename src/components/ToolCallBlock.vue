@@ -575,6 +575,11 @@ const readRange = computed(() =>
 .tool-item--line .ti-row:hover {
   background: var(--aide-surface-default);
 }
+/* +N −M / 打开 紧跟旁白文字（与合并旁白 NarrationGroup 一致）。卡片态的 margin-left:auto
+   在这里要撤掉：箭头也是 auto，两段 auto 平分剩余空间会把它们挤到行中间。 */
+.tool-item--line .ti-diff {
+  margin-left: 0;
+}
 /* 箭头只在悬停时浮出，提示可以点开 */
 .tool-item--line .ti-chev {
   margin-left: auto;
