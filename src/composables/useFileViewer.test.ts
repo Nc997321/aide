@@ -139,6 +139,36 @@ describe("useFileViewer 多窗口 store", () => {
     expect(target.flashCount).toBeNull();
   });
 
+  it("openAndScrollTo replaceWinId：diff 窗原地换成真实文件，不新开窗口", async () => {
+    const v = useFileViewer();
+    const pair = { status: "modified", oldText: "a", newText: "b" } as unknown as DiffPair;
+    await v.open("src/a.ts", { diff: windowDiffOfPair(pair) });
+    const diffWin = v.windows.value[0];
+    await v.openAndScrollTo("src/a.ts", 7, undefined, { replaceWinId: diffWin.id });
+    expect(v.windows.value).toHaveLength(1);
+    const w = v.windows.value[0];
+    expect(w.id).toBe(diffWin.id);
+    expect(w.virtual).toBe(false);
+    expect(w.diff).toBeNull();
+    expect(w.readonly).toBe(false);
+    expect(w.editContent).toBe("content of src/a.ts");
+    expect(w.scrollToLine).toBe(7);
+    expect(v.focusedId.value).toBe(w.id);
+  });
+
+  it("openAndScrollTo replaceWinId：真实文件已开着 → 关 diff 窗、聚焦已有窗口", async () => {
+    const v = useFileViewer();
+    const pair = { status: "modified", oldText: "a", newText: "b" } as unknown as DiffPair;
+    await v.open("src/a.ts");
+    await v.open("src/a.ts", { diff: windowDiffOfPair(pair) });
+    const [real, diffWin] = v.windows.value;
+    await v.openAndScrollTo("src/a.ts", 3, undefined, { replaceWinId: diffWin.id });
+    expect(v.windows.value).toHaveLength(1);
+    expect(v.windows.value[0].id).toBe(real.id);
+    expect(real.scrollToLine).toBe(3);
+    expect(v.focusedId.value).toBe(real.id);
+  });
+
   it("超过 1MB 的大文件只读", async () => {
     vi.mocked(api.readFileContent).mockResolvedValueOnce("x".repeat(1_000_001));
     const v = useFileViewer();

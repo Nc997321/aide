@@ -437,11 +437,11 @@ function locateInTree() {
   revealInTreePath.value = props.win.filePath;
 }
 
-/** 打开真实文件（与 diff 窗并存）并滚到首个变更行 */
+/** 把 diff 窗原地换成真实文件并滚到首个变更行（不另开窗口） */
 function openAtFirstChange() {
   const pair = diffHead.value;
   if (!pair) return;
-  void openAndScrollTo(props.win.filePath, firstChangedLine(pair));
+  void openAndScrollTo(props.win.filePath, firstChangedLine(pair), undefined, { replaceWinId: props.win.id });
 }
 
 async function openInBrowser() {

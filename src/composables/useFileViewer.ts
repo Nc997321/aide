@@ -197,6 +197,9 @@ async function loadIntoWindow(win: FileWindowState, path: string, opts?: { conte
   win.scrollToLine = null;
   win.scrollViewportY = null;
   win.flashCount = null;
+  // 从磁盘读进来的就是真实文件：diff 虚拟窗原地换成真实文件时（openAndScrollTo 的
+  // replaceWinId）在这里一并翻转，与上面的字段同一同步块，不出现「virtual 但无 diff」的中间帧。
+  win.virtual = false;
   win.filePath = path; // ← 最后赋：与 editContent 同步连改触发 createEditor 重建
 
   // 记录最近访问文件（best effort，绝不阻断打开主流程）
@@ -273,9 +276,28 @@ export function useFileViewer() {
     focusedId.value = null;
   }
 
-  /** 打开并滚动到目标行（聊天文件链接 / 跳转定义共用入口） */
-  async function openAndScrollTo(targetPath: string, line: number, flashCount?: number) {
-    await open(targetPath);
+  /**
+   * 打开并滚动到目标行（聊天文件链接 / 跳转定义共用入口）。
+   * `replaceWinId`：不新开窗口，把这个窗口（如 git diff 窗）原地换成目标文件，几何不变；
+   * 目标文件已在别的窗口开着 → 关掉被替换的窗口、聚焦已有的那个（保住同路径只开一个）。
+   */
+  async function openAndScrollTo(
+    targetPath: string,
+    line: number,
+    flashCount?: number,
+    opts?: { replaceWinId?: string },
+  ) {
+    const replace = opts?.replaceWinId
+      ? windows.value.find((w) => w.id === opts.replaceWinId)
+      : undefined;
+    const alreadyOpen = windows.value.some((w) => w.filePath === targetPath && !w.virtual);
+    if (replace && !alreadyOpen) {
+      await loadIntoWindow(replace, targetPath);
+      replace.navStack = [];
+    } else {
+      if (replace) closeWindow(replace.id);
+      await open(targetPath);
+    }
     const win = windows.value.find((w) => w.filePath === targetPath && !w.virtual);
     if (!win) return;
     if (!win.readonly && !win.error) {
