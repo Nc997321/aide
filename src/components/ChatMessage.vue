@@ -509,11 +509,13 @@ function handleTextClick(e: MouseEvent) {
    撑开、无外部基准，百分比 max-width 的基准会自指 .btw-note 自身撑开的
    .msg-row--note，把容器压到比内容还窄、head 标签被 overflow:hidden 截断。宽度
    上限交由 .msg-action-wrap 的 max-width:85%（基准=消息区，正确）兜底。 */
-.msg-row--note { display: flex; justify-content: flex-end; padding: 2px 12px; }
+/* min-width:0（.msg-row--note 与 .btw-note 两层都要）：问题文字是单行不换行，弹性项默认
+   min-width:auto 会按整句单行宽度当最小宽度，长问题把批注撑出内容列、整条对话横向滚动。 */
+.msg-row--note { display: flex; justify-content: flex-end; padding: 2px 12px; min-width: 0; }
 /* 2026-10-17 去装饰：收起态与过程行同一语法——一行灰字、悬停浮底色，不要虚线框、
    accent 底色和描边药丸（批注是附属物，视觉重量要低于正文）。展开后才给一层浅底，
    让右侧浮着的结论有个落脚处。 */
-.btw-note { border-radius: var(--aide-radius-md); overflow: hidden; }
+.btw-note { border-radius: var(--aide-radius-md); overflow: hidden; min-width: 0; }
 .btw-note[open] { background: var(--aide-surface-default); }
 .btw-note-head {
   display: flex; align-items: center; gap: 7px; padding: 3px 8px; cursor: pointer;
