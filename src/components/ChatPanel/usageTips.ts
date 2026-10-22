@@ -6,8 +6,9 @@
  * - 其余是**时机提示**：只在用户正需要它的那一刻出现（生成中开始打字 → /btw；
  *   @ 菜单里出现别的项目 → 跨项目……），比随机翻到有效得多。
  *
- * 退场：每条看过 maxShows 次，或用户已经用过它讲的功能（retiredBy），就不再出现——
- * 提示是教学不是广告，教会了就闭嘴。没有设置开关，靠这条规则自己安静下去。
+ * 退场：时机提示看过 maxShows 次，或用户已经用过它讲的功能（retiredBy），就不再出现——
+ * 它们打断的是正在输入的用户，教会了就闭嘴。思考行轮播不退役（用户在等，不打扰），
+ * 只按出场次数排先后、用过的功能降频，见 nextThinkingTip。
  *
  * 加提示 = 在 TIPS 加一行。文案只写代码里确认存在的行为；`反引号` 渲染成行内代码。
  */
@@ -176,20 +177,32 @@ export function slotTip(slot: TipSlot, state: TipState, pool: readonly UsageTip[
   return pool.find((t) => t.slot === slot && isTipActive(t, state)) ?? null;
 }
 
+/** 用户点了「知道了」的标记值（useUsageTips.dismiss 写入）：轮播也不再出这条。 */
+export const DISMISSED_SHOWS = Number.MAX_SAFE_INTEGER;
+
 /**
- * 轮播下一条：在役的 thinking 提示里出场最少的（同次数按表序）——每出场一次计数 +1，
- * 自然就轮起来了。excludeId（当前正显示的）在还有别的可选时跳过，避免原地重复。
+ * 轮播下一条：思考行的提示**永不用完**——出场次数只排先后，不退役（2026-10-22：按次数退役
+ * 让老用户几分钟后就再也看不到提示，思考行空荡荡）。
+ *
+ * 挑「有效出场数」最少的（同分按表序）：没看过的、看得少的排前面，新用户首轮仍按表序；
+ * 讲的功能已经用过的按两倍计（+1 让它在同轮里也排后面），出现频率减半而不是消失。
+ * 只有点过「知道了」的（DISMISSED_SHOWS）不再出。excludeId（当前正显示的）在还有别的
+ * 可选时跳过，避免原地重复。maxShows 只管时机提示（slotTip），不管这里。
  */
 export function nextThinkingTip(
   state: TipState,
   excludeId: string | null = null,
   pool: readonly UsageTip[] = TIPS,
 ): UsageTip | null {
-  const active = pool.filter((t) => t.slot === "thinking" && isTipActive(t, state));
-  const candidates = active.length > 1 ? active.filter((t) => t.id !== excludeId) : active;
+  const live = pool.filter((t) => t.slot === "thinking" && (state.shown[t.id] ?? 0) < DISMISSED_SHOWS);
+  const candidates = live.length > 1 ? live.filter((t) => t.id !== excludeId) : live;
+  const score = (t: UsageTip) => {
+    const n = state.shown[t.id] ?? 0;
+    return t.retiredBy && state.used.includes(t.retiredBy) ? n * 2 + 1 : n;
+  };
   let best: UsageTip | null = null;
   for (const t of candidates) {
-    if (!best || (state.shown[t.id] ?? 0) < (state.shown[best.id] ?? 0)) best = t;
+    if (!best || score(t) < score(best)) best = t;
   }
   return best;
 }

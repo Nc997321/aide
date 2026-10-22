@@ -1,5 +1,6 @@
 import { ref } from "vue";
 import {
+  DISMISSED_SHOWS,
   nextThinkingTip,
   slotTip,
   type TipFeature,
@@ -48,7 +49,7 @@ function markShown(id: string) {
 
 /** 用户点了「知道了」：这条直接退役。 */
 function dismiss(id: string) {
-  state.value = { ...state.value, shown: { ...state.value.shown, [id]: Number.MAX_SAFE_INTEGER } };
+  state.value = { ...state.value, shown: { ...state.value.shown, [id]: DISMISSED_SHOWS } };
   save();
 }
 

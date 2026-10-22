@@ -24,9 +24,9 @@ describe("ActivityStrip · 思考字样", () => {
     expect(w.find(".astrip-chips").classes()).toContain("astrip-chips--alone");
   });
 
-  it("往上翻走了：亮出「思考中」", () => {
-    const w = mount(ActivityStrip, { props: { ...base, thinkingLabel: true }, global: { directives: { tooltip: () => {} } } });
+  it("往上翻走了：亮出这一轮的状态词", () => {
+    const w = mount(ActivityStrip, { props: { ...base, thinkingLabel: true, label: "琢磨中" }, global: { directives: { tooltip: () => {} } } });
     expect(w.find(".astrip-thinking").exists()).toBe(true);
-    expect(w.text()).toContain("思考中");
+    expect(w.text()).toContain("琢磨中");
   });
 });

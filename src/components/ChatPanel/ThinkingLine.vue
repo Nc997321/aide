@@ -30,6 +30,8 @@ const HIDE_DELAY_MS = 450;
 const props = defineProps<{
   /** 此刻在想（忙且没有在等用户作答、不在压缩） */
   active: boolean;
+  /** 这一轮的状态词（「琢磨中」…，见 workingVerbs.ts）；不说「思考」，免得和消息里模型的「正在思考…」撞 */
+  label: string;
   elapsedSeconds: number;
   tip: UsageTip | null;
 }>();
@@ -106,7 +108,7 @@ onBeforeUnmount(() => {
   <div ref="el" class="tline" role="status" :aria-hidden="!shown">
     <div class="tline-row" :class="{ 'tline-row--on': shown }">
       <ThinkingMark :size="16" />
-      <span class="tline-text">正在思考</span>
+      <span class="tline-text">{{ label }}</span>
       <span class="tline-elapsed">{{ elapsedSeconds }}s</span>
       <Transition name="tline-tip" mode="out-in">
         <UsageTipText v-if="tip && shown" :key="tip.id" class="tline-tip" :text="tip.text" />

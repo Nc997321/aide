@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   DEFAULT_MAX_SHOWS,
+  DISMISSED_SHOWS,
   TIPS,
   isTipActive,
   nextThinkingTip,
@@ -25,7 +26,7 @@ describe("usageTips", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("看满次数或用过对应功能即退役", () => {
+  it("时机提示：看满次数或用过对应功能即退役", () => {
     const a = pool[0];
     expect(isTipActive(a, fresh)).toBe(true);
     expect(isTipActive(a, { shown: { a: DEFAULT_MAX_SHOWS }, used: [] })).toBe(false);
@@ -33,29 +34,39 @@ describe("usageTips", () => {
     expect(isTipActive(pool[2], { shown: { c: 1 }, used: [] })).toBe(false);
   });
 
-  it("新用户按表序出场，之后挑出场最少的——计数自增即自然轮转", () => {
-    let state: TipState = fresh;
+  const rotate = (state: TipState, n: number) => {
     const seen: string[] = [];
     let cur: string | null = null;
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < n; i++) {
       const t = nextThinkingTip(state, cur, pool);
       if (!t) break;
       seen.push(t.id);
       cur = t.id;
       state = { ...state, shown: { ...state.shown, [t.id]: (state.shown[t.id] ?? 0) + 1 } };
     }
-    // c 只许出一次；之后在 a/b 间轮
-    expect(seen).toEqual(["a", "b", "c", "a"]);
+    return seen;
+  };
+
+  it("新用户按表序出场，之后挑出场最少的——计数自增即自然轮转", () => {
+    expect(rotate(fresh, 6)).toEqual(["a", "b", "c", "a", "b", "c"]);
   });
 
-  it("只剩一条在役时允许连着出（不因 exclude 变成空）", () => {
-    const state: TipState = { shown: { b: 3, c: 1 }, used: [] };
+  it("思考轮播永不用完：看满次数（含 maxShows）照样轮", () => {
+    const state: TipState = { shown: { a: 50, b: 50, c: 50 }, used: [] };
+    expect(rotate(state, 3)).toEqual(["a", "b", "c"]);
+  });
+
+  it("用过的功能降频而不消失：其它条出两次它出一次", () => {
+    const seen = rotate({ shown: {}, used: ["btw"] }, 30);
+    const count = (id: string) => seen.filter((x) => x === id).length;
+    expect(count("a")).toBeGreaterThan(0);
+    expect(count("a")).toBeLessThan(count("b"));
+  });
+
+  it("点过「知道了」的不再出；只剩一条时允许连着出", () => {
+    const state: TipState = { shown: { b: DISMISSED_SHOWS, c: DISMISSED_SHOWS }, used: ["btw"] };
     expect(nextThinkingTip(state, "a", pool)?.id).toBe("a");
-  });
-
-  it("全部退役 → null（思考行不再带提示）", () => {
-    const state: TipState = { shown: { b: 3, c: 1 }, used: ["btw"] };
-    expect(nextThinkingTip(state, null, pool)).toBeNull();
+    expect(nextThinkingTip({ ...state, shown: { ...state.shown, a: DISMISSED_SHOWS } }, null, pool)).toBeNull();
   });
 
   it("时机提示按 slot 取在役的第一条", () => {

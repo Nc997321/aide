@@ -27,6 +27,8 @@ const props = defineProps<{
   thinking: boolean;
   /** 是否显示「思考中」字样（消息流末尾那行看不见时才要）；缺省显示 */
   thinkingLabel?: boolean;
+  /** 状态词（与消息流末尾那行同一个，见 ChatPanel/workingVerbs.ts）；缺省「处理中」 */
+  label?: string;
   elapsedSeconds: number;
   tip: UsageTip | null;
   chips: ActivityChip[];
@@ -54,7 +56,7 @@ const showThinking = computed(() => props.thinking && props.thinkingLabel !== fa
     />
     <div v-else-if="showThinking" class="astrip-thinking">
       <ThinkingMark :size="16" />
-      <span class="astrip-thinking-text">思考中</span>
+      <span class="astrip-thinking-text">{{ label ?? "处理中" }}</span>
       <span class="astrip-elapsed">{{ elapsedSeconds }}s</span>
       <Transition name="astrip-tip" mode="out-in">
         <UsageTipText v-if="tip" :key="tip.id" class="astrip-tip" :text="tip.text" />

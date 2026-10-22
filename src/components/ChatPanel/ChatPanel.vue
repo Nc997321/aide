@@ -25,6 +25,7 @@ import HeroWelcome from "./hero/HeroWelcome.vue";
 import { DEFAULT_CHAT_MODE, type ChatMode } from "./modes";
 import ChatInputBox from "./ChatInputBox.vue";
 import ThinkingLine from "./ThinkingLine.vue";
+import { pickWorkingVerb } from "./workingVerbs";
 import { applyLspChoice, lspLangsToAsk, pendingLspAsk } from "./lspSendGate";
 import LspSendPrompt from "./LspSendPrompt.vue";
 import { sameRoot, useLsp } from "@/composables/useLsp";
@@ -618,7 +619,10 @@ function syncActivityTimer() {
   if (!activityTimer) activityTimer = setInterval(refreshActivityElapsed, 1000);
 }
 
+/** 这一轮的状态词（「琢磨中」…）：每轮开始抽一个，轮内不变，见 workingVerbs.ts */
+const workingVerb = ref(pickWorkingVerb(null));
 watch(() => props.isBusy, (busy) => {
+  if (busy && busyStartedAt.value === null) workingVerb.value = pickWorkingVerb(workingVerb.value);
   busyStartedAt.value = busy ? Date.now() : null;
   syncActivityTimer();
 }, { immediate: true });
@@ -831,6 +835,7 @@ function onOpenBgDock(taskId: string) {
         <ThinkingLine
           v-if="props.messages.length > 0"
           :active="thinkingNow"
+          :label="workingVerb"
           :elapsed-seconds="activityElapsed"
           :tip="thinkingTip"
           @in-view="thinkingLineInView = $event"
@@ -912,6 +917,7 @@ function onOpenBgDock(taskId: string) {
         :compaction="contextCompactionVal"
         :thinking="props.isBusy && !displayedPermission"
         :thinking-label="!thinkingLineInView"
+        :label="workingVerb"
         :elapsed-seconds="activityElapsed"
         :tip="null"
         :chips="activityChips"
