@@ -3,6 +3,7 @@
  *
  * 块级：标题/段落/围栏代码/列表(含任务列表)/引用/分隔线/表格(降级等宽块)；
  * 行内：加粗(** __ ***)/斜体(*)/行内码(`)/删除线(~~)/链接(仅样式)/反斜杠转义。
+ * 图片：`![说明](本地路径)` 拆成独立的 Image 块（LocalImage 经 Host 读图）；网络图等只留说明文字。
  * 不追求 CommonMark 全覆盖——只做助手回复的常用子集，表格降级为等宽块。
  *
  * 性能约束（用户明确要求，勿回退）：
@@ -17,7 +18,9 @@ export enum MdBlockKind {
   Code = 2,
   ListItem = 3,
   Quote = 4,
-  Rule = 5
+  Rule = 5,
+  /** 回复里的本地图片（`![说明](Host 上的路径)`）：text = 说明，src = 路径。 */
+  Image = 6
 }
 
 export enum MdSpanKind {
@@ -26,7 +29,9 @@ export enum MdSpanKind {
   Italic = 2,
   Code = 3,
   Strike = 4,
-  Link = 5
+  Link = 5,
+  /** 本地图片（只在解析中间态出现：段落里的图片会被拆成独立的 Image 块）。 */
+  Image = 6
 }
 
 /** 行内样式段：一段同风格文本（Link 带原始 href，V1 仅样式不响应点击）。 */
@@ -49,6 +54,8 @@ export class MdBlock {
   /** 列表缩进层级（0 起，按 2 空格折算，上限 3）。 */
   indent: number = 0;
   spans: MdSpan[] = [];
+  /** Image 块：Host 上的图片路径（未按工作区解析）。 */
+  src: string = '';
 }
 
 const INLINE_SPECIALS: string = '*_~`[\\';
@@ -80,11 +87,117 @@ function pushParagraph(blocks: MdBlock[], para: string[]): void {
   if (para.length === 0) {
     return;
   }
-  const b: MdBlock = new MdBlock();
-  b.kind = MdBlockKind.Paragraph;
-  b.text = para.join('\n');
-  b.spans = parseInline(b.text);
-  blocks.push(b);
+  const text: string = para.join('\n');
+  const spans: MdSpan[] = parseInline(text);
+  // 段落里的本地图片拆成独立的图片块（前后的文字各成一段）
+  let cur: MdSpan[] = [];
+  const flush = (): void => {
+    if (cur.length === 0 || cur.every((s: MdSpan) => s.kind === MdSpanKind.Text && s.text.trim() === '')) {
+      cur = [];
+      return;
+    }
+    // 图片拆出后，前后文字段首尾的换行去掉（否则多出一行空白）
+    if (cur[0].kind === MdSpanKind.Text) {
+      cur[0].text = cur[0].text.replace(/^\n+/, '');
+    }
+    const lastSpan: MdSpan = cur[cur.length - 1];
+    if (lastSpan.kind === MdSpanKind.Text) {
+      lastSpan.text = lastSpan.text.replace(/\n+$/, '');
+    }
+    const b: MdBlock = new MdBlock();
+    b.kind = MdBlockKind.Paragraph;
+    b.text = cur.map((s: MdSpan) => s.text).join('');
+    b.spans = cur;
+    blocks.push(b);
+    cur = [];
+  };
+  for (let i = 0; i < spans.length; i++) {
+    const s: MdSpan = spans[i];
+    if (s.kind !== MdSpanKind.Image) {
+      cur.push(s);
+      continue;
+    }
+    flush();
+    const img: MdBlock = new MdBlock();
+    img.kind = MdBlockKind.Image;
+    img.text = s.text;
+    img.src = s.href;
+    blocks.push(img);
+  }
+  flush();
+}
+
+/** 可点开的文件扩展名白名单（同 SDK fileLink.ts 的 FILE_EXTENSIONS）。 */
+const FILE_EXTENSIONS: string =
+  'png|jpe?g|gif|webp|bmp|svg|ts|tsx|vue|rs|js|jsx|mjs|cjs|css|scss|less|html|json|jsonc|md|toml|yaml|yml|sh|ps1|py|java|kt|xml|gradle|go|c|cpp|h|hpp|rb|php|swift|cs|proto|sql|env|lock|txt|ini|cfg|conf|ets|json5|log|csv';
+
+/** [可选盘符或开头 /][目录段/]文件名.扩展名[:行号]——不含空白，排除整句代码与 `foo(bar).ts` 之类表达式。 */
+const RE_FILE_PATH: RegExp = new RegExp(
+  `^((?:[A-Za-z]:[/\\\\]|/)?(?:[\\w.@-]+[/\\\\])*[\\w.@-]+\\.(?:${FILE_EXTENSIONS}))(?::(\\d+))?$`, 'i');
+
+/** 行内码是文件路径引用 → 返回路径（去掉 :行号）；否则空串（同 SDK parseFileLink）。 */
+export function fileLinkPath(text: string): string {
+  if (text === '' || text.length > 260) {
+    return '';
+  }
+  const m: RegExpMatchArray | null = text.match(RE_FILE_PATH);
+  return m !== null ? m[1] : '';
+}
+
+/** markdown 链接指向 Host 上的文件（不带 URL 协议、不是锚点）→ 返回路径（去掉 #L12 / :12）；否则空串。 */
+export function localLinkPath(href: string): string {
+  const v: string = href.trim();
+  if (v === '' || v.startsWith('#') || v.startsWith('//')) {
+    return '';
+  }
+  let p: string = v;
+  if (/^file:\/\//i.test(p)) {
+    p = p.replace(/^file:\/\/(?:localhost)?/i, '');
+    if (/^\/[A-Za-z]:[\\/]/.test(p)) {
+      p = p.substring(1);
+    }
+  } else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(p) && !/^[A-Za-z]:[\\/]/.test(p)) {
+    return '';
+  }
+  p = p.replace(/#.*$/, '').replace(/:\d+(?::\d+)?$/, '');
+  if (p.indexOf('%') >= 0) {
+    try {
+      p = decodeURI(p);
+    } catch (e) {
+      // 非法转义按原文
+    }
+  }
+  return p;
+}
+
+const RE_LOCAL_IMAGE_EXT: RegExp = /\.(?:png|jpe?g|gif|webp|bmp|svg|avif|ico|tiff?)$/i;
+
+/**
+ * `![说明](路径)` 的路径是不是 Host 上的一张本地图片（同 SDK markdown.ts 的 localImagePath）：
+ * 不是任何 URL 协议（盘符不算；`file://` 剥成路径），且扩展名是图片——只读图片，
+ * 不会让任意文件被读进界面。是 → 返回路径（未按工作区解析）；否 → 空串。
+ */
+export function localImagePath(raw: string): string {
+  let v: string = raw.trim();
+  if (v === '' || v.startsWith('//')) {
+    return '';
+  }
+  if (/^file:\/\//i.test(v)) {
+    v = v.replace(/^file:\/\/(?:localhost)?/i, '');
+    if (/^\/[A-Za-z]:[\\/]/.test(v)) {
+      v = v.substring(1); // file:///C:/x.png
+    }
+  } else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(v) && !/^[A-Za-z]:[\\/]/.test(v)) {
+    return ''; // http / data / javascript … 一切带协议的
+  }
+  if (v.indexOf('%') >= 0) {
+    try {
+      v = decodeURI(v);
+    } catch (e) {
+      // 非法转义按原文
+    }
+  }
+  return RE_LOCAL_IMAGE_EXT.test(v) ? v : '';
 }
 
 /** 任务列表前缀归一：`[ ]`→□、`[x]`→✓（其余原样）。 */
@@ -116,7 +229,9 @@ export function parseInline(src: string): MdSpan[] {
       if (close > i) {
         pushSpanText(out, buf);
         buf = '';
-        pushStyledSpan(out, MdSpanKind.Code, src.substring(i + 1, close), '');
+        // 看起来是文件路径的行内码（`src/a.ts:12`）带上路径，渲染成可点开
+        const code: string = src.substring(i + 1, close);
+        pushStyledSpan(out, MdSpanKind.Code, code, fileLinkPath(code));
         i = close + 1;
         continue;
       }
@@ -181,9 +296,23 @@ export function parseInline(src: string): MdSpan[] {
     }
     if (c === '[') {
       const closeB: number = src.indexOf(']', i + 1);
-      if (closeB > i + 1 && src.charAt(closeB + 1) === '(') {
+      if (closeB > i && src.charAt(closeB + 1) === '(') {
         const closeP: number = src.indexOf(')', closeB + 2);
-        if (closeP > closeB + 1) {
+        if (closeP > closeB + 1 && buf.endsWith('!')) {
+          // 图片：本地图片出 Image 段（由段落拆成图片块），其余（网络图等）只留说明文字
+          pushSpanText(out, buf.substring(0, buf.length - 1));
+          buf = '';
+          const alt: string = src.substring(i + 1, closeB);
+          const path: string = localImagePath(src.substring(closeB + 2, closeP));
+          if (path !== '') {
+            pushStyledSpan(out, MdSpanKind.Image, alt, path);
+          } else {
+            pushSpanText(out, alt);
+          }
+          i = closeP + 1;
+          continue;
+        }
+        if (closeP > closeB + 1 && closeB > i + 1) {
           pushSpanText(out, buf);
           buf = '';
           pushStyledSpan(out, MdSpanKind.Link, src.substring(i + 1, closeB), src.substring(closeB + 2, closeP));

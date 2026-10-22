@@ -45,7 +45,7 @@ import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/Cha
 import { routeChatEvent } from './chat/ChatEvents';
 import { ttsModel } from './chat/TtsModel';
 import { readerModel } from './chat/ReaderModel';
-import { uuid, fileExt } from './chat/ChatWire';
+import { uuid, fileExt, imageMime } from './chat/ChatWire';
 import { sessionsModel } from './SessionsModel';
 import { workspaceModel } from './WorkspaceModel';
 import { providerModel } from './ProviderModel';
@@ -114,12 +114,6 @@ export interface RespondPermissionOpts {
   reason: string | null;
 }
 
-/** 远程预览：可直接当图片显示的扩展名 → MIME。 */
-const PREVIEW_IMAGE_MIME: Map<string, string> = new Map<string, string>([
-  ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
-  ['gif', 'image/gif'], ['webp', 'image/webp'], ['bmp', 'image/bmp']
-]);
-
 /** 远程预览：只给提示、不拉取正文的文档/二进制类扩展名。 */
 const PREVIEW_DOC_EXTS: Set<string> = new Set<string>([
   'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'odt', 'ods', 'odp', 'rtf',
@@ -157,14 +151,28 @@ export class ChatModel {
    * （pdf/office/压缩包…）不拉正文（体积大、手机渲不了，只给提示）；其余按文本拉取。
    * 读文件闸在 Host 侧（已注册工作区内、≤8 MiB），越界/超限的错误原样进 error 态。
    */
-  openWorkspaceFile(path: string): void {
+  openWorkspaceFile(raw: string): void {
+    const path: string = this.resolveHostPath(raw);
     this.store.openRemoteFile(path);
     void this.loadWorkspaceFile(path);
   }
 
+  /** 会话里出现的路径 → Host 上的路径：绝对路径原样，相对路径挂到会话所在工作区根下
+   *  （同 SDK fileLink.resolveFileLinkPath；找不到根就原样交给 Host，由它如实报错）。 */
+  resolveHostPath(raw: string): string {
+    if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) {
+      return raw;
+    }
+    const root: string = workspaceModel.rootOfKey(this.store.spawnWsKey);
+    if (root === '') {
+      return raw;
+    }
+    return `${root}/${raw.replace(/^\.\//, '')}`.replace(/\\/g, '/');
+  }
+
   private async loadWorkspaceFile(path: string): Promise<void> {
     const ext: string = fileExt(path);
-    const mime: string = PREVIEW_IMAGE_MIME.has(ext) ? PREVIEW_IMAGE_MIME.get(ext) ?? '' : '';
+    const mime: string = imageMime(path);
     try {
       if (mime !== '') {
         const b64: string = await api.readFileBase64(path);
@@ -313,9 +321,8 @@ export class ChatModel {
         initialModel: spawn && this.store.model !== '' ? this.store.model : null,
         // effort 每条消息都带（对照桌面 ChatInputBox / PWA ChatView：同值幂等无
         // 回执）。只在 spawn 带会让「快速」在非新会话永不生效——历史会话重启时
-        // 新 worker 读不到档位（回落 provider 默认），存活会话则触发不了 Rust 侧
-        // thinking_enabled=false 的思考漂移重建（thinking 在 query 创建时固定，
-        // 热切 effort 不关思考块）
+        // 新 worker 读不到档位（回落 provider 默认）；存活会话走 effort 热通道
+        // 下一轮生效。思考恒开，档位只管思考深度
         initialEffort: this.store.effort !== '' ? this.store.effort : null,
         permissionMode: null,
         jumpQueue: wasBusy,

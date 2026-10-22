@@ -62,6 +62,19 @@ export function fileExt(path: string): string {
   return i <= 0 || i === base.length - 1 ? '' : base.substring(i + 1).toLowerCase();
 }
 
+/** 手机能直接当图片显示的扩展名 → MIME（文件预览与回复里的本地图片共用）。 */
+const IMAGE_MIME: Map<string, string> = new Map<string, string>([
+  ['png', 'image/png'], ['jpg', 'image/jpeg'], ['jpeg', 'image/jpeg'],
+  ['gif', 'image/gif'], ['webp', 'image/webp'], ['bmp', 'image/bmp'],
+  ['svg', 'image/svg+xml'], ['ico', 'image/x-icon']
+]);
+
+/** 路径的图片 MIME；不是手机能显示的图片 → 空串。 */
+export function imageMime(path: string): string {
+  const m: string | undefined = IMAGE_MIME.get(fileExt(path));
+  return m !== undefined ? m : '';
+}
+
 export function isEditTool(name: string): boolean {
   return name === 'Edit' || name === 'Write';
 }

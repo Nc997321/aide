@@ -12,7 +12,9 @@
  * 行内样式走 Text{ForEach{Span}} 声明式（官方 faqs-arkui-591 模式），
  * 行内码用 ContainerSpan（API 12）做灰底。
  */
-import { MdBlock, MdBlockKind, MdSpan, MdSpanKind, parseMarkdown } from './Markdown';
+import { MdBlock, MdBlockKind, MdSpan, MdSpanKind, parseMarkdown, localLinkPath } from './Markdown';
+import { chatModel } from '../ChatModel';
+import { LocalImage } from './LocalImage';
 import { StreamSplit, WaveStream, WaveTail, splitStreamingText, stripInlineMarks, CARET_BLINK_MS } from './StreamWave';
 
 const LIVE_THROTTLE_MS: number = 400;
@@ -163,6 +165,18 @@ export struct MarkdownText {
       Span(s.text).fontWeight(FontWeight.Bold)
     } else if (s.kind === MdSpanKind.Italic) {
       Span(s.text).fontStyle(FontStyle.Italic)
+    } else if (s.kind === MdSpanKind.Code && s.href !== '') {
+      // 文件路径：点开只读预览 Host 上的这个文件
+      ContainerSpan() {
+        Span(s.text)
+          .fontFamily('monospace')
+          .fontSize(13)
+          .fontColor($r('app.color.accent'))
+          .onClick(() => {
+            chatModel.openWorkspaceFile(s.href);
+          })
+      }
+      .textBackgroundStyle({ color: $r('app.color.input_bg'), radius: 4 })
     } else if (s.kind === MdSpanKind.Code) {
       ContainerSpan() {
         Span(s.text).fontFamily('monospace').fontSize(13)
@@ -174,6 +188,13 @@ export struct MarkdownText {
       Span(s.text)
         .fontColor($r('app.color.accent'))
         .decoration({ type: TextDecorationType.Underline })
+        .onClick(() => {
+          // 指向 Host 上文件的链接点开预览；网址链接仍只是样式
+          const p: string = localLinkPath(s.href);
+          if (p !== '') {
+            chatModel.openWorkspaceFile(p);
+          }
+        })
     } else {
       Span(s.text)
     }
@@ -269,6 +290,8 @@ export struct MarkdownText {
         .layoutWeight(1)
       }
       .width('100%')
+    } else if (b.kind === MdBlockKind.Image) {
+      LocalImage({ src: b.src, alt: b.text })
     } else if (b.kind === MdBlockKind.Rule) {
       Divider().strokeWidth(1).color($r('app.color.line'))
     } else {
@@ -289,7 +312,7 @@ export struct MarkdownText {
     Column({ space: 8 }) {
       ForEach(this.blocks, (b: MdBlock, i: number) => {
         this.blockView(b, false)
-      }, (b: MdBlock, i: number) => `${i}-${b.kind}-${b.text.length}`)
+      }, (b: MdBlock, i: number) => `${i}-${b.kind}-${b.text.length}-${b.src}`)
       if (this.waveOn) {
         WaveTail({ stream: this.wave })
       }

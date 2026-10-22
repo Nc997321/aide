@@ -224,6 +224,19 @@ export class WorkspaceModel {
     return ws !== null ? ws.name : '';
   }
 
+  /** 某个浏览范围键对应的工作区路径（'' = 桌面活动工作区；日常 = 日常路径；找不到 = 空串）。
+   *  回复里 `![](相对路径)` 的图片按它解析。 */
+  rootOfKey(key: string): string {
+    if (key === '') {
+      return this.activePath;
+    }
+    if (this.isDaily(key)) {
+      return this.daily !== null ? this.daily.path : '';
+    }
+    const ws: WorkspaceInfo | null = this.lookup(key);
+    return ws !== null ? ws.name : '';
+  }
+
   /** spawn 的 workspaceRoot：日常 → 日常路径（⚠ 不走 lookup——列表不含日常，
    *  落空回 null 会让 spawn 错落桌面活动工作区）；'' → null（桌面回落活动
    *  工作区）；选中项缺失兜底 null。 */

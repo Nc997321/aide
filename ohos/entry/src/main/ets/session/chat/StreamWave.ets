@@ -6,7 +6,7 @@
  *    块粒度做「词感知」：拉丁词整块（词中不被换行劈开），CJK 2 字/块（原型
  *    观感），超长词按 WORD_CHUNK_MAX 分段（Flex wrap 断点只落在块间）
  *  - 尾巴按 '\n' 切成逐行 Flex：含换行的块在 Flex wrap 里按整块盒子顶对齐
- *  - transition 用 asymmetric：appear = OPACITY（460ms 错峰、cubic-bezier
+ *  - transition 用 asymmetric：appear = OPACITY（250ms 错峰、cubic-bezier
  *    (.22,.75,.3,1)，桌面同曲线），disappear = IDENTITY（重置时瞬时让位
  *    给定稿渲染，绝不整段淡出闪烁）
  *  - 思考是无限增长的纯文本：WaveStream 设 maxChunks 后按块数窗口滚动退役
@@ -27,10 +27,11 @@ const TAIL_MAX_CHARS: number = 800;
 const CHUNK_CHARS: number = 2;
 /** 同一次到达内相邻块的错峰间隔；块多时按比例压缩。 */
 const STAGGER_MS: number = 12;
-/** 错峰总摊开上限：再长用户就等不到最后一块浮现。 */
-const STAGGER_CAP_MS: number = 200;
-/** 波形入场时长（桌面 CSS 0.46s 同源）。 */
-const WAVE_DURATION_MS: number = 460;
+/** 错峰总摊开上限 = sidecar 增量合并窗口（40ms）：一批刚好摊完下一批就到，波连成一片。
+ *  原先 200ms，吐字快时尾巴越拖越长、像跟不上模型（桌面 streamSplit 2026-10-20 同调）。 */
+const STAGGER_CAP_MS: number = 40;
+/** 波形入场时长（桌面 CSS 0.25s 同源，原 0.46s）。 */
+const WAVE_DURATION_MS: number = 250;
 /** 流式光标闪烁半周期（ms）：对照原型 .cursor 的 blink 1s steps——500 显 / 500 隐。 */
 export const CARET_BLINK_MS: number = 500;
 /** 词块长度上限：词块不可断行，过长会撑破 Flex 行宽。 */

@@ -302,6 +302,9 @@ export class SessionsModel {
         this.setLive(sid, false);
         this.setWait(sid, false);
         break;
+      case 'session_slept':
+        // 子会话空闲超时、Host 已安静关掉进程（协议 §8.1，不是出错）：下一条消息带
+        // resume id 原地续上。三态全清——落进 default 会被误点成「回复中」
       case 'session_dead':
         // 进程覆灭：三态全清
         this.setLive(sid, false);

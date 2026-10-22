@@ -63,6 +63,7 @@ import {
 } from '../session/chat/ChatBlocks';
 import { Attachment, ChatAttachments, attachmentsModel, durationLabel } from '../session/chat/ChatAttachments';
 import { toolSummary, extBadgeColor } from '../session/chat/ChatWire';
+import { NarrSeg, Narration, narrateCall } from '../session/chat/Narration';
 import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
 import { FileViewer } from '../session/chat/FileViewer';
@@ -1090,8 +1091,8 @@ export struct ChatPage {
   }
 
   /**
-   * Edit/Write 常驻折叠行（对照原型 .edit-row）：spinner → 铅笔图标 + 工具名 +
-   * mono 路径，单行始终显示、不可展开（写盘留痕）。pending 态由 tool_result
+   * Edit/Write 常驻折叠行（对照原型 .edit-row）：spinner → 铅笔图标 + 旁白
+   * （「修改了 a.ts」，不露工具名），单行始终显示、不可展开（写盘留痕）。pending 态由 tool_result
    * 回填 / finishStreaming 兜底收束（ChatStore.backfillToolResult）。
    */
   @Builder
@@ -1104,19 +1105,7 @@ export struct ChatPage {
           .fontSize(13)
           .fontColor([b.isError ? $r('app.color.status_danger') : $r('app.color.accent')])
       }
-      Text(`${b.name} ·`)
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-      if (toolSummary(b.input) !== '') {
-        Text(toolSummary(b.input))
-          .fontSize(12)
-          .fontColor($r('app.color.text_secondary'))
-          .fontFamily('monospace')
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-      }
+      this.narrLine(narrateCall(b.name, b.input, b.result, b.isError, b.isPending), 13)
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
@@ -1226,13 +1215,8 @@ export struct ChatPage {
             .fontSize(10)
             .fontColor(en.isError ? $r('app.color.status_danger') : $r('app.color.status_ok'))
         }
-        Text(en.toolName).fontSize(11).fontColor($r('app.color.text_primary'))
-        Text(toolSummary(en.input))
-          .fontSize(11)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
+        this.narrLine(narrateCall(en.toolName, en.input, en.result, en.isError,
+          en.result === '' && !en.isError), 11)
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -1247,27 +1231,55 @@ export struct ChatPage {
     }
   }
 
+  /**
+   * 旁白一句话（Narration.ets）：对象（文件名 / 搜索词）比动词亮、等宽对象走 monospace、
+   * 失败标红；被拒在句尾挂「已拒绝 / 规则拒绝」。单行截断，占满剩余宽度。
+   */
+  @Builder
+  narrLine(n: Narration, size: number) {
+    Row({ space: 6 }) {
+      Text() {
+        ForEach(n.segs, (sg: NarrSeg) => {
+          Span(sg.text)
+            .fontSize(sg.tone === 'mono' || sg.tone === 'meta' ? size - 1 : size)
+            .fontFamily(sg.tone === 'mono' ? 'monospace' : 'HarmonyOS Sans')
+            .fontColor(this.narrColor(sg.tone))
+        }, (sg: NarrSeg, i: number) => `${i}-${sg.text}`)
+      }
+      .maxLines(1)
+      .textOverflow({ overflow: TextOverflow.Ellipsis })
+      .flexShrink(1)
+      if (n.denied !== '') {
+        Text(n.denied === 'policy' ? '规则拒绝' : '已拒绝')
+          .fontSize(10.5)
+          .fontColor($r('app.color.status_warn'))
+          .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+          .borderRadius(8)
+          .border({ width: 1, color: $r('app.color.status_warn') })
+          .flexShrink(0)
+      }
+    }
+    .layoutWeight(1)
+    .alignItems(VerticalAlign.Center)
+  }
+
+  private narrColor(tone: string): ResourceColor {
+    if (tone === 'err') {
+      return $r('app.color.status_danger');
+    }
+    if (tone === 'obj' || tone === 'mono') {
+      return $r('app.color.text_primary');
+    }
+    return $r('app.color.text_secondary');
+  }
+
   // ── 瞬态工具行（运行期可见，结束即焚；Edit/Write 常驻折叠行见 editRowView）──
 
   @Builder
   liveRow(a: LiveActivity) {
     Row({ space: 8 }) {
       LoadingProgress().width(13).height(13).color($r('app.color.accent'))
-      Text('正在执行')
-        .fontSize(13)
-        .fontColor($r('app.color.text_secondary'))
-      Text(a.name)
-        .fontSize(13)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-      if (toolSummary(a.input) !== '') {
-        Text(toolSummary(a.input))
-          .fontSize(13)
-          .fontColor($r('app.color.text_secondary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-          .layoutWeight(1)
-      }
+      this.narrLine(narrateCall(a.name, a.input, '', false, true), 13)
     }
     .width('100%')
     .alignItems(VerticalAlign.Center)
