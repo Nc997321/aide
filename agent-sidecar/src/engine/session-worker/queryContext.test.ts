@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { prepareQueryContext } from "./queryContext.js";
 import type { HookBuildContext } from "../../extensions/builtinHooks/index.js";
+import { DOCUMENT_ARTIFACT_HINT } from "../../desktop/documentArtifacts.js";
 
 const sessionStub: HookBuildContext["session"] = {
   makePolicyHook: () => async () => ({}),
@@ -39,6 +40,11 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
 }
 
 describe("prepareQueryContext", () => {
+  it("宿主提示包含文档交付协议，不依赖文档 MCP 是否挂载", async () => {
+    const ctx = await prepareQueryContext(deps({ processEnv: { CLAUDE_CONFIG_DIR: dir } }));
+    expect(ctx.instructions).toContain(DOCUMENT_ARTIFACT_HINT);
+    expect(DOCUMENT_ARTIFACT_HINT.length).toBeLessThan(1200);
+  });
   it("CLAUDE_CONFIG_DIR 在场透传；!trusted → docs 全不注册", async () => {
     const ctx = await prepareQueryContext(
       deps({

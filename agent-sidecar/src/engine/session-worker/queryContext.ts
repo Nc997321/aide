@@ -17,6 +17,7 @@ import { loadUserMcpServers, loadAppMcp, loadUserHooks, assembleMcpServers, asse
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
 import { CHAT_DISPLAY_HINT } from "../displayHint.js";
+import { DOCUMENT_ARTIFACT_HINT } from "../../desktop/documentArtifacts.js";
 import { loadLspHint } from "../lspHint.js";
 import { crossMemoryMcpRegistration } from "../crossMemory.js";
 import { subsessionMcpRegistration, type SubsessionContext } from "../../extensions/subsessions.js";
@@ -124,8 +125,8 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     configDir,
     trusted: deps.trusted,
     attached: deps.attachedDirs,
-    // Aide 自己的指令块：图片显示（恒在）+ 内置 LSP 提示（按闸门）
-    builtinHint: [CHAT_DISPLAY_HINT, await loadLspHint(configDir, lspGate)].filter(Boolean).join("\n\n"),
+    // 宿主展示提示 + 内置 LSP 提示（按闸门）；展示协议实现留在 desktop。
+    builtinHint: [CHAT_DISPLAY_HINT, DOCUMENT_ARTIFACT_HINT, await loadLspHint(configDir, lspGate)].filter(Boolean).join("\n\n"),
   });
   // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
   // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard

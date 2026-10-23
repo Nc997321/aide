@@ -61,6 +61,36 @@ describe("useFileViewer 多窗口 store", () => {
     expect(v.windows.value[0].content).toBe("diff v2");
   });
 
+  it("成果重新打开时刷新干净文件，保留未保存的编辑", async () => {
+    const v = useFileViewer();
+    await v.open("design.md");
+    const win = v.windows.value[0];
+    vi.mocked(api.readFileContent).mockResolvedValueOnce("updated on disk");
+    await v.open("design.md", { refreshIfClean: true });
+    expect(win.content).toBe("updated on disk");
+    expect(win.editContent).toBe("updated on disk");
+    expect(v.windows.value).toHaveLength(1);
+    win.editContent = "unsaved edits";
+    vi.mocked(api.readFileContent).mockClear();
+    await v.open("design.md", { refreshIfClean: true });
+    expect(api.readFileContent).not.toHaveBeenCalled();
+    expect(win.editContent).toBe("unsaved edits");
+  });
+
+  it("成果刷新期间开始的编辑也不被迟到的磁盘内容覆盖", async () => {
+    const v = useFileViewer();
+    await v.open("design.md");
+    const win = v.windows.value[0];
+    let finish!: (value: string) => void;
+    vi.mocked(api.readFileContent).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const refreshing = v.open("design.md", { refreshIfClean: true });
+    win.editContent = "typed during refresh";
+    finish("new disk contents");
+    await refreshing;
+    expect(win.editContent).toBe("typed during refresh");
+    expect(win.content).not.toBe("new disk contents");
+  });
+
   it("diff 载荷窗口：只读虚拟窗，同路径换载荷就地刷新（不新开）", async () => {
     const v = useFileViewer();
     const pair: DiffPair = {

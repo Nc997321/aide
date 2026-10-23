@@ -138,7 +138,10 @@ async function detectProjectRoot() {
  * 重置全部内容相关字段后重新加载：图片走 Blob URL，文本按大小判只读，
  * 读取失败写 win.error（调用方决定是否允许后退恢复）。
  */
-async function loadIntoWindow(win: FileWindowState, path: string, opts?: { content?: string }) {
+async function loadIntoWindow(win: FileWindowState, path: string, opts?: { content?: string; preserveEdits?: boolean }) {
+  const previousEdit = win.editContent;
+  const previousContent = win.content;
+  const previousPath = win.filePath;
   // 旧图片的 Blob URL 先释放（同窗口换文件，避免泄漏）
   const oldUrl = blobUrls.get(win.id);
   if (oldUrl) {
@@ -181,6 +184,9 @@ async function loadIntoWindow(win: FileWindowState, path: string, opts?: { conte
     }
   }
 
+  // 成果刷新等磁盘期间，用户可能已输入/保存/导航：迟到的内容不能覆盖新状态。
+  if (opts?.preserveEdits && (win.editContent !== previousEdit || win.content !== previousContent || win.filePath !== previousPath || win.saving)) return;
+
   // 一次性同步设置全部字段（filePath 最后）。editContent 与 filePath 同步连改 →
   // CodeEditor 合并 watch 走 createEditor 重建（销毁旧视图、不 dispatch），cmLsp didOpen
   // 拿到目标内容；不向旧编辑器 parent-sync dispatch，旧文件缓存不被误清。
@@ -212,7 +218,7 @@ export function useFileViewer() {
    * 注入内容的虚拟视图（git diff / 片段 diff）同路径重开 → 原窗口内容就地刷新。
    * 新窗口加入平铺全览（取消聚焦），窗口随数量增多平均变小。
    */
-  async function open(path: string, opts?: { content?: string; language?: string; diff?: WindowDiff }) {
+  async function open(path: string, opts?: { content?: string; language?: string; diff?: WindowDiff; refreshIfClean?: boolean }) {
     // 虚拟视图注入内容：diff 分支不用 content（diff 内容由 WindowDiff 携带）；
     // 非 diff 的虚拟打开 content 必有值（isVirtual 定义保证），开头收窄一次，
     // 后续分支用 injectContent 避免 opts!.content! 双断言。
@@ -227,6 +233,10 @@ export function useFileViewer() {
         existing.content = injectContent!;
         existing.editContent = injectContent!;
         existing.language = opts?.language || existing.language;
+      }
+      // 成果入口再次打开时读取最新文件；用户未保存的编辑必须保留。
+      if (!isVirtual && opts?.refreshIfClean && existing.editContent === existing.content && !existing.saving) {
+        await loadIntoWindow(existing, path, { preserveEdits: true });
       }
       focusedId.value = existing.id;
       return;

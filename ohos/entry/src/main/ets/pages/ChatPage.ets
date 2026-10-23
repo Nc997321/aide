@@ -66,6 +66,7 @@ import { toolSummary, extBadgeColor } from '../session/chat/ChatWire';
 import { NarrSeg, Narration, narrateCall } from '../session/chat/Narration';
 import { PermissionSheet } from '../session/chat/PermissionSheet';
 import { MarkdownText } from '../session/chat/MarkdownText';
+import { DocumentMessageContent } from '../session/chat/DocumentMessageContent';
 import { FileViewer } from '../session/chat/FileViewer';
 import { BgTaskDock } from '../session/chat/BgTaskDock';
 import { ThinkingCard } from '../session/chat/ThinkingCard';
@@ -1053,9 +1054,11 @@ export struct ChatPage {
       if (m.modelLabel !== '') {
         Text(m.modelLabel).fontSize(11).fontColor($r('app.color.text_secondary'))
       }
-      ForEach(m.blocks, (b: ContentBlock) => {
-        this.blockView(b, m.streaming && m.blocks[m.blocks.length - 1] === b)
-      }, (b: ContentBlock) => b.id)
+      DocumentMessageContent({
+        message: m,
+        workspaceRoot: workspaceModel.rootOfKey(this.store.spawnWsKey),
+        renderBlock: (b: ContentBlock, live: boolean) => { this.blockView(b, live) }
+      })
       // 语音 chip：正文消息尾部（对照原型 .sp-chip 挂 assistant 消息末尾）——
       // 点 = 听书（小艺朗读面板），长按 = 自动播报开关；三态见 VoiceChip
       if (this.hasSpeechText(m)) {
