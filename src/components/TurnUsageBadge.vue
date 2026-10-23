@@ -10,7 +10,7 @@
  */
 import { computed } from "vue";
 import type { TurnUsage } from "@/types/chat";
-import { formatCompactNumber } from "@/utils/format";
+import { formatCompactNumber, formatClockTime } from "@/utils/format";
 
 const props = defineProps<{ usage: TurnUsage }>();
 
@@ -34,6 +34,7 @@ const tooltip = computed(() => {
     );
   }
   lines.push(`这一轮花费 $${u.costUsd.toFixed(4)}`);
+  if (typeof u.finishedAt === "number") lines.push(`完成于 ${new Date(u.finishedAt).toLocaleString()}`);
   return lines.join("\n");
 });
 </script>
@@ -43,6 +44,7 @@ const tooltip = computed(() => {
     <span class="tu-item tu-in">↓ {{ formatCompactNumber(usage.inputTokens) }}</span>
     <span class="tu-item tu-out">↑ {{ formatCompactNumber(usage.outputTokens) }}</span>
     <span class="tu-cost">${{ usage.costUsd.toFixed(4) }}</span>
+    <span v-if="typeof usage.finishedAt === 'number'" class="tu-time">{{ formatClockTime(usage.finishedAt) }}</span>
   </div>
 </template>
 

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formatContent } from "./format";
+import { formatContent, formatClockTime } from "./format";
 
 describe("formatContent", () => {
   it("json 缩进美化", () => {
@@ -47,5 +47,14 @@ describe("formatContent", () => {
     const r = formatContent("x", "ts");
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toContain(".ts");
+  });
+});
+
+describe("formatClockTime", () => {
+  const now = new Date(2026, 9, 22, 18, 0);
+  it("今天只给时分，往日带日期，跨年带年份", () => {
+    expect(formatClockTime(new Date(2026, 9, 22, 9, 5).getTime(), now)).toBe("09:05");
+    expect(formatClockTime(new Date(2026, 9, 21, 14, 32).getTime(), now)).toBe("10-21 14:32");
+    expect(formatClockTime(new Date(2025, 11, 31, 23, 59).getTime(), now)).toBe("2025-12-31 23:59");
   });
 });

@@ -33,6 +33,9 @@ export interface TurnUsage {
    *  ↓ 的累计输入拆成「N 次 × 平均每次」，让 4.2m 这种数不再反直觉（4.2m ÷ 20 ≈ ctx，
    *  每次重发全量上下文）。旧 sidecar / error result 不带，前端按 >1 才展示分解。 */
   apiCallCount?: number;
+  /** 本轮完成时刻（epoch ms，sidecar 收到 SDK result 时记下，各端显示同一时刻）。
+   *  徽标末尾显示「几点几分完成」。旧 sidecar / error result 不带。 */
+  finishedAt?: number;
 }
 
 // 可切换模型——纯展示用的字符串，具体是什么模型完全由 provider 决定，
