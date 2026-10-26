@@ -28,7 +28,7 @@ impl ProjectDetector for TauriDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         // 不再声明 "vue"：.vue 由 TS 服务器的 Vue 插件服务，没有独立的 vue 服务
         // （vue-language-server 是需要客户端桥接的 proxy，见 lsp/vue_plugin.rs 抬头）。
         vec!["rust", "typescript"]
@@ -188,7 +188,7 @@ impl ProjectDetector for SpringBootMavenDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["java"]
     }
 }
@@ -216,7 +216,7 @@ impl ProjectDetector for SpringBootGradleDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["java"]
     }
 }
@@ -238,7 +238,7 @@ impl ProjectDetector for JavaMavenDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["java"]
     }
 }
@@ -261,7 +261,7 @@ impl ProjectDetector for JavaGradleDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["java"]
     }
 }
@@ -302,7 +302,7 @@ impl ProjectDetector for NodeDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["typescript", "javascript"]
     }
 }
@@ -324,7 +324,7 @@ impl ProjectDetector for CargoDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["rust"]
     }
 }
@@ -346,7 +346,7 @@ impl ProjectDetector for GoDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["go"]
     }
 }
@@ -368,7 +368,7 @@ impl ProjectDetector for FlutterDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["dart"]
     }
 }
@@ -390,7 +390,7 @@ impl ProjectDetector for DartDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["dart"]
     }
 }
@@ -420,7 +420,7 @@ impl ProjectDetector for DotnetDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["csharp"]
     }
 }
@@ -442,7 +442,7 @@ impl ProjectDetector for DjangoDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["python"]
     }
 }
@@ -469,20 +469,15 @@ impl ProjectDetector for PythonDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["python"]
     }
 
-    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
+    fn has_project_evidence(&self, root: &Path) -> bool {
         // main.py/app.py 只是可运行文件；项目推荐需要包或环境清单。
-        if ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]
+        ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]
             .iter()
             .any(|name| root.join(name).is_file())
-        {
-            self.languages(root)
-        } else {
-            Vec::new()
-        }
     }
 }
 
@@ -503,7 +498,7 @@ impl ProjectDetector for RailsDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["ruby"]
     }
 }
@@ -525,7 +520,7 @@ impl ProjectDetector for LaravelDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["php"]
     }
 }
@@ -553,7 +548,7 @@ impl ProjectDetector for ElixirDetector {
         }]
     }
 
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         vec!["elixir"]
     }
 }

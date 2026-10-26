@@ -27,19 +27,14 @@ pub trait ProjectDetector: Send + Sync {
     fn matches(&self, root: &Path) -> bool;
     fn build_targets(&self, root: &Path) -> Vec<RunTarget>;
 
-    /// 该探测器认领的项目涉及的 LSP 语言 id 字符串（"rust"/"typescript"/...）。
-    /// 默认空——多数探测器不声明（v1 仅项目型探测器覆盖）。不影响 detect_run_targets。
-    fn languages(&self, _root: &Path) -> Vec<&'static str> {
+    /// 项目语言声明，与运行命令是否生成无关。
+    fn project_language_ids(&self, _root: &Path) -> Vec<&'static str> {
         Vec::new()
     }
 
-    /// 启动 LSP 推荐所需的项目证据。运行入口不总是项目标志，探测器可单独收紧判据。
-    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
-        if self.matches(root) {
-            self.languages(root)
-        } else {
-            Vec::new()
-        }
+    /// 默认复用项目匹配；仅运行入口不足以证明项目时，可单独收紧证据。
+    fn has_project_evidence(&self, root: &Path) -> bool {
+        self.matches(root)
     }
 
     // Skeleton -- concrete detectors do not override this.
@@ -128,29 +123,15 @@ impl DetectorChain {
         Vec::new()
     }
 
-    /// 该目录下**被认领的项目**声明的 LSP 语言（去重）。
-    /// 与 `detect_targets` 独立：不要求 targets 非空——一个没有 dev 脚本的 Node 项目
-    /// 仍该起 TS server。
-    fn languages(&self, root: &Path) -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
+    /// 只匹配当前目录的项目证据，不在 marker 层递归扫描工作区。
+    fn project_language_ids(&self, root: &Path) -> Vec<&'static str> {
+        let mut out = Vec::new();
         for det in &self.detectors {
-            if det.matches(root) {
-                for lang in det.languages(root) {
+            if det.has_project_evidence(root) {
+                for lang in det.project_language_ids(root) {
                     if !out.contains(&lang) {
                         out.push(lang);
                     }
-                }
-            }
-        }
-        out
-    }
-
-    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
-        let mut out = Vec::new();
-        for det in &self.detectors {
-            for lang in det.project_languages(root) {
-                if !out.contains(&lang) {
-                    out.push(lang);
                 }
             }
         }
@@ -401,69 +382,14 @@ impl ProjectDetector for SubdirScanDetector {
         for_each_subdir(root, |path| targets.extend(self.chain.detect_targets(path)));
         targets
     }
-
-    /// 子目录里的项目**也属于这个工作区**：run target 早就下钻一层找它，语言声明同理。
-    /// 不下钻的话，`frontend/`（Vite+Vue）、`server/` 这类布局对 LSP 完全隐形
-    /// ——2026-09-29 agri-ai-agent 实测只探测出 Java（TS/Vue 全在 `frontend/`）。
-    ///
-    /// 深度与 run target 同界（一层）且共用跳过表；更深的项目由 `lsp::detector` 的
-    /// 有界扩展名计数兜底。
-    fn languages(&self, root: &Path) -> Vec<&'static str> {
-        let mut out: Vec<&'static str> = Vec::new();
-        for_each_subdir(root, |path| {
-            for lang in self.chain.languages(path) {
-                if !out.contains(&lang) {
-                    out.push(lang);
-                }
-            }
-        });
-        out
-    }
 }
 
-/// 走探测器链收集所有 matching 探测器声明的 LSP 语言 id 字符串（去重）。
-/// 供 `super::languages::detect_languages` 用。与 detect_run_targets 独立：不要求 targets 非空，
-/// 只要 matches 即收 languages（一个无 dev 脚本的 Node 项目仍该起 ts server）。
-/// **含一层子目录里的项目**（`SubdirScanDetector::languages`）——`frontend/` 这类布局
-/// 与根层项目同等对待。
-pub fn detect_languages_from_markers(root: &Path) -> Vec<&'static str> {
-    DetectorChain::default_chain().languages(root)
-}
-
-/// 只收集有项目证据的语言。复用叶子探测器和子目录纪律，不改变运行目标的一层扫描。
-/// 有界下钻认领 `packages/<name>` 等嵌套项目，不再靠文件数量推断深层项目。
-pub fn detect_project_languages_from_markers(root: &Path) -> Vec<&'static str> {
-    const MAX_DEPTH: usize = 4;
-    const DIR_CAP: usize = 2_000;
-    let chain = DetectorChain::leaf_chain();
-    let mut out = Vec::new();
-    let mut stack = vec![(root.to_path_buf(), 0usize)];
-    let mut visited = 0;
-    while let Some((dir, depth)) = stack.pop() {
-        visited += 1;
-        if !dir.is_dir() {
-            continue;
-        }
-        for lang in chain.project_languages(&dir) {
-            if !out.contains(&lang) {
-                out.push(lang);
-            }
-        }
-        if visited >= DIR_CAP {
-            break;
-        }
-        if depth < MAX_DEPTH {
-            let mut children = Vec::new();
-            for_each_subdir(&dir, |path| {
-                if !path.is_symlink() && children.len() + stack.len() < DIR_CAP - visited {
-                    children.push((path.to_path_buf(), depth + 1));
-                }
-            });
-            // 栈按路径升序访问，预算不足时也不依赖 readdir 顺序。
-            stack.extend(children.into_iter().rev());
-        }
-    }
-    out
+/// 仅供统一语言 detector 调用的单目录 matcher；不可变链可共享，不缓存文件系统事实。
+pub(super) fn project_language_ids(root: &Path) -> Vec<&'static str> {
+    static CHAIN: std::sync::OnceLock<DetectorChain> = std::sync::OnceLock::new();
+    CHAIN
+        .get_or_init(DetectorChain::leaf_chain)
+        .project_language_ids(root)
 }
 
 #[cfg(test)]
@@ -718,7 +644,7 @@ mod tests {
             "{}",
             targets[0].command
         );
-        let langs = detect_languages_from_markers(&tmp);
+        let langs = project_language_ids(&tmp);
         assert!(langs.contains(&"rust"));
         std::fs::remove_dir_all(&tmp).ok();
     }

@@ -94,8 +94,8 @@ impl LanguageId {
         }
     }
 
-    /// **server 原生可解析**的源文件扩展名。靶子搜索、代表文件、语言计数**共用这一份**
-    /// ——判据统一成一句话：报出来的语言，一定递得出去一个靶子文件。
+    /// **server 原生可解析**的源文件扩展名。靶子搜索与代表文件共用；
+    /// 工作区源码语言由 `from_ext` 认领，不能把服务归属与原生探针资格混为一谈。
     ///
     /// `.vue` 不在这里：它要靠 `@vue/typescript-plugin` 才有服务，且 TLS 对它的
     /// `documentSymbol` 恒空（2026-09-19 实测 30 次 / 150s 零条，见
@@ -171,11 +171,9 @@ pub fn is_skip_dir(name: &str) -> bool {
 /// 有界遍历：把目录树里的**源文件**交给 `visit`（路径 / 小写扩展名 / 服务归属）；
 /// `visit` 返回 `false` 提前收工。
 ///
-/// **边界只有这一份**：跳过重目录与点目录、测试文件不算；深度两档（见下）。靶子搜索、代表
-/// 文件排名、语言计数都走它——纪律写在注释里而实现有两份，等于没有（`find_probe_target` 与
-/// `count_and_first` 曾经各写一遍）。
+/// 靶子搜索与代表文件排名共用遍历；工作区报告复用同一跳目录与源码判据。
 ///
-/// 深度两档：语言**计数**（挂在每条 send 与按名查询上）≤ [`COUNT_DEPTH`]；**找靶子 / 代表文件**
+/// 深度两档：工作区报告 / 按扩展名查找 ≤ [`SOURCE_DEPTH`]；**找靶子 / 代表文件**
 /// ≤ [`TARGET_DEPTH`]。曾经共用 4 层：Maven / Gradle 的 Java 源码天然在
 /// `src/main/java/<包路径>/` 下（po-api 最浅的 `.java` 在第 7 层），于是 Java 工程永远找不到
 /// 代表文件，就绪探针一次都没跑过（2026-10-15 真机）。计数不受影响：Java 靠 `pom.xml` 标记认出。
@@ -183,11 +181,11 @@ pub fn is_skip_dir(name: &str) -> bool {
 /// 测试文件不当靶子**也不计数**：工程配置十有八九把它们排除在外（本仓库 `tsconfig.json`
 /// 的 exclude 排 `src/**/*.test.ts`），递一个不属于任何工程的孤文件 = 工程没加载
 /// （真机上栽过两次）。
-const COUNT_DEPTH: usize = 4;
+const SOURCE_DEPTH: usize = 4;
 const TARGET_DEPTH: usize = 12;
 
 fn walk_sources(root: &Path, visit: impl FnMut(&Path, &str, LanguageId) -> bool) {
-    walk_sources_to(root, COUNT_DEPTH, visit)
+    walk_sources_to(root, SOURCE_DEPTH, visit)
 }
 
 /// 找靶子 / 代表文件用的深遍历。只在「找到第一个就停」或有计数上限的调用方用。
@@ -210,17 +208,7 @@ fn walk_sources_to(root: &Path, max_depth: usize, mut visit: impl FnMut(&Path, &
                 }
                 continue;
             }
-            if is_test_file(&name) {
-                continue;
-            }
-            let Some(ext) = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .map(|e| e.to_ascii_lowercase())
-            else {
-                continue;
-            };
-            let Some(lang) = LanguageId::from_ext(&ext) else {
+            let Some((ext, lang)) = source_language(&path, &name) else {
                 continue;
             };
             if !visit(&path, &ext, lang) {
@@ -286,6 +274,16 @@ fn is_test_file(name: &str) -> bool {
         .any(|suffix| stem.ends_with(suffix))
 }
 
+/// 报告与文件遍历共用源码判据；服务归属不要求这个文件能充当原生探针。
+fn source_language(path: &Path, name: &str) -> Option<(String, LanguageId)> {
+    if is_test_file(name) {
+        return None;
+    }
+    let ext = path.extension()?.to_str()?.to_ascii_lowercase();
+    let lang = LanguageId::from_ext(&ext)?;
+    Some((ext, lang))
+}
+
 /// 有界遍历一个目录：数该语言的**探针靶子**文件个数，并返回遇到的第一个（当代表）。
 /// `COUNT_CAP` 封顶——只为排名，数到够分辨大小就行，不必数完（`target/` 那种目录
 /// 本来就被 `is_skip_dir` 挡在外面）。
@@ -306,83 +304,92 @@ fn count_and_first(dir: &Path, lang: LanguageId) -> (usize, Option<std::path::Pa
     (count, first)
 }
 
-/// 启动 LSP 推荐用的项目语言：只认项目证据，不把辅助脚本的数量当成项目。
-/// 文件级服务分派与 Agent 语言发现仍走 `from_ext` / `detect_languages`。
-pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
-    super::markers::detect_project_languages_from_markers(root)
-        .into_iter()
-        .filter_map(lang_from_id_str)
-        .collect()
+/// 同一次工作区扫描得到的事实。项目推荐只取 project；源码存在不等于项目存在。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LanguageDetection {
+    pub project_languages: Vec<LanguageId>,
+    pub source_languages: Vec<LanguageId>,
 }
 
-/// 探测某工作区涉及的语言集合（去重，无序），包含没有项目清单的源码。
-/// 不用于启动安装推荐（见 `detect_project_languages`）。两条腿，各自负责自己的盲区：
-/// 1. **项目证据**（有界下钻）+ 兼容原有的根 / 一级运行入口 marker：
-///    项目推荐能认领的语言必须也出现在广义发现里；
-/// 2. **有界扩展名计数兜底**（`count_probe_sources`）：marker 漏掉的语言（`scripts/*.ts`
-///    这类无 marker 目录）靠它补。**必须下钻**：只数根层文件时，源码躺在子目录里
-///    （`frontend/src/**`）的工作区一个都看不见——2026-09-29 agri-ai-agent 实测只报 Java。
-///
-/// 调用方注意：计数是有界遍历（深度 ≤4、跳重目录、封顶 `VISIT_CAP`），不追求准确数字。
-pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
-    let mut out = detect_project_languages(root);
-    for id_str in super::markers::detect_languages_from_markers(root) {
-        if let Some(lang) = lang_from_id_str(id_str) {
-            if !out.contains(&lang) {
-                out.push(lang);
+impl LanguageDetection {
+    /// Agent 查询需要的服务集合；纯投影，不额外扫描文件系统。
+    pub fn query_languages(&self) -> Vec<LanguageId> {
+        let mut out = self.project_languages.clone();
+        for lang in &self.source_languages {
+            if !out.contains(lang) {
+                out.push(*lang);
             }
         }
+        out.sort_by_key(LanguageId::id_str);
+        out
     }
-    for (lang, n) in count_probe_sources(root) {
-        // 频次 ≥2 才认（避免单个 .go 文件误触发；marker 已覆盖主流项目）
-        if n >= 2 && !out.contains(&lang) {
-            out.push(lang);
+}
+
+const DETECTION_DIR_CAP: usize = 2_000;
+const DETECTION_SOURCE_CAP: usize = 20_000;
+
+/// 工作区语言事实的唯一探测实现：一次有界下钻，同时收集项目证据与源码服务归属。
+/// marker 只匹配当前目录；文件数量不再承担「认领项目」的职责。
+pub fn detect_workspace_languages(root: &Path) -> LanguageDetection {
+    let mut report = LanguageDetection::default();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut directories = 0;
+    let mut sources = 0;
+    while let Some((dir, depth)) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        directories += 1;
+        for id in super::markers::project_language_ids(&dir) {
+            if let Some(lang) = lang_from_id_str(id) {
+                if !report.project_languages.contains(&lang) {
+                    report.project_languages.push(lang);
+                }
+            }
         }
+        let mut entries: Vec<_> = entries.flatten().collect();
+        entries.sort_by_key(|e| e.file_name());
+        let mut children = Vec::new();
+        for entry in entries {
+            let Ok(kind) = entry.file_type() else {
+                continue;
+            };
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            // file_type 不跟随符号链接，避免重复扫描和越过工作区边界。
+            if kind.is_dir() {
+                if depth < SOURCE_DEPTH
+                    && !is_skip_dir(&name)
+                    && children.len() + stack.len() < DETECTION_DIR_CAP - directories
+                {
+                    children.push((path, depth + 1));
+                }
+            } else if kind.is_file() && sources < DETECTION_SOURCE_CAP {
+                if let Some((_, lang)) = source_language(&path, &name) {
+                    sources += 1;
+                    if !report.source_languages.contains(&lang) {
+                        report.source_languages.push(lang);
+                    }
+                }
+            }
+        }
+        if directories >= DETECTION_DIR_CAP {
+            break;
+        }
+        stack.extend(children.into_iter().rev());
     }
-    out
+    report.project_languages.sort_by_key(LanguageId::id_str);
+    report.source_languages.sort_by_key(LanguageId::id_str);
+    report
 }
 
-/// 有界计数：工作区里每种语言有多少个探针靶子文件。
-/// 封顶只为不让「大仓里的语言探测」变成秒级阻塞（它挂在 agent 按名查询的路径上）——
-/// 计数只服务「有没有 ≥2」这一条判据，截断最多漏报冷门语言，不产生错报。
-fn count_probe_sources(root: &Path) -> std::collections::HashMap<LanguageId, usize> {
-    const VISIT_CAP: usize = 20_000;
-    let mut counts: std::collections::HashMap<LanguageId, usize> = std::collections::HashMap::new();
-    let mut visited = 0usize;
-    walk_sources(root, |_path, ext, lang| {
-        visited += 1;
-        if is_probe_target(ext, lang) {
-            *counts.entry(lang).or_insert(0) += 1;
-        }
-        visited < VISIT_CAP
-    });
-    counts
-}
-
-/// async 外壳：探测要遍历工作区（有界，但仍是文件系统 IO），**不许占 tokio worker**
-/// ——所有 async 调用点都走这里（Tauri 命令 / agent 查询 / 工作区语言列出），
-/// 同步场景（单测、纯判定函数）直接用 `detect_languages`。
-/// `JoinError` 只来自任务取消或线程池关闭：探测本就是尽力而为，退化成「没有语言」
-/// 与 `read_dir` 失败同类（不 panic，也不改变语义——没有语言就是不挂 LSP 工具）。
-pub async fn detect_languages_async(root: std::path::PathBuf) -> Vec<LanguageId> {
-    detect_async(root, detect_languages).await
-}
-
-/// 项目证据的 IO 同样不能占 tokio worker。
-pub async fn detect_project_languages_async(root: std::path::PathBuf) -> Vec<LanguageId> {
-    detect_async(root, detect_project_languages).await
-}
-
-async fn detect_async(
-    root: std::path::PathBuf,
-    detect: fn(&Path) -> Vec<LanguageId>,
-) -> Vec<LanguageId> {
-    match tokio::task::spawn_blocking(move || detect(&root)).await {
-        Ok(langs) => langs,
+/// 所有异步消费者共用此外壳，文件系统 IO 不占 tokio worker。
+pub async fn detect_workspace_languages_async(root: std::path::PathBuf) -> LanguageDetection {
+    match tokio::task::spawn_blocking(move || detect_workspace_languages(&root)).await {
+        Ok(report) => report,
         Err(e) => {
-            // 只在任务取消/线程池关闭时到这——降级成「没有语言」，但留一行痕迹
             tracing::warn!("language detection task failed: {e}");
-            Vec::new()
+            LanguageDetection::default()
         }
     }
 }
@@ -458,7 +465,7 @@ mod tests {
         fs::write(d.join("package.json"), "{}").unwrap();
         fs::create_dir_all(d.join("src-tauri")).unwrap();
         fs::write(d.join("src-tauri/Cargo.toml"), "").unwrap();
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         assert!(langs.contains(&LanguageId::Rust), "{:?}", langs);
         assert!(langs.contains(&LanguageId::TypeScript), "{:?}", langs);
         // 没有 "vue" 这门语言了：.vue 归 TS（服务），由 TS 服务器的插件覆盖。
@@ -469,7 +476,7 @@ mod tests {
     fn cargo_yields_rust() {
         let d = tmp_dir("cargo");
         fs::write(d.join("Cargo.toml"), "").unwrap();
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         assert!(langs.contains(&LanguageId::Rust), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
     }
@@ -478,7 +485,7 @@ mod tests {
     fn node_yields_ts_js() {
         let d = tmp_dir("node");
         fs::write(d.join("package.json"), "{}").unwrap();
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         // Node 探测器声明 typescript+javascript
         assert!(
             langs.contains(&LanguageId::TypeScript) || langs.contains(&LanguageId::JavaScript),
@@ -492,7 +499,7 @@ mod tests {
     fn go_yields_go() {
         let d = tmp_dir("go");
         fs::write(d.join("go.mod"), "module x").unwrap();
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         assert!(langs.contains(&LanguageId::Go), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
     }
@@ -505,7 +512,7 @@ mod tests {
             "<project><artifactId>a</artifactId></project>",
         )
         .unwrap();
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         // 任何 pom.xml → Java（SpringBootMaven 或 JavaMaven 探测器）
         assert!(langs.contains(&LanguageId::Java), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
@@ -525,15 +532,17 @@ mod tests {
                 }
             }
         }
-        let projects = detect_project_languages(&d);
+        let report = detect_workspace_languages(&d);
+        let projects = &report.project_languages;
         assert!(projects.contains(&LanguageId::Rust), "{projects:?}");
         assert!(projects.contains(&LanguageId::TypeScript), "{projects:?}");
-        let broad = detect_languages(&d);
+        let broad = report.query_languages();
         for lang in [LanguageId::Python, LanguageId::Ruby, LanguageId::Go] {
             assert!(
                 !projects.contains(&lang),
                 "辅助源码不应推荐为项目：{projects:?}"
             );
+            assert!(report.source_languages.contains(&lang), "{report:?}");
             assert!(broad.contains(&lang), "语言发现仍须覆盖辅助源码：{broad:?}");
         }
         fs::remove_dir_all(&d).ok();
@@ -550,8 +559,9 @@ mod tests {
                     fs::write(src.join(format!("{name}.{ext}")), "").unwrap();
                 }
             }
-            assert!(detect_project_languages(&d).is_empty(), "{dir}");
-            assert!(!detect_languages(&d).is_empty(), "{dir}");
+            let report = detect_workspace_languages(&d);
+            assert!(report.project_languages.is_empty(), "{dir}");
+            assert!(!report.source_languages.is_empty(), "{dir}");
             assert_eq!(LanguageId::from_ext("py"), Some(LanguageId::Python));
             assert!(find_probe_target(&d, LanguageId::Python).is_some());
             fs::remove_dir_all(&d).ok();
@@ -563,13 +573,14 @@ mod tests {
         for marker in ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"] {
             let d = tmp_dir(&format!("project_python_{marker}"));
             fs::write(d.join(marker), "").unwrap();
+            let report = detect_workspace_languages(&d);
             assert_eq!(
-                detect_project_languages(&d),
+                report.project_languages,
                 vec![LanguageId::Python],
                 "{marker}"
             );
             assert!(
-                detect_languages(&d).contains(&LanguageId::Python),
+                report.query_languages().contains(&LanguageId::Python),
                 "{marker}"
             );
             assert!(
@@ -586,11 +597,15 @@ mod tests {
         fs::write(d.join("main.py"), "print(1)").unwrap();
         fs::write(d.join("app.py"), "print(2)").unwrap();
         fs::write(d.join("requirements.txt"), "pillow").unwrap();
-        assert!(detect_project_languages(&d).is_empty());
-        assert!(detect_languages(&d).contains(&LanguageId::Python));
+        let report = detect_workspace_languages(&d);
+        assert!(report.project_languages.is_empty());
+        assert_eq!(report.source_languages, vec![LanguageId::Python]);
         assert!(!crate::detect::markers::detect_run_targets(&d).is_empty());
         fs::write(d.join("manage.py"), "").unwrap();
-        assert_eq!(detect_project_languages(&d), vec![LanguageId::Python]);
+        assert_eq!(
+            detect_workspace_languages(&d).project_languages,
+            vec![LanguageId::Python]
+        );
         fs::remove_dir_all(&d).ok();
     }
 
@@ -607,9 +622,10 @@ mod tests {
             fs::create_dir_all(d.join(path)).unwrap();
             fs::write(d.join(path).join(marker), "{}").unwrap();
         }
-        let langs = detect_project_languages(&d);
+        let report = detect_workspace_languages(&d);
+        let langs = &report.project_languages;
         assert_eq!(langs.len(), 5, "{langs:?}");
-        let broad = detect_languages(&d);
+        let broad = report.query_languages();
         for lang in [
             LanguageId::Java,
             LanguageId::TypeScript,
@@ -623,7 +639,7 @@ mod tests {
                 "推荐的项目语言也必须能被查询：{broad:?}"
             );
         }
-        assert_eq!(detect_project_languages(&d), langs);
+        assert_eq!(detect_workspace_languages(&d), report);
         fs::remove_dir_all(&d).ok();
     }
 
@@ -647,14 +663,15 @@ mod tests {
             fs::write(d.join(dir).join("pyproject.toml"), "").unwrap();
             fs::write(d.join(dir).join("Cargo.toml"), "").unwrap();
         }
-        assert!(detect_project_languages(&d).is_empty());
+        assert!(detect_workspace_languages(&d).project_languages.is_empty());
         fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn real_workspace_project_languages_exclude_helper_scripts() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let projects = detect_project_languages(&root);
+        let report = detect_workspace_languages(&root);
+        let projects = &report.project_languages;
         for lang in [
             LanguageId::Rust,
             LanguageId::TypeScript,
@@ -663,17 +680,108 @@ mod tests {
             assert!(projects.contains(&lang), "{projects:?}");
         }
         assert!(!projects.contains(&LanguageId::Python), "{projects:?}");
-        assert!(detect_languages(&root).contains(&LanguageId::Python));
+        assert!(report.source_languages.contains(&LanguageId::Python));
+        assert!(report.query_languages().contains(&LanguageId::Python));
     }
 
     #[test]
-    fn file_ext_fallback_no_marker() {
-        // 无任何项目 marker，但目录里有若干 .py 文件 → 兜底探测器给 python。
+    fn query_projection_is_a_deduplicated_union_without_io() {
+        let report = LanguageDetection {
+            project_languages: vec![LanguageId::Rust],
+            source_languages: vec![LanguageId::Python, LanguageId::Rust],
+        };
+        assert_eq!(
+            report.query_languages(),
+            vec![LanguageId::Python, LanguageId::Rust]
+        );
+    }
+
+    #[test]
+    fn single_source_is_a_file_fact_not_a_project() {
+        for (name, lang) in [
+            ("helper.py", LanguageId::Python),
+            ("main.py", LanguageId::Python),
+            ("App.vue", LanguageId::TypeScript),
+            ("one.go", LanguageId::Go),
+        ] {
+            let d = tmp_dir(name);
+            fs::write(d.join(name), "").unwrap();
+            let report = detect_workspace_languages(&d);
+            assert!(report.project_languages.is_empty(), "{name}: {report:?}");
+            assert_eq!(report.source_languages, vec![lang], "{name}");
+            assert_eq!(report.query_languages(), vec![lang], "{name}");
+            fs::remove_dir_all(d).unwrap();
+        }
+    }
+
+    #[test]
+    fn report_directory_budget_is_bounded_and_stable() {
+        let d = tmp_dir("report_dir_cap");
+        for i in 0..DETECTION_DIR_CAP - 1 {
+            fs::create_dir(d.join(format!("d{i:04}"))).unwrap();
+        }
+        fs::create_dir(d.join("zz-project")).unwrap();
+        fs::write(d.join("zz-project/go.mod"), "module beyond_budget").unwrap();
+        fs::write(d.join("Cargo.toml"), "").unwrap();
+        let report = detect_workspace_languages(&d);
+        assert_eq!(report.project_languages, vec![LanguageId::Rust]);
+        assert_eq!(detect_workspace_languages(&d), report);
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn source_budget_does_not_stop_project_discovery() {
+        let d = tmp_dir("report_source_cap");
+        for i in 0..DETECTION_SOURCE_CAP {
+            fs::write(d.join(format!("s{i:05}.py")), "").unwrap();
+        }
+        fs::write(d.join("z.go"), "package main").unwrap();
+        fs::create_dir(d.join("zz-project")).unwrap();
+        fs::write(d.join("zz-project/go.mod"), "module after_sources").unwrap();
+        let report = detect_workspace_languages(&d);
+        assert_eq!(report.source_languages, vec![LanguageId::Python]);
+        assert_eq!(report.project_languages, vec![LanguageId::Go]);
+        assert_eq!(
+            report.query_languages(),
+            vec![LanguageId::Go, LanguageId::Python]
+        );
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn report_does_not_follow_directory_or_source_symlinks() {
+        let d = tmp_dir("report_symlinks");
+        fs::create_dir(d.join(".external")).unwrap();
+        fs::write(d.join(".external/pyproject.toml"), "").unwrap();
+        fs::write(d.join(".external/helper.py"), "").unwrap();
+        std::os::unix::fs::symlink(d.join(".external"), d.join("linked_project")).unwrap();
+        std::os::unix::fs::symlink(d.join(".external/helper.py"), d.join("linked.py")).unwrap();
+        std::os::unix::fs::symlink(&d, d.join("loop")).unwrap();
+        assert_eq!(detect_workspace_languages(&d), LanguageDetection::default());
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[tokio::test]
+    async fn async_report_uses_the_same_detector() {
+        let d = tmp_dir("report_async");
+        fs::write(d.join("Cargo.toml"), "").unwrap();
+        fs::write(d.join("helper.py"), "").unwrap();
+        assert_eq!(
+            detect_workspace_languages_async(d.clone()).await,
+            detect_workspace_languages(&d)
+        );
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn source_languages_without_project_markers() {
+        // 源码语言只记录文件事实，不再靠数量阈值认领项目。
         let d = tmp_dir("extfb");
         fs::write(d.join("a.py"), "print(1)").unwrap();
         fs::write(d.join("b.py"), "print(2)").unwrap();
         fs::write(d.join("c.txt"), "x").unwrap(); // 非源码，不计数
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         assert!(langs.contains(&LanguageId::Python), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
     }
@@ -681,7 +789,7 @@ mod tests {
     /// **2026-09-29 agri-ai-agent 实测形状**：仓库根是 Maven（pom.xml），前端在
     /// `frontend/` 子目录（Vite+Vue）。修前只报 Java——两条腿都只认根层。
     #[test]
-    fn detect_languages_sees_project_in_subdir() {
+    fn workspace_report_sees_project_in_subdir() {
         let d = tmp_dir("subdir_project");
         fs::write(
             d.join("pom.xml"),
@@ -694,7 +802,7 @@ mod tests {
         fs::write(fe.join("src/main.ts"), "").unwrap();
         fs::write(fe.join("src/App.vue"), "<template/>").unwrap();
 
-        let langs = detect_languages(&d);
+        let langs = detect_workspace_languages(&d).query_languages();
         assert!(langs.contains(&LanguageId::Java), "{langs:?}");
         assert!(
             langs.contains(&LanguageId::TypeScript),
@@ -703,8 +811,7 @@ mod tests {
         fs::remove_dir_all(&d).ok();
     }
 
-    /// 生成物目录不算源码：`coverage/lcov-report/*.js` 与 `__pycache__/*.py` 曾会被
-    /// 计数腿当真源码，给纯 TS 工作区假报一门语言。
+    /// 生成物目录既不进入报告，也不提供探针靶子。
     #[test]
     fn generated_dirs_are_not_sources() {
         let d = tmp_dir("skipgen");
@@ -716,8 +823,7 @@ mod tests {
         fs::create_dir_all(&pycache).unwrap();
         fs::write(pycache.join("x.py"), "").unwrap();
 
-        // 单文件就能判别的入口先钉住「跳过」本身（计数腿有 ≥2 的阈值：只放一条 `.py`
-        // 时，就算不跳 `__pycache__` 也凑不满 2，断言照样绿 = 证明不了它声称的分支）。
+        // 深层靶子遍历与工作区报告分别守住同一跳目录纪律。
         assert!(
             find_probe_target(&d, LanguageId::Python).is_none(),
             "__pycache__ 里不该有靶子"
@@ -726,42 +832,39 @@ mod tests {
             find_probe_target(&d, LanguageId::JavaScript).is_none(),
             "coverage 里不该有靶子"
         );
-        // 计数腿再守一层：两个 .js 若被当成源码，纯 TS 工作区会假报一门语言
-        let langs = detect_languages(&d);
-        assert!(!langs.contains(&LanguageId::JavaScript), "coverage 下的 .js 不该被计数：{langs:?}");
-        assert!(!langs.contains(&LanguageId::Python), "__pycache__ 下的 .py 不该被计数：{langs:?}");
+        assert_eq!(detect_workspace_languages(&d), LanguageDetection::default());
         fs::remove_dir_all(&d).ok();
     }
 
-    /// 没有 marker、只有源码的子目录（`scripts/*.ts` 那种）：靠有界扩展名计数兜底。
-    /// 修前只数根层文件，这类子目录一个都看不见。
+    /// 没有清单的源码子目录只进入源码集合。
     #[test]
-    fn detect_languages_counts_sources_in_subdir_without_marker() {
+    fn workspace_report_sees_sources_in_subdir_without_marker() {
         let d = tmp_dir("subdir_ext");
         let scripts = d.join("scripts");
         fs::create_dir_all(&scripts).unwrap();
         fs::write(scripts.join("a.ts"), "").unwrap();
         fs::write(scripts.join("b.ts"), "").unwrap();
-        assert!(
-            detect_languages(&d).contains(&LanguageId::TypeScript),
-            "无 marker 的子目录源码该被计数到"
-        );
+        let report = detect_workspace_languages(&d);
+        assert!(report.project_languages.is_empty());
+        assert_eq!(report.source_languages, vec![LanguageId::TypeScript]);
         fs::remove_dir_all(&d).ok();
     }
 
     #[test]
     fn cross_language_union() {
-        // Tauri 项目根 + 根层两个 .go 文件 → rust/ts(来自 marker) ∪ go(来自扩展名兜底)
+        // 项目集合与源码集合只在查询投影合并，不能把 Go 源码认成 Go 项目。
         let d = tmp_dir("cross");
         fs::write(d.join("package.json"), "{}").unwrap();
         fs::create_dir_all(d.join("src-tauri")).unwrap();
         fs::write(d.join("src-tauri/Cargo.toml"), "").unwrap();
-        // 根层两个 .go 文件 → 扩展名兜底加 Go
         fs::write(d.join("a.go"), "package main").unwrap();
         fs::write(d.join("b.go"), "package main").unwrap();
-        let langs = detect_languages(&d);
-        assert!(langs.contains(&LanguageId::Rust), "{:?}", langs);
-        assert!(langs.contains(&LanguageId::Go), "{:?}", langs);
+        let report = detect_workspace_languages(&d);
+        assert!(report.project_languages.contains(&LanguageId::Rust));
+        assert!(!report.project_languages.contains(&LanguageId::Go));
+        assert_eq!(report.source_languages, vec![LanguageId::Go]);
+        assert!(report.query_languages().contains(&LanguageId::Rust));
+        assert!(report.query_languages().contains(&LanguageId::Go));
         fs::remove_dir_all(&d).ok();
     }
 

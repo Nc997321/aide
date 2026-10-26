@@ -9,6 +9,18 @@ use aide_workspace::search::{SearchOptions, SearchResponse};
 
 use crate::lsp::detector::LanguageId;
 
+type QueryDetectionCache = std::sync::Mutex<
+    std::collections::HashMap<
+        String,
+        (std::time::Instant, crate::lsp::detector::LanguageDetection),
+    >,
+>;
+static QUERY_DETECTION_CACHE: std::sync::OnceLock<QueryDetectionCache> = std::sync::OnceLock::new();
+
+fn query_detection_cache() -> &'static QueryDetectionCache {
+    QUERY_DETECTION_CACHE.get_or_init(Default::default)
+}
+
 /// 一个工作区根的访问方式（Host 上的本机文件系统）。
 pub struct WorkspaceAccess;
 
@@ -17,33 +29,27 @@ impl WorkspaceAccess {
         WorkspaceAccess
     }
 
-    /// 该工作区涉及的语言。
-    pub async fn detect_languages(&self, root: &str) -> Vec<LanguageId> {
-        crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(root)).await
-    }
-
-    /// 启动推荐只认项目证据，不把零散辅助脚本推荐成语言项目。
-    pub async fn detect_project_languages(&self, root: &str) -> Vec<LanguageId> {
-        crate::lsp::detector::detect_project_languages_async(std::path::PathBuf::from(root)).await
+    /// 获取新鲜的项目语言与真实源码语言探测报告。
+    pub async fn language_detection(&self, root: &str) -> crate::lsp::detector::LanguageDetection {
+        crate::lsp::detector::detect_workspace_languages_async(std::path::PathBuf::from(root)).await
     }
 
     /// agent 按名查询该问哪些语言的 server（= 探到的语言）。
     ///
     /// 短时缓存：按名查询与 grep 顺带作答一发就要一次，而探测是整仓有界遍历——不缓存会把
-    /// 1.5s 的作答预算吃光。
+    /// 1.5s 的作答预算吃光。缓存完整报告，但仅投影其广义并集给 Agent；UI 与预检始终走新鲜探测。
     pub async fn queryable_languages(&self, root: &str) -> Vec<LanguageId> {
-        type Cache = std::sync::Mutex<std::collections::HashMap<String, (std::time::Instant, Vec<LanguageId>)>>;
-        static CACHE: std::sync::OnceLock<Cache> = std::sync::OnceLock::new();
         const TTL: std::time::Duration = std::time::Duration::from_secs(30);
-        let cache = CACHE.get_or_init(Default::default);
-        if let Some((at, langs)) = cache.lock().ok().and_then(|m| m.get(root).cloned()) {
+        let cache = query_detection_cache();
+        if let Some((at, report)) = cache.lock().ok().and_then(|m| m.get(root).cloned()) {
             if at.elapsed() < TTL {
-                return langs;
+                return report.query_languages();
             }
         }
-        let langs = self.detect_languages(root).await;
+        let report = self.language_detection(root).await;
+        let langs = report.query_languages();
         if let Ok(mut m) = cache.lock() {
-            m.insert(root.to_string(), (std::time::Instant::now(), langs.clone()));
+            m.insert(root.to_string(), (std::time::Instant::now(), report));
         }
         langs
     }
@@ -100,22 +106,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn preflight_project_languages_do_not_disable_script_discovery() {
+    async fn project_preflight_and_agent_query_use_distinct_report_projections() {
         let root =
             std::env::temp_dir().join(format!("aide_preflight_projects_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(root.join("scripts")).unwrap();
         std::fs::write(root.join("scripts/main.py"), "").unwrap();
         std::fs::write(root.join("scripts/helper.py"), "").unwrap();
-        let path = root.to_string_lossy();
+        let path = root.to_string_lossy().into_owned();
         let access = WorkspaceAccess::of(&path);
-        let langs = access.detect_project_languages(&path).await;
-        assert!(langs.is_empty());
-        assert_eq!(preflight(langs), LspPreflight::Nothing);
-        assert!(access
-            .detect_languages(&path)
-            .await
-            .contains(&LanguageId::Python));
+        let report = access.language_detection(&path).await;
+        assert!(report.project_languages.is_empty());
+        assert!(report.source_languages.contains(&LanguageId::Python));
+        assert_eq!(
+            preflight(report.project_languages.clone()),
+            LspPreflight::Nothing
+        );
         assert!(access
             .queryable_languages(&path)
             .await
@@ -127,10 +133,10 @@ mod tests {
             "[project]\nname = 'tool'\n",
         )
         .unwrap();
-        let langs = access.detect_project_languages(&path).await;
-        assert_eq!(langs, vec![LanguageId::Python]);
+        let fresh = access.language_detection(&path).await;
+        assert_eq!(fresh.project_languages, vec![LanguageId::Python]);
         assert_eq!(
-            preflight(langs),
+            preflight(fresh.project_languages.clone()),
             LspPreflight::Ask {
                 langs: vec![PreflightLang {
                     lang: "python".into(),
@@ -139,18 +145,57 @@ mod tests {
                 }],
             }
         );
+
+        // Agent 的原报告在 TTL 内仍是初次探测，UI/预检的新鲜探测不覆盖它。
+        let (cached_at, cached) = query_detection_cache()
+            .lock()
+            .unwrap()
+            .get(&path)
+            .unwrap()
+            .clone();
+        assert!(cached_at.elapsed() < std::time::Duration::from_secs(30));
+        assert!(cached.project_languages.is_empty());
+        assert!(cached.source_languages.contains(&LanguageId::Python));
+        assert!(access
+            .queryable_languages(&path)
+            .await
+            .contains(&LanguageId::Python));
+        {
+            let mut cache = query_detection_cache().lock().unwrap();
+            cache.get_mut(&path).unwrap().0 =
+                std::time::Instant::now() - std::time::Duration::from_secs(31);
+        }
+        assert!(access
+            .queryable_languages(&path)
+            .await
+            .contains(&LanguageId::Python));
+        let (_, refreshed) = query_detection_cache()
+            .lock()
+            .unwrap()
+            .get(&path)
+            .unwrap()
+            .clone();
+        assert_eq!(refreshed.project_languages, vec![LanguageId::Python]);
         std::fs::remove_dir_all(root).unwrap();
+        query_detection_cache().lock().unwrap().remove(&path);
     }
 
     #[tokio::test]
     async fn preflight_project_languages_of_aide_exclude_python() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let path = root.to_string_lossy();
-        let langs = WorkspaceAccess::of(&path)
-            .detect_project_languages(&path)
-            .await;
-        assert!(langs.contains(&LanguageId::Rust), "{langs:?}");
-        assert!(langs.contains(&LanguageId::TypeScript), "{langs:?}");
-        assert!(!langs.contains(&LanguageId::Python), "{langs:?}");
+        let report = WorkspaceAccess::of(&path).language_detection(&path).await;
+        assert!(
+            report.project_languages.contains(&LanguageId::Rust),
+            "{report:?}"
+        );
+        assert!(
+            report.project_languages.contains(&LanguageId::TypeScript),
+            "{report:?}"
+        );
+        assert!(
+            !report.project_languages.contains(&LanguageId::Python),
+            "{report:?}"
+        );
     }
 }

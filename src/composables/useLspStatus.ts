@@ -98,40 +98,46 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
 
 /**
  * 每语言 LSP server 状态跟踪（标题栏 LSP 面板用）。
- * 语义：detect 工作区语言 → 逐个 ensure → ok（已就绪）/ indexing（握手成功但 jdtls 索引中，
+ * 语义：detect 项目语言 → 逐个 ensure；按文件启动的额外语言由 Host 状态板补入。
+ * ensure → ok（已就绪）/ indexing（握手成功但 jdtls 索引中，
  * 仅 Java）/ missing（未安装）/ failed（spawn/握手失败）。ensure 对已启动 server 幂等。
  * Java 索引中显示「索引中…」，收到后端 lsp-server-ready 事件（jdtls ServiceReady）才切 ok；
  * 超 90s 仍无信号加「较慢…」提示但不切假就绪。server 死（lsp-server-dead）→ 清计时器重 probe。
  * 只在 LSP 开启时探测；workspaceRoot 或 enabled 变化时清空重探。
  */
 export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolean>) {
-  /** 探测得到的行（detect + ensure）；Host 状态板有这一语言的状态时以状态板为准（见 langs）。 */
+  /** 项目基底（detect + ensure），不因零散源码或旧失败快照扩充。 */
   const rows = ref<LspLangStatus[]>([]);
   /** lang → Host 状态板（就绪只认 Host 的实测探针；旧 Host 没有状态板时退回 ensure 结果）。 */
   const board = ref<Map<string, LspBoardStatus>>(new Map());
+  /** 项目之外实际进入过 server 生命周期的语言，停用时移除。 */
+  const activeLangs = ref(new Set<string>());
   const now = ref(Date.now());
   let ticker: ReturnType<typeof setInterval> | null = null;
-  const langs = computed<LspLangStatus[]>({
-    get: () =>
-      rows.value.map((r) => {
-        const b = board.value.get(r.lang);
-        if (!b) return r;
-        const out: LspLangStatus = { lang: r.lang, status: PHASE_STATUS[b.phase] };
-        const err = b.error ?? r.error;
-        if (err && out.status === "failed") out.error = err;
-        const note = boardNote(b, now.value);
-        if (note) out.note = note;
-        if (b.memory) out.memory = b.memory;
-        return out;
-      }),
-    set: (v) => {
-      rows.value = v;
-    },
+  const langs = computed<LspLangStatus[]>(() => {
+    const merged = new Map(rows.value.map((r) => [r.lang, r]));
+    for (const lang of activeLangs.value) {
+      const b = board.value.get(lang);
+      if (b && !merged.has(lang)) merged.set(lang, { lang, status: PHASE_STATUS[b.phase] });
+    }
+    return [...merged.values()].map((r) => {
+      const b = board.value.get(r.lang);
+      if (!b) return r;
+      const out: LspLangStatus = { lang: r.lang, status: PHASE_STATUS[b.phase] };
+      const err = b.error ?? r.error;
+      if (err && out.status === "failed") out.error = err;
+      const note = boardNote(b, now.value);
+      if (note) out.note = note;
+      if (b.memory) out.memory = b.memory;
+      return out;
+    });
   });
   const probing = ref(false);
   /** lang → 90s 慢索引计时器（indexing 进入起；ready/重 probe/切工作区清）。 */
   const slowTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  let listening = false;
+  let listening: Promise<void> | null = null;
+  let generation = 0;
+  let disposed = false;
   let unlistenReady: (() => void) | null = null;
   let unlistenDead: (() => void) | null = null;
 
@@ -144,12 +150,19 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
     slowTimers.clear();
   }
 
-  /** 订阅后端就绪/死亡事件（LSP 开启后首次 probe 成功时调，幂等）。callback 按 workspaceRoot 过滤旧事件。 */
+  /** 只接收当前工作区且仍开启的 Host 事件，旧 missing/failed 记录不构成项目证据。 */
   function applyBoard(b: LspBoardStatus) {
-    if (!sameRoot(b.workspaceRoot, getWorkspaceRoot())) return; // 旧工作区的事件
+    if (disposed || !enabled.value || !sameRoot(b.workspaceRoot, getWorkspaceRoot())) return;
     const next = new Map(board.value);
     next.set(b.lang, b);
     board.value = next;
+    const active = new Set(activeLangs.value);
+    if (["starting", "loading", "indexing", "ready", "sleeping"].includes(b.phase)) {
+      active.add(b.lang);
+    } else if (b.phase === "off" || b.phase === "disabled") {
+      active.delete(b.lang);
+    }
+    activeLangs.value = active;
     syncTicker();
   }
 
@@ -169,33 +182,46 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
 
   let unlistenBoard: (() => void) | null = null;
   async function ensureListening() {
-    if (listening) return;
-    listening = true;
-    unlistenBoard = await listen<LspBoardStatus>("lsp-status", (ev) => applyBoard(ev.payload));
-    unlistenReady = await listen<{ workspaceRoot: string; lang: string }>(
-      "lsp-server-ready",
-      (ev) => {
-        const p = ev.payload;
-        if (p.workspaceRoot !== getWorkspaceRoot()) return; // 旧工作区事件忽略
-        const idx = langs.value.findIndex((x) => x.lang === p.lang && x.status === "indexing");
-        if (idx >= 0) {
-          langs.value = langs.value.map((x, i) =>
-            i === idx ? { ...x, status: "ok", note: undefined } : x,
-          );
-          clearSlowTimer(p.lang);
+    if (!listening) {
+      listening = (async () => {
+        unlistenBoard = await listen<LspBoardStatus>("lsp-status", (ev) => applyBoard(ev.payload));
+        unlistenReady = await listen<{ workspaceRoot: string; lang: string }>(
+          "lsp-server-ready",
+          (ev) => {
+            const p = ev.payload;
+            if (disposed || !enabled.value || !sameRoot(p.workspaceRoot, getWorkspaceRoot())) return;
+            rows.value = rows.value.map((x) =>
+              x.lang === p.lang && x.status === "indexing" ? { ...x, status: "ok", note: undefined } : x,
+            );
+            clearSlowTimer(p.lang);
+          },
+        );
+        unlistenDead = await listen("lsp-server-dead", () => {
+          clearAllSlowTimers();
+          void probe();
+        });
+        if (disposed) {
+          unlistenReady?.();
+          unlistenDead?.();
+          unlistenBoard?.();
         }
-      },
-    );
-    unlistenDead = await listen("lsp-server-dead", () => {
-      // server 死 → 清计时器 + 重 probe（免卡「索引中」；ensure 幂等重拉）
-      clearAllSlowTimers();
-      void probe();
-    });
+      })().catch((e) => {
+        unlistenReady?.();
+        unlistenDead?.();
+        unlistenBoard?.();
+        listening = null;
+        throw e;
+      });
+    }
+    await listening;
   }
 
   async function probe() {
+    const current = ++generation;
     const workspaceRoot = getWorkspaceRoot();
-    if (!workspaceRoot || !enabled.value) {
+    const isCurrent = () =>
+      !disposed && current === generation && enabled.value && sameRoot(workspaceRoot, getWorkspaceRoot());
+    if (disposed || !workspaceRoot || !enabled.value) {
       // 关闭/无工作区：显式复位。若上一次 probe 挂起未收尾（invoke 慢/挂死），
       // 这里把它拉回 false，杜绝「LSP 已关却永远显示探测中」。
       probing.value = false;
@@ -204,7 +230,11 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
     }
     probing.value = true;
     try {
+      // 先订阅再探测，按文件启动的语言即使不在项目列表中也不会漏掉。
+      await ensureListening();
+      if (!isCurrent()) return;
       const detected = await api.lspDetectLanguages(workspaceRoot);
+      if (!isCurrent()) return;
       const results = await Promise.all(
         detected.map(async (lang): Promise<LspLangStatus> => {
           let status: LspServerStatus = "failed";
@@ -225,14 +255,15 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
             status = "failed";
           }
           // Java 索引中：启动诚实兜底计时器（90s 仍无 ServiceReady → 加提示，不切假就绪）
-          if (status === "indexing") {
+          if (status === "indexing" && isCurrent()) {
             clearSlowTimer(lang);
             slowTimers.set(
               lang,
               setTimeout(() => {
-                const idx = langs.value.findIndex((x) => x.lang === lang && x.status === "indexing");
+                if (!isCurrent()) return;
+                const idx = rows.value.findIndex((x) => x.lang === lang && x.status === "indexing");
                 if (idx >= 0) {
-                  langs.value = langs.value.map((x, i) =>
+                  rows.value = rows.value.map((x, i) =>
                     i === idx ? { ...x, note: "较慢，定义/补全可能暂时为空" } : x,
                   );
                 }
@@ -244,15 +275,15 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
           return entry;
         }),
       );
+      if (!isCurrent()) return;
       rows.value = results;
-      void ensureListening(); // LSP 开启时订阅状态板 / 就绪 / 死亡事件
       // 回种状态板（之后靠 lsp-status 事件）；旧 Host 没有这条命令 → 保持 ensure 结果
       const snap = await api.lspStatus(workspaceRoot).catch(() => null);
-      if (Array.isArray(snap)) for (const b of snap) applyBoard(b);
+      if (isCurrent() && Array.isArray(snap)) for (const b of snap) applyBoard(b);
     } catch {
-      rows.value = [];
+      if (isCurrent()) rows.value = [];
     } finally {
-      probing.value = false;
+      if (current === generation) probing.value = false;
     }
   }
 
@@ -261,6 +292,7 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
     () => {
       rows.value = [];
       board.value = new Map();
+      activeLangs.value = new Set();
       syncTicker();
       clearAllSlowTimers();
       void probe();
@@ -271,6 +303,8 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
   // 组件卸载清计时器 + 取消订阅（test 无 effect scope → getCurrentScope() null → skip，无警告）
   if (getCurrentScope()) {
     onScopeDispose(() => {
+      disposed = true;
+      generation++;
       clearAllSlowTimers();
       if (ticker) clearInterval(ticker);
       unlistenReady?.();

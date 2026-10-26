@@ -60,7 +60,7 @@ pub fn parse_workspace_symbols(value: &serde_json::Value, lang: &str) -> Vec<Sym
 
 /// 按名字在工作区找符号。
 ///
-/// `lang` 给了就只查该语言；缺省时对该工作区 `detect_languages` 探到的**全部**语言
+/// `lang` 给了就只查该语言；缺省时对该工作区 `LanguageDetection::query_languages` 探到的**全部**语言
 /// 依次查询并合并——agent 只拿得到一个名字，没有扩展名可据以分派（`lang_from_ext_of`
 /// 在此不适用），逼它先猜语言等于把一个问题变成两个。
 pub static COMMANDS: &[HostCommand] = &[command!("lsp_workspace_symbol", lsp_workspace_symbol)];
@@ -129,10 +129,10 @@ async fn resolve_query_languages(
         Some(l) => crate::lsp::detector::lang_from_id_str(l)
             .into_iter()
             .collect(),
-        None => {
-            crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(workspace_root))
-                .await
-        }
+        None => crate::lsp::workspace_access::WorkspaceAccess::of(workspace_root)
+            .language_detection(workspace_root)
+            .await
+            .query_languages(),
     }
 }
 
@@ -200,5 +200,36 @@ mod tests {
     fn non_array_input_yields_empty() {
         assert!(parse_workspace_symbols(&json!(null), "rust").is_empty());
         assert!(parse_workspace_symbols(&json!({"nope": 1}), "rust").is_empty());
+    }
+
+    #[tokio::test]
+    async fn automatic_symbol_language_selection_uses_project_and_source_union() {
+        let root =
+            std::env::temp_dir().join(format!("aide_lsp_symbol_languages_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/helper.py"), "").unwrap();
+        let path = root.to_string_lossy().into_owned();
+
+        let report = crate::lsp::detector::detect_workspace_languages(&root);
+        assert!(report.project_languages.is_empty());
+        assert!(report
+            .source_languages
+            .contains(&crate::lsp::detector::LanguageId::Python));
+        let resolved = resolve_query_languages(&None, &path).await;
+        assert!(resolved.contains(&crate::lsp::detector::LanguageId::Python));
+        let mut resolved_ids: Vec<_> = resolved
+            .iter()
+            .map(|lang| lang.id_str().to_string())
+            .collect();
+        let mut report_ids: Vec<_> = report
+            .query_languages()
+            .iter()
+            .map(|lang| lang.id_str().to_string())
+            .collect();
+        resolved_ids.sort_unstable();
+        report_ids.sort_unstable();
+        assert_eq!(resolved_ids, report_ids);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

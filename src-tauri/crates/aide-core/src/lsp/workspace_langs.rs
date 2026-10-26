@@ -87,9 +87,10 @@ pub fn preflight_lang(
     }
 }
 
-/// 纯路径判定部分：该根探测到哪些语言。与 core 无关，故可单测。
+/// 纯路径判定部分：该根广义发现到哪些语言。与 core 无关，故可单测。
 fn lsp_language_ids_of(workspace_root: &str) -> Vec<crate::lsp::detector::LanguageId> {
-    crate::lsp::detector::detect_languages(std::path::Path::new(workspace_root))
+    crate::lsp::detector::detect_workspace_languages(std::path::Path::new(workspace_root))
+        .query_languages()
 }
 
 
@@ -140,5 +141,23 @@ mod tests {
     fn lsp_language_ids_of_a_real_tree_is_not_empty() {
         let here = env!("CARGO_MANIFEST_DIR");
         assert!(!lsp_language_ids_of(here).is_empty(), "仓库根应探测到语言: {here}");
+    }
+
+    #[test]
+    fn language_tool_mount_uses_project_and_source_union() {
+        let root =
+            std::env::temp_dir().join(format!("aide_lsp_tool_languages_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/helper.py"), "").unwrap();
+
+        let report = crate::lsp::detector::detect_workspace_languages(&root);
+        assert!(report.project_languages.is_empty());
+        assert!(report
+            .source_languages
+            .contains(&crate::lsp::detector::LanguageId::Python));
+        assert!(lsp_language_ids_of(&root.to_string_lossy())
+            .contains(&crate::lsp::detector::LanguageId::Python));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

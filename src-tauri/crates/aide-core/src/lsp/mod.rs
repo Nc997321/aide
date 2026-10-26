@@ -129,11 +129,15 @@ async fn lsp_detect_languages(
     a: LspDetectLanguagesArgs,
 ) -> Result<Vec<String>, String> {
     let LspDetectLanguagesArgs { workspace_root } = a;
-    // 探测要下钻（子目录 marker + 有界扩展名遍历）= 文件系统 IO：本机走 async 外壳不占
-    // tokio worker；远程工作区在目标机上探测（WorkspaceAccess）。
+    // UI 项目列表与自动启动只认项目证据；Agent 的广义发现仍保留辅助源码。
+    // 探测在 Host 上有界下钻，async 外壳避免文件 IO 占用 tokio worker。
     let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
-    let langs = access.detect_languages(&workspace_root).await;
-    Ok(langs.iter().map(|l| l.id_str().to_string()).collect())
+    let report = access.language_detection(&workspace_root).await;
+    Ok(report
+        .project_languages
+        .iter()
+        .map(|l| l.id_str().to_string())
+        .collect())
 }
 
 #[derive(Deserialize)]
@@ -1131,12 +1135,16 @@ async fn lsp_session_preflight(
         return Ok(decide_preflight(trusted, cfg.lsp_decided(), cfg.enabled, vec![]));
     }
     let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
-    let detected = access.detect_project_languages(&workspace_root).await;
-    if detected.is_empty() {
+    let report = access.language_detection(&workspace_root).await;
+    if report.project_languages.is_empty() {
         return Ok(LspPreflight::Nothing);
     }
     let settings = crate::app_settings::public_settings(&core.settings).map_err(|e| e.to_string())?;
-    let langs = detected.into_iter().map(|l| preflight_lang(&core, &settings, l)).collect();
+    let langs = report
+        .project_languages
+        .into_iter()
+        .map(|l| preflight_lang(&core, &settings, l))
+        .collect();
     Ok(decide_preflight(true, false, false, langs))
 }
 
@@ -1289,6 +1297,61 @@ fn parse_hover_content(result: &serde_json::Value) -> Option<String> {
 mod tests {
     use super::*;
     use crate::lsp::manager::{build_exclude_globs, is_excluded};
+
+    #[tokio::test]
+    async fn lsp_detect_languages_panel_uses_project_evidence() {
+        let root = std::env::temp_dir().join(format!("aide_lsp_panel_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::create_dir_all(root.join("src-tauri")).unwrap();
+        std::fs::write(root.join("package.json"), "{}").unwrap();
+        std::fs::write(root.join("src-tauri/Cargo.toml"), "").unwrap();
+        std::fs::write(root.join("scripts/main.py"), "").unwrap();
+        std::fs::write(root.join("scripts/helper.py"), "").unwrap();
+        let path = root.to_string_lossy().into_owned();
+        let core = crate::test_core(Arc::new(crate::NullSink));
+        let args = || LspDetectLanguagesArgs {
+            workspace_root: path.clone(),
+        };
+
+        // 直接调用面板使用的 IPC 入口，不能仅测试另一个 detector 或会话预检。
+        let langs = lsp_detect_languages(core.clone(), args()).await.unwrap();
+        assert!(langs.iter().any(|l| l == "rust"), "{langs:?}");
+        assert!(langs.iter().any(|l| l == "typescript"), "{langs:?}");
+        assert!(
+            !langs.iter().any(|l| l == "python"),
+            "辅助脚本不应出现在项目语言面板：{langs:?}"
+        );
+        let access = crate::lsp::workspace_access::WorkspaceAccess::of(&path);
+        let report = access.language_detection(&path).await;
+        assert!(report
+            .project_languages
+            .contains(&crate::lsp::detector::LanguageId::Rust));
+        assert!(report
+            .project_languages
+            .contains(&crate::lsp::detector::LanguageId::TypeScript));
+        assert!(!report
+            .project_languages
+            .contains(&crate::lsp::detector::LanguageId::Python));
+        assert!(report
+            .source_languages
+            .contains(&crate::lsp::detector::LanguageId::Python));
+        assert!(report
+            .query_languages()
+            .contains(&crate::lsp::detector::LanguageId::Python));
+
+        std::fs::write(
+            root.join("scripts/pyproject.toml"),
+            "[project]\nname = 'tool'\n",
+        )
+        .unwrap();
+        let langs = lsp_detect_languages(core, args()).await.unwrap();
+        assert!(
+            langs.iter().any(|l| l == "python"),
+            "真实 Python 子项目仍应出现：{langs:?}"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn lsp_location_to_query_result_via_protocol() {
