@@ -136,6 +136,14 @@ pub async fn browser_bookmarks_remove(id: String) -> CmdResult<bool> {
         .map_err(|e| e.to_string())
 }
 
+/// 收藏整理在阻塞线程落盘。
+#[tauri::command]
+pub async fn browser_bookmarks_move(id: String, folders: Vec<String>, before: Option<String>) -> CmdResult<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        BookmarkStore::at_default_location().relocate(&id, folders, before.as_deref()).map_err(|e| e.to_string())
+    }).await.map_err(|e| e.to_string())?
+}
+
 /// 从文件导入（路径由应用内文件选择器给出）。
 /// 字节先按 BOM 判编码再解文本——UTF-16 是记事本另存 HTML 的默认编码，直接 `read_to_string` 会失败。
 #[tauri::command]

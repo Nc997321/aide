@@ -89,6 +89,11 @@ export function useBrowserBookmarks() {
     await refresh();
   }
 
+  async function move(id: string, folders: string[], before: string | null = null): Promise<void> {
+    await invoke("browser_bookmarks_move", { id, folders, before });
+    await refresh();
+  }
+
   /** 从文件导入（路径由应用内文件选择器给出）。返回如实报告。 */
   async function importFromFile(path: string): Promise<ImportReport> {
     const report = await invoke<ImportReport>("browser_bookmarks_import", { path });
@@ -111,5 +116,5 @@ export function useBrowserBookmarks() {
 
   // `favicons` 直接出表而不是包成 `faviconOf(url)`：两个消费方（收藏条、文件夹下拉）都要按 url 查，
   // 下拉那边要的是**表本身**（当 prop 传下去）；包一层只会多一个消费方还得再拆开。
-  return { bookmarks, favicons, error, refresh, add, remove, importFromFile, has, idOf };
+  return { bookmarks, favicons, error, refresh, add, remove, move, importFromFile, has, idOf };
 }

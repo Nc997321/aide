@@ -33,6 +33,7 @@ import { useBrowserViews } from "../../composables/browser/useBrowserViews";
 import { overlayLayerOpen } from "../../directives/overlayLayer";
 import FilePickerDialog from "../FilePickerDialog.vue";
 import Icon from "../Icon.vue";
+import BookmarkActions from "./BookmarkActions.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
 import {
   buildBookmarkBar,
@@ -488,9 +489,41 @@ const {
   refresh: refreshBookmarks,
   add: addBookmark,
   remove: removeBookmark,
+  move: moveBookmark,
   importFromFile,
   idOf: bookmarkIdOf,
 } = useBrowserBookmarks();
+
+const bookmarkContext = ref<{ id: string; x: number; y: number } | null>(null);
+const contextBookmark = computed(() => bookmarks.value.find(b => b.id === bookmarkContext.value?.id));
+const draggedBookmark = ref<string | null>(null);
+function bookmarkContextMenu(id: string, event: MouseEvent) {
+  bookmarkContext.value = { id, x: event.clientX, y: event.clientY };
+  openFolder.value = null;
+}
+function startBookmarkDrag(id: string, event: DragEvent) {
+  draggedBookmark.value = id;
+  event.dataTransfer?.setData("text/plain", id);
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+}
+async function relocateBookmark(id: string, folders: string[], before: string | null = null) {
+  try { await moveBookmark(id, folders, before); openFolder.value = null; }
+  catch (e) { setError(e); }
+}
+function dropBesideBookmark(id: string, event: DragEvent) {
+  const target = bookmarks.value.find(b => b.id === id);
+  if (!target) return;
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const after = event.clientX > rect.left + rect.width / 2;
+  const siblings = bookmarks.value.filter(b => JSON.stringify(b.folders) === JSON.stringify(target.folders) && b.id !== draggedBookmark.value);
+  const next = siblings[siblings.findIndex(b => b.id === id) + 1];
+  dropBookmark(target.folders, after ? next?.id ?? null : id);
+}
+function dropBookmark(folders: string[], before: string | null = null) {
+  const id = draggedBookmark.value;
+  draggedBookmark.value = null;
+  if (id && id !== before) void relocateBookmark(id, folders, before);
+}
 
 /** 导入用的文件选择器开没开（它自己会挂 `v-overlay-layer` 让原生视图让位，这里只管开关）。 */
 const pickerVisible = ref(false);
@@ -766,19 +799,24 @@ onBeforeUnmount(() => {
 
     <!-- 收藏条：顶层文件夹点开下拉、根级散条点标题直达、✕ 删除；右端是导入入口 -->
     <div class="bp-bookmarks">
-      <div class="bp-bm-list">
+      <div class="bp-bm-list" @dragover.prevent @drop.prevent.self="dropBookmark([])">
         <template v-for="e in bookmarkBar" :key="entryKey(e)">
           <button
             v-if="e.kind === 'folder'"
             class="bp-bm bp-bm-folder"
             :title="`文件夹：${e.folder.name}`"
             @click="openFolderMenu(e.folder, $event)"
+            @dragover.prevent
+            @drop.prevent.stop="dropBookmark(e.folder.path)"
           >
             <Icon name="folder" :size="13" class="bp-bm-glyph" />
             <span class="bp-bm-label">{{ e.folder.name }}</span>
           </button>
-          <div v-else class="bp-bm" :title="e.url">
-            <img v-if="favicons[e.url]" class="bp-bm-icon" :src="favicons[e.url]" alt="" />
+          <div v-else class="bp-bm" :title="e.url" draggable="true"
+            @dragstart="startBookmarkDrag(e.id, $event)" @dragend="draggedBookmark = null"
+            @dragover.prevent @drop.prevent.stop="dropBesideBookmark(e.id, $event)"
+            @contextmenu.prevent="bookmarkContextMenu(e.id, $event)">
+            <img draggable="false" v-if="favicons[e.url]" class="bp-bm-icon" :src="favicons[e.url]" alt="" />
             <Icon v-else name="globe" :size="13" class="bp-bm-glyph" />
             <span class="bp-bm-label" @click="openBookmark(e.url)">{{ e.title }}</span>
             <button class="bp-bm-x" title="删除收藏" @click="removeFromBar(e.id)">✕</button>
@@ -800,9 +838,17 @@ onBeforeUnmount(() => {
       :folder="openFolder"
       :anchor="folderMenuAnchor"
       :favicons="favicons"
+      @context="bookmarkContextMenu"
+      @drag="startBookmarkDrag"
+      @drag-end="draggedBookmark = null"
+      @drop-bookmark="dropBookmark"
       @open="onFolderPick"
       @close="openFolder = null"
     />
+
+    <BookmarkActions v-if="bookmarkContext && contextBookmark" :bookmark="contextBookmark" :bookmarks="bookmarks"
+      :x="bookmarkContext.x" :y="bookmarkContext.y" @close="bookmarkContext = null"
+      @open="onFolderPick" @remove="removeFromBar" @move="relocateBookmark" />
 
     <div v-if="message" class="bp-notice" :class="{ err: messageTone === 'error' }">
       {{ message }}

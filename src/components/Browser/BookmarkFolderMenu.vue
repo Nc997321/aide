@@ -25,6 +25,10 @@ const props = defineProps<{
 const emit = defineEmits<{
   open: [url: string];
   close: [];
+  context: [id: string, event: MouseEvent];
+  drag: [id: string, event: DragEvent];
+  dragEnd: [];
+  dropBookmark: [folders: string[], before?: string];
 }>();
 
 const rows = computed(() => flattenFolderMenu(props.folder));
@@ -55,6 +59,7 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
         class="bp-fmenu"
         role="menu"
         :aria-label="folder.name"
+        @dragover.prevent @drop.prevent.stop="emit('dropBookmark', folder.path)"
         :style="{ left: `${anchor.left}px`, top: `${anchor.top}px` }"
       >
         <template v-for="(row, i) in rows" :key="i">
@@ -66,6 +71,10 @@ onUnmounted(() => window.removeEventListener("keydown", onKeydown));
             class="bp-fmenu__item"
             role="menuitem"
             :title="row.url"
+            draggable="true"
+            @dragstart="emit('drag', row.id, $event)" @dragend="emit('dragEnd')"
+            @dragover.prevent @drop.prevent.stop="emit('dropBookmark', row.folders, row.id)"
+            @contextmenu.prevent="emit('context', row.id, $event)"
             :style="indentOf(row.depth)"
             @click="emit('open', row.url)"
           >
