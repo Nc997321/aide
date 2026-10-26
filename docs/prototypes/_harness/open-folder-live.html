@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>打开目录 · 界面预览</title>
+    <style>
+      body { margin: 0; background: var(--aide-bg-base); color: var(--aide-text-primary); font-family: system-ui, sans-serif; }
+      main { padding: calc(var(--aide-space-unit) * 6); }
+      button { padding: calc(var(--aide-space-unit) * 2); background: var(--aide-bg-raised); color: var(--aide-text-primary); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); cursor: pointer; }
+      output { display: block; margin-top: calc(var(--aide-space-unit) * 3); overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="./open-folder-live.ts"></script>
+  </body>
+</html>
