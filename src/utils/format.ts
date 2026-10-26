@@ -1,3 +1,13 @@
+/** 完成时刻：今天只给 `14:32`，往日带日期 `10-21 14:32`，跨年带年份。 */
+export function formatClockTime(epochMs: number, now: Date = new Date()): string {
+  const d = new Date(epochMs);
+  const p2 = (n: number) => String(n).padStart(2, "0");
+  const hm = `${p2(d.getHours())}:${p2(d.getMinutes())}`;
+  if (d.toDateString() === now.toDateString()) return hm;
+  const md = `${p2(d.getMonth() + 1)}-${p2(d.getDate())}`;
+  return d.getFullYear() === now.getFullYear() ? `${md} ${hm}` : `${d.getFullYear()}-${md} ${hm}`;
+}
+
 /**
  * 把较大的 token 数量压成「36.1k / 150k / 1.2m」这种一眼扫过去就有量级感的
  * 缩写形式——原始的完整数字（36108、150170）放进 tooltip，不在这里丢失精度。

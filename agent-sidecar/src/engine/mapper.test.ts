@@ -570,6 +570,17 @@ describe("mapSdkMessage usage 归因（subagentTurn / byModel）", () => {
     });
   });
 
+  it("usage 带 finishedAt = 收到 result 的时刻（徽标显示完成时间）", () => {
+    const events: ChatEvent[] = [];
+    const before = Date.now();
+    mapSdkMessage(successResult({ "claude-sonnet-5": { inputTokens: 10, outputTokens: 5, costUSD: 0.001 } }),
+      (e) => events.push(e),
+      { tasks: tasks(), subagents: new SubagentTracker(), tools: tools() });
+    const stop = events.find((e) => e.type === "message_stop") as any;
+    expect(stop.usage.finishedAt).toBeGreaterThanOrEqual(before);
+    expect(stop.usage.finishedAt).toBeLessThanOrEqual(Date.now());
+  });
+
   it("apiCallCount 透传 result.num_turns（前端据此把 ↓ 累计输入拆成 ×N 分解）", () => {
     const events: ChatEvent[] = [];
     mapSdkMessage(// 4.2m 输入 / 20 次调用 = 平均每次 210k ≈ ctx，正是反直觉场景的分解

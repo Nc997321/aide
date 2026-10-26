@@ -12,6 +12,7 @@
 //! 不被 `pub use` 重导出到外部。
 
 pub mod branches;
+pub mod clone;
 pub mod commits;
 pub mod diffpair;
 pub mod fingerprint;

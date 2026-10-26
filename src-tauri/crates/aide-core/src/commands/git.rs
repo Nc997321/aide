@@ -14,6 +14,7 @@ use crate::registry::{blocking, Command};
 use crate::{command, Core};
 
 pub static COMMANDS: &[Command] = &[
+    command!("git_clone", git_clone),
     command!("git_branches", git_branches),
     command!("git_checkout", git_checkout),
     command!("git_create_branch", git_create_branch),
@@ -53,6 +54,18 @@ pub static COMMANDS: &[Command] = &[
 pub struct GitBranchesArgs {
     #[serde(default)]
     cwd: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCloneArgs {
+    url: String,
+    parent_path: String,
+    directory_name: String,
+}
+
+async fn git_clone(_core: Arc<Core>, a: GitCloneArgs) -> Result<String, String> {
+    git::clone::git_clone(a.url, a.parent_path, a.directory_name).await
 }
 
 async fn git_branches(core: Arc<Core>, a: GitBranchesArgs) -> Result<Vec<BranchInfo>, String> {

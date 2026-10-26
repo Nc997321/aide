@@ -25,6 +25,17 @@ use super::path::HostId;
 /// 单次调用的上限。最慢的合法操作是网络 git（fetch/pull/push，host 侧自带 120s
 /// 超时），这里再留余量；超过即视为连接卡死。
 const CALL_TIMEOUT: Duration = Duration::from_secs(180);
+const GIT_CLONE_CALL_TIMEOUT: Duration = Duration::from_secs(660);
+
+fn call_timeout(method: &str, params: &Value) -> Duration {
+    let is_clone_invoke = method == METHOD_INVOKE
+        && params.get("cmd").and_then(Value::as_str) == Some("git_clone");
+    if is_clone_invoke {
+        GIT_CLONE_CALL_TIMEOUT
+    } else {
+        CALL_TIMEOUT
+    }
+}
 
 type Pending = Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>;
 pub type EventHandler = Arc<dyn Fn(&HostId, Notification) + Send + Sync>;
@@ -163,6 +174,7 @@ impl HostConnection {
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .insert(id, tx);
+        let timeout = call_timeout(method, &params);
         let req = Request {
             id,
             method: method.to_string(),
@@ -182,7 +194,7 @@ impl HostConnection {
                 .remove(&id);
             return Err(format!("写入 {} 失败：{e}", self.host.label()));
         }
-        match tokio::time::timeout(CALL_TIMEOUT, rx).await {
+        match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(r)) => r,
             Ok(Err(_)) => Err(format!("与 {} 的连接已断开", self.host.label())),
             Err(_) => {
@@ -233,5 +245,25 @@ fn dispatch_line(host: &HostId, line: &str, pending: &Pending, last_seq: &Atomic
             (ok, None) => Ok(ok.unwrap_or(Value::Null)),
         };
         let _ = tx.send(r);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn only_git_clone_gets_extended_rpc_timeout() {
+        assert_eq!(
+            call_timeout(METHOD_INVOKE, &json!({"cmd":"git_clone"})),
+            GIT_CLONE_CALL_TIMEOUT
+        );
+        assert!(GIT_CLONE_CALL_TIMEOUT > Duration::from_secs(600));
+        assert_eq!(
+            call_timeout(METHOD_INVOKE, &json!({"cmd":"git_fetch"})),
+            CALL_TIMEOUT
+        );
+        assert_eq!(call_timeout(METHOD_HELLO, &Value::Null), CALL_TIMEOUT);
     }
 }

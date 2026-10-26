@@ -24,18 +24,27 @@ pub(super) static GIT_LOCK: Mutex<()> = Mutex::new(());
 /// finishes or `timeout` expires — on timeout the child is **killed** so no
 /// zombie git process is left behind.  stdout/stderr are drained on helper
 /// threads so a chatty child can't deadlock on a full pipe.
-fn git_run_with_timeout(
+pub(super) fn git_run_blocking_options(
     args: &[&str],
     root: &std::path::Path,
     timeout: Duration,
+    env: &[(&str, &str)],
+    lock: bool,
 ) -> Result<std::process::Output, String> {
-    let _guard = GIT_LOCK
-        .lock()
-        .map_err(|e| format!("Git lock poisoned: {}", e))?;
+    let _guard = if lock {
+        Some(
+            GIT_LOCK
+                .lock()
+                .map_err(|e| format!("Git lock poisoned: {}", e))?,
+        )
+    } else {
+        None
+    };
 
     let mut cmd = Command::new("git");
     cmd.args(args)
         .current_dir(root)
+        .envs(env.iter().copied())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -101,7 +110,7 @@ pub(super) fn git_run(
     args: &[&str],
     root: &std::path::Path,
 ) -> Result<std::process::Output, String> {
-    git_run_with_timeout(args, root, GIT_TIMEOUT)
+    git_run_blocking_options(args, root, GIT_TIMEOUT, &[], true)
 }
 
 /// Run git inside `tokio::spawn_blocking` so the async handler never blocks
@@ -113,7 +122,7 @@ pub(super) async fn git_run_async_timeout(
 ) -> Result<std::process::Output, String> {
     tokio::task::spawn_blocking(move || {
         let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-        git_run_with_timeout(&refs, &root, timeout)
+        git_run_blocking_options(&refs, &root, timeout, &[], true)
     })
     .await
     .map_err(|e| format!("Git task panicked: {}", e))?

@@ -434,6 +434,11 @@ export const api = {
     return getTransport().invoke("apply_replacements", { files });
   },
 
+  /** 在当前 Host 的现有父目录下完整克隆仓库；只返回路径，不登记或切换工作区。 */
+  gitClone(input: { url: string; parentPath: string; directoryName: string }): Promise<string> {
+    return getTransport().invoke("git_clone", input);
+  },
+
   // Git（自足的「状态读取」组；写操作调用后需调用方自行刷新状态）
   /**
    * 工作区覆写：会话归属于某个工作区，但主进程的 `WorkspaceState` 是全局单例、

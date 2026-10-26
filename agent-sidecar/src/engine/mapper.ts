@@ -774,6 +774,7 @@ function mapResultMessage(msg: any, emit: (e: ChatEvent) => void, deps: MapperDe
     // num_turns 是 turn 级 API 调用数（不按模型拆），透传给前端做「×N」分解——
     // 4.2m 累计输入 ÷ 20 ≈ ctx，让徽标不再反直觉。
     if (typeof msg.num_turns === "number") usage.apiCallCount = msg.num_turns;
+    usage.finishedAt = Date.now();
   }
   emit({
     type: "message_stop",
