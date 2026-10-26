@@ -2,7 +2,7 @@
  * 原生打开目录/克隆表单预览；只替换传输层，不执行真实克隆。
  * pnpm exec vite --port 5199
  * /docs/prototypes/_harness/open-folder-live.html?theme=glass
- * ?theme=warm-dark 切暗色；?fail 演示克隆错误；?host=wsl 演示 Host 路径。
+ * ?theme=warm-dark 切暗色；?fail 演示克隆错误；?host=wsl / ssh 演示 Host 路径；?many 演示长目录树。
  */
 import { createApp, h, ref } from "vue";
 import "../../../src/styles/global.css";
@@ -13,9 +13,11 @@ import OpenFolderDialog from "../../../src/components/OpenFolderDialog.vue";
 
 const params = new URLSearchParams(location.search);
 applyTheme(themes[params.get("theme") ?? "glass"] ?? themes.glass);
-const host = params.get("host") === "wsl"
-  ? { key: "wsl:Debian", label: "WSL: Debian", os: "linux", home: "/home/demo" }
-  : { key: "local", label: "本机", os: "windows", home: "C:\\Projects" };
+const host = params.get("host") === "ssh"
+  ? { key: "ssh:devbox", label: "SSH: devbox", os: "linux", home: "/home/demo" }
+  : params.get("host") === "wsl"
+    ? { key: "wsl:Debian", label: "WSL: Debian", os: "linux", home: "/home/demo" }
+    : { key: "local", label: "本机", os: "windows", home: "C:\\Projects" };
 const separator = host.os === "windows" ? "\\" : "/";
 const entry = (name: string, path: string) => ({ name, path, is_dir: true, children: null });
 
@@ -26,7 +28,13 @@ setTransport({
     else if (command === "remote_ws_targets") result = { wsl: ["Debian"], ssh: ["devbox"] };
     else if (command === "list_fs_roots") result = [entry("Projects", host.home)];
     else if (command === "list_directory") result = input?.path === host.home
-      ? [entry("examples", `${host.home}${separator}examples`), entry("work", `${host.home}${separator}work`)] : [];
+      ? params.has("many")
+        ? Array.from({ length: 80 }, (_, i) => {
+            const name = `project-${String(i + 1).padStart(2, "0")}`;
+            return entry(name, `${host.home}${separator}${name}`);
+          })
+        : [entry("examples", `${host.home}${separator}examples`), entry("work", `${host.home}${separator}work`)]
+      : [];
     else if (command === "git_clone") {
       await new Promise((resolve) => setTimeout(resolve, 1200));
       if (params.has("fail")) throw new Error("认证失败：请在当前 Host 配置 Git 凭据后重试（演示）。");

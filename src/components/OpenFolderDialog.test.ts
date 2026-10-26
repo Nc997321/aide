@@ -112,6 +112,17 @@ async function mountClone(host = local) {
 }
 
 describe("OpenFolderDialog：从 Git 克隆", () => {
+  it.each([local, wsl, { key: "ssh:devbox", label: "SSH: devbox", os: "linux", home: "/home/demo" }])(
+    "$label 的目录树直接参与克隆区域 flex 布局，不受 fieldset 匿名盒约束",
+    async (host) => {
+      const w = await mountClone(host);
+      const picker = w.findComponent({ name: "DirTreePicker" }).element;
+      expect(picker.parentElement).toBe(q(".of-clone"));
+      expect(picker.closest("fieldset")).toBeNull();
+      w.unmount();
+    },
+  );
+
   it.each([
     ["https://example.com/team/repo.git", "repo"],
     ["git@example.com:team/repo.git", "repo"],
@@ -198,7 +209,9 @@ describe("OpenFolderDialog：从 Git 克隆", () => {
     await click(q('[data-testid="of-open-confirm"]'));
     expect(text(".of-progress")).toContain("正在克隆");
     expect((q('[data-testid="of-open-confirm"]') as HTMLButtonElement).disabled).toBe(true);
-    expect(q("fieldset")?.hasAttribute("inert")).toBe(true);
+    expect(q(".of-clone")?.hasAttribute("inert")).toBe(true);
+    expect((q("fieldset") as HTMLFieldSetElement).disabled).toBe(true);
+    expect((q('[data-testid="of-git-url"]') as HTMLInputElement).matches(":disabled")).toBe(true);
     await click(q('[data-testid="of-open-confirm"]'));
     await click(q(".of-btn.cancel"));
     await click(q(".of-overlay"));
