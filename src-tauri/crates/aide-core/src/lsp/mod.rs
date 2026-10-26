@@ -1110,8 +1110,8 @@ pub struct LspSessionPreflightArgs {
 }
 
 /// 会话启动前：这个工作区要不要问用户「开不开语言服务器」。按**会话自持的工作区**判定
-/// （调用方传会话的 wsPath，不是窗口活动工作区）。探测与 send 下发给 sidecar 的语言同口径
-/// （detector + registry::resolve），远程工作区在目标机上探测。
+/// （调用方传会话的 wsPath，不是窗口活动工作区）。推荐只认项目证据；send 下发给 sidecar
+/// 的广义语言发现仍包含辅助脚本。两者均在 Host 探测，经 registry / 语言包筛选。
 async fn lsp_session_preflight(
     core: Arc<Core>,
     a: LspSessionPreflightArgs,
@@ -1131,7 +1131,7 @@ async fn lsp_session_preflight(
         return Ok(decide_preflight(trusted, cfg.lsp_decided(), cfg.enabled, vec![]));
     }
     let access = crate::lsp::workspace_access::WorkspaceAccess::of(&workspace_root);
-    let detected = access.detect_languages(&workspace_root).await;
+    let detected = access.detect_project_languages(&workspace_root).await;
     if detected.is_empty() {
         return Ok(LspPreflight::Nothing);
     }

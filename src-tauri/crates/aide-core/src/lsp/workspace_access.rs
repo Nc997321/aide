@@ -22,6 +22,11 @@ impl WorkspaceAccess {
         crate::lsp::detector::detect_languages_async(std::path::PathBuf::from(root)).await
     }
 
+    /// 启动推荐只认项目证据，不把零散辅助脚本推荐成语言项目。
+    pub async fn detect_project_languages(&self, root: &str) -> Vec<LanguageId> {
+        crate::lsp::detector::detect_project_languages_async(std::path::PathBuf::from(root)).await
+    }
+
     /// agent 按名查询该问哪些语言的 server（= 探到的语言）。
     ///
     /// 短时缓存：按名查询与 grep 顺带作答一发就要一次，而探测是整仓有界遍历——不缓存会把
@@ -74,5 +79,78 @@ impl WorkspaceAccess {
         })
         .await
         .map_err(|e| e.to_string())?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lsp::workspace_langs::{decide_preflight, LspPreflight, PreflightLang};
+
+    fn preflight(langs: Vec<LanguageId>) -> LspPreflight {
+        let langs = langs
+            .into_iter()
+            .map(|l| PreflightLang {
+                lang: l.id_str().into(),
+                installed: false,
+                pack_id: Some("python"),
+            })
+            .collect();
+        decide_preflight(true, false, false, langs)
+    }
+
+    #[tokio::test]
+    async fn preflight_project_languages_do_not_disable_script_discovery() {
+        let root =
+            std::env::temp_dir().join(format!("aide_preflight_projects_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scripts")).unwrap();
+        std::fs::write(root.join("scripts/main.py"), "").unwrap();
+        std::fs::write(root.join("scripts/helper.py"), "").unwrap();
+        let path = root.to_string_lossy();
+        let access = WorkspaceAccess::of(&path);
+        let langs = access.detect_project_languages(&path).await;
+        assert!(langs.is_empty());
+        assert_eq!(preflight(langs), LspPreflight::Nothing);
+        assert!(access
+            .detect_languages(&path)
+            .await
+            .contains(&LanguageId::Python));
+        assert!(access
+            .queryable_languages(&path)
+            .await
+            .contains(&LanguageId::Python));
+
+        // 同一个 scripts 目录一旦是有清单的项目，也应正常推荐；不是目录黑名单。
+        std::fs::write(
+            root.join("scripts/pyproject.toml"),
+            "[project]\nname = 'tool'\n",
+        )
+        .unwrap();
+        let langs = access.detect_project_languages(&path).await;
+        assert_eq!(langs, vec![LanguageId::Python]);
+        assert_eq!(
+            preflight(langs),
+            LspPreflight::Ask {
+                langs: vec![PreflightLang {
+                    lang: "python".into(),
+                    installed: false,
+                    pack_id: Some("python"),
+                }],
+            }
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_project_languages_of_aide_exclude_python() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let path = root.to_string_lossy();
+        let langs = WorkspaceAccess::of(&path)
+            .detect_project_languages(&path)
+            .await;
+        assert!(langs.contains(&LanguageId::Rust), "{langs:?}");
+        assert!(langs.contains(&LanguageId::TypeScript), "{langs:?}");
+        assert!(!langs.contains(&LanguageId::Python), "{langs:?}");
     }
 }
