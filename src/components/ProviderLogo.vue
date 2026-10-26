@@ -5,7 +5,7 @@
  *
  * 分层：品牌商标是 UI 层关注点，按 kind 静态映射（utils/providerLogos.ts），
  * 不依赖后端 catalog 的 icon 字段——catalog 字母仍是回退与 Custom 的数据源。
- * 合规：商标仅用于指代接入该厂商官方端点（指示性合理使用），不改图形。
+ * 商标用于标识厂商或模型来源，不表示官方合作；接入方式仍由供应商名称区分。
  */
 import { computed } from "vue";
 import IconOrChar from "./IconOrChar.vue";
@@ -49,7 +49,7 @@ const logo = computed(() => providerLogo(props.kind));
   flex-shrink: 0;
 }
 
-/* 纯黑品牌 mark（Ollama / Kimi）：随主题前景色，浅色黑、深色白 */
+/* 单色品牌 mark（OpenAI / Ollama / Kimi）：随主题前景色，浅色黑、深色白 */
 .aide-provider-logo--mono {
   color: var(--aide-text-primary);
 }

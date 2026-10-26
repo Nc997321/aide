@@ -146,6 +146,22 @@ afterEach(() => {
   __resetBrowserViewsForTest();
 });
 
+describe("BrowserPanel 地址栏", () => {
+  it("只显示精简提示、不显示打开按钮，并保留回车导航", async () => {
+    const w = mountPanel();
+    expect(w.find(".bp-address").attributes("placeholder")).toBe("输入网址，回车打开");
+    expect(w.find(".bp-go").exists()).toBe(false);
+    expect(w.find(".bp-toolbar").findAll("button").map((button) => button.text())).not.toContain("打开");
+
+    await openView(w);
+
+    expect(invokeMock).toHaveBeenCalledWith(
+      "browser_create",
+      expect.objectContaining({ dto: expect.objectContaining({ url: "https://example.com" }) }),
+    );
+  });
+});
+
 describe("BrowserPanel 浮层与原生视图的让位", () => {
   it("打开导入文件选择器 → 隐藏原生视图（否则弹窗被网页吃掉下半截）", async () => {
     const w = mountPanel();

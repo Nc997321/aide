@@ -749,7 +749,7 @@ onBeforeUnmount(() => {
         ref="addressEl"
         v-model="address"
         class="bp-address"
-        placeholder="输入网址，回车打开（裸域名补 https://，本机/内网地址补 http://）"
+        placeholder="输入网址，回车打开"
         spellcheck="false"
         @keydown.enter="go"
       />
@@ -762,7 +762,6 @@ onBeforeUnmount(() => {
       >
         {{ starred ? "★" : "☆" }}
       </button>
-      <button class="bp-btn bp-go" @click="go">打开</button>
     </div>
 
     <!-- 收藏条：顶层文件夹点开下拉、根级散条点标题直达、✕ 删除；右端是导入入口 -->
@@ -1012,16 +1011,6 @@ onBeforeUnmount(() => {
 .bp-btn:disabled {
   opacity: 0.4;
   cursor: default;
-}
-.bp-go {
-  color: var(--aide-text-on-accent);
-  background: var(--aide-accent);
-  border-color: var(--aide-accent);
-  font-size: 13px;
-}
-.bp-go:hover:not(:disabled) {
-  background: var(--aide-accent);
-  color: var(--aide-text-on-accent);
 }
 
 .bp-address {
