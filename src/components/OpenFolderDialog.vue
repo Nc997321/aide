@@ -248,23 +248,25 @@ async function onConfirm() {
             </button>
           </div>
           <DirTreePicker v-if="mode === 'directory'" :key="machine" v-model="path" :roots="hostRoots" />
-          <fieldset v-else class="of-clone" :disabled="cloning" :inert="cloning" :aria-busy="cloning">
-            <p class="of-hint">克隆到 {{ host?.label ?? '当前 Host' }}，使用该 Host 已配置的 Git 凭据。目标目录必须尚不存在。</p>
-            <label class="of-field">
-              <span>仓库地址</span>
-              <input v-model="gitUrl" data-testid="of-git-url" placeholder="HTTPS 或 SSH 仓库地址" spellcheck="false" autocomplete="off" @keydown.enter.prevent="onConfirm" />
-            </label>
-            <label class="of-field">
-              <span>项目目录名</span>
-              <input v-model="directoryName" data-testid="of-git-name" placeholder="从仓库地址自动填写，可修改" spellcheck="false" @input="directoryNameEdited = true" @keydown.enter.prevent="onConfirm" />
-            </label>
+          <div v-else class="of-clone" :inert="cloning" :aria-busy="cloning">
+            <fieldset class="of-clone-fields" :disabled="cloning">
+              <p class="of-hint">克隆到 {{ host?.label ?? '当前 Host' }}，使用该 Host 已配置的 Git 凭据。目标目录必须尚不存在。</p>
+              <label class="of-field">
+                <span>仓库地址</span>
+                <input v-model="gitUrl" data-testid="of-git-url" placeholder="HTTPS 或 SSH 仓库地址" spellcheck="false" autocomplete="off" @keydown.enter.prevent="onConfirm" />
+              </label>
+              <label class="of-field">
+                <span>项目目录名</span>
+                <input v-model="directoryName" data-testid="of-git-name" placeholder="从仓库地址自动填写，可修改" spellcheck="false" @input="directoryNameEdited = true" @keydown.enter.prevent="onConfirm" />
+              </label>
+            </fieldset>
             <span class="of-field-label">保存父目录</span>
             <DirTreePicker :key="`clone-${machine}`" v-model="cloneParent" :roots="hostRoots" />
             <div v-if="cloneDestination" class="of-destination" data-testid="of-git-destination">
               <span>将创建</span>
               <code>{{ cloneDestination }}</code>
             </div>
-          </fieldset>
+          </div>
         </template>
 
         <div v-if="cloning" class="of-progress" role="status">正在克隆…完成后自动打开，请勿关闭窗口。</div>
@@ -346,8 +348,13 @@ async function onConfirm() {
 .of-clone {
   display: flex; flex-direction: column; gap: calc(var(--aide-space-unit) * 2);
   flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto;
-  border: 0; padding: 0; margin: 0;
 }
+/* fieldset 的匿名内容盒不会随 flex 子项收缩；仅包固定字段，目录树直接参与 of-clone 的高度分配。 */
+.of-clone-fields {
+  display: flex; flex-direction: column; gap: calc(var(--aide-space-unit) * 2);
+  min-width: 0; border: 0; padding: 0; margin: 0;
+}
+.of-clone-fields, .of-field-label, .of-destination { flex-shrink: 0; }
 .of-hint { margin: 0; color: var(--aide-text-muted); font-size: 12px; line-height: 1.6; }
 .of-field { display: flex; flex-direction: column; gap: var(--aide-space-unit); }
 .of-field, .of-field-label { font-size: 12px; color: var(--aide-text-secondary); }

@@ -306,17 +306,26 @@ fn count_and_first(dir: &Path, lang: LanguageId) -> (usize, Option<std::path::Pa
     (count, first)
 }
 
-/// 探测某工作区涉及的语言集合（去重，无序）。
-/// 两条腿，各自负责自己的盲区：
-/// 1. **项目 marker 探测器链**（根 + 一级子目录里的项目——见 `commands::detectors`）：
-///    主流项目的形状由它认领；
+/// 启动 LSP 推荐用的项目语言：只认项目证据，不把辅助脚本的数量当成项目。
+/// 文件级服务分派与 Agent 语言发现仍走 `from_ext` / `detect_languages`。
+pub fn detect_project_languages(root: &Path) -> Vec<LanguageId> {
+    super::markers::detect_project_languages_from_markers(root)
+        .into_iter()
+        .filter_map(lang_from_id_str)
+        .collect()
+}
+
+/// 探测某工作区涉及的语言集合（去重，无序），包含没有项目清单的源码。
+/// 不用于启动安装推荐（见 `detect_project_languages`）。两条腿，各自负责自己的盲区：
+/// 1. **项目证据**（有界下钻）+ 兼容原有的根 / 一级运行入口 marker：
+///    项目推荐能认领的语言必须也出现在广义发现里；
 /// 2. **有界扩展名计数兜底**（`count_probe_sources`）：marker 漏掉的语言（`scripts/*.ts`
 ///    这类无 marker 目录）靠它补。**必须下钻**：只数根层文件时，源码躺在子目录里
 ///    （`frontend/src/**`）的工作区一个都看不见——2026-09-29 agri-ai-agent 实测只报 Java。
 ///
 /// 调用方注意：计数是有界遍历（深度 ≤4、跳重目录、封顶 `VISIT_CAP`），不追求准确数字。
 pub fn detect_languages(root: &Path) -> Vec<LanguageId> {
-    let mut out: Vec<LanguageId> = Vec::new();
+    let mut out = detect_project_languages(root);
     for id_str in super::markers::detect_languages_from_markers(root) {
         if let Some(lang) = lang_from_id_str(id_str) {
             if !out.contains(&lang) {
@@ -356,7 +365,19 @@ fn count_probe_sources(root: &Path) -> std::collections::HashMap<LanguageId, usi
 /// `JoinError` 只来自任务取消或线程池关闭：探测本就是尽力而为，退化成「没有语言」
 /// 与 `read_dir` 失败同类（不 panic，也不改变语义——没有语言就是不挂 LSP 工具）。
 pub async fn detect_languages_async(root: std::path::PathBuf) -> Vec<LanguageId> {
-    match tokio::task::spawn_blocking(move || detect_languages(&root)).await {
+    detect_async(root, detect_languages).await
+}
+
+/// 项目证据的 IO 同样不能占 tokio worker。
+pub async fn detect_project_languages_async(root: std::path::PathBuf) -> Vec<LanguageId> {
+    detect_async(root, detect_project_languages).await
+}
+
+async fn detect_async(
+    root: std::path::PathBuf,
+    detect: fn(&Path) -> Vec<LanguageId>,
+) -> Vec<LanguageId> {
+    match tokio::task::spawn_blocking(move || detect(&root)).await {
         Ok(langs) => langs,
         Err(e) => {
             // 只在任务取消/线程池关闭时到这——降级成「没有语言」，但留一行痕迹
@@ -488,6 +509,161 @@ mod tests {
         // 任何 pom.xml → Java（SpringBootMaven 或 JavaMaven 探测器）
         assert!(langs.contains(&LanguageId::Java), "{:?}", langs);
         fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn project_languages_ignore_auxiliary_sources() {
+        let d = tmp_dir("project_aux");
+        fs::write(d.join("package.json"), "{}").unwrap();
+        fs::create_dir_all(d.join("src-tauri")).unwrap();
+        fs::write(d.join("src-tauri/Cargo.toml"), "").unwrap();
+        for dir in ["scripts", "docs/experiments", "helpers"] {
+            fs::create_dir_all(d.join(dir)).unwrap();
+            for ext in ["py", "rb", "go"] {
+                for name in ["a", "b"] {
+                    fs::write(d.join(dir).join(format!("{name}.{ext}")), "").unwrap();
+                }
+            }
+        }
+        let projects = detect_project_languages(&d);
+        assert!(projects.contains(&LanguageId::Rust), "{projects:?}");
+        assert!(projects.contains(&LanguageId::TypeScript), "{projects:?}");
+        let broad = detect_languages(&d);
+        for lang in [LanguageId::Python, LanguageId::Ruby, LanguageId::Go] {
+            assert!(
+                !projects.contains(&lang),
+                "辅助源码不应推荐为项目：{projects:?}"
+            );
+            assert!(broad.contains(&lang), "语言发现仍须覆盖辅助源码：{broad:?}");
+        }
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn project_languages_require_more_than_source_files() {
+        for dir in ["", "scripts", "arbitrary/nested"] {
+            let d = tmp_dir(&format!("project_sources_{}", dir.replace('/', "_")));
+            let src = d.join(dir);
+            fs::create_dir_all(&src).unwrap();
+            for ext in KNOWN_SOURCE_EXTS {
+                for name in ["a", "b"] {
+                    fs::write(src.join(format!("{name}.{ext}")), "").unwrap();
+                }
+            }
+            assert!(detect_project_languages(&d).is_empty(), "{dir}");
+            assert!(!detect_languages(&d).is_empty(), "{dir}");
+            assert_eq!(LanguageId::from_ext("py"), Some(LanguageId::Python));
+            assert!(find_probe_target(&d, LanguageId::Python).is_some());
+            fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    #[test]
+    fn project_languages_python_metadata_without_run_entry() {
+        for marker in ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"] {
+            let d = tmp_dir(&format!("project_python_{marker}"));
+            fs::write(d.join(marker), "").unwrap();
+            assert_eq!(
+                detect_project_languages(&d),
+                vec![LanguageId::Python],
+                "{marker}"
+            );
+            assert!(
+                detect_languages(&d).contains(&LanguageId::Python),
+                "{marker}"
+            );
+            assert!(
+                crate::detect::markers::detect_run_targets(&d).is_empty(),
+                "不要伪造运行入口"
+            );
+            fs::remove_dir_all(&d).ok();
+        }
+    }
+
+    #[test]
+    fn project_languages_python_entry_is_not_project_evidence() {
+        let d = tmp_dir("project_python_entry");
+        fs::write(d.join("main.py"), "print(1)").unwrap();
+        fs::write(d.join("app.py"), "print(2)").unwrap();
+        fs::write(d.join("requirements.txt"), "pillow").unwrap();
+        assert!(detect_project_languages(&d).is_empty());
+        assert!(detect_languages(&d).contains(&LanguageId::Python));
+        assert!(!crate::detect::markers::detect_run_targets(&d).is_empty());
+        fs::write(d.join("manage.py"), "").unwrap();
+        assert_eq!(detect_project_languages(&d), vec![LanguageId::Python]);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn project_languages_reach_nested_projects_and_deduplicate() {
+        let d = tmp_dir("project_nested");
+        for (path, marker) in [
+            ("backend", "pom.xml"),
+            ("packages/frontend", "package.json"),
+            ("services/python", "pyproject.toml"),
+            ("scripts/tool", "Pipfile"),
+            ("one/two/three/four", "Cargo.toml"),
+        ] {
+            fs::create_dir_all(d.join(path)).unwrap();
+            fs::write(d.join(path).join(marker), "{}").unwrap();
+        }
+        let langs = detect_project_languages(&d);
+        assert_eq!(langs.len(), 5, "{langs:?}");
+        let broad = detect_languages(&d);
+        for lang in [
+            LanguageId::Java,
+            LanguageId::TypeScript,
+            LanguageId::JavaScript,
+            LanguageId::Python,
+            LanguageId::Rust,
+        ] {
+            assert!(langs.contains(&lang), "{langs:?}");
+            assert!(
+                broad.contains(&lang),
+                "推荐的项目语言也必须能被查询：{broad:?}"
+            );
+        }
+        assert_eq!(detect_project_languages(&d), langs);
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn project_languages_skip_dependencies_generated_dirs_and_excess_depth() {
+        let d = tmp_dir("project_skip");
+        for dir in [
+            "node_modules/pkg",
+            "target/debug",
+            "dist",
+            "build",
+            "vendor",
+            "out",
+            "coverage",
+            "__pycache__",
+            ".venv",
+            ".hidden",
+            "one/two/three/four/five",
+        ] {
+            fs::create_dir_all(d.join(dir)).unwrap();
+            fs::write(d.join(dir).join("pyproject.toml"), "").unwrap();
+            fs::write(d.join(dir).join("Cargo.toml"), "").unwrap();
+        }
+        assert!(detect_project_languages(&d).is_empty());
+        fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn real_workspace_project_languages_exclude_helper_scripts() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+        let projects = detect_project_languages(&root);
+        for lang in [
+            LanguageId::Rust,
+            LanguageId::TypeScript,
+            LanguageId::JavaScript,
+        ] {
+            assert!(projects.contains(&lang), "{projects:?}");
+        }
+        assert!(!projects.contains(&LanguageId::Python), "{projects:?}");
+        assert!(detect_languages(&root).contains(&LanguageId::Python));
     }
 
     #[test]

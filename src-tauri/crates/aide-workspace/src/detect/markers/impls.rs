@@ -472,6 +472,18 @@ impl ProjectDetector for PythonDetector {
     fn languages(&self, _root: &Path) -> Vec<&'static str> {
         vec!["python"]
     }
+
+    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
+        // main.py/app.py 只是可运行文件；项目推荐需要包或环境清单。
+        if ["pyproject.toml", "setup.py", "setup.cfg", "Pipfile"]
+            .iter()
+            .any(|name| root.join(name).is_file())
+        {
+            self.languages(root)
+        } else {
+            Vec::new()
+        }
+    }
 }
 
 // Priority 60 -- Ruby on Rails

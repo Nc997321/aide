@@ -33,6 +33,15 @@ pub trait ProjectDetector: Send + Sync {
         Vec::new()
     }
 
+    /// 启动 LSP 推荐所需的项目证据。运行入口不总是项目标志，探测器可单独收紧判据。
+    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
+        if self.matches(root) {
+            self.languages(root)
+        } else {
+            Vec::new()
+        }
+    }
+
     // Skeleton -- concrete detectors do not override this.
     fn detect(&self, root: &Path) -> Option<Vec<RunTarget>> {
         if self.matches(root) {
@@ -130,6 +139,18 @@ impl DetectorChain {
                     if !out.contains(&lang) {
                         out.push(lang);
                     }
+                }
+            }
+        }
+        out
+    }
+
+    fn project_languages(&self, root: &Path) -> Vec<&'static str> {
+        let mut out = Vec::new();
+        for det in &self.detectors {
+            for lang in det.project_languages(root) {
+                if !out.contains(&lang) {
+                    out.push(lang);
                 }
             }
         }
@@ -407,6 +428,42 @@ impl ProjectDetector for SubdirScanDetector {
 /// 与根层项目同等对待。
 pub fn detect_languages_from_markers(root: &Path) -> Vec<&'static str> {
     DetectorChain::default_chain().languages(root)
+}
+
+/// 只收集有项目证据的语言。复用叶子探测器和子目录纪律，不改变运行目标的一层扫描。
+/// 有界下钻认领 `packages/<name>` 等嵌套项目，不再靠文件数量推断深层项目。
+pub fn detect_project_languages_from_markers(root: &Path) -> Vec<&'static str> {
+    const MAX_DEPTH: usize = 4;
+    const DIR_CAP: usize = 2_000;
+    let chain = DetectorChain::leaf_chain();
+    let mut out = Vec::new();
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut visited = 0;
+    while let Some((dir, depth)) = stack.pop() {
+        visited += 1;
+        if !dir.is_dir() {
+            continue;
+        }
+        for lang in chain.project_languages(&dir) {
+            if !out.contains(&lang) {
+                out.push(lang);
+            }
+        }
+        if visited >= DIR_CAP {
+            break;
+        }
+        if depth < MAX_DEPTH {
+            let mut children = Vec::new();
+            for_each_subdir(&dir, |path| {
+                if !path.is_symlink() && children.len() + stack.len() < DIR_CAP - visited {
+                    children.push((path.to_path_buf(), depth + 1));
+                }
+            });
+            // 栈按路径升序访问，预算不足时也不依赖 readdir 顺序。
+            stack.extend(children.into_iter().rev());
+        }
+    }
+    out
 }
 
 #[cfg(test)]
