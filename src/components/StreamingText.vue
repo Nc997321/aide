@@ -19,6 +19,7 @@
 import { computed, onMounted, onUpdated, ref } from "vue";
 import { renderMarkdown, renderStreaming } from "@/utils/markdown";
 import { hydrateLocalImages } from "@/utils/localImages";
+import { hydrateCodeBlockCopy } from "@/utils/codeBlockCopy";
 import { splitStreamingText, stripInlineMarks } from "@aide/sdk/utils/streamSplit";
 import { useStreamChunks } from "@/composables/useStreamChunks";
 
@@ -34,7 +35,10 @@ const props = defineProps<{
 /** 本地图片（`![](路径)`）经 Host 读出来再显示。v-html 只在 HTML 串变化时重建 DOM，
  *  每次更新后补一遍即可，已处理的图会跳过。 */
 const root = ref<HTMLElement | null>(null);
-const hydrate = () => hydrateLocalImages(root.value, props.workspacePath);
+const hydrate = () => {
+  hydrateLocalImages(root.value, props.workspacePath);
+  hydrateCodeBlockCopy(root.value);
+};
 onMounted(hydrate);
 onUpdated(hydrate);
 
