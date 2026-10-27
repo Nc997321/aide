@@ -180,3 +180,27 @@ describe("ChatMessage — 定位锚点属性", () => {
     }
   });
 });
+
+describe("ChatMessage — 文档成果", () => {
+  const declaration = '```aide-document\n{"version":1,"path":"docs/design.md","title":"设计方案"}\n```';
+
+  it("流式期保留正文，结束后生成卡片；历史重新挂载结果相同", async () => {
+    const message = makeMessage([{ type: "text", text: `已完成。\n\n${declaration}` }], true);
+    const w = mount(ChatMessage, { props: { message, workspacePath: "/project" } });
+    expect(w.find(".document-artifact").exists()).toBe(false);
+    await w.setProps({ message: { ...message, streaming: false } });
+    expect(w.findAll(".document-artifact")).toHaveLength(1);
+    expect(w.find(".msg-text").text()).toBe("已完成。");
+    w.unmount();
+    const history = mount(ChatMessage, { props: { message: { ...message, streaming: false }, workspacePath: "/project" } });
+    expect(history.findAll(".document-artifact")).toHaveLength(1);
+    history.unmount();
+  });
+
+  it("用户粘贴的协议示例不生成成果卡片", () => {
+    const w = mount(ChatMessage, { props: { message: { ...makeMessage([{ type: "text", text: declaration }], false), role: "user" } } });
+    expect(w.find(".document-artifact").exists()).toBe(false);
+    expect(w.text()).toContain("version");
+    w.unmount();
+  });
+});

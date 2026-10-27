@@ -118,3 +118,14 @@ describe("BookmarkFolderMenu", () => {
     expect(overlayLayerOpen.value).toBe(false);
   });
 });
+
+it("目录内网址提供右键和拖放操作的稳定 id 与目录", async () => {
+  const w = mountMenu(folderOf("工具", [bm("a", ["工具"])]));
+  const item = w.find(".bp-fmenu__item");
+  await item.trigger("contextmenu");
+  expect(w.emitted("context")?.[0][0]).toBe("a");
+  await item.trigger("dragstart");
+  expect(w.emitted("drag")?.[0][0]).toBe("a");
+  await item.trigger("drop");
+  expect(w.emitted("dropBookmark")?.[0]).toEqual([["工具"], "a"]);
+});

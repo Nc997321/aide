@@ -148,7 +148,7 @@ export function buildBookmarkBar(bookmarks: Bookmark[]): BookmarkEntry[] {
 /** 下拉菜单的一行。`depth` 用于缩进——子目录的内容比它的标题行深一层。 */
 export type FolderMenuRow =
   | { kind: "folder"; depth: number; label: string }
-  | { kind: "link"; depth: number; label: string; url: string };
+  | { kind: "link"; depth: number; label: string; url: string; id: string; folders: string[] };
 
 /**
  * 导入结果 → 一句真话。
@@ -171,17 +171,17 @@ export function formatImportReport(r: ImportReport): string {
 export function flattenFolderMenu(folder: BookmarkFolder): FolderMenuRow[] {
   const rows: FolderMenuRow[] = [];
 
-  function walk(entries: BookmarkEntry[], depth: number) {
+  function walk(entries: BookmarkEntry[], depth: number, path: string[]) {
     for (const entry of entries) {
       if (entry.kind === "folder") {
         rows.push({ kind: "folder", depth, label: entry.folder.name });
-        walk(entry.folder.entries, depth + 1);
+        walk(entry.folder.entries, depth + 1, entry.folder.path);
       } else {
-        rows.push({ kind: "link", depth, label: entry.title, url: entry.url });
+        rows.push({ kind: "link", depth, label: entry.title, url: entry.url, id: entry.id, folders: path });
       }
     }
   }
 
-  walk(folder.entries, 0);
+  walk(folder.entries, 0, folder.path);
   return rows;
 }

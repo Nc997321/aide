@@ -271,6 +271,7 @@ pub fn run() {
             commands::browser::browser_bookmarks_list,
             commands::browser::browser_bookmarks_add,
             commands::browser::browser_bookmarks_remove,
+            commands::browser::browser_bookmarks_move,
             commands::browser::browser_bookmarks_import,
             commands::browser::browser_favicons,
             commands::filesystem::file_open,

@@ -228,6 +228,21 @@ impl BookmarkStore {
         Ok(true)
     }
 
+    /// 移动单条收藏；以目标 id 定位，避免旧 UI 覆盖并发新增的数据。
+    pub fn relocate(&self, id: &str, folders: Vec<String>, before: Option<&str>) -> Result<(), StoreError> {
+        let _guard = FILE_LOCK.lock().map_err(|_| StoreError::LockPoisoned)?;
+        let mut file = self.load()?;
+        let index = file.bookmarks.iter().position(|b| b.id == id)
+            .ok_or_else(|| StoreError::Io("收藏已不存在，请刷新".into()))?;
+        if before == Some(id) { return Ok(()); }
+        let mut item = file.bookmarks.remove(index);
+        item.folders = folders.into_iter().map(|s| s.trim().to_owned()).filter(|s| !s.is_empty()).collect();
+        let index = before.and_then(|target| file.bookmarks.iter().position(|b| b.id == target))
+            .unwrap_or(file.bookmarks.len());
+        file.bookmarks.insert(index, item);
+        self.save(&file)
+    }
+
     /// 导入：解析（两种通用格式，按内容嗅探）→ 过 `url_guard` → 按 URL 去重**合并**。
     ///
     /// 逐条三选一（**只增不删**：导入是"搬进来"，不是"替换"）：

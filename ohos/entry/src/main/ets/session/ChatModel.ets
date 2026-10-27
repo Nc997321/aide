@@ -157,6 +157,17 @@ export class ChatModel {
     void this.loadWorkspaceFile(path);
   }
 
+  /** 显式成果路径不能在会话工作区缺失时回落到 Host 的活动项目。 */
+  openDocumentArtifact(raw: string): void {
+    const absolute: boolean = raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw);
+    if (!absolute && workspaceModel.rootOfKey(this.store.spawnWsKey) === '') {
+      this.store.openRemoteFile(raw);
+      this.store.setRemoteFile(raw, 'error', '', '', 0, '无法确定这条会话的工作区，请恢复工作区后再打开文档。');
+      return;
+    }
+    this.openWorkspaceFile(raw);
+  }
+
   /** 会话里出现的路径 → Host 上的路径：绝对路径原样，相对路径挂到会话所在工作区根下
    *  （同 SDK fileLink.resolveFileLinkPath；找不到根就原样交给 Host，由它如实报错）。 */
   resolveHostPath(raw: string): string {

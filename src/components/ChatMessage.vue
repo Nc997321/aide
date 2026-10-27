@@ -5,6 +5,8 @@ import { SCENE_ACTION_PREFIX } from "@/composables/useChatSession";
 import { renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
 import StreamingText from "./StreamingText.vue";
+import DocumentArtifactCards from "./DocumentArtifactCards.vue";
+import { collectDocumentArtifacts } from "@aide/sdk/utils/documentArtifacts";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import KbRefCard from "./KbRefCard.vue";
 import PageRefCard from "./PageRefCard.vue";
@@ -97,6 +99,13 @@ const wrapClass = computed(() => {
 const { openResolved } = useFileResolver();
 const { settings } = useSettings();
 
+// 卡片只从广播/历史正文里的显式声明派生。用户消息与流式正文保持原样。
+const documentPresentation = computed(() =>
+  isUser.value || props.message.streaming
+    ? null
+    : collectDocumentArtifacts(props.message.blocks, props.workspacePath),
+);
+
 /** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；assistant 消息走
  *  segmentBlocks：相邻同类工具调用合成一句旁白，思考按「显示思考过程」开关显示或隐藏
  *  （见 blockSegments.ts 文件头）。 */
@@ -183,13 +192,15 @@ function handleTextClick(e: MouseEvent) {
         </div>
         <!-- 正文渲染收进 StreamingText（分段 + 渐显波；@click 靠单根 fallthrough
              落到 .msg-text 上，与工具块的文件码点击共用 handleTextClick）。 -->
-        <StreamingText
-          v-else-if="seg.block.type === 'text'"
-          :text="seg.block.text"
-          :streaming="isStreamingTail(seg.index)"
-          :workspace-path="workspacePath"
-          @click="handleTextClick"
-        />
+        <template v-else-if="seg.block.type === 'text'">
+          <StreamingText
+            v-if="(documentPresentation?.texts.get(seg.index) ?? seg.block.text).trim()"
+            :text="documentPresentation?.texts.get(seg.index) ?? seg.block.text"
+            :streaming="isStreamingTail(seg.index)"
+            :workspace-path="workspacePath"
+            @click="handleTextClick"
+          />
+        </template>
         <ThinkingBlock
           v-else-if="seg.block.type === 'thinking'"
           :text="seg.block.text"
@@ -289,6 +300,11 @@ function handleTextClick(e: MouseEvent) {
           <div class="msg-text" v-html="renderMarkdown(seg.block.text)" @click="handleTextClick"></div>
         </template>
       </template>
+      <DocumentArtifactCards
+        v-if="documentPresentation?.documents.length"
+        :documents="documentPresentation.documents"
+        :workspace-path="workspacePath"
+      />
       <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span
           v-if="modelBadge || message.turnEffort"

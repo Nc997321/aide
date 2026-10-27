@@ -156,8 +156,8 @@ describe("flattenFolderMenu", () => {
   it("目录自己的书签 depth 0", () => {
     const bar = buildBookmarkBar([bm("a", ["工具"]), bm("b", ["工具"])]);
     expect(flattenFolderMenu(folderAt(bar, "工具"))).toEqual([
-      { kind: "link", depth: 0, label: "A", url: "https://a.com/" },
-      { kind: "link", depth: 0, label: "B", url: "https://b.com/" },
+      { kind: "link", depth: 0, id: "a", folders: ["工具"], label: "A", url: "https://a.com/" },
+      { kind: "link", depth: 0, id: "b", folders: ["工具"], label: "B", url: "https://b.com/" },
     ]);
   });
 
@@ -168,10 +168,10 @@ describe("flattenFolderMenu", () => {
       bm("w2", ["工作"]),
     ]);
     expect(flattenFolderMenu(folderAt(bar, "工作"))).toEqual([
-      { kind: "link", depth: 0, label: "W1", url: "https://w1.com/" },
+      { kind: "link", depth: 0, id: "w1", folders: ["工作"], label: "W1", url: "https://w1.com/" },
       { kind: "folder", depth: 0, label: "漳蒲" },
-      { kind: "link", depth: 1, label: "Z1", url: "https://z1.com/" },
-      { kind: "link", depth: 0, label: "W2", url: "https://w2.com/" },
+      { kind: "link", depth: 1, id: "z1", folders: ["工作", "漳蒲"], label: "Z1", url: "https://z1.com/" },
+      { kind: "link", depth: 0, id: "w2", folders: ["工作"], label: "W2", url: "https://w2.com/" },
     ]);
   });
 

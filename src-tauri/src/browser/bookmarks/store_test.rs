@@ -351,3 +351,21 @@ fn corrupt_file_is_quarantined_and_store_keeps_working() {
     s.add("B", "https://b.com/").unwrap();
     assert_eq!(s.list().unwrap().len(), 1);
 }
+
+#[test]
+fn relocate_preserves_data_and_persists_order_and_folder() {
+    let s = store("relocate");
+    let a = s.add("A", "https://a.com").unwrap();
+    let b = s.add("B", "https://b.com").unwrap();
+    s.relocate(b.id(), vec!["工具".into()], Some(a.id())).unwrap();
+    let rows = s.list().unwrap();
+    assert_eq!(rows[0].id(), b.id());
+    assert_eq!(rows[0].folders(), &["工具".to_string()]);
+    assert_eq!(rows[0].url(), b.url());
+    s.relocate(b.id(), vec![], None).unwrap();
+    let rows = s.list().unwrap();
+    assert_eq!(rows[1].id(), b.id());
+    assert!(rows[1].folders().is_empty());
+    assert!(s.relocate("missing", vec![], None).is_err());
+    assert_eq!(s.list().unwrap(), rows);
+}
