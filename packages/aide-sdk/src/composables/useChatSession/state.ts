@@ -1,4 +1,5 @@
 import { reactive, ref } from "vue";
+import { historicalToolCall } from "./reconcile";
 import { sessionContinuations } from "../useSessionContinuations";
 import { api } from "../../api";
 import { useDiagnosticsDashboard } from "../../composables/useDiagnosticsDashboard";
@@ -57,6 +58,8 @@ export interface SessionStore {
   pendingPermissions: PermissionRequest[];
   /** 是否已从磁盘加载过历史 */
   hydrated: boolean;
+  /** Generation of history requests; truncation/reload invalidates older responses. */
+  historyRevision: number;
   /** 可切换的模型列表（provider 决定，纯展示字符串） */
   models: ModelOption[];
   /** 当前选中的模型 value；空串表示跟随 provider 默认 */
@@ -211,7 +214,7 @@ export function registerToolCall(sid: string, id: string, block: ToolCallBlock):
   m.set(id, reactive(block));
 }
 export function lookupToolCall(sid: string, id: string): ToolCallBlock | undefined {
-  return pendingToolCalls.get(sid)?.get(id);
+  return pendingToolCalls.get(sid)?.get(id) ?? historicalToolCall(stores[sid]?.messages ?? [], id);
 }
 export function unregisterToolCall(sid: string, id: string): void {
   pendingToolCalls.get(sid)?.delete(id);
@@ -427,6 +430,7 @@ export function getStore(sid: string): SessionStore {
       isBusy: false,
       pendingPermissions: [],
       hydrated: false,
+      historyRevision: 0,
       models: [],
       currentModel: "",
       modelSwitchResult: null,

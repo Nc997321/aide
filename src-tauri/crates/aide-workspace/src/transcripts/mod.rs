@@ -47,6 +47,13 @@ pub enum HistoryBlock {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ChatMessageItem {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// SDK content-block identities, aligned with blocks (including merged assistant rows).
+    #[serde(default, rename = "sourceIds", skip_serializing_if = "Vec::is_empty")]
+    pub source_ids: Vec<Option<String>>,
+    #[serde(default, rename = "offsetBytes", skip_serializing_if = "Option::is_none")]
+    pub offset_bytes: Option<u64>,
     pub role: String,
     pub blocks: Vec<HistoryBlock>,
     pub timestamp: u64,

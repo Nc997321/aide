@@ -208,7 +208,10 @@ export interface ContextUsageBreakdown {
 }
 
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
-export type ChatEvent =
+/** Main-thread block identity and UTF-16 offset shared with transcript snapshots. */
+export type ChatEvent = ChatEventBody & { sourceId?: string; sourceOffset?: number };
+type ChatEventBody =
+  | { type: "block_snapshot"; kind: "text" | "thinking"; text: string }
   | { type: "handoff_summary"; request_id: string; summary?: string; error?: string }
   | { type: "session_init"; session_id: string }
   // model/modelLabel：本条 assistant 消息的真实 wire model（API 实际调用标识）——

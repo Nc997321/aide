@@ -27,6 +27,8 @@ import {
 } from "./useChatSession";
 import { useSessionState } from "./useSessionState";
 import type { TextBlock } from "../types/chat";
+import { hydrate } from "./useChatSession/pagination";
+import { disposeSession, getStore, pageLedgers } from "./useChatSession/state";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
@@ -54,6 +56,134 @@ function pageResponse(n: number, prefix: string, nextOffsetBytes = 0, text?: str
 function loadMessagesCalls() {
   return invokeMock.mock.calls.filter((c) => c[0] === "load_messages");
 }
+
+describe("快照与实时流的交接", () => {
+  beforeEach(() => { __resetForTest(); invokeMock.mockReset(); invokeMock.mockResolvedValue(undefined); });
+  const snapshot = (text = "开始检查工作树") => ({
+    messages: [
+      { id: "task", role: "user", timestamp: 1, offsetBytes: 100, blocks: [{ type: "text", text: "父会话派发任务" }] },
+      { id: "answer", role: "claude", timestamp: 2, offsetBytes: 200, sourceIds: ["api:0"], blocks: [{ type: "text", text }] },
+    ], nextOffsetBytes: 0, endOffsetBytes: 400,
+  });
+  function delayHistory() {
+    let resolve!: (value: unknown) => void;
+    invokeMock.mockImplementation((name: string) => name === "load_messages"
+      ? new Promise(r => { resolve = r; }) : Promise.resolve(undefined));
+    return (value: unknown) => resolve(value);
+  }
+  const texts = (sid: string) => getStore(sid).messages.map(m => m.blocks.filter(b => b.type === "text").map(b => (b as TextBlock).text).join(""));
+
+  it("历史返回期间收到完整任务与回答：整段只出现一次，迟到增量按偏移接续", async () => {
+    const resolve = delayHistory();
+    useChatSession(ref<string | null>("child"));
+    await flush();
+    emit({ type: "user_message", session_id: "child", id: "task", text: "父会话派发任务" });
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 0, delta: "开始" });
+    resolve(snapshot());
+    await flush(); await flush();
+    expect(texts("child")).toEqual(["父会话派发任务", "开始检查工作树"]);
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 2, delta: "检查工作树" });
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 7, delta: "完成" });
+    expect(texts("child")).toEqual(["父会话派发任务", "开始检查工作树完成"]);
+    expect(pageLedgers.get("child") ?? []).toHaveLength(0); // overlapping turn is live, not recyclable
+  });
+
+  it("已有实时数据首次打开也加载并对账整页，不把游标放到已显示回合中间", async () => {
+    const sid = ref<string | null>(null);
+    useChatSession(sid);
+    await flush();
+    emit({ type: "user_message", session_id: "child", id: "task", text: "父会话派发任务" });
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 0, delta: "开始检查工作树" });
+    invokeMock.mockResolvedValue(snapshot());
+    sid.value = "child";
+    await flush(); await flush();
+    expect(texts("child")).toEqual(["父会话派发任务", "开始检查工作树"]);
+    expect(hasMoreOlder("child")).toBe(false);
+    expect(await loadOlderPage("child", 4096)).toBe(0);
+    expect(loadMessagesCalls()).toHaveLength(1);
+    expect(loadMessagesCalls()[0][1].limit).toBe(256 * 1024);
+  });
+
+  it("快照页首在长回答中间：以内容块身份对齐，任务仍在回答之前", async () => {
+    const resolve = delayHistory();
+    useChatSession(ref<string | null>("child")); await flush();
+    emit({ type: "user_message", session_id: "child", id: "task", text: "父会话派发任务" });
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 0, delta: "开始检查工作树" });
+    resolve({ ...snapshot(), messages: [snapshot().messages[1]], nextOffsetBytes: 200 });
+    await flush(); await flush();
+    expect(texts("child")).toEqual(["父会话派发任务", "开始检查工作树"]);
+    expect(pageLedgers.get("child") ?? []).toHaveLength(0);
+  });
+
+  it("快照只将不可变历史前缀建页，工具结果仍能回填原 live 对象", async () => {
+    const resolve = delayHistory();
+    useChatSession(ref<string | null>("child")); await flush();
+    emit({ type: "user_message", session_id: "child", id: "task", text: "父会话派发任务" });
+    emit({ type: "tool_use_start", session_id: "child", id: "tool", name: "Read", input: {}, sourceId: "api:0" });
+    const tool = getStore("child").messages[1].blocks[0];
+    resolve({ messages: [
+      { id: "old", role: "user", timestamp: 0, offsetBytes: 0, blocks: [{ type: "text", text: "旧任务" }] },
+      ...snapshot().messages.slice(0, 1),
+      { id: "answer", role: "claude", timestamp: 2, offsetBytes: 200, sourceIds: ["api:0"], blocks: [{ type: "tool_call", id: "tool", name: "Read", input: {}, result: null, isError: null }] },
+    ], nextOffsetBytes: 0, endOffsetBytes: 400 });
+    await flush(); await flush();
+    expect(pageLedgers.get("child")?.[0]).toMatchObject({ count: 1, startOffset: 0, endOffset: 100, restorable: true });
+    expect(getStore("child").messages[2].blocks[0]).toBe(tool);
+    emit({ type: "tool_result", session_id: "child", id: "tool", content: "完成", is_error: false });
+    expect(tool).toMatchObject({ result: "完成", isPending: false });
+  });
+
+  it("中途加入只收到文本后缀，SDK 完成块补齐前缀，保留两块相同正文", async () => {
+    const resolve = delayHistory();
+    useChatSession(ref<string | null>("child"));
+    await flush();
+    emit({ type: "text_delta", session_id: "child", sourceId: "api:0", sourceOffset: 2, delta: "检查工作树" });
+    resolve({ ...snapshot(), messages: [snapshot().messages[0]] }); // incomplete assistant not persisted yet
+    await flush(); await flush();
+    emit({ type: "block_snapshot", session_id: "child", sourceId: "api:0", kind: "text", text: "开始检查工作树" });
+    emit({ type: "block_snapshot", session_id: "child", sourceId: "api:1", kind: "text", text: "开始检查工作树" });
+    expect(getStore("child").messages[1].blocks.map(b => (b as TextBlock).text)).toEqual(["开始检查工作树", "开始检查工作树"]);
+  });
+
+  it("相同文本的不同用户消息保留，快照后的同一 SDK 用户回显幂等", async () => {
+    invokeMock.mockResolvedValue(snapshot());
+    useChatSession(ref<string | null>("child"));
+    await flush(); await flush();
+    emit({ type: "user_message", session_id: "child", id: "task", text: "父会话派发任务" });
+    expect(getStore("child").messages).toHaveLength(2);
+    emit({ type: "user_message", session_id: "child", id: "task-2", text: "父会话派发任务" });
+    expect(getStore("child").messages).toHaveLength(3);
+  });
+
+  it("同一代 hydrate 与并发上翻各自只发一次请求", async () => {
+    const resolve = delayHistory();
+    const a = hydrate("child"); const b = hydrate("child");
+    expect(loadMessagesCalls()).toHaveLength(1);
+    resolve({ ...snapshot(), nextOffsetBytes: 100 });
+    await Promise.all([a, b]);
+    const resolveOlder = delayHistory();
+    const c = loadOlderPage("child", 4096); const d = loadOlderPage("child", 4096);
+    expect(loadMessagesCalls()).toHaveLength(2);
+    resolveOlder({ messages: [{ id: "older", role: "user", timestamp: 0, blocks: [{ type: "text", text: "更早" }] }], nextOffsetBytes: 0, endOffsetBytes: 100 });
+    await Promise.all([c, d]);
+    expect(texts("child")).toEqual(["更早", "父会话派发任务", "开始检查工作树"]);
+  });
+
+  it("关闭重开和截断后的旧快照均不可回写新一代 store", async () => {
+    const resolveOld = delayHistory(); const old = hydrate("child");
+    disposeSession("child");
+    const resolveNew = delayHistory(); const fresh = hydrate("child");
+    resolveNew({ messages: [], nextOffsetBytes: 0, endOffsetBytes: 0 }); await fresh;
+    resolveOld(snapshot()); await old;
+    expect(texts("child")).toEqual([]);
+    resetPaginationForRevert("child");
+    const resolveStale = delayHistory(); const stale = hydrate("child");
+    resetPaginationForRevert("child");
+    resolveStale(snapshot()); await stale;
+    expect(texts("child")).toEqual([]);
+    expect(hasMoreOlder("child")).toBe(false);
+  });
+});
 
 describe("P1 双向分页", () => {
   beforeEach(() => {
@@ -207,7 +337,7 @@ describe("P1 双向分页", () => {
     expect(ledger[0].loaded).toBe(true);
   });
 
-  it("store 有数据但游标缺失（活动会话/历史遗留）：hydrate 补探测游标恢复上滚", async () => {
+  it("store 有数据但游标缺失：重新对账完整快照，不再丢弃探测页", async () => {
     invokeMock.mockResolvedValueOnce(pageResponse(10, "tail", 5000));
     const sid = ref<string | null>("uuid-a");
     useChatSession(sid);
@@ -227,9 +357,9 @@ describe("P1 双向分页", () => {
     await flush();
     await flush();
     expect(hasMoreOlder("uuid-a")).toBe(true);
-    // 探测 = 最小页（limit 1 字节，只拿游标不 unshift 消息）
-    const probe = loadMessagesCalls().find((c) => c[1]?.sessionId === "uuid-a" && c[1]?.limit === 1);
-    expect(probe).toBeDefined();
+    const calls = loadMessagesCalls().filter((c) => c[1]?.sessionId === "uuid-a");
+    expect(calls).toHaveLength(2);
+    expect(calls[1][1].limit).toBe(256 * 1024);
   });
 
   it("hydrate 兼容 mock 返回 undefined（防御分支）", async () => {

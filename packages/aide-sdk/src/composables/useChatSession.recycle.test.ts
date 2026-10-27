@@ -198,6 +198,32 @@ describe("useChatSession/recycle 页级回收", () => {
     expect(isRecycleMutating("s1")).toBe(false);
   });
 
+  it("取回期间更早页插入：按页身份重新定位，不按旧数组下标插入", async () => {
+    const store = setupSession("s1", [makePage({ count: 1 })], 1);
+    releasePage("s1", 0);
+    let resolve!: (value: unknown) => void;
+    invokeMock.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const pending = restorePage("s1", 0);
+    pageLedgers.get("s1")!.unshift(makePage({ count: 1 }));
+    store.messages.unshift(makeMsg("更早页"));
+    resolve(pageResult("restored", 1));
+    expect(await pending).toBe(1);
+    expect(store.messages.map(m => (m.blocks[0] as { text: string }).text)).toEqual(["更早页", "restored-0", "live-0"]);
+  });
+
+  it("取回期间历史被重置：旧响应不能把已删除的页插回来", async () => {
+    const store = setupSession("s1", [makePage({ count: 1 })], 1);
+    releasePage("s1", 0);
+    let resolve!: (value: unknown) => void;
+    invokeMock.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const pending = restorePage("s1", 0);
+    store.historyRevision++;
+    pageLedgers.delete("s1");
+    resolve(pageResult("stale", 1));
+    expect(await pending).toBe(0);
+    expect(store.messages.map(m => (m.blocks[0] as { text: string }).text)).toEqual(["live-0"]);
+  });
+
   it("restorable=false 的页不释放不取回", async () => {
     setupSession("s1", [makePage({ count: 2, restorable: false })], 1);
     expect(releasePage("s1", 0, 100)).toBe(0);

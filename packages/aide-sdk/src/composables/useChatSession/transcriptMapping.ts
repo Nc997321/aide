@@ -1,5 +1,6 @@
 import type {
   ChatMessage,
+  ContentBlock,
   KbRefBlock,
   SubsessionInstructionBlock,
   SubsessionReportBlock,
@@ -21,12 +22,13 @@ import { annotateReadRelay } from "../../utils/lspRelay";
  */
 
 /** load_messages 返回的 ChatMessageItem[] → 前端 ChatMessage[]（历史 block 转换 +
- *  mention 段拆分 + Read 接力标注）。消息 id 每次重新生成（crypto.randomUUID）。 */
+ *  mention 段拆分 + Read 接力标注）。保留 SDK 身份，旧转录缺身份时才生成展示 id。 */
 export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
   const messages = items.map((item) => ({
-    id: crypto.randomUUID(),
+    id: item.id ?? crypto.randomUUID(),
     role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
-    blocks: item.blocks.flatMap((b) => historyBlockToContentBlocks(b, item.role === "user")),
+    blocks: item.blocks.flatMap((b, index): ContentBlock[] => historyBlockToContentBlocks(b, item.role === "user")
+      .map(block => item.sourceIds?.[index] ? { ...block, sourceId: item.sourceIds[index]! } : block)),
     timestamp: item.timestamp,
   }));
   // F 方案（Read 接力显示）：历史消息就地标注 assistant Read 的接力结论，与实时

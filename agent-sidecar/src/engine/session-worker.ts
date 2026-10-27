@@ -6,6 +6,7 @@ import type {
   SidecarCommand,
   UserMessageBlock,
 } from "./types.js";
+import { StreamSources } from "./streamSources.js";
 import { MessageQueue } from "./generator.js";
 import { PermissionManager, makeGuardedCanUseTool } from "./permissions.js";
 import { approvedExtras, classifyPermissionResponse } from "./permissionResponse.js";
@@ -158,6 +159,7 @@ export class SessionWorker {
   /** 忙时排队、已交给 CLI 但还没被模型接入的消息（见 desktop/jumpQueue.ts）。 */
   readonly queuedSends = new QueuedSendLedger();
   readonly coalescer: DeltaCoalescer;
+  private readonly streamSources = new StreamSources();
   /** 图片 400 回滚：检测到 synthetic 400 后置位，abort 当前 query，catch 里执行回滚。 */
   private rollbackPending = false;
   /** 当前 query 的 abort 信号（每次 while 迭代新建；回滚时 abort 杀 CLI 停写入）。 */
@@ -1296,6 +1298,7 @@ export class SessionWorker {
   /** mapper 依赖包（每轮迭代重建——partialMode 捕获当轮支线状态）。 */
   private buildMapperDeps(): MapperDeps {
     return {
+      sources: this.streamSources,
       tasks: this.taskTracker,
       subagents: this.subagentTracker,
       tools: this.toolLifecycle,

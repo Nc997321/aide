@@ -30,6 +30,13 @@ pub(super) fn parse_transcript_lines(lines: &[String]) -> Vec<ChatMessageItem> {
 pub(super) fn parse_transcript_lines_with_starts(
     lines: &[String],
 ) -> Vec<(ChatMessageItem, usize)> {
+    parse_transcript_lines_seeded(lines, std::collections::HashMap::new())
+}
+
+pub(super) fn parse_transcript_lines_seeded(
+    lines: &[String],
+    mut block_indices: std::collections::HashMap<String, usize>,
+) -> Vec<(ChatMessageItem, usize)> {
     let mut tool_results: std::collections::HashMap<String, (String, bool)> =
         std::collections::HashMap::new();
     for line in lines {
@@ -92,6 +99,13 @@ pub(super) fn parse_transcript_lines_with_starts(
             continue;
         };
 
+        let api_id = v.pointer("/message/id").and_then(Value::as_str);
+        let base_index = api_id.map(|id| *block_indices.entry(id.to_string()).or_default()).unwrap_or(0);
+        let block_count = content_val.as_array().map_or(0, Vec::len);
+        if let Some(id) = api_id {
+            block_indices.insert(id.to_string(), base_index + block_count);
+        }
+        let mut source_ids = Vec::new();
         let blocks: Vec<HistoryBlock> = if let Some(s) = content_val.as_str() {
             if s.is_empty() {
                 Vec::new()
@@ -101,8 +115,9 @@ pub(super) fn parse_transcript_lines_with_starts(
                 }]
             }
         } else if let Some(arr) = content_val.as_array() {
-            arr.iter()
-                .filter_map(|block| match block.get("type").and_then(|t| t.as_str()) {
+            arr.iter().enumerate()
+                .filter_map(|(index, block)| {
+                  let parsed = match block.get("type").and_then(|t| t.as_str()) {
                     Some("text") => {
                         block
                             .get("text")
@@ -137,6 +152,11 @@ pub(super) fn parse_transcript_lines_with_starts(
                     }
                     // 图片等其余 block 类型：维持原有降级行为，暂不重建。
                     _ => None,
+                  };
+                  if parsed.is_some() {
+                      source_ids.push(api_id.map(|id| format!("{id}:{}", base_index + index)));
+                  }
+                  parsed
                 })
                 .collect()
         } else {
@@ -152,16 +172,21 @@ pub(super) fn parse_transcript_lines_with_starts(
         // 对齐实时路径「一个回合一条 assistant 消息」的形状——否则重开历史会话时
         // 一个回合的连续工具调用被拆成 N 条消息，前端的消息内分组（ToolCallGroup）
         // 各自成组，摘要退化成 N 个「1 次工具调用」。
+        source_ids.resize(blocks.len(), None);
         if role == "claude" {
             if let Some(last) = messages.last_mut() {
                 if last.0.role == "claude" {
                     last.0.blocks.extend(blocks);
+                    last.0.source_ids.extend(source_ids);
                     continue;
                 }
             }
         }
         messages.push((
             ChatMessageItem {
+                id: v.get("uuid").and_then(Value::as_str).map(str::to_string),
+                source_ids,
+                offset_bytes: None,
                 role: role.to_string(),
                 blocks,
                 timestamp: i as u64,

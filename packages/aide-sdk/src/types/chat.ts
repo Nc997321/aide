@@ -141,7 +141,7 @@ export type PageRefBlock = { type: "pageref" } & PageRef;
 /** 用户气泡里的知识库选区卡片（由 display 的 `kbref` 块映射而来）。 */
 export type KbRefBlock = { type: "kbref" } & KbRef;
 
-export type ContentBlock =
+export type ContentBlock = (
   | TextBlock
   | ThinkingBlock
   | ToolCallBlock
@@ -152,7 +152,7 @@ export type ContentBlock =
   | KbRefBlock
   | SubsessionReportBlock
   | SubsessionInstructionBlock
-  | WatchReportBlock;
+  | WatchReportBlock) & { sourceId?: string; sourceStart?: number };
 
 /** 子会话回报（Host 投给父会话的那条消息里的一块）：渲染成系统卡片，不是用户气泡。 */
 export type SubsessionReportBlock = { type: "subsession_report" } & SubsessionReport;

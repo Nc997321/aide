@@ -4,6 +4,7 @@ import type { ChatMessage } from "../../types/chat";
 import { computeMessagesBytes } from "../../utils/messageBytes";
 import { itemsToChatMessages } from "./transcriptMapping";
 import { maybeEvict } from "./evict";
+import { reconcileHistory } from "./reconcile";
 import {
   disposedSids,
   getOrCreateLedger,
@@ -12,7 +13,9 @@ import {
   pageLedgers,
   sessionPagination,
   stores,
+  resolveSid,
   type PageEntry,
+  type SessionStore,
 } from "./state";
 
 /**
@@ -27,6 +30,8 @@ import {
 /** hydrate / 上滚取回的页字节预算（UTF-8 行字节累计，后端 load_messages limit 语义；
  *  大 tool_result 占预算多则页内条数自适应收缩）。 */
 const HYDRATE_PAGE_BYTES = 256 * 1024;
+const hydrationRequests = new WeakMap<SessionStore, { revision: number; promise: Promise<void> }>();
+const olderRequests = new WeakMap<object, Promise<number>>();
 
 /** 一页响应 → 台账条目。endOffsetBytes 由后端返回（本次读取的排他末尾）——
  *  hydrate 走 offset=None 时前端自己不知道 file_len，必须从响应取。
@@ -48,31 +53,29 @@ function pageEntryFrom(result: LoadMessagesResult, msgs: readonly ChatMessage[])
   };
 }
 
-/** 首屏加载：只取尾部一页（页 = 字节预算），建立 per-sid 游标与页台账。已有数据
- *  （活动会话/重开）走「游标缺失探测」分支：store 有数据但 sessionPagination 无
- *  记录时补一次最小页探测拿 tailOffset，恢复上滚取回；台账不补（live 段全量视为
- *  未分页，下次重开会话 hydrate 自然重建）。 */
+/** One snapshot request per store generation. A live store must reconcile with the
+ * snapshot too: probing the file tail and discarding its messages creates a cursor
+ * inside an already rendered turn, making the next older page repeat that turn. */
 export async function hydrate(sid: string): Promise<void> {
   // 重开 = 复活：清除销毁标记，后续事件正常入 store（getStore 重建为重开做准备）
   disposedSids.delete(sid);
+  sid = resolveSid(sid);
   const store = getStore(sid);
-  if (store.hydrated || store.messages.length > 0 || isPendingSession(sid)) {
-    store.hydrated = true;
-    if (store.messages.length > 0 && !sessionPagination.has(sid)) {
-      try {
-        const result = await api.loadMessages(sid, null, 1); // 最小页：只探游标（最新 1 条保底），消息丢弃不 unshift
-        if (result && Array.isArray(result.messages)) {
-          sessionPagination.set(sid, { tailOffset: result.nextOffsetBytes });
-        }
-      } catch (e) {
-        console.warn("Failed to probe pagination cursor:", e);
-      }
-    }
-    return;
-  }
-  store.hydrated = true;
+  if (isPendingSession(sid) || store.hydrated && sessionPagination.has(sid)) return;
+  const revision = store.historyRevision;
+  const active = hydrationRequests.get(store);
+  if (active?.revision === revision) return active.promise;
+  const promise = hydrateSnapshot(sid, store, revision);
+  hydrationRequests.set(store, { revision, promise });
+  try { await promise; }
+  finally { if (hydrationRequests.get(store)?.promise === promise) hydrationRequests.delete(store); }
+}
+
+async function hydrateSnapshot(sid: string, store: SessionStore, revision: number): Promise<void> {
   try {
     const result = await api.loadMessages(sid, null, HYDRATE_PAGE_BYTES);
+    sid = resolveSid(sid);
+    if (stores[sid] !== store || store.historyRevision !== revision) return;
     if (!result || !Array.isArray(result.messages)) {
       // 响应形状异常（版本错配/网关裁剪）不是「真空会话」：回滚 hydrated 让
       // 重开重试，否则一次坏响应把会话永久钉死在空态（真空走下方正常路径，
@@ -80,15 +83,22 @@ export async function hydrate(sid: string): Promise<void> {
       store.hydrated = false;
       return;
     }
-    // hydrate 期间可能已有实时消息进来：历史插到最前
-    const msgs = itemsToChatMessages(result.messages);
-    store.messages.unshift(...msgs);
+    const history = itemsToChatMessages(result.messages);
+    const { messages, prefixCount } = reconcileHistory(history, store.messages);
+    store.messages.splice(0, store.messages.length, ...messages);
+    store.hydrated = true;
     // 尾部页游标：nextOffsetBytes 0 = 无更早页，上滚「到此为止」
     sessionPagination.set(sid, { tailOffset: result.nextOffsetBytes });
     // 页台账首条 = 尾部页（live 段从此页之后开始累积）
-    if (msgs.length > 0) {
+    if (prefixCount > 0) {
       const ledger = getOrCreateLedger(sid);
-      ledger.push(pageEntryFrom(result, msgs));
+      // Only the immutable disk prefix is recyclable. The overlapping turn keeps
+      // live object references and must never be released underneath event handlers.
+      const boundary = result.messages[prefixCount]?.offsetBytes;
+      const entry = pageEntryFrom({ ...result,
+        endOffsetBytes: prefixCount === history.length ? result.endOffsetBytes : boundary!,
+      }, history.slice(0, prefixCount));
+      ledger.push(entry);
     }
     maybeEvict(sid, store);
   } catch (e) {
@@ -96,7 +106,7 @@ export async function hydrate(sid: string): Promise<void> {
     // 加载失败（断线/桌面忙）：回滚 hydrated，重开会话时重试——否则 PWA 这类
     // SPA 的模块级 store 里一次失败把会话永久钉死在「此会话暂无消息」
     // （hydrated=true 使 hydrate 的 skip 分支拦截一切后续加载）。
-    store.hydrated = false;
+    if (stores[resolveSid(sid)] === store && store.historyRevision === revision) store.hydrated = false;
   }
 }
 
@@ -106,8 +116,19 @@ export async function loadOlderPage(sid: string, limit: number): Promise<number>
   const page = sessionPagination.get(sid);
   const store = stores[sid];
   if (!page || !store || page.tailOffset === 0) return 0;
+  const active = olderRequests.get(page);
+  if (active) return active;
+  const promise = loadOlderSnapshot(sid, limit, store, page);
+  olderRequests.set(page, promise);
+  try { return await promise; }
+  finally { if (olderRequests.get(page) === promise) olderRequests.delete(page); }
+}
+
+async function loadOlderSnapshot(sid: string, limit: number, store: SessionStore, page: { tailOffset: number }): Promise<number> {
+  const revision = store.historyRevision;
   try {
     const result = await api.loadMessages(sid, page.tailOffset, limit);
+    if (stores[sid] !== store || sessionPagination.get(sid) !== page || store.historyRevision !== revision) return 0;
     if (!result || !Array.isArray(result.messages)) {
       return 0;
     }
@@ -130,6 +151,10 @@ export async function loadOlderPage(sid: string, limit: number): Promise<number>
  *  已释放内容等下次 hydrate——与 revert 不动 store 的现状语义一致）。
  *  后端另有 clamp 兜底（双保险）。 */
 export function resetPaginationForRevert(sid: string): void {
+  if (stores[sid]) {
+    stores[sid].historyRevision++;
+    stores[sid].hydrated = false;
+  }
   sessionPagination.delete(sid);
   pageLedgers.delete(sid);
 }

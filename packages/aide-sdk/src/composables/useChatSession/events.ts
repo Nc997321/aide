@@ -56,6 +56,7 @@ import {
   type SessionStore,
 } from "./state";
 import { maybeEvict } from "./evict";
+import { appendSourceText, sourceMessage } from "./reconcile";
 import {
   BG_TASKS_CAP,
   BG_TASK_OUTPUT_CAP,
@@ -351,8 +352,15 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // 落盘已在发送前（ChatPanel.onSendRequest 的 settleOnSend）完成，此处不再落盘。
       break;
     }
+    case "block_snapshot": {
+      if (typeof e.sourceId !== "string" || typeof e.text !== "string" || (e.kind !== "text" && e.kind !== "thinking")) break;
+      const msg = sourceMessage(store.messages, e) ?? getOrCreateAssistant(store);
+      msg.streaming = true;
+      appendSourceText(msg, e.kind, e.text, { ...e, sourceOffset: 0 });
+      break;
+    }
     case "text_delta": {
-      const msg = getOrCreateAssistant(store);
+      const msg = sourceMessage(store.messages, e) ?? getOrCreateAssistant(store);
       stampMessageModel(msg, e);
       const delta = e["delta"] as string;
       // 空增量 = 只补模型徽标的打戳通路：正文逐字流式时（partial=on）文本已由
@@ -360,12 +368,8 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // 不能让空串走到下面的 push——那会凭空多出一个空 text 块，块数错位会连累
       // 流式尾块判定（isStreamingTail 取 blocks.length - 1）。
       if (!delta) break;
-      const last = msg.blocks[msg.blocks.length - 1];
-      if (last?.type === "text") {
-        (last as TextBlock).text += delta;
-      } else {
-        msg.blocks.push({ type: "text", text: delta });
-      }
+      msg.streaming = true;
+      appendSourceText(msg, "text", delta, e);
       break;
     }
     case "thinking":
@@ -375,16 +379,22 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       // 用 text ?? delta 兼容两路。不盖 model——思考事件不带 model/modelLabel（模型徽标
       // 由同消息首个 text/tool_use 块盖）。
       const chunk = (e["text"] as string) ?? (e["delta"] as string);
-      const msg = getOrCreateAssistant(store);
-      const last = msg.blocks[msg.blocks.length - 1];
-      if (last?.type === "thinking") {
-        (last as ThinkingBlock).text += chunk;
-      } else {
-        msg.blocks.push({ type: "thinking", text: chunk });
-      }
+      const msg = sourceMessage(store.messages, e) ?? getOrCreateAssistant(store);
+      msg.streaming = true;
+      appendSourceText(msg, "thinking", chunk, e);
       break;
     }
     case "tool_use_start": {
+      const existing = lookupToolCall(sid, e["id"] as string);
+      if (existing) {
+        if (existing.result === undefined) {
+          existing.isPending = true;
+          registerToolCall(sid, existing.id, existing);
+        }
+        const owner = sourceMessage(store.messages, e);
+        if (owner) stampMessageModel(owner, e);
+        break;
+      }
       const msg = getOrCreateAssistant(store);
       stampMessageModel(msg, e);
       const toolId = e["id"] as string;
@@ -394,6 +404,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         name: e["name"] as string,
         input: e["input"],
         isPending: true,
+        ...(typeof e.sourceId === "string" ? { sourceId: e.sourceId } : {}),
       };
       // F 方案（Read 接力显示）：Read 入场即判定是否沿用了上一个 LSP 调用的坐标，
       // 结论钉在块上随块渲染。判定核心与回看路径（transcriptMapping）共用同一实现；
@@ -894,24 +905,27 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "user_message": {
-      // 用户气泡的**唯一渲染点**——本地、手机、PWA 发的消息全部落到这里。发送方
-      // 不再本地乐观渲染（buildUserDisplay 只构造描述随命令下发），所以不会重复，
-      // 也不需要 message_id 去重；代价是本地发送也多一个 RTT 才出气泡。
+      // 所有发送方只认广播；SDK uuid 还用于与加载期间的磁盘快照对账。
+      // 先读到历史、后收到回显时，用 display 丰富已有气泡，不能再追加一次。
       //
       // finishStreaming 收尾上一条 assistant：无论谁发的，气泡都必须插在上一条
       // assistant 之后，否则流式续写会误把新回合内容接进上一条消息里。
-      finishStreaming(store);
       const userBlocks = blocksFromDisplay(
         e["display"] as UserMessageBlock[] | undefined,
         e["text"] as string,
       );
-      store.messages.push({
-        // sidecar 给的 id = 这条消息的 SDK uuid，撤回（user_message_withdrawn）按它删气泡
-        id: typeof e["id"] === "string" && e["id"] ? (e["id"] as string) : crypto.randomUUID(),
-        role: "user",
-        blocks: userBlocks,
-        timestamp: Date.now(),
-      });
+      const existing = store.messages.find(m => m.role === "user" && m.id === e["id"]);
+      if (existing) existing.blocks = userBlocks;
+      else {
+        finishStreaming(store);
+        store.messages.push({
+          // sidecar 给的 id = 这条消息的 SDK uuid，撤回（user_message_withdrawn）按它删气泡
+          id: typeof e["id"] === "string" && e["id"] ? (e["id"] as string) : crypto.randomUUID(),
+          role: "user",
+          blocks: userBlocks,
+          timestamp: Date.now(),
+        });
+      }
       // 子会话回报（Host 投给本会话）：记下各子会话的最近回报，活动抽屉显示首行
       const reports = userBlocks.filter((b): b is ContentBlock & SubsessionReport => b.type === "subsession_report");
       if (reports.length) noteSubsessionReports(sid, reports);

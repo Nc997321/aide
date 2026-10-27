@@ -37,7 +37,7 @@ function isDeltaEvent(event: ChatEvent): event is DeltaEvent {
 /** 合并 key：类型 + 目标 id（主线程 text_delta 无 id，子代理/后台任务增量按各自 id 区分）。 */
 function keyOf(event: DeltaEvent): string {
   const id = "id" in event ? event.id : "";
-  return `${event.type}:${id}`;
+  return `${event.type}:${id}:${event.sourceId ?? ""}`;
 }
 
 export class DeltaCoalescer {
@@ -59,7 +59,9 @@ export class DeltaCoalescer {
     }
 
     const last = this.pending[this.pending.length - 1];
-    if (last && keyOf(last) === keyOf(event)) {
+    if (last && keyOf(last) === keyOf(event)
+      && (event.sourceOffset === undefined || last.sourceOffset !== undefined
+        && last.sourceOffset + last.delta.length === event.sourceOffset)) {
       last.delta += event.delta;
     } else {
       // 浅拷贝：不改动上游传入的事件对象

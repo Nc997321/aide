@@ -4,6 +4,7 @@ import { TaskTracker } from "./tasks.js";
 import { SubagentTracker } from "./subagents.js";
 import { ToolLifecycleTracker } from "./toolLifecycle.js";
 import { BgTaskTracker } from "../desktop/bgTasks.js";
+import type { StreamSources } from "./streamSources.js";
 import { startOutputTail as globalStartOutputTail, stopOutputTail as globalStopOutputTail } from "./subagentOutputTail.js";
 
 /** 子代理嵌套深度告警阈值（warn-only，不阻止调用）。深度 > 阈值时发
@@ -320,6 +321,7 @@ export function emitSubagentBlocks(
 /** mapper 的依赖包：调用方以对象形式注入，取代历史 11 位置参数墙（审查 P1）。
  *  必选三个 tracker；可选能力一律字段缺省 = 不启用（旧调用方逐个核对迁移）。 */
 export interface MapperDeps {
+  sources?: StreamSources;
   tasks: TaskTracker;
   subagents: SubagentTracker;
   tools: ToolLifecycleTracker;
@@ -539,18 +541,22 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
   // 历史那次卡死——根因是前端每个增量把整块正文重跑 markdown 再整块换 innerHTML。
   // 2026-09-13 解禁：前端已把正文切成「前缀定格 + 有界尾巴」（StreamingText /
   // streamSplit），完成段落不再重渲、尾部有段落级上界，重解析范围不再随全文增长。
-  // 模型徽标不受影响——整块路径仍在，只改为发空增量补戳（见下方 text 分支）。
+  // 完成块另发带身份的 block_snapshot；旧客户端忽略它，仍只消费原来的 delta。
   // partial=off（btw/title）SDK 不发 stream_event，本分支不触发。
   if (msg.type === "stream_event") {
     if (!partialMode) return;
     const ev = msg.event;
+    if (ev?.type === "message_start" && ev.message?.id) {
+      deps.sources?.start(ev.message.id);
+      return;
+    }
     if (ev?.type !== "content_block_delta") return;
     if (ev.delta?.type === "thinking_delta" && ev.delta.thinking) {
-      emit({ type: "thinking_delta", delta: ev.delta.thinking });
+      emit({ type: "thinking_delta", delta: ev.delta.thinking, ...deps.sources?.delta(ev.index, ev.delta.thinking) });
       return;
     }
     if (ev.delta?.type === "text_delta" && ev.delta.text) {
-      emit({ type: "text_delta", delta: ev.delta.text });
+      emit({ type: "text_delta", delta: ev.delta.text, ...deps.sources?.delta(ev.index, ev.delta.text) });
     }
     return;
   }
@@ -568,19 +574,28 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
       return { ...e, model: wire, modelLabel: label };
     };
     for (const block of msg.message.content) {
+      const sourceId = msg.message.id ? deps.sources?.block(msg.message.id) : undefined;
+      const emitBlock = (event: ChatEvent) => emit(sourceId ? { ...event, sourceId, sourceOffset: 0 } : event);
       if (block.type === "text") {
-        // partial=on：正文已由 stream_event 的 text_delta 逐字发过，这里**不再重发
-        // 正文**，只借一个空增量把模型徽标补上——徽标走 isAdoptableAssistantModel
+        // partial=on 的 text_delta 仍只补模型徽标（兼容忽略 sourceOffset 的客户端）。
+        // 新客户端另消费 block_snapshot，补齐中途订阅缺失的前缀；不是第二次 append。
+        // 徽标走 isAdoptableAssistantModel
         // 推导，而那是 wire model 唯一可信的来源，不能跟着整块一起去掉。
         // 空增量只盖戳不入块（见 events.ts 的 text_delta 分支）。
         // partial=off（btw/title）没有 stream_event，仍是正文的唯一来源，整块发。
-        if (block.text) emit(withModel({ type: "text_delta", delta: partialMode ? "" : block.text }));
+        if (block.text) {
+          emitBlock(withModel({ type: "text_delta", delta: partialMode ? "" : block.text }));
+          if (partialMode && sourceId) emitBlock({ type: "block_snapshot", kind: "text", text: block.text });
+        }
         continue;
       } else if (block.type === "thinking") {
         // 主线程 thinking block 整块。partial=on 时已被 stream_event 的 thinking_delta
         // 逐字发过，此处跳过去重；partial=off 时这是唯一来源（整块转发）。文本为空
         // 时跳过——provider 用 display=omitted 时 block 在但 text 空，两边都不发。
-        if (block.thinking && !partialMode) emit({ type: "thinking", text: block.thinking });
+        if (block.thinking) {
+          if (!partialMode) emitBlock({ type: "thinking", text: block.thinking });
+          else if (sourceId) emitBlock({ type: "block_snapshot", kind: "thinking", text: block.thinking });
+        }
         continue;
       } else if (block.type === "tool_use") {
         // 插队安全边界判断的账本：不管是普通工具、Task/Agent 子代理还是内置
@@ -588,7 +603,7 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
         tools.onToolUse(block.id);
         if (SubagentTracker.isSubagentTool(block.name)) {
           const { agentName, description, prompt } = subagents.handleToolUse(block.id, block.input);
-          emit(withModel({ type: "subagent_start", id: block.id, agentName, description, ...(prompt ? { prompt } : {}) }));
+          emitBlock(withModel({ type: "subagent_start", id: block.id, agentName, description, ...(prompt ? { prompt } : {}) }));
         } else if (TaskTracker.isTaskTool(block.name)) {
           if (tasks.handleToolUse(block.id, block.name, block.input)) {
             emit({ type: "tasks_update", tasks: tasks.snapshot() });
@@ -597,7 +612,7 @@ function mapMainThreadMessage(msg: any, emit: (e: ChatEvent) => void, deps: Mapp
           // Bash 调用的入参顺手登记——若它转入后台，task_started/后台回执要用
           // command/description 填充面板展示（tracker 内部 FIFO 上限，无泄漏）。
           if (block.name === "Bash") bgTaskHooks?.tracker.noteBashToolUse(block.id, block.input);
-          emit(withModel({ type: "tool_use_start", id: block.id, name: block.name, input: block.input }));
+          emitBlock(withModel({ type: "tool_use_start", id: block.id, name: block.name, input: block.input }));
         }
       }
     }

@@ -270,6 +270,8 @@ aide-link://pair?v=1&relay=wss%3A%2F%2Frelay.example.com%2F&id=00112233445566778
 - 顺序保证：`subscribed` → 回放的事件（`seq` 升序）→ 实时事件，**不丢、不重、不乱序**。
 - `event.seq`：Host 全局事件序号，在同一 `epoch` 内**单调递增**（过滤后收到的 `seq` 可能不连续，这是正常的）。
   `payload` 是 Host 事件的原样 JSON；`chat-event` 的各 `type` 形状见 `packages/aide-sdk/src/types/chat.ts`（协议层不解释它）。
+
+  历史与实时流对账（2026-10-27，增量协议）：主线程内容块事件可带 `sourceId`（SDK API message id + `:` + 原始 block index），文本增量可带 `sourceOffset`（该块内的 UTF-16 code unit 起点）。`block_snapshot{kind:"text"|"thinking",text,sourceId}` 是该块完成后的完整值；支持它的客户端按身份和偏移合并，不能追加全文。旧客户端忽略未知字段及 `block_snapshot`，原有 delta 通路不重复发送正文。`load_messages` 的消息新增可选 `id`（SDK UUID）、`sourceIds`（与 blocks 对齐，未知为 null）、`offsetBytes`（该消息在转录中的起始字节）；手机端可自行采用这些对账信息，帧及订阅规则不变。
 - 只会收到目录里公开的事件名（§8）。
 
 ### 6.4 `ping` / `pong`

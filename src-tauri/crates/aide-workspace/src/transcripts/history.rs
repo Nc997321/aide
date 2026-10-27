@@ -7,7 +7,7 @@ use std::path::Path;
 
 use super::parse::{
     is_synthetic_user_entry, parse_transcript_lines, parse_transcript_lines_with_starts,
-    SUBAGENT_TOOL_NAMES,
+    parse_transcript_lines_seeded, SUBAGENT_TOOL_NAMES,
 };
 use super::{ChatMessageItem, LoadMessagesResult};
 
@@ -48,14 +48,24 @@ pub fn load_messages_at(
 /// 整读全部行（缺省路径，与分页前的行为一致）。end_offset_bytes = file_len
 /// （整页的排他末尾），前端页级回收重取协议要求任何路径都给真实末尾字节。
 fn read_all_messages(file: fs::File, file_len: u64) -> Result<LoadMessagesResult, String> {
-    let reader = BufReader::new(file);
-    let lines: Vec<String> = reader
-        .lines()
-        .enumerate()
-        .map(|(i, l)| l.map_err(|e| format!("Read error at line {}: {}", i, e)))
-        .collect::<Result<_, _>>()?;
+    let mut reader = BufReader::new(file.take(file_len));
+    let mut lines = Vec::new();
+    let mut starts = Vec::new();
+    let mut offset = 0u64;
+    loop {
+        let mut line = String::new();
+        let bytes = reader.read_line(&mut line).map_err(|e| format!("Read error: {e}"))?;
+        if bytes == 0 { break; }
+        starts.push(offset);
+        offset += bytes as u64;
+        lines.push(line.trim_end_matches(['\r', '\n']).to_string());
+    }
+    let messages = parse_transcript_lines_with_starts(&lines).into_iter().map(|(mut message, index)| {
+        message.offset_bytes = starts.get(index).copied();
+        message
+    }).collect();
     Ok(LoadMessagesResult {
-        messages: parse_transcript_lines(&lines),
+        messages,
         next_offset_bytes: 0,
         end_offset_bytes: file_len,
     })
@@ -83,7 +93,11 @@ fn read_page_backwards(
             cursor = chunk_start;
         }
         let (lines, starts) = split_lines(&bytes, cursor);
-        let parsed = parse_transcript_lines_with_starts(&lines);
+        let seed = source_prefix(file, &lines, &starts)?;
+        let mut parsed = parse_transcript_lines_seeded(&lines, seed);
+        for (message, index) in &mut parsed {
+            message.offset_bytes = starts.get(*index).copied();
+        }
         let (messages, page_start, used_bytes) = trim_to_bytes(&parsed, &lines, limit_bytes);
         if used_bytes >= limit_bytes as usize || cursor == 0 {
             let next_offset = starts.get(page_start).copied().unwrap_or(0);
@@ -106,6 +120,52 @@ fn read_page_backwards(
             });
         }
     }
+}
+
+/// A byte page can begin between two persisted blocks of the same API response.
+/// Recover only that response's preceding block count, stopping at the previous
+/// response/user boundary; identities must not depend on page size or chunk edges.
+fn source_prefix(file: &fs::File, lines: &[String], starts: &[u64]) -> Result<std::collections::HashMap<String, usize>, String> {
+    let mut seed = std::collections::HashMap::new();
+    for (index, line) in lines.iter().enumerate() {
+        let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+        match value.get("type").and_then(Value::as_str) {
+            Some("user") if !is_synthetic_user_entry(&value)
+                && value.pointer("/message/content").is_some_and(|c| c.is_string() || c.as_array().is_some_and(|a| a.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("text")))) => break,
+            Some("assistant") => {
+                let Some(id) = value.pointer("/message/id").and_then(Value::as_str) else { break };
+                let mut cursor = starts[index];
+                let mut bytes = Vec::new();
+                loop {
+                    if cursor == 0 { break; }
+                    let (chunk, start) = read_chunk_backwards(file, cursor)?;
+                    bytes.splice(0..0, chunk);
+                    cursor = start;
+                    let mut count = 0;
+                    let mut boundary = false;
+                    for prior in split_lines(&bytes, cursor).0.iter().rev() {
+                        let Ok(prior) = serde_json::from_str::<Value>(prior) else { continue };
+                        match prior.get("type").and_then(Value::as_str) {
+                            Some("assistant") => {
+                                if prior.pointer("/message/id").and_then(Value::as_str) != Some(id) { boundary = true; break; }
+                                count += prior.pointer("/message/content").and_then(Value::as_array).map_or(0, Vec::len);
+                            }
+                            Some("user") if !is_synthetic_user_entry(&prior)
+                                && prior.pointer("/message/content").is_some_and(Value::is_string) => { boundary = true; break; }
+                            _ => {}
+                        }
+                    }
+                    if boundary || cursor == 0 {
+                        seed.insert(id.to_string(), count);
+                        break;
+                    }
+                }
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(seed)
 }
 
 /// `[0, end)` 区域是否存在「能解析成历史消息」的行（轻量判定，与
@@ -285,6 +345,26 @@ mod tests {
 
     /// 字节预算语义下的「全量页」预算（10MB > 任何测试文件大小）。
     const BIG: u32 = 10 * 1024 * 1024;
+    #[test]
+    fn sdk_identities_are_stable_across_split_rows_and_byte_pages() {
+        let lines = vec![
+            line(serde_json::json!({"type":"user", "uuid":"task", "message":{"content":"任务"}})),
+            line(serde_json::json!({"type":"assistant", "uuid":"text", "message":{"id":"api", "content":[{"type":"text", "text":"x".repeat(CHUNK_SIZE as usize + 100)}]}})),
+            line(serde_json::json!({"type":"assistant", "uuid":"sub", "message":{"id":"api", "content":[{"type":"tool_use", "id":"sub", "name":"Agent", "input":{}}]}})),
+            line(serde_json::json!({"type":"assistant", "uuid":"tool", "message":{"id":"api", "content":[{"type":"tool_use", "id":"tool", "name":"Read", "input":{}}]}})),
+        ];
+        let path = temp_jsonl("source-identities", &(lines.join("\r\n") + "\r\n"));
+        let full = load_messages_at(&path, None, None).unwrap();
+        assert_eq!(full.messages[0].id.as_deref(), Some("task"));
+        assert_eq!(full.messages[1].offset_bytes, Some(lines[0].len() as u64 + 2));
+        assert_eq!(full.messages[1].source_ids, vec![Some("api:0".into()), Some("api:2".into())]);
+        let tail = load_messages_at(&path, None, Some(1)).unwrap();
+        assert_eq!(tail.messages.len(), 1);
+        assert_eq!(tail.messages[0].source_ids, vec![Some("api:2".into())]);
+        let expected = lines[..3].iter().map(|l| l.len() as u64 + 2).sum::<u64>();
+        assert_eq!(tail.messages[0].offset_bytes, Some(expected));
+        std::fs::remove_file(path).unwrap();
+    }
     /// 「尾部 n 行」的字节预算：页 = 累计字节 ≤ 预算的消息（第 n+1 行加入会超才截断，
     /// 故预算 = n 行字节和恰好收下这 n 行；单行超预算时最新 1 条保底）。
     fn budget_tail_lines(lines: &[String], n: usize) -> u32 {

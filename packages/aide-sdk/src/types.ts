@@ -39,6 +39,9 @@ export type HistoryBlock =
   | { type: "tool_call"; id: string; name: string; input: unknown; result: string | null; isError: boolean | null };
 
 export interface ChatMessageItem {
+  id?: string;
+  sourceIds?: (string | null)[];
+  offsetBytes?: number;
   role: string;
   blocks: HistoryBlock[];
   timestamp: number;

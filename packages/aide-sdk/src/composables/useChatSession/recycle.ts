@@ -138,15 +138,18 @@ export async function restorePage(sid: string, pageIndex: number): Promise<numbe
   const page = ledger?.[pageIndex];
   if (!ledger || !store || !page || page.loaded || page.restorable === false || mutating.has(sid)) return 0;
   mutating.add(sid);
+  const revision = store.historyRevision;
   try {
     const result = await api.loadMessages(sid, page.endOffset, Math.max(1, page.bytes));
+    if (stores[sid] !== store || store.historyRevision !== revision || pageLedgers.get(sid) !== ledger || !ledger.includes(page)) return 0;
+    const currentIndex = ledger.indexOf(page);
     if (!result || !Array.isArray(result.messages) || result.messages.length === 0) {
-      ledger.splice(pageIndex, 1);
+      ledger.splice(currentIndex, 1);
       return 0;
     }
     const msgs = itemsToChatMessages(result.messages);
     // 原位在 await 之后现算——间隙里可能有别的页被释放/新页被 unshift，索引随取随新
-    store.messages.splice(insertionIndex(ledger, pageIndex), 0, ...msgs);
+    store.messages.splice(insertionIndex(ledger, currentIndex), 0, ...msgs);
     page.count = msgs.length; // 预算边界允许条数漂移，以实际为准
     page.loaded = true;
     return msgs.length;
