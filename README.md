@@ -74,6 +74,21 @@ pnpm tauri dev
 pnpm release
 ```
 
+On Windows, publish from the host environment with Git for Windows, Python +
+`git-filter-repo`, and GitHub CLI. Keep mirror rules under
+`~/.config/aide-publish/`, configure the `github` remote, and sign in with
+`gh auth login`. The PowerShell entry point uses the same sanitization script;
+it does not read WSL configuration or credentials.
+
+```powershell
+./scripts/publish-github.ps1 -DryRun
+# After committing and creating the local version tag:
+./scripts/publish-github.ps1 -ReleaseTag vX.Y.Z -Asset $installer -NotesFile $releaseNotes
+```
+
+Release uploads remain drafts until all supplied assets have been uploaded and
+their names and sizes verified. GitHub tags always pass through history cleaning.
+
 ## Project structure
 
 ```

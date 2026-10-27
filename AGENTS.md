@@ -29,6 +29,7 @@ macOS 已踩的坑：`objc2` 不单独声明（由 `objc2-app-kit` / `objc2-foun
 
 - **Gitee（`origin`）是完整历史；GitHub（`github`，公开）是清洗后的镜像，只经 `scripts/publish-github.sh` 同步，禁止直接 `git push github`**（会公开未清洗的历史）。需 `git-filter-repo`；`--dry-run` 只清洗扫描。
 - 清洗规则（`rules.txt` / `mailmap.txt` / `forbidden.txt`）放 `~/.config/aide-publish/`，**不进仓库**（规则本身含要抹掉的字符串）。清洗确定性，日常快进；规则改了才需 `--force`；清洗后扫全历史，命中 `forbidden.txt` 即中止。
+- **Windows 发布统一使用宿主机环境**：入口 `scripts/publish-github.ps1`（只装配宿主机工具并调用同一份 `.sh`，不另写清洗实现）；规则在 Windows 用户的 `~/.config/aide-publish/`，GitHub 发布登录由宿主机 `gh auth login` 管理，不从 WSL 取配置或凭据。`github` remote 或 `AIDE_PUBLISH_REMOTE` 指定镜像目标。
 - 仓库里不要写真实隧道 UUID / 镜像仓库账号 / 内网 IP / 个人邮箱或本机路径；新增敏感类型时同步改规则与 `forbidden.txt`。
 - CI（`.github/workflows/ci.yml`，仅 GitHub 触发）在 **macOS** 跑 frontend / rust crates（aide-workspace、core、link、host、computer）/ sidecar / tauri-shell（`cargo check`）——跨平台红线靠它兜底，**Windows 暂无 CI**。CI 需还原本地依赖布局：根 vitest 含 `agent-sidecar/src/**`，要装 sidecar 依赖；`jsdom` 只在根 package.json；macOS bundle 资源 glob 要 `pnpm --dir agent-sidecar install`。
 
