@@ -1,4 +1,9 @@
 import { getTransport } from "./transport";
+export interface HandoffTarget {
+  provider: string;
+  model: string;
+  effort: string;
+}
 export interface SessionHandoff {
   id: string;
   sourceId: string;
@@ -660,11 +665,11 @@ export const api = {
   createSession(id: string, name: string): Promise<Session> {
     return getTransport().invoke("create_session", { id, name });
   },
-  prepareSessionHandoff(sourceId: string, focus: string): Promise<SessionHandoff> {
-    return getTransport().invoke("prepare_session_handoff", { sourceId, focus });
+  prepareSessionHandoff(sourceId: string, focus: string, target: HandoffTarget): Promise<SessionHandoff> {
+    return getTransport().invoke("prepare_session_handoff", { sourceId, focus, target });
   },
-  continueSessionHandoff(handoffId: string, summary: string): Promise<SessionContinued> {
-    return getTransport().invoke("continue_session_handoff", { handoffId, summary });
+  continueSessionHandoff(handoffId: string, summary: string, target: HandoffTarget): Promise<SessionContinued> {
+    return getTransport().invoke("continue_session_handoff", { handoffId, summary, target });
   },
   sessionHandoff(sessionId: string): Promise<SessionHandoff | null> {
     return getTransport().invoke("session_handoff", { sessionId });

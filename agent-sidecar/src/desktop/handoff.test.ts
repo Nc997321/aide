@@ -20,15 +20,16 @@ describe("会话交接摘要", () => {
     expect(chunks.join("")).toBe(text);
     expect(chunks.every((c) => Array.from(c).length <= HANDOFF_CHUNK_CHARS)).toBe(true);
   });
-  it("沿用源供应商，禁用工具、转录持久化和 resume；每段合并已有摘要", async () => {
+  it("使用 Host 指定的新供应商和档位，禁用工具、持久化和 resume；逐段合并摘要", async () => {
     queryMock.mockImplementationOnce(() => response("第一段摘要")).mockImplementationOnce(() => response("最终摘要"));
-    expect(await summarizeHandoff(command("a".repeat(HANDOFF_CHUNK_CHARS + 1)))).toBe("最终摘要");
+    expect(await summarizeHandoff({ ...command("a".repeat(HANDOFF_CHUNK_CHARS + 1)), effort: "low" })).toBe("最终摘要");
     const first = queryMock.mock.calls[0][0];
     expect(first.options.tools).toEqual([]);
     expect(first.options.persistSession).toBe(false);
     expect(first.options.resume).toBeUndefined();
     expect(first.options.env.ANTHROPIC_BASE_URL).toBe("https://provider.example");
     expect(first.options.env.ANTHROPIC_MODEL).toBe("source-model");
+    expect(first.options.effort).toBe("low");
     expect(queryMock.mock.calls[1][0].prompt).toContain("第一段摘要");
   });
   it("任一分段失败就拒绝，不拿部分摘要冒充完整交接", async () => {

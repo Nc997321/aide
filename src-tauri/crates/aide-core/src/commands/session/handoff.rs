@@ -97,8 +97,6 @@ fn snapshot(source: &str) -> Result<(Draft, String), String> {
         return Err("源会话工作区已不存在".into());
     }
     let ws_key = field(&meta, "wsKey").ok_or("源会话没有工作区标识")?;
-    let provider =
-        field(&meta, "provider").ok_or("源会话没有供应商绑定，请先在原会话发送消息后重试")?;
     let id = crate::automation::new_id("handoff");
     let snapshot_path = crate::paths::our_config_dir()
         .join("handoffs")
@@ -114,9 +112,9 @@ fn snapshot(source: &str) -> Result<(Draft, String), String> {
             focus: String::new(),
             ws_path,
             ws_key,
-            provider,
-            model: field(&meta, "model"),
-            effort: field(&meta, "effort"),
+            provider: String::new(),
+            model: None,
+            effort: None,
             snapshot_path,
             created_at: crate::commands::recent::now_ms(),
             continued_session: None,
@@ -154,7 +152,9 @@ fn snapshot_text(raw: &str) -> Result<String, String> {
                 } => {
                     text.push_str(&format!(
                         "工具 {name}: {input}\n结果（错误={}）：{}\n",
-                        is_error.map(|v| v.to_string()).unwrap_or_else(|| "未知".into()),
+                        is_error
+                            .map(|v| v.to_string())
+                            .unwrap_or_else(|| "未知".into()),
                         result.unwrap_or_else(|| "（结果未记录）".into())
                     ));
                 }
@@ -225,6 +225,49 @@ pub struct PrepareArgs {
     source_id: String,
     #[serde(default)]
     focus: String,
+    target: HandoffTarget,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct HandoffTarget {
+    provider: String,
+    model: String,
+    effort: String,
+}
+
+/// 配置来自新会话的选择，不从源会话或旧交接草稿恢复身份。
+async fn resolve_target(
+    core: &Arc<Core>,
+    target: HandoffTarget,
+) -> Result<(HandoffTarget, std::collections::HashMap<String, String>), String> {
+    let settings = core.settings.clone();
+    blocking(move || {
+        let provider = settings
+            .resolve_runtime_provider(&target.provider)
+            .map_err(|e| e.to_string())?;
+        if target.provider != provider.id {
+            return Err("当前选定的供应商已被删除，请重新选择".into());
+        }
+        let chosen = target;
+        if !chosen.effort.is_empty() && !matches!(chosen.effort.as_str(), "low" | "high" | "max") {
+            return Err("新会话档位无效，请重新选择".into());
+        }
+        let mut env = crate::runtime::env::build_runtime_env_vars(
+            &provider,
+            &crate::app_settings::public_settings(&settings)?.proxy,
+        );
+        if !chosen.model.is_empty() {
+            env.insert("ANTHROPIC_MODEL".into(), chosen.model.clone());
+        }
+        Ok((chosen, env))
+    })
+    .await
+}
+
+fn apply_target(draft: &mut Draft, target: HandoffTarget) {
+    draft.provider = target.provider;
+    draft.model = (!target.model.is_empty()).then_some(target.model);
+    draft.effort = (!target.effort.is_empty()).then_some(target.effort);
 }
 async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<Draft, String> {
     let _guard = GENERATING
@@ -233,34 +276,16 @@ async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<D
     if args.focus.chars().count() > 2000 {
         return Err("接续目标过长".into());
     }
+    let (chosen, env) = resolve_target(&core, args.target).await?;
     let (mut draft, transcript) = blocking(move || snapshot(&args.source_id)).await?;
     draft.focus = args.focus;
-    let settings = core.settings.clone();
-    let provider_id = draft.provider.clone();
-    let model = draft.model.clone();
-    let env = blocking(move || {
-        let provider = settings
-            .resolve_runtime_provider(&provider_id)
-            .map_err(|e| e.to_string())?;
-        if provider.id != provider_id {
-            return Err("源会话供应商已被删除，请重新绑定供应商".into());
-        }
-        let mut env = crate::runtime::env::build_runtime_env_vars(
-            &provider,
-            &crate::app_settings::public_settings(&settings)?.proxy,
-        );
-        if let Some(model) = model {
-            env.insert("ANTHROPIC_MODEL".into(), model);
-        }
-        Ok(env)
-    })
-    .await?;
+    apply_target(&mut draft, chosen);
     if !core.runtime.is_running() {
         crate::runtime::start(&core).await?;
     }
     let (_sub, mut rx) = subscribe(&core, &draft.source_id, Some(draft.id.clone()));
     core.runtime.send_to_runtime(&json!({ "cmd": "summarize_handoff", "session_id": draft.source_id,
-        "request_id": draft.id, "transcript": transcript, "focus": draft.focus, "cwd": draft.ws_path, "env": env })).await?;
+        "request_id": draft.id, "transcript": transcript, "focus": draft.focus, "cwd": draft.ws_path, "env": env, "effort": draft.effort })).await?;
     let event = tokio::time::timeout(Duration::from_secs(660), rx.recv())
         .await
         .map_err(|_| "交接摘要生成超时，旧会话未修改")?
@@ -295,6 +320,7 @@ async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<D
 pub struct ContinueArgs {
     handoff_id: String,
     summary: String,
+    target: HandoffTarget,
 }
 async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result<Value, String> {
     let _guard = CONTINUING.lock().await;
@@ -305,6 +331,8 @@ async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result
     if let Some(id) = &draft.continued_session {
         return Ok(continued_event(&draft, id));
     }
+    let (chosen, _) = resolve_target(&core, args.target).await?;
+    apply_target(&mut draft, chosen);
     draft.summary = args.summary.trim().to_string();
     let cwd = draft.ws_path.clone();
     blocking(move || {
@@ -313,18 +341,6 @@ async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result
         } else {
             Err("源工作区已不存在".into())
         }
-    })
-    .await?;
-    let settings = core.settings.clone();
-    let provider_id = draft.provider.clone();
-    blocking(move || {
-        let provider = settings
-            .resolve_runtime_provider(&provider_id)
-            .map_err(|e| e.to_string())?;
-        if provider.id != provider_id {
-            return Err("源会话供应商已被删除，请重新绑定后接续".into());
-        }
-        Ok(())
     })
     .await?;
     let route = crate::automation::new_id("handoff");
@@ -349,7 +365,10 @@ async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result
     let event = match tokio::time::timeout(Duration::from_secs(90), rx.recv()).await {
         Ok(Some(event)) => event,
         _ => {
-            let _ = core.runtime.send_to_runtime(&json!({ "cmd": "session_stop", "session_id": route })).await;
+            let _ = core
+                .runtime
+                .send_to_runtime(&json!({ "cmd": "session_stop", "session_id": route }))
+                .await;
             return Err("新会话启动超时或通道已关闭，交接摘要仍保留，可重试".into());
         }
     };
@@ -437,6 +456,47 @@ async fn session_handoff(_core: Arc<Core>, args: SessionArgs) -> Result<Option<D
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn new_target_replaces_all_old_provider_fields_including_legacy_drafts() {
+        let mut draft = Draft {
+            id: "draft".into(),
+            source_id: "source".into(),
+            source_title: "old".into(),
+            summary: "summary".into(),
+            focus: String::new(),
+            ws_path: "project".into(),
+            ws_key: "workspace".into(),
+            provider: "cpa".into(),
+            model: Some("gpt-6.1-sol".into()),
+            effort: Some("max".into()),
+            snapshot_path: "snapshot".into(),
+            created_at: 0,
+            continued_session: None,
+        };
+        apply_target(
+            &mut draft,
+            HandoffTarget {
+                provider: "ollama".into(),
+                model: "qwen3".into(),
+                effort: "low".into(),
+            },
+        );
+        assert_eq!(draft.provider, "ollama");
+        assert_eq!(draft.model.as_deref(), Some("qwen3"));
+        assert_eq!(draft.effort.as_deref(), Some("low"));
+        assert_eq!(draft.ws_key, "workspace");
+        apply_target(
+            &mut draft,
+            HandoffTarget {
+                provider: "other".into(),
+                model: String::new(),
+                effort: String::new(),
+            },
+        );
+        assert_eq!(draft.provider, "other");
+        assert!(draft.model.is_none());
+        assert!(draft.effort.is_none());
+    }
     #[test]
     fn ids_cannot_escape_storage_directory() {
         for id in ["../secret", "a/b", "a\\b", "", "C:drive", "."] {
