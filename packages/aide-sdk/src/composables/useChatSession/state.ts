@@ -1,4 +1,5 @@
 import { reactive, ref } from "vue";
+import { sessionContinuations } from "../useSessionContinuations";
 import { api } from "../../api";
 import { useDiagnosticsDashboard } from "../../composables/useDiagnosticsDashboard";
 import type {
@@ -687,6 +688,7 @@ export async function finalizeSession(tempId: string, realId: string) {
 
 /** 测试钩子：重置全部模块级状态（__resetForTest 的宿主侧实现）。 */
 export function resetAllState(): void {
+  for (const id of Object.keys(sessionContinuations)) delete sessionContinuations[id];
   for (const k of Object.keys(stores)) delete stores[k];
   sessionPagination.clear();
   pageLedgers.clear();

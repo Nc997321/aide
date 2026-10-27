@@ -209,6 +209,7 @@ export interface ContextUsageBreakdown {
 
 // Sidecar → Rust（每行一个 JSON，写入 stdout）
 export type ChatEvent =
+  | { type: "handoff_summary"; request_id: string; summary?: string; error?: string }
   | { type: "session_init"; session_id: string }
   // model/modelLabel：本条 assistant 消息的真实 wire model（API 实际调用标识）——
   // 只盖在每条消息的首个块事件上（后续块事件不带）。modelLabel 是 sidecar 按
@@ -541,6 +542,7 @@ export type PermissionResponseWire =
 // Rust → Sidecar（每行一个 JSON，从 stdin 读取）。
 // 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
+  | import("../desktop/handoff.js").HandoffCommand
   | {
       cmd: "send";
       session_id: string;

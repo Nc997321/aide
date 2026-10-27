@@ -5,6 +5,7 @@ import type {
   SidecarCommand,
 } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
+import { summarizeHandoff } from "../desktop/handoff.js";
 import { resolveLspResult } from "../extensions/lspClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { resolveComputerResult } from "../extensions/computer/client.js";
@@ -79,6 +80,14 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
+    if (cmd.cmd === "summarize_handoff") {
+      void summarizeHandoff(cmd).then(
+        (summary) => this.emitToStdout(cmd.session_id, { type: "handoff_summary", request_id: cmd.request_id, summary }),
+        (error: unknown) => this.emitToStdout(cmd.session_id, { type: "handoff_summary", request_id: cmd.request_id,
+          error: error instanceof Error ? error.message : String(error) }),
+      );
+      return;
+    }
     // LSP MCP 工具的 Rust 回包：按 request_id 结算挂起查询，无会话路由。
     if (cmd.cmd === "lsp_result") {
       resolveLspResult(cmd);

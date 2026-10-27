@@ -25,6 +25,7 @@ import { useSessionProviders } from "./useSessionProviders";
 import { useSessionWorkspaces } from "./useSessionWorkspaces";
 import { useSessionNames } from "./useSessionNames";
 import { useSubsessions, __resetSubsessionsForTest } from "./useSubsessions";
+import { sessionContinuations } from "./useSessionContinuations";
 
 function emit(e: Record<string, unknown>) {
   chatEventHandler?.({ payload: e });
@@ -60,6 +61,23 @@ describe("useChatSession per-session store", () => {
     invokeMock.mockResolvedValue(undefined);
     const { state, removeSessionState } = useSessionState();
     for (const k of Object.keys(state)) removeSessionState(k);
+  });
+
+  it("Host 发起的接续保留运行态；其他客户端仅凭落盘事件回种名称和归属", async () => {
+    useChatSession(ref<string | null>(null));
+    await flush();
+    emit({ type: "session_init", session_id: "handoff_route", sdk_session_id: "continued" });
+    await flush();
+    expect(useSessionState().state["handoff_route"]).toBeUndefined();
+    expect(useSessionState().state["continued"]).toBe("running");
+    emit({ type: "session_continued", session_id: "source", childId: "continued", title: "任务 · 接续", wsKey: "workspace", wsPath: "/project" });
+    await flush();
+    expect(useSessionNames().displayName("continued")).toBe("任务 · 接续");
+    expect(useSessionWorkspaces().workspaceOf("continued")).toEqual({ wsKey: "workspace", wsPath: "/project" });
+    expect(sessionContinuations["continued"].session_id).toBe("source");
+    emit({ type: "message_stop", session_id: "continued", stop_reason: "end_turn" });
+    await flush();
+    expect(useSessionState().state["continued"]).toBe("waiting");
   });
 
   it("后台会话的 message_stop 不会污染前台会话的消息（P0 缓存污染回归）", async () => {

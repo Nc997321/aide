@@ -7,6 +7,10 @@ import { useMentionInserter } from "../composables/useMentionInserter";
 import { api } from "../api";
 import { forgetSubsession, useSubsessions } from "../composables/useSubsessions";
 import { requestCloseWindow, closeOtherWindows } from "../components/fileviewer/closeWindow";
+import SessionHandoffDialog from "../components/SessionHandoffDialog.vue";
+import { useSessionNames } from "../composables/useSessionNames";
+import { useSessionState } from "../composables/useSessionState";
+import type { SessionContinued } from "@aide/sdk/api";
 
 function sep(): MenuItem {
   return { label: "", separator: true };
@@ -217,6 +221,21 @@ export function sessionMenuItems(
     { label: "在新标签页打开", action: () => pane.openSessionInNewTab(id) },
     { label: "在右侧分屏打开", action: () => pane.openSessionInSplit(id, "horizontal") },
     { label: "在下方分屏打开", action: () => pane.openSessionInSplit(id, "vertical") },
+    {
+      label: "接续到新会话…",
+      action: async () => {
+        const status = useSessionState().state[id];
+        if (status === "running" || status === "attention") {
+          await modal.notice("请等当前回合结束", "会话正在运行或等待审批，结束后再生成交接摘要。");
+          return;
+        }
+        const result = await modal.custom<SessionContinued>({
+          title: "接续到新会话", component: SessionHandoffDialog, width: "lg",
+          props: { sourceId: id, sourceTitle: useSessionNames().displayName(id) },
+        });
+        if (result) pane.openSessionInNewTab(result.childId);
+      },
+    },
     sep(),
     {
       label: "重命名",

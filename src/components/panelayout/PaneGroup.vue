@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, inject, ref, type Ref } from "vue";
+import { computed, inject, ref, watch, type Ref } from "vue";
+import { api, type SessionHandoff } from "@aide/sdk/api";
 import ChatPanel from "../ChatPanel/ChatPanel.vue";
 import PaneTabBar from "./PaneTabBar.vue";
 import BtwPanel from "../BtwPanel.vue";
@@ -39,6 +40,17 @@ const activeTab = computed(
 );
 /** 本组正在显示的会话：钻进子会话时是子会话（tab 仍属于父会话，见 tree.ts drillChildId）。 */
 const sessionIdRef = computed(() => viewSessionOf(activeTab.value));
+const handoff = ref<SessionHandoff | null>(null);
+watch(sessionIdRef, async (sid, _before, onCleanup) => {
+  let stale = false;
+  onCleanup(() => { stale = true; });
+  handoff.value = null;
+  if (!sid) return;
+  try {
+    const value = await api.sessionHandoff(sid);
+    if (!stale) handoff.value = value;
+  } catch (e) { console.warn("读取会话交接来源失败", e); }
+}, { immediate: true });
 
 const {
   messages,
@@ -234,6 +246,10 @@ async function onPickMode(mode: ChatMode) {
         @new-tab="onNewTab"
       />
     </Transition>
+    <div v-if="handoff" class="pane-group__handoff">
+      接续自：<button type="button" @click="pl.openSessionInNewTab(handoff.sourceId)">{{ handoff.sourceTitle }}</button>
+      <span>携带交接摘要 · 历史可按需查阅</span>
+    </div>
     <!-- 会话 + btw 侧边对话并排：侧栏挤开会话而不是盖住它（BtwPanel 文件头） -->
     <div class="pane-group__body">
     <ChatPanel
@@ -302,6 +318,8 @@ async function onPickMode(mode: ChatMode) {
   min-height: 0;
   display: flex;
 }
+.pane-group__handoff { display: flex; align-items: center; gap: calc(var(--aide-space-unit) * 2); padding: calc(var(--aide-space-unit) * 2) calc(var(--aide-space-unit) * 3); color: var(--aide-text-muted); font-size: 12px; border-bottom: 1px solid var(--aide-border); }
+.pane-group__handoff button { background: none; border: none; color: var(--aide-accent); cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .pane-group__chat {
   flex: 1;

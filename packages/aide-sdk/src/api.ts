@@ -1,4 +1,22 @@
 import { getTransport } from "./transport";
+export interface SessionHandoff {
+  id: string;
+  sourceId: string;
+  sourceTitle: string;
+  summary: string;
+  focus: string;
+  wsPath: string;
+  wsKey: string;
+  createdAt: number;
+}
+export interface SessionContinued {
+  type: "session_continued";
+  session_id: string;
+  childId: string;
+  title: string;
+  wsPath: string;
+  wsKey: string;
+}
 import type {
   Session, WorkspaceInfo, FileEntry, ChatMessageItem, LoadMessagesResult,
   ClipboardFilesRead,
@@ -641,6 +659,15 @@ export const api = {
   },
   createSession(id: string, name: string): Promise<Session> {
     return getTransport().invoke("create_session", { id, name });
+  },
+  prepareSessionHandoff(sourceId: string, focus: string): Promise<SessionHandoff> {
+    return getTransport().invoke("prepare_session_handoff", { sourceId, focus });
+  },
+  continueSessionHandoff(handoffId: string, summary: string): Promise<SessionContinued> {
+    return getTransport().invoke("continue_session_handoff", { handoffId, summary });
+  },
+  sessionHandoff(sessionId: string): Promise<SessionHandoff | null> {
+    return getTransport().invoke("session_handoff", { sessionId });
   },
   deleteSession(id: string): Promise<void> {
     return getTransport().invoke("delete_session", { id });

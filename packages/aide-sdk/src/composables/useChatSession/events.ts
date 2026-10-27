@@ -1,4 +1,7 @@
 import { api } from "../../api";
+import type { SessionContinued } from "../../api";
+import { sessionContinuations } from "../useSessionContinuations";
+import { useSessionWorkspaces } from "../useSessionWorkspaces";
 import { builtinHooks, type BuiltinHookManifest } from "../../composables/useCustomizations";
 import type {
   ContextUsageAgent,
@@ -272,6 +275,15 @@ function handleRuntimeDead(e: Record<string, unknown>): void {
 const editSelectionCalls = new Map<string, string>();
 
 export function handleChatEvent(e: Record<string, unknown>): void {
+  if (e["type"] === "handoff_summary") return;
+  if (e["type"] === "session_continued") {
+    if (typeof e["childId"] !== "string" || typeof e["wsPath"] !== "string" || typeof e["wsKey"] !== "string" || typeof e["title"] !== "string") return;
+    useSessionNames().setName(e["childId"], e["title"]);
+    useSessionWorkspaces().setWorkspace(e["childId"], { wsPath: e["wsPath"], wsKey: e["wsKey"] });
+    finalizedSids.add(e["childId"]); // Host 已等 session_init 并完成档案落盘
+    sessionContinuations[e["childId"]] = e as unknown as SessionContinued;
+    return;
+  }
   if (e["type"] === "runtime_dead") {
     handleRuntimeDead(e);
     return;
@@ -311,8 +323,9 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         void finalizeSession(sid, sdkSid);
         break;
       }
-      if (sdkSid && sdkSid !== sid && sid.startsWith(SUBSESSION_ROUTING_PREFIX)) {
-        // 子会话（Host 派发，路由键 subsess_*）：与本端发起的新会话一样是「改名」，不是下面那种
+      if (sdkSid && sdkSid !== sid && (sid.startsWith(SUBSESSION_ROUTING_PREFIX) || sid.startsWith("handoff_"))) {
+        if (sid.startsWith("handoff_")) useSessionNames().takePendingTitle(sid);
+        // Host 派发的子会话/接续会话：与本端发起的新会话一样是「改名」，不是下面那种
         // 无人认领的后台会话——store 过户到真实 id、状态照常跟踪（侧栏流光 / 活动带 / 作答槽都看它）。
         aliasMap.set(sid, sdkSid);
         if (stores[sid] && !stores[sdkSid]) stores[sdkSid] = stores[sid];

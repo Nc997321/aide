@@ -3,6 +3,7 @@ import { ref, computed, onMounted, watch } from "vue";
 import { timeAgo } from "../utils/time";
 import { useContextMenu } from "../composables/useContextMenu";
 import { useSessionState } from "../composables/useSessionState";
+import { sessionContinuations } from "@aide/sdk/composables/useSessionContinuations";
 import { useUpdate } from "../composables/useUpdate";
 import { useRecent } from "../composables/useRecent";
 import { useRightPanel } from "../composables/useRightPanel";
@@ -242,6 +243,11 @@ async function loadWsSessions(wsKey: string) {
     sessionsByWorkspace.value[wsKey] = [];
   }
 }
+
+// 任何客户端接续成功，都按 Host 事件刷新那个工作区的会话列表。
+watch(() => Object.keys(sessionContinuations), (ids, before) => {
+  for (const id of ids) if (!before.includes(id)) void loadWsSessions(sessionContinuations[id].wsKey);
+});
 
 // ── 日常分区（与「项目」「自动化」平级的第三个根分区）──────────────────────────
 /** 日常归属 key；装载前为空串（分区显示空态）。它不在 workspaces 列表里（SDK 已过滤），

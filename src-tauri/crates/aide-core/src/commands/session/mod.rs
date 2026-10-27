@@ -28,6 +28,7 @@ pub static COMMANDS: &[HostCommand] = &[
 ];
 
 pub mod history;
+pub mod handoff;
 pub mod jsonl;
 
 // 供自动化 RunRecord.summary 读取末条消息摘要（automation/scheduler.rs）
@@ -396,6 +397,7 @@ pub(crate) struct SessionMetaPatch {
     pub ws_key: MetaField,
     /// 子会话的父会话 id（Host 派发子会话时写；删父会话但保留子会话时 Clear）。
     pub parent_id: MetaField,
+    pub handoff_id: MetaField,
 }
 
 fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
@@ -448,6 +450,7 @@ pub(crate) fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) ->
     apply_field(&mut v, "wsPath", &patch.ws_path);
     apply_field(&mut v, "wsKey", &patch.ws_key);
     apply_field(&mut v, "parentId", &patch.parent_id);
+    apply_field(&mut v, "handoffId", &patch.handoff_id);
 
     fs::write(
         &path,

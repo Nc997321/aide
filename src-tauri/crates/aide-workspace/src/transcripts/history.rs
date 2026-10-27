@@ -11,6 +11,21 @@ use super::parse::{
 };
 use super::{ChatMessageItem, LoadMessagesResult};
 
+/// 解析已经固定的快照；只允许末尾未完成行，损坏的中间行不能静默丢弃。
+pub fn parse_snapshot(text: &str) -> Result<Vec<ChatMessageItem>, String> {
+    let mut lines: Vec<String> = Vec::new();
+    let source: Vec<&str> = text.lines().collect();
+    for (index, line) in source.iter().enumerate() {
+        if line.trim().is_empty() { continue; }
+        if serde_json::from_str::<Value>(line).is_err() {
+            if index + 1 == source.len() && !text.ends_with('\n') { break; }
+            return Err(format!("会话快照第 {} 行损坏，无法可靠生成摘要", index + 1));
+        }
+        lines.push((*line).to_string());
+    }
+    Ok(parse_transcript_lines(&lines))
+}
+
 /// 读一页历史（参数语义见桌面 `load_messages` 命令）：`limit` = None 整读；否则
 /// 从 `offset_bytes`（缺省文件尾）往前取 `limit` 字节预算的一页。
 pub fn load_messages_at(
@@ -238,6 +253,14 @@ fn trim_to_bytes(
 mod tests {
     use super::*;
     use super::super::HistoryBlock;
+
+    #[test]
+    fn snapshot_rejects_corrupt_middle_but_allows_inflight_tail() {
+        let user = r#"{"type":"user","message":{"content":"保留目标"}}"#;
+        assert_eq!(parse_snapshot(&format!("{user}\n{{\"unfinished")).unwrap().len(), 1);
+        assert!(parse_snapshot(&format!("{user}\nBROKEN\n{user}\n")).is_err());
+        assert!(parse_snapshot("BROKEN\n").is_err());
+    }
 
     fn line(v: serde_json::Value) -> String {
         v.to_string()
