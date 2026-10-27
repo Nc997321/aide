@@ -45,9 +45,21 @@ jobs:
           workspaces: src-tauri
       # 与 Tauri 无关的 Host 侧 crate：这是跨平台红线最该守的部分
       - name: test host-side crates
-        run: >
-          cargo test --manifest-path src-tauri/Cargo.toml
-          -p aide-workspace -p aide-core -p aide-link -p aide-host -p aide-computer
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml \
+            -p aide-workspace -p aide-core -p aide-link -p aide-host -p aide-computer \
+            2>&1 | tee "$RUNNER_TEMP/rust-tests.log"
+      - name: report Rust test failure
+        if: failure()
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          log = Path(os.environ["RUNNER_TEMP"]) / "rust-tests.log"
+          if log.exists():
+              tail = "\n".join(log.read_text(errors="replace").splitlines()[-100:])
+              escaped = tail.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+              print(f"::error title=Rust test failure::{escaped}")
 
   tauri-shell:
     name: tauri shell compile (macOS)
