@@ -89,5 +89,14 @@
             { "name": "permissions-changed", "session_routed": false }
           ] } } }
     ]
+  },
+  {
+    "name": "pending interaction snapshot is exposed without rewriting sessionId",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "call", "id": 77, "method": "list_pending_permissions", "params": { "sessionId": "s1" } } },
+      { "expect": { "type": "result", "id": 77, "value": { "sessionId": "s1" } } }
+    ]
   }
 ]

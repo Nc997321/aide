@@ -13,6 +13,7 @@ pub mod env;
 #[cfg(windows)]
 pub mod job_object;
 pub mod lsp_agent;
+pub mod permission_registry;
 pub mod ports;
 pub mod pump;
 use crate::provider::connection_fingerprint;
@@ -72,6 +73,8 @@ pub struct AgentRuntimeManager {
     job: Mutex<Option<job_object::KillOnCloseJob>>,
     /// 后台任务注册表：远程快照源（list_bg_tasks）。事件泵喂、Runtime 死亡清空。
     pub bg_tasks: bg_registry::BgTaskRegistry,
+    /// 实时请求的快照投影：晚加入的客户端恢复未决交互。
+    pub pending_permissions: permission_registry::PermissionRegistry,
     /// GUI 侧能力（浏览器查询 / 诊断 / 自动化观测），挂 GUI 的前门注入。见 [`ports`]。
     hooks: OnceLock<Box<dyn AgentHooks>>,
 }
@@ -92,6 +95,7 @@ impl AgentRuntimeManager {
             #[cfg(windows)]
             job: Mutex::new(None),
             bg_tasks: bg_registry::BgTaskRegistry::default(),
+            pending_permissions: permission_registry::PermissionRegistry::default(),
             hooks: OnceLock::new(),
         }
     }
@@ -365,6 +369,7 @@ impl AgentRuntimeManager {
 
     /// 标记会话进程结束（`session_dead` 事件 / `stop_chat_session` 命令）。
     pub fn mark_session_dead(&self, session_id: &str) {
+        self.pending_permissions.clear(session_id);
         self.session_alive.lock().unwrap().remove(session_id);
     }
 
@@ -376,6 +381,7 @@ impl AgentRuntimeManager {
 
     /// Runtime 进程整体死亡：所有会话一并标记结束（同 `bg_registry.clear_all`）。
     pub fn clear_all_session_alive(&self) {
+        self.pending_permissions.clear_all();
         self.session_alive.lock().unwrap().clear();
     }
 

@@ -67,6 +67,7 @@ pub static GROUPS: &[Group] = &[
             "set_session_meta",
             "session_alive",
             "list_bg_tasks",
+            "list_pending_permissions",
         ],
     },
     Group {

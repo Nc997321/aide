@@ -244,6 +244,10 @@ export class AideApi {
    * 的 auto）；message = 拒绝理由；sessionRules = 规则草稿（ohos 不推导，
    * 恒缺键 = Rust None，与上游空 opts 语义一致）。
    */
+  listPendingPermissions(sessionId: string): Promise<Record<string, Object>[]> {
+    return getTransport().invoke<Record<string, Object>[]>('list_pending_permissions', { 'sessionId': sessionId });
+  }
+
   permissionResponse(params: PermissionResponseParams): Promise<void> {
     const args: Record<string, Object> = {
       'sessionId': params.sessionId,

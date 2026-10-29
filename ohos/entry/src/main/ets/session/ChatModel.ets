@@ -45,7 +45,7 @@ import { hydrate as hydrateStore, loadOlder as loadOlderStore } from './chat/Cha
 import { routeChatEvent } from './chat/ChatEvents';
 import { ttsModel } from './chat/TtsModel';
 import { readerModel } from './chat/ReaderModel';
-import { uuid, fileExt, imageMime } from './chat/ChatWire';
+import { uuid, fileExt, imageMime, str } from './chat/ChatWire';
 import { sessionsModel } from './SessionsModel';
 import { workspaceModel } from './WorkspaceModel';
 import { providerModel } from './ProviderModel';
@@ -125,6 +125,7 @@ export class ChatModel {
   readonly store: ChatStore = new ChatStore();
 
   private listening: boolean = false;
+  private permissionSyncId: number = 0;
 
   /** 页面挂载时调用：幂等挂 chat-event + 重连监听。 */
   ensureListener(): void {
@@ -202,7 +203,9 @@ export class ChatModel {
   open(sid: string, name: string): void {
     ttsModel.stop(); // 切走即停：不念旧会话（对照原型 pickSession）
     readerModel.stop(); // 听书同理：面板播放列表是旧会话快照，切走即收
+    this.ensureListener();
     this.store.resetForOpen(sid, name);
+    void this.syncPendingPermissions();
     // 归属范围 = 打开瞬间的浏览范围（日常会话的档位默认判定；finalize 归属
     // 核对不读它——pendingSpawn 恒 false，见 ChatEvents.finalizeSpawn）
     this.store.spawnWsKey = sessionsModel.wsKey;
@@ -494,7 +497,7 @@ export class ChatModel {
   }
 
   /**
-   * 权限应答（出队后 invoke，失败提示不回滚队列——sidecar 会重发）。
+   * 权限应答只发送命令；出队由 sidecar 的 permission_cancelled 广播确认。
    * opts 语义对照上游 respondPermission：answers = AskUserQuestion 选项
    * 作答、reason = 拒绝理由、nextMode = 「批准并执行」的目标模式（计划
    * 批准 = 'auto'）；null = 不携带（Rust Option 缺键即 None）。
@@ -502,11 +505,6 @@ export class ChatModel {
    */
   async respondPermission(id: string, approved: boolean, opts: RespondPermissionOpts | null): Promise<void> {
     const sid: string = this.store.sid;
-    this.store.pendingPermissions = this.store.pendingPermissions
-      .filter((p: PermissionRequest) => p.id !== id);
-    ttsModel.stopPermission(id); // 已应答：这条的播报（若在播）停
-    // 本机已应答：列表「待确认」徽标同步终结（事件面幂等）
-    sessionsModel.clearWaitConfirm(sid);
     try {
       await api.permissionResponse({
         sessionId: sid,
@@ -812,12 +810,56 @@ export class ChatModel {
     }
   }
 
+  /** 快照恢复未决交互；请求期间的直播事件优先，切会话/再次同步使旧请求失效。 */
+  private async syncPendingPermissions(): Promise<void> {
+    const sid: string = this.store.sid;
+    const syncId: number = ++this.permissionSyncId;
+    if (sid === '') {
+      return;
+    }
+    while (this.store.sid === sid && this.permissionSyncId === syncId) {
+      const revision: number = this.store.permissionRevision;
+      try {
+        const pending: Record<string, Object>[] = await api.listPendingPermissions(sid);
+        if (this.store.sid !== sid || this.permissionSyncId !== syncId) {
+          return;
+        }
+        if (this.store.permissionRevision !== revision) {
+          continue; // 桌面可能已回答/取消，不能把旧快照中的问题复活
+        }
+        const ids: string[] = pending.map((p: Record<string, Object>) => str(p, 'id'));
+        const removed: PermissionRequest[] = this.store.pendingPermissions
+          .filter((p: PermissionRequest) => !ids.includes(p.id));
+        this.store.pendingPermissions = this.store.pendingPermissions
+          .filter((p: PermissionRequest) => ids.includes(p.id));
+        removed.forEach((p: PermissionRequest) => { ttsModel.stopPermission(p.id); });
+        pending.forEach((p: Record<string, Object>) => { routeChatEvent(this.store, p); });
+        const ordered: PermissionRequest[] = [];
+        ids.forEach((id: string) => {
+          const req: PermissionRequest | undefined = this.store.pendingPermissions
+            .find((p: PermissionRequest) => p.id === id);
+          if (req !== undefined) {
+            ordered.push(req);
+          }
+        });
+        this.store.pendingPermissions = ordered;
+        return;
+      } catch (e) {
+        if (this.store.sid === sid && this.permissionSyncId === syncId) {
+          this.store.sysNote = `待处理请求恢复失败：${e instanceof Error ? e.message : String(e)}（请确认 Host 已更新）`;
+        }
+        return;
+      }
+    }
+  }
+
   /** 断线重连整页重载：复位由 resetForReload 承担（只清消息/游标，不动 isBusy）。 */
   private async reload(): Promise<void> {
     if (this.store.sid === '') {
       return;
     }
     this.store.resetForReload();
+    void this.syncPendingPermissions();
     await hydrateStore(this.store);
     await this.syncBgTasks();
   }

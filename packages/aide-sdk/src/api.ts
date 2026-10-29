@@ -195,6 +195,11 @@ export const api = {
     return getTransport().invoke("send_message", { ...params });
   },
   /** 权限弹窗应答。sessionRules = 「允许并记住」勾选的规则草稿。 */
+  /** 未终结的 permission_request 原始事件；供晚加入/重连客户端恢复交互。 */
+  listPendingPermissions(sessionId: string): Promise<Record<string, unknown>[]> {
+    return getTransport().invoke('list_pending_permissions', { sessionId });
+  },
+
   permissionResponse(params: PermissionResponseParams): Promise<void> {
     return getTransport().invoke("permission_response", { ...params });
   },

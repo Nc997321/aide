@@ -163,6 +163,25 @@ mod tests {
         assert_eq!(backend.host().id, "dev");
     }
 
+    #[tokio::test]
+    async fn late_client_recovers_pending_interactions_through_the_host_command_table() {
+        let core = crate::test_core(Arc::new(NullSink));
+        let backend = CoreBackend::new(&core, "dev".into());
+        let request = json!({"type":"permission_request", "session_id":"s1", "id":"q1",
+            "name":"AskUserQuestion", "input":{"questions":[{"question":"continue?"}]}});
+        core.runtime.pending_permissions.feed(&request);
+        assert_eq!(backend.call("list_pending_permissions", json!({"sessionId":"s1"})).await.unwrap(), json!([request]));
+        assert_eq!(backend.call("list_pending_permissions", json!({"sessionId":"other"})).await.unwrap(), json!([]));
+        core.runtime.pending_permissions.feed(&json!({"type":"permission_cancelled", "session_id":"s1", "id":"q1"}));
+        assert_eq!(backend.call("list_pending_permissions", json!({"sessionId":"s1"})).await.unwrap(), json!([]));
+        core.runtime.pending_permissions.feed(&request);
+        core.runtime.mark_session_dead("s1");
+        assert!(core.runtime.pending_permissions.list("s1").is_empty());
+        core.runtime.pending_permissions.feed(&request);
+        core.runtime.clear_all_session_alive();
+        assert!(core.runtime.pending_permissions.list("s1").is_empty());
+    }
+
     /// 总线事件经 Link 帧送出：先 subscribed，再回放，再实时；只送目录里公开的事件。
     #[tokio::test]
     async fn events_flow_from_the_bus_as_link_frames_with_resume() {

@@ -51,6 +51,8 @@ export class ChatStore {
   @Trace spawnWsKey: string = '';
   /** 挂起的权限请求队列（FIFO，弹层永远显示队头；并行工具会同时发多条）。 */
   @Trace pendingPermissions: PermissionRequest[] = [];
+  /** 交互生命周期版本：快照返回期间有新事件时，丢弃旧快照重新读取。 */
+  permissionRevision: number = 0;
   /** 忙时排队、还没被模型接入的消息（jump_queued 写入，jump_promoted / jump_withdrawn 按 id 撤）。 */
   @Trace pendingJumps: PendingJump[] = [];
   /** 本端发起撤回的排队 id（× / 停止）：撤成时文字退回本端输入框。只是本端意图。 */
@@ -267,6 +269,7 @@ export class ChatStore {
     this.hydrated = false;
     this.hydrateFailed = false;
     this.isBusy = false;
+    this.permissionRevision += 1;
     this.pendingPermissions = [];
     this.pendingJumps = [];
     this.withdrawRequests = [];
@@ -519,6 +522,7 @@ export class ChatStore {
   resetRuntimeState(): void {
     this.finishStreaming();
     this.isBusy = false;
+    this.permissionRevision += 1;
     this.pendingPermissions = [];
     this.pendingJumps = [];
     this.liveActivities = [];

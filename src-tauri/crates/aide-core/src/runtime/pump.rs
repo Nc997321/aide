@@ -109,6 +109,7 @@ pub fn start(p: Pump) {
                     // 在线、是唯一看全 bg_task_* 流的一端；手机打开会话/重连时
                     // 对账离线期间错过的任务。进程级死亡兜底见 emit_runtime_dead。
                     core.runtime.bg_tasks.feed(&event);
+                    core.runtime.pending_permissions.feed(&event);
                     // 会话存活表：session_init 登记 / session_dead、session_slept（子会话空闲休眠）移除。远程端
                     // 判断「跟随全局还是锁定会话供应商」的唯一权威来源（前端的
                     // useSessionState 在 Rust 侧拿不到）。

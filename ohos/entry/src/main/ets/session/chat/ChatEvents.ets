@@ -138,6 +138,10 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       break;
     }
     case 'permission_request': {
+      store.permissionRevision += 1;
+      if (store.pendingPermissions.some((p: PermissionRequest) => p.id === str(payload, 'id'))) {
+        break; // 快照与直播/续传可重叠，保留已有作答草稿
+      }
       const req: PermissionRequest = new PermissionRequest();
       req.id = str(payload, 'id');
       req.name = str(payload, 'name');
@@ -159,6 +163,7 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
       break;
     }
     case 'permission_cancelled': {
+      store.permissionRevision += 1;
       const id: string = str(payload, 'id');
       store.pendingPermissions = store.pendingPermissions.filter((p: PermissionRequest) => p.id !== id);
       ttsModel.stopPermission(id); // 桌面侧已取消：正在播的对应播报停

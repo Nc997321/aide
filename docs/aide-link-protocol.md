@@ -308,7 +308,7 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 | 组 | 方法 |
 |---|---|
 | `chat` 聊天控制 | `send_message` `permission_response` `interrupt_session` `withdraw_queued_message` `stop_chat_session` `stop_bg_task` `set_model` `set_effort` `set_permission_mode` `btw_ask` `get_default_models` `get_default_permission_modes` |
-| `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` |
+| `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` `list_pending_permissions` |
 | `workspace` 工作区 | `list_workspaces` `daily_workspace` `get_active_workspace` `is_workspace_trusted` `trust_workspace` `untrust_workspace` |
 | `settings` 设置与供应商 | `get_settings` `set_settings` `get_providers` `set_providers` `get_active_provider_id` `set_active_provider_id` `get_provider_catalog` `refresh_models` `claude_credentials_exist` `load_notifications` `save_notifications` |
 | `files` 文件（只读，限已注册工作区） | `read_file_content` `read_file_base64` |
@@ -339,7 +339,9 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 ### 多端一致性（客户端必须遵守，沿用 Aide 的红线）
 
 桌面、手机共享同一会话：**UI 状态只认事件通道，不认本地乐观更新**。用户气泡只在收到 `user_message` 事件时渲染；
-权限请求只认 `permission_request` / `permission_cancelled` 事件；等等——细则见仓库 `CLAUDE.md`「命令 / 事件双通道契约」。
+权限请求的存活由 `permission_request` / `permission_cancelled` 事件确定。晚加入、切换会话或续传存在缺口的客户端，先监听事件，再调用 `list_pending_permissions {sessionId}`，恢复该会话仍未终结的请求。结果为原始 `permission_request` 载荷数组（按发起顺序，含 `id` / `name` / `input` / `session_id` 和可选子代理来源）。已批准、拒绝、取消以及已结束会话的请求不返回；不从聊天历史推测。
+
+快照与实时事件可重叠：按请求 id 幂等合并、保留已有作答草稿；查询期间收到请求生命周期事件时，丢弃旧快照重新查询，避免已作答的问题重新弹出。查询失败（含旧 Host 不支持）应明确提示未能恢复，保留已有实时队列，不伪造弹窗。
 
 ### 8.1 子会话（2026-10-16 新增，协议向后兼容）
 

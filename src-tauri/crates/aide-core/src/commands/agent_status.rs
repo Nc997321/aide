@@ -12,6 +12,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("session_alive", session_alive),
     command!("session_notification_info", session_notification_info),
     command!("list_bg_tasks", list_bg_tasks),
+    command!("list_pending_permissions", list_pending_permissions),
     command!("test_mcp_connection", test_mcp_connection),
     command!("agent_tool_result", agent_tool_result),
 ];
@@ -96,6 +97,12 @@ async fn session_notification_info(
 /// 只做实时转发无重放，离线期间错过的任务靠这里回填）。
 async fn list_bg_tasks(core: Arc<Core>, a: SessionIdArgs) -> Result<Vec<BgTaskSnapshot>, String> {
     Ok(core.runtime.bg_tasks.list(&a.session_id))
+}
+
+/// 返回尚未终结的 permission_request 原始事件（含 AskUserQuestion / 子代理来源）。
+/// 历史消息不具有请求存活语义，客户端打开会话或重连时用此快照对账。
+async fn list_pending_permissions(core: Arc<Core>, a: SessionIdArgs) -> Result<Vec<serde_json::Value>, String> {
+    Ok(core.runtime.pending_permissions.list(&a.session_id))
 }
 
 // ── MCP 探活 ──
