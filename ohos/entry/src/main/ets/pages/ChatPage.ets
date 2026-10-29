@@ -1510,21 +1510,21 @@ export struct ChatPage {
     })
   }
 
-  /** ＋ 按钮（chip 行右端；忙碌不置灰——排队照发，附件随消息透传 sidecar）。 */
+  /** ＋ 按钮（操作栏左端；忙碌不置灰——排队照发，附件随消息透传 sidecar）。 */
   @Builder
   plusBtn() {
     Row() {
       SymbolGlyph($r('sys.symbol.plus'))
-        .fontSize(15)
-        .fontColor([$r('app.color.text_secondary')])
+        .fontSize(22)
+        .fontColor([$r('app.color.text_primary')])
     }
-    .width(32)
-    .height(32)
-    .borderRadius(10)
+    .width(40)
+    .height(40)
+    .borderRadius(20)
     .backgroundColor($r('app.color.input_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
+    .accessibilityText('添加附件')
     .onClick(() => {
       this.store.plusPop = !this.store.plusPop;
       this.store.modelPop = false;
@@ -1616,7 +1616,7 @@ export struct ChatPage {
       .backgroundColor($r('app.color.card_bg'))
       .border({ width: 1, color: $r('app.color.line') })
       .shadow({ radius: 36, color: '#241D2129', offsetX: 0, offsetY: 12 })
-      .margin({ right: 12, bottom: this.chipBarHeight + 16 })
+      .margin({ left: 12, bottom: this.chipBarHeight + 24 })
       .onClick(() => {
         // 空点击拦截落穿
       })
@@ -1625,7 +1625,7 @@ export struct ChatPage {
     .width('100%')
     .height('100%')
     .justifyContent(FlexAlign.End)
-    .alignItems(HorizontalAlign.End)
+    .alignItems(HorizontalAlign.Start)
     .onClick(() => {
       // 遮罩即容器：空白处点击收起
       this.store.handlePopups();
@@ -1760,59 +1760,60 @@ export struct ChatPage {
 
   @Builder
   inputBarView() {
-    // 原型 .ch-input：附件条（有附件时）在上、输入行、工具行（.ch-bar）在下
-    Column({ space: 8 }) {
+    // 整块圆角输入卡：正文独占上层，附件 / 模型档位 / 发送收在底部操作栏。
+    Column({ space: 10 }) {
       if (this.att.items.length > 0) {
         this.atStripView()
       }
-      Row({ space: 8 }) {
-        TextArea({ text: this.draft, placeholder: this.inputPlaceholder() })
-          .onChange((value: string) => {
-            this.draft = value;
-          })
-          .onFocus(() => {
-            // 键盘弹起让位 chip 浮层：聚焦即收（浮层经遮罩/返回键亦可收）
-            this.store.handlePopups();
-          })
-          .fontSize(14)
-          .fontColor($r('app.color.text_primary'))
-          .placeholderColor($r('app.color.text_secondary'))
-          .backgroundColor($r('app.color.input_bg'))
-          .borderRadius(20)
-          .padding({ left: 14, right: 14, top: 9, bottom: 9 })
-          .constraintSize({ minHeight: 40, maxHeight: 120 })
-          .layoutWeight(1)
-          .enabled(this.conn.state === 'authed')
+      TextArea({ text: this.draft, placeholder: this.inputPlaceholder() })
+        .onChange((value: string) => {
+          this.draft = value;
+        })
+        .onFocus(() => {
+          this.store.handlePopups();
+        })
+        .fontSize(18)
+        .fontColor($r('app.color.text_primary'))
+        .placeholderColor($r('app.color.text_secondary'))
+        .backgroundColor(Color.Transparent)
+        .borderRadius(0)
+        .padding({ left: 4, right: 4, top: 6, bottom: 6 })
+        .constraintSize({ minHeight: 56, maxHeight: 144 })
+        .width('100%')
+        .enabled(this.conn.state === 'authed')
 
+      Row({ space: 8 }) {
+        this.plusBtn()
         Row() {
-          SymbolGlyph($r('sys.symbol.arrow_up'))
-            .fontSize(18)
-            .fontColor([Color.White])
+          this.modelChip()
+          this.effortChip()
         }
-        .width(40)
+        .constraintSize({ maxWidth: this.rootWidth > 0 ? Math.max(100,
+          this.rootWidth - (this.store.contextUsage !== null ? 172 : 132)) : 220 })
         .height(40)
         .borderRadius(20)
-        .backgroundColor(this.canSend() ? $r('app.color.accent') : $r('app.color.btn_disabled_bg'))
-        .justifyContent(FlexAlign.Center)
+        .backgroundColor($r('app.color.input_bg'))
         .alignItems(VerticalAlign.Center)
-        .onClick(() => {
-          this.onSend();
-        })
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Bottom)
 
-      // 工具行（原型 .ch-bar）：模型 / 思考程度 / ＋ 附件（右端）。
-      // ＋ 左侧的原型空白位挂上下文用量环（桌面 ContextUsageRing 的同位
-      // 语义：数据未到达不渲染，不挤占默认布局）
-      Row({ space: 8 }) {
-        this.modelChip()
-        this.effortChip()
         Blank()
         if (this.store.contextUsage !== null) {
           this.contextRing()
         }
-        this.plusBtn()
+        Row() {
+          SymbolGlyph($r('sys.symbol.arrow_up'))
+            .fontSize(22)
+            .fontColor([this.canSend() ? $r('app.color.card_bg') : $r('app.color.text_secondary')])
+        }
+        .width(40)
+        .height(40)
+        .borderRadius(20)
+        .backgroundColor(this.canSend() ? $r('app.color.text_primary') : $r('app.color.input_bg'))
+        .justifyContent(FlexAlign.Center)
+        .alignItems(VerticalAlign.Center)
+        .accessibilityText('发送消息')
+        .onClick(() => {
+          this.onSend();
+        })
       }
       .width('100%')
       .alignItems(VerticalAlign.Center)
@@ -1824,37 +1825,30 @@ export struct ChatPage {
       })
     }
     .width('100%')
-    .padding({ left: 12, right: 12, top: 8, bottom: 8 })
-    // background() 而非 backgroundColor()：输入栏贴安全区底缘，白色卡背景
-    // 延伸进底部导航条避让区（组件级沉浸）——否则灰条出现在白卡下方仍显割裂
-    .background($r('app.color.card_bg'))
-    .border({ width: { top: 1 }, color: $r('app.color.line') })
+    .padding({ left: 12, right: 12, top: 10, bottom: 12 })
+    .backgroundColor($r('app.color.card_bg'))
+    .borderRadius(28)
+    .border({ width: 1, color: $r('app.color.line') })
   }
 
-  // ── 模型 / 思考程度 chip + 浮层（原型 .md-chip/.ef-chip/.md-pop/.ef-pop）──
-
-  /** 模型 chip：供应商商标 + 模型名 + 下折角标。 */
+  // 模型与思考档位共用胶囊背景，各自保留独立选择入口。
   @Builder
   modelChip() {
     Row({ space: 5 }) {
-      ProviderMark({ p: this.pv.activeProvider(), markSize: 12, tint: $r('app.color.text_secondary') })
+      ProviderMark({ p: this.pv.activeProvider(), markSize: 14, tint: $r('app.color.text_secondary') })
       Text(this.modelChipLabel())
-        .fontSize(11)
-        .fontWeight(600)
-        .fontColor($r('app.color.text_secondary'))
+        .fontSize(14)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .constraintSize({ maxWidth: 118 })
-      SymbolGlyph($r('sys.symbol.chevron_down'))
-        .fontSize(9)
-        .fontColor([$r('app.color.text_secondary')])
-        .opacity(0.6)
+        .constraintSize({ maxWidth: this.rootWidth > 0 ? Math.max(40,
+          Math.min(132, this.rootWidth - (this.store.contextUsage !== null ? 259 : 219))) : 100 })
     }
-    .padding({ left: 11, right: 11, top: 4, bottom: 4 })
-    .borderRadius(99)
-    .backgroundColor($r('app.color.input_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
+    .height(40)
+    .padding({ left: 14, right: 4 })
     .alignItems(VerticalAlign.Center)
+    .accessibilityText('选择模型')
     .onClick(() => {
       this.onModelChipTap();
     })
@@ -1866,28 +1860,18 @@ export struct ChatPage {
     })
   }
 
-  /** 思考程度 chip：warn 色档位图标 + 「思考 · 档名」+ 下折角标。 */
   @Builder
   effortChip() {
-    Row({ space: 5 }) {
-      SymbolGlyph(this.effortIcon(this.store.effort))
-        .fontSize(11)
-        .fontColor([$r('app.color.status_warn')])
-      Text(`思考 · ${effortLabel(this.store.effort)}`)
-        .fontSize(11)
-        .fontWeight(600)
+    Row() {
+      Text(effortLabel(this.store.effort))
+        .fontSize(14)
         .fontColor($r('app.color.text_secondary'))
         .maxLines(1)
-      SymbolGlyph($r('sys.symbol.chevron_down'))
-        .fontSize(9)
-        .fontColor([$r('app.color.text_secondary')])
-        .opacity(0.6)
     }
-    .padding({ left: 11, right: 11, top: 4, bottom: 4 })
-    .borderRadius(99)
-    .backgroundColor($r('app.color.input_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
+    .height(40)
+    .padding({ left: 4, right: 14 })
     .alignItems(VerticalAlign.Center)
+    .accessibilityText('选择思考程度')
     .onClick(() => {
       this.store.effortPop = !this.store.effortPop;
       this.store.modelPop = false;
@@ -1921,7 +1905,7 @@ export struct ChatPage {
       .backgroundColor($r('app.color.card_bg'))
       .border({ width: 1, color: $r('app.color.line') })
       .shadow({ radius: 36, color: '#241D2129', offsetX: 0, offsetY: 12 })
-      .margin({ left: 12, bottom: this.chipBarHeight + 16 })
+      .margin({ left: 12, bottom: this.chipBarHeight + 24 })
       .onClick(() => {
         // 空点击拦截落穿：面板内空白不关浮层（选项行有自己的 onClick）
       })
@@ -1998,7 +1982,7 @@ export struct ChatPage {
       .backgroundColor($r('app.color.card_bg'))
       .border({ width: 1, color: $r('app.color.line') })
       .shadow({ radius: 36, color: '#241D2129', offsetX: 0, offsetY: 12 })
-      .margin({ left: this.effortPopLeft(), bottom: this.chipBarHeight + 16 })
+      .margin({ left: this.effortPopLeft(), bottom: this.chipBarHeight + 24 })
       .onClick(() => {
         // 空点击拦截落穿
       })
@@ -2119,7 +2103,7 @@ export struct ChatPage {
   /** 思考浮层左缘：锚思考 chip（模型 chip 右缘 + 间距 8）；锚位 + 卡宽将右缘
    *  顶出屏幕时整体左收（右边距 12 对齐输入栏），极窄屏兜底 12。 */
   private effortPopLeft(): number {
-    const anchor: number = 12 + this.modelChipWidth + 8;
+    const anchor: number = 12 + 40 + 8 + this.modelChipWidth;
     if (this.rootWidth <= 0) {
       return anchor;
     }
