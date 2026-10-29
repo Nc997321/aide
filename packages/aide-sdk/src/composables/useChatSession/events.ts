@@ -1023,6 +1023,13 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       }
       break;
     }
+    case "session_slept": {
+      // 正常空闲回收：进程已关闭，侧栏不再亮「存活空闲」灯。
+      // 不添加退出错误，也不清对话任务记录；下一条消息由 Host 原地 resume。
+      resetRuntimeState(store, false);
+      setSessionState(sid, "stopped");
+      break;
+    }
     case "session_dead": {
       // 进程真的没了（Rust 侧 reader EOF 或心跳看门狗超时合成）。
       resetRuntimeState(store);

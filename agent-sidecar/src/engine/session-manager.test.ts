@@ -10,6 +10,24 @@ import { SessionManager } from "./session-manager.js";
  * - 非 session_init 事件不触发 re-key
  * - re-key 后事件自动带 realId（emit 闭包读 worker.routingKey）
  */
+describe("SessionManager — 子会话休眠回收", () => {
+  it("休眠关闭 query、广播事件并摘掉 worker；下一条消息能重新创建", () => {
+    const emitted: any[] = [];
+    const manager = new SessionManager({ emit: (sid, event) => emitted.push({ sid, event }) });
+    const worker = manager.__testCreateWorker("idle-child");
+    const close = vi.fn();
+    // 注入一个活着但没有在飞回合的 query，验证真实 stop/selfTeardown 接线。
+    Object.assign(worker, { subsessionParent: "parent", currentQuery: { close } });
+    expect(worker.sleepIfIdle()).toBe(true);
+    expect(close).toHaveBeenCalledOnce();
+    expect(manager.getAllWorkers().has("idle-child")).toBe(false);
+    expect(emitted.some(e => e.sid === "idle-child" && e.event.type === "session_slept")).toBe(true);
+    const resumed = manager.__testCreateWorker("idle-child");
+    expect(resumed).not.toBe(worker);
+    manager.stopSession("idle-child");
+  });
+});
+
 describe("SessionManager — session_init re-key", () => {
   let stdoutSpy: ReturnType<typeof vi.spyOn>;
 

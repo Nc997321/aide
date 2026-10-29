@@ -491,7 +491,7 @@ type ChatEventBody =
   // Rust 注入；detail 携带 stderr 尾部用于诊断。列在此处以统一 chat-event 协议真相源。
   | { type: "session_dead"; reason: "exit" | "heartbeat_timeout"; detail?: string }
   // 子会话空闲休眠：进程已安静关掉（不是出事），下一条消息带 resume id 原地续上。
-  // 界面不变（仍是「空闲」）；Host 据此把它从存活表摘掉。见 session-worker/idleSleep.ts。
+  // 正常回收，不渲染退出错误；Host 摘掉存活表，UI 熄灭存活状态灯。见 session-worker/idleSleep.ts。
   | { type: "session_slept" }
   // Runtime 健康快照：由 SessionManager 每 30s emit 一次，供前端诊断仪表盘消费。
   | {

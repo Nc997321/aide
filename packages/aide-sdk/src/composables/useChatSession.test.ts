@@ -498,6 +498,27 @@ describe("useChatSession per-session store", () => {
     }
   });
 
+  it("子会话休眠熄灭列表状态灯，保留历史且不显示崩溃错误，下次发送可恢复", async () => {
+    const { state, dotTone, setSessionState } = useSessionState();
+    const chat = useChatSession(ref<string | null>("uuid-a"));
+    await flush();
+    await chat.sendMessage("q");
+    emit({ type: "message_stop", session_id: "uuid-a", stop_reason: "end_turn" });
+    await flush();
+    expect(state["uuid-a"]).toBe("waiting");
+    setSessionState("parent", "waiting");
+    const history = [...chat.messages.value];
+    emit({ type: "session_slept", session_id: "uuid-a" });
+    await flush();
+    expect(state["uuid-a"]).toBe("stopped");
+    expect(dotTone("uuid-a")).toBe("stopped");
+    expect(chat.isBusy.value).toBe(false);
+    expect(chat.messages.value).toEqual(history);
+    expect(state.parent).toBe("waiting");
+    await chat.sendMessage("继续");
+    expect(state["uuid-a"]).toBe("running");
+  });
+
   it("session_dead 置 stopped(灰)并解除忙碌", async () => {
     const { state, dotTone } = useSessionState();
     const sid = ref<string | null>("uuid-a");
