@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref } from "vue";
 import ThemedSelect from "@/components/ThemedSelect.vue";
 import type { PermissionEffect, PermissionMatcher, PermissionRuleDraft } from "@/types/permissions";
@@ -126,7 +127,7 @@ function onSubmit() {
       </label>
       <label v-if="bashMode !== 'all'" class="field">
         <span class="field-label">{{ bashMode === "prefix" ? "前缀文本" : "包含文本" }}</span>
-        <input v-model="bashValue" class="text-input" :placeholder="bashMode === 'prefix' ? 'pnpm test' : 'rm -rf'" />
+        <AInput unstyled v-model="bashValue" class="text-input" :placeholder="bashMode === 'prefix' ? 'pnpm test' : 'rm -rf'" />
       </label>
     </div>
 
@@ -137,7 +138,7 @@ function onSubmit() {
       </label>
       <label class="field">
         <span class="field-label">文件夹（可选，留空=任意路径）</span>
-        <input v-model="pathFolder" class="text-input" placeholder="/path/to/folder" />
+        <AInput unstyled v-model="pathFolder" class="text-input" placeholder="/path/to/folder" />
       </label>
     </div>
 
@@ -148,7 +149,7 @@ function onSubmit() {
       </label>
       <label class="field">
         <span class="field-label">等于</span>
-        <input v-model="fieldEquals" class="text-input" placeholder="https://example.com" />
+        <AInput unstyled v-model="fieldEquals" class="text-input" placeholder="https://example.com" />
       </label>
     </div>
 

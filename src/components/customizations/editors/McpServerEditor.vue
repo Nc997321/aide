@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, reactive, computed, watch } from "vue";
 import type { CustomizationItem, McpServer } from "../../../types/customization";
 import { testMcpConnection } from "../../../api/customization";
@@ -115,7 +116,7 @@ function save() {
     <template v-if="form.transport === 'stdio'">
       <div class="field">
         <label>command</label>
-        <input v-model="form.command" :disabled="readOnly" />
+        <AInput unstyled v-model="form.command" :disabled="readOnly" />
       </div>
       <div class="field">
         <label>args <span class="hint">每行一个，避免引号转义</span></label>
@@ -124,8 +125,8 @@ function save() {
       <div class="field">
         <label>env</label>
         <div class="kv" v-for="(e, i) in envEntries" :key="i">
-          <input v-model="e[0]" placeholder="键" :disabled="readOnly" />
-          <input v-model="e[1]" placeholder="值" :disabled="readOnly" />
+          <AInput unstyled v-model="e[0]" placeholder="键" :disabled="readOnly" />
+          <AInput unstyled v-model="e[1]" placeholder="值" :disabled="readOnly" />
           <button v-if="!readOnly" class="x" @click="envEntries.splice(i, 1)">×</button>
         </div>
         <button v-if="!readOnly" class="btn btn-ghost add-kv" @click="envEntries.push(['', ''])">+ 添加</button>
@@ -135,20 +136,20 @@ function save() {
     <template v-else-if="form.transport === 'sse'">
       <div class="field">
         <label>url</label>
-        <input v-model="form.url" :disabled="readOnly" />
+        <AInput unstyled v-model="form.url" :disabled="readOnly" />
       </div>
     </template>
 
     <template v-else-if="form.transport === 'http'">
       <div class="field">
         <label>url</label>
-        <input v-model="form.url" :disabled="readOnly" />
+        <AInput unstyled v-model="form.url" :disabled="readOnly" />
       </div>
       <div class="field">
         <label>headers</label>
         <div class="kv" v-for="(e, i) in headersEntries" :key="i">
-          <input v-model="e[0]" placeholder="键" :disabled="readOnly" />
-          <input v-model="e[1]" placeholder="值" :disabled="readOnly" />
+          <AInput unstyled v-model="e[0]" placeholder="键" :disabled="readOnly" />
+          <AInput unstyled v-model="e[1]" placeholder="值" :disabled="readOnly" />
           <button v-if="!readOnly" class="x" @click="headersEntries.splice(i, 1)">×</button>
         </div>
         <button v-if="!readOnly" class="btn btn-ghost add-kv" @click="headersEntries.push(['', ''])">+ 添加</button>

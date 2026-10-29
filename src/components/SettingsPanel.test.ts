@@ -72,7 +72,7 @@ function mountPanel(initialTab = "about") {
     // by default, which would keep nav + content out of document.body and make
     // the assertions below read empty. Disable that one stub so Teleport renders
     // for real while child components (DiagnosticsDashboard etc.) stay stubbed.
-    global: { stubs: { Teleport: false } },
+    global: { stubs: { Teleport: false, AInput: false } },
   });
   return wrapper;
 }

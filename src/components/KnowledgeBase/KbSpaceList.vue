@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 空间列表：侧栏里「空间」那一段。
 //
 // 本组件只管选中与重命名。**新建空间不在这里**：空间段在只有一个空间时整段隐藏，
@@ -74,7 +75,7 @@ const vFocus = {
       @click="emit('select', s.id)"
       @keydown.enter.prevent="emit('select', s.id)"
     >
-      <input
+      <AInput unstyled
         v-if="renaming === s.id"
         data-space-rename
         v-model="renameDraft"

@@ -66,6 +66,34 @@ describe("ModelRoster.adoptFromInit", () => {
 });
 
 describe("ModelRoster.resolveDropdownValue", () => {
+  it("无法匹配的实际模型加入选项，UI 不会误选列表首项", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery(INIT_MODELS), "claude-sonnet-5");
+    expect(r.adoptConcreteModel("gateway-model-261017")).toBe("gateway-model-261017");
+    r.adoptConcreteModel("gateway-model-261017");
+    expect(r.models.filter(m => m.value === "gateway-model-261017")).toEqual([
+      { value: "gateway-model-261017", displayName: "gateway-model-261017" },
+    ]);
+  });
+  it("运行时数字版本用横杠并带日期：匹配配置中的点号版本，不落到默认 Kimi", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery([
+      { value: "default", displayName: "Kimi", resolvedModel: "kimi-k3.1-pro[1m]" },
+      { value: "sonnet", displayName: "DeepSeek", resolvedModel: "deepseek-v4.1-flash" },
+    ]), "deepseek-v4.1-flash");
+    expect(r.resolveDropdownValue("deepseek-v4-1-flash-261017")).toBe("deepseek-v4.1-flash");
+  });
+
+  it("多个数字版本写法同时存在时不猜测，保留实际回报", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery([
+      { value: "a", displayName: "A", resolvedModel: "model-v4.1" },
+      { value: "b", displayName: "B", resolvedModel: "model-v4-1" },
+    ]), "model-v4.1");
+    expect(r.resolveDropdownValue("model-v4-1-261017")).toBe("model-v4-1");
+    expect(r.resolveDropdownValue("model-v4.1-261017")).toBe("model-v4.1");
+    expect(r.resolveDropdownValue("another-model-261017")).toBe("another-model-261017");
+  });
   it("精确命中 / 变体后缀前缀归一 / 未知原样", async () => {
     const r = new ModelRoster();
     await r.adoptFromInit(fakeQuery(INIT_MODELS), "");

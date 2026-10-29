@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // Host 启动页：一眼看到所有 Host（本机 / WSL 发行版 / SSH 主机）与各自的最近项目，点一下进
 // 它的窗口。最近项目是桌面自己记的（不连接任何 Host 就能列），连接发生在点开之后——一个窗口
 // = 一个 Host，点哪台就开（或聚焦）哪台的窗口。
@@ -189,7 +190,7 @@ function addCustomSsh() {
         <div class="hl-add">
           <button v-if="!showCustomSsh" class="hl-link" @click="showCustomSsh = true">+ SSH 主机</button>
           <span v-else class="hl-ssh-input">
-            <input v-model="customSsh" placeholder="~/.ssh/config 别名或 user@host" @keydown.enter="addCustomSsh" />
+            <AInput unstyled v-model="customSsh" placeholder="~/.ssh/config 别名或 user@host" @keydown.enter="addCustomSsh" />
             <button class="hl-open" @click="addCustomSsh">连接</button>
           </span>
         </div>

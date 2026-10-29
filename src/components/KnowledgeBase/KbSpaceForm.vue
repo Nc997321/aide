@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 新建空间表单。**不是独立弹窗**——它是 `useModal().custom()` 的 contents：
 // ModalDialog 负责遮罩、层级、Esc/overlay 关闭，这里只管三个字段与校验，
 // 按契约 emit submit(payload) / cancel。
@@ -48,11 +49,11 @@ const vFocus = {
   <div data-space-form class="kb-form">
     <label>
       标识<span class="kb-form-hint">小写字母 / 数字 / -，建后不可改</span>
-      <input v-model="key" data-space-key v-focus spellcheck="false" placeholder="eng-handbook" />
+      <AInput unstyled v-model="key" data-space-key v-focus spellcheck="false" placeholder="eng-handbook" />
     </label>
     <label>
       名称
-      <input v-model="name" data-space-name placeholder="工程手册" @keydown.enter="onSubmit" />
+      <AInput unstyled v-model="name" data-space-name placeholder="工程手册" @keydown.enter="onSubmit" />
     </label>
     <label>
       可见性

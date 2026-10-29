@@ -5,6 +5,13 @@ import ProviderLogo from "./ProviderLogo.vue";
 import { providerLogo } from "@aide/sdk/utils/providerLogos";
 
 describe("ProviderLogo", () => {
+  it("火山方舟保留商标的四层路径与蓝青配色", () => {
+    const logo = providerLogo("volcengine");
+    const w = mount(ProviderLogo, { props: { kind: "volcengine" } });
+    expect(w.findAll("path").map(p => ({ path: p.attributes("d"), color: p.attributes("fill") }))).toEqual(logo?.paths);
+    expect(w.findAll("path")).toHaveLength(4);
+    w.unmount();
+  });
   it("CPA 中转使用 OpenAI 图标，不再显示存量字母 C", () => {
     const logo = providerLogo("cpa_gpt");
     expect(logo).toBeDefined();

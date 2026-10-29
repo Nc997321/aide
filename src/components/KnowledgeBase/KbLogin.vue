@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 知识库入口。打开面板未登录时直接落在这里，没有中间首屏。
 // 三种互斥状态，由服务端的 initialized 决定走哪条：
 //
@@ -132,37 +133,37 @@ function onInvitePaste(e: ClipboardEvent): void {
       <template v-if="mode === 'setup'">
         <label>
           <span>用户名</span>
-          <input v-model="username" type="text" autocomplete="username" placeholder="登录用，如 zhangsan" />
+          <AInput unstyled v-model="username" type="text" autocomplete="username" placeholder="登录用，如 zhangsan" />
         </label>
         <label>
           <span>昵称</span>
-          <input v-model="displayName" type="text" placeholder="团队里显示的名字" />
+          <AInput unstyled v-model="displayName" type="text" placeholder="团队里显示的名字" />
         </label>
         <label>
           <span>口令（可留空）</span>
-          <input v-model="password" type="password" autocomplete="new-password" placeholder="留空则只能凭邀请链接进入" />
+          <AInput unstyled v-model="password" type="password" autocomplete="new-password" placeholder="留空则只能凭邀请链接进入" />
         </label>
         <label>
           <span>邮箱（可选）</span>
-          <input v-model="email" type="email" placeholder="仅用于找回与通知" />
+          <AInput unstyled v-model="email" type="email" placeholder="仅用于找回与通知" />
         </label>
       </template>
 
       <template v-else-if="mode === 'login'">
         <label>
           <span>用户名或邮箱</span>
-          <input v-model="account" type="text" autocomplete="username" required />
+          <AInput unstyled v-model="account" type="text" autocomplete="username" required />
         </label>
         <label>
           <span>口令</span>
-          <input v-model="password" type="password" autocomplete="current-password" required />
+          <AInput unstyled v-model="password" type="password" autocomplete="current-password" required />
         </label>
       </template>
 
       <template v-else>
         <label>
           <span>邀请链接</span>
-          <input
+          <AInput unstyled
             v-model="inviteInput"
             type="text"
             placeholder="http://host:8788/join#… 或直接贴令牌"
@@ -183,7 +184,7 @@ function onInvitePaste(e: ClipboardEvent): void {
 
       <label v-if="showAddr" class="kb-addr">
         <span>knowledge-server 地址</span>
-        <input v-model="baseUrl" type="url" @blur="onBaseBlur" @keydown.enter.prevent="onBaseBlur" />
+        <AInput unstyled v-model="baseUrl" type="url" @blur="onBaseBlur" @keydown.enter.prevent="onBaseBlur" />
         <small>默认 http://127.0.0.1:8788。改完失焦生效。</small>
       </label>
     </form>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed, watch } from "vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
 import { useRunConfigs } from "../composables/useRunConfigs";
@@ -174,17 +175,17 @@ async function close() {
 
             <div class="rcd-field">
               <label>名称</label>
-              <input v-model="draft.name" type="text" placeholder="service-auth" />
+              <AInput unstyled v-model="draft.name" type="text" placeholder="service-auth" />
             </div>
 
             <div class="rcd-field">
               <label>工作目录</label>
-              <input v-model="draft.cwd" type="text" placeholder="/path/to/module" />
+              <AInput unstyled v-model="draft.cwd" type="text" placeholder="/path/to/module" />
             </div>
 
             <div class="rcd-field">
               <label>命令</label>
-              <input v-model="draft.command" type="text" placeholder="mvn spring-boot:run" />
+              <AInput unstyled v-model="draft.command" type="text" placeholder="mvn spring-boot:run" />
               <span class="rcd-hint">在工作目录中执行的 shell 命令</span>
             </div>
 

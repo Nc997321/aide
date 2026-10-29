@@ -24,6 +24,7 @@ pub enum ProviderKind {
     DeepSeek,
     Zhipu,
     Qwen,
+    Volcengine,
     #[default]
     Custom,
 }

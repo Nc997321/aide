@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, onMounted, watch, computed } from "vue";
 import { api } from "../api";
 import type { DiffMode } from "../types";
@@ -512,7 +513,7 @@ defineExpose({ reload });
 
     <!-- Commit bar（amend 模式下无 staged 改动也可用——纯改 message） -->
     <div v-if="stagedFiles.length > 0 || amendMode" class="commit-bar">
-      <input
+      <AInput unstyled
         v-model="commitMessage"
         class="commit-input"
         :placeholder="amendMode ? '留空则保留原 message...' : 'Commit message...'"

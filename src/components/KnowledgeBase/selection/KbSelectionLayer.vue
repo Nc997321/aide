@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 知识库文档里的「圈选 → 交给 AI 改」交互层。
 //
 // 它不在文章流里，而是**绝对定位在文章的滚动容器里**的一层：滚动时跟着内容走，只有布局变化
@@ -690,7 +691,7 @@ function badgeText(o: Overlay): string {
       <div class="ksl-tray" :class="`ksl-tray--${trayMode}`" role="region" aria-label="圈选">
         <template v-if="trayMode === 'pending'">
           <span class="ksl-tray-count"><b>{{ pendingCount }}</b> 处已圈</span>
-          <input
+          <AInput unstyled
             v-model="trayNote"
             class="ksl-tray-input"
             placeholder="补一句话（可选）"

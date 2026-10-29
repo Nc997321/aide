@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed, watch } from "vue";
 import type { CustomizationItem } from "../../../types/customization";
 import { customizationApi, getSkillContent, skillScriptApi } from "../../../api/customization";
@@ -120,7 +121,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
     </div>
 
     <div v-if="tab === 'meta'" class="tab-pane">
-      <div class="field"><label>name</label><input v-model="name" :disabled="readOnly" /></div>
+      <div class="field"><label>name</label><AInput unstyled v-model="name" :disabled="readOnly" /></div>
       <div class="field"><label>description</label><textarea v-model="description" :disabled="readOnly" /></div>
       <div class="ed-actions" v-if="!readOnly"><button class="btn btn-accent save-btn" @click="emit('update', { name: name, description: description })">保存</button></div>
     </div>

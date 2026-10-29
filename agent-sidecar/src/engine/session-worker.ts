@@ -1349,7 +1349,7 @@ export class SessionWorker {
     if (!isAdoptableAssistantModel(msg)) return;
     if (msg.message.model === this.modelRoster.lastConcreteModel) return;
     this.modelRoster.lastConcreteModel = msg.message.model;
-    this.currentModel = this.modelRoster.resolveDropdownValue(this.modelRoster.lastConcreteModel);
+    this.currentModel = this.modelRoster.adoptConcreteModel(this.modelRoster.lastConcreteModel);
     if (this.modelRoster.models.length > 0) {
       this.emit({ type: "models_available", models: this.modelRoster.models, current: this.currentModel });
     }

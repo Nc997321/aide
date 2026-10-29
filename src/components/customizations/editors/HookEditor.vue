@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { reactive, computed, watch } from "vue";
 import type { CustomizationItem, Hook, HookEvent } from "../../../types/customization";
 
@@ -64,15 +65,15 @@ function save() {
     </div>
     <div class="field">
       <label>matcher <span class="hint">正则，匹配工具名（如 ^Read$ 或 .*）</span></label>
-      <input v-model="form.matcher" :disabled="readOnly" />
+      <AInput unstyled v-model="form.matcher" :disabled="readOnly" />
     </div>
     <div class="field">
       <label>command <span class="hint">shell 命令</span></label>
-      <input v-model="form.command" :disabled="readOnly" />
+      <AInput unstyled v-model="form.command" :disabled="readOnly" />
     </div>
     <div class="field">
       <label>timeout <span class="hint">秒，可选</span></label>
-      <input v-model="form.timeout" type="number" :disabled="readOnly" />
+      <AInput unstyled v-model="form.timeout" type="number" :disabled="readOnly" />
     </div>
     <div class="field">
       <label>asyncRewake</label>

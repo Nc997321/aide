@@ -37,7 +37,10 @@ const logo = computed(() => providerLogo(props.kind));
     role="img"
     aria-hidden="true"
   >
-    <path :d="logo.path" :fill="logo.mono ? 'currentColor' : logo.color" />
+    <template v-if="logo.paths">
+      <path v-for="(layer, index) in logo.paths" :key="index" :d="layer.path" :fill="layer.color" />
+    </template>
+    <path v-else :d="logo.path" :fill="logo.mono ? 'currentColor' : logo.color" />
   </svg>
   <IconOrChar v-else :text="text" :size="size" />
 </template>

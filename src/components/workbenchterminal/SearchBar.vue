@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useTerminalSearch } from "../../composables/useTerminalSearch";
 
@@ -10,7 +12,7 @@ import { useTerminalSearch } from "../../composables/useTerminalSearch";
  */
 const { query, caseSensitive, activeResults, close, findNext, findPrev } = useTerminalSearch();
 
-const inputRef = ref<HTMLInputElement>();
+const inputRef = ref<AInputHandle>();
 
 // 输入 / 大小写开关变化 → 增量搜索（沿用当前选区，不跳下一处）
 watch([query, caseSensitive], () => findNext(true));
@@ -42,7 +44,7 @@ const countText = computed(() => {
 
 <template>
   <div class="wb-search" @keydown.stop>
-    <input
+    <AInput unstyled
       ref="inputRef"
       v-model="query"
       class="wb-search-input"

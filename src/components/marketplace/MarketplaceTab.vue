@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed, onMounted, watch } from "vue";
 import { useMarketplace } from "../../composables/useMarketplace";
 import { useLanguagePacks } from "../../composables/useLanguagePacks";
@@ -256,7 +257,7 @@ const enabledCount = computed(() => {
         <div class="head-right">
           <div class="search">
             <span class="ic">⌕</span>
-            <input v-model="searchQuery" placeholder="搜索插件名或描述…" />
+            <AInput unstyled v-model="searchQuery" placeholder="搜索插件名或描述…" />
           </div>
           <!-- 关闭 = 主区切回聊天（与记忆观测台头部 ✕ 同规格同语义：面板关掉，
                PaneLayout 由 v-show 保活，会话不掉线） -->

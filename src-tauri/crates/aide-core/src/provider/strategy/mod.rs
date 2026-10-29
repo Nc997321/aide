@@ -142,6 +142,11 @@ pub fn strategy_for(kind: ProviderKind) -> Box<dyn ProviderStrategy> {
         ProviderKind::DeepSeek => crate::provider::strategy::deepseek::strategy(),
         ProviderKind::Zhipu => crate::provider::strategy::zhipu::strategy(),
         ProviderKind::Qwen => crate::provider::strategy::qwen::strategy(),
+        ProviderKind::Volcengine => Box::new(PresetStrategy {
+            kind,
+            base_url: crate::provider::catalog::catalog_find(kind)
+                .expect("Volcengine preset must exist").base_url.clone(),
+        }),
     }
 }
 
@@ -211,6 +216,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn volcengine_env_uses_plan_endpoint_and_auth_token() {
+        let mut cfg = crate::provider::system_default_provider();
+        cfg.kind = ProviderKind::Volcengine;
+        cfg.auth_token = "test-token".into();
+        let env = strategy_for(cfg.kind).env_vars(&cfg);
+        assert_eq!(env.get("ANTHROPIC_BASE_URL").map(String::as_str), Some("https://ark.cn-beijing.volces.com/api/plan"));
+        assert_eq!(env.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str), Some("test-token"));
+        assert!(!env.contains_key("ANTHROPIC_API_KEY"));
+    }
+
+    #[test]
     fn strategy_for_returns_some_for_every_kind() {
         for k in [
             ProviderKind::Custom,
@@ -221,6 +237,7 @@ mod tests {
             ProviderKind::DeepSeek,
             ProviderKind::Zhipu,
             ProviderKind::Qwen,
+            ProviderKind::Volcengine,
         ] {
             let s = strategy_for(k);
             assert_eq!(

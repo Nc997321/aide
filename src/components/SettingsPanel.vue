@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, watch, onMounted, computed } from "vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
 import { useSettings } from "../composables/useSettings";
@@ -551,7 +552,7 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">最近访问保留条数</label>
                 <div class="field-control">
-                  <input
+                  <AInput unstyled
                     v-model.number="recentLimitLocal"
                     type="number"
                     min="1"
@@ -565,7 +566,7 @@ function onOverlayClick(e: MouseEvent) {
 
               <div class="settings-field">
                 <label class="field-label">网络代理</label>
-                <input
+                <AInput unstyled
                   v-model="proxyLocal"
                   class="text-input"
                   placeholder="例如 http://127.0.0.1:7890（Clash）"
@@ -580,7 +581,7 @@ function onOverlayClick(e: MouseEvent) {
 
               <div class="settings-field">
                 <label class="field-label">工作台终端 Shell</label>
-                <input
+                <AInput unstyled
                   v-model="shellPathLocal"
                   class="text-input"
                   placeholder="留空自动探测（Windows: PowerShell / macOS: zsh / Linux: bash）"
@@ -599,7 +600,7 @@ function onOverlayClick(e: MouseEvent) {
                 >
                   <span class="kb-label">{{ def.label }}</span>
                   <div class="kb-control">
-                    <input
+                    <AInput unstyled
                       class="kb-input"
                       :class="{ recording: recordingKey === def.key }"
                       :value="keybindingValue(def.key)"
@@ -672,7 +673,7 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">缩进格数</label>
                 <div class="field-control">
-                  <input
+                  <AInput unstyled
                     v-model.number="indentSizeLocal"
                     type="number"
                     min="1"
@@ -722,7 +723,7 @@ function onOverlayClick(e: MouseEvent) {
                         {{ isRecordingVimKey(mode.key, idx) ? "按快捷键…" : b.keys || "点击录制" }}
                       </button>
                       <span class="vim-keymap-arrow">→</span>
-                      <input
+                      <AInput unstyled
                         v-model="b.to"
                         class="vim-key-target"
                         placeholder="如 <Esc> 或 :w"

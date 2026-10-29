@@ -62,7 +62,7 @@ function mountEditorTab() {
   wrapper = shallowMount(SettingsPanel, {
     props: { initialTab: "editor" },
     attachTo: document.body,
-    global: { stubs: { Teleport: false } },
+    global: { stubs: { Teleport: false, AInput: false } },
   });
   return wrapper;
 }

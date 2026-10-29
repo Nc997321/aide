@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 /**
  * 全局记忆清单（P2 跨项目只读聚合）：全局健康 stat + 搜索 + 按项目分组的记忆行。
  * 2026-09-06：行点击直接打开 FileViewer.open(topic.path)——后端在每次 scan 时已把
@@ -133,7 +134,7 @@ function badgeClass(s: Row["status"]): string {
 
     <!-- 搜索 -->
     <div class="search">
-      <input v-model="query" type="search" placeholder="搜索记忆 / 描述 / 项目…" spellcheck="false" />
+      <AInput unstyled v-model="query" type="search" placeholder="搜索记忆 / 描述 / 项目…" spellcheck="false" />
     </div>
 
     <!-- 按项目分组 -->

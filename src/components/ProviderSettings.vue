@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 /**
  * ProviderSettings —— 供应商设置面板（kind-aware 重构，Task 9）。
  *
@@ -16,7 +17,7 @@
  *   （身份 + 行为字段 + 凭证单次 setProviders），「取消」丢弃。避免半成品入库。
  * - knownModels 手动标签编辑已移除：会话面板下拉动态列表由 sidecar models_available
  *   提供、映射字段值也进列表（providerModelList），字段保留仅为兼容旧存量数据
- *   （仍参与下拉兜底与一致性校验）；datalist 建议源改为映射字段现有值合并。
+ *   （仍参与下拉兜底与一致性校验）；输入框不提供浏览器原生补全浮层。
  */
 import { ref, computed, watch, onMounted } from "vue";
 import { useProviders } from "../composables/useProviders";
@@ -298,22 +299,6 @@ async function handleDelete() {
   showToast("已删除", "info");
 }
 
-// ── 模型建议（datalist autocomplete 源）：映射字段现有值 + 存量 knownModels。
-//    手动标签编辑 UI 已移除——会话面板下拉的动态列表由 sidecar models_available
-//    提供，映射字段值也进列表（providerModelList），knownModels 仅兼容旧数据。──
-const modelSuggestions = computed<string[]>(() => {
-  const f = form.value;
-  if (!f) return [];
-  const vals = [
-    f.modelMappings.anthropicModel,
-    f.modelMappings.defaultOpusModel,
-    f.modelMappings.defaultSonnetModel,
-    f.modelMappings.defaultHaikuModel,
-    f.modelMappings.subagent,
-    ...f.knownModels,
-  ].filter((v): v is string => !!v);
-  return [...new Set(vals)];
-});
 </script>
 
 <template>
@@ -393,7 +378,7 @@ const modelSuggestions = computed<string[]>(() => {
         <!-- 名称：预置只读，Custom 可编辑 -->
         <div class="form-field">
           <label>名称</label>
-          <input
+          <AInput unstyled
             v-if="!isPreset"
             v-model="form.name"
             class="text-input"
@@ -426,7 +411,7 @@ const modelSuggestions = computed<string[]>(() => {
         <!-- Base URL：预置只读，Custom 可编辑 -->
         <div class="form-field">
           <label>Base URL</label>
-          <input
+          <AInput unstyled
             v-if="!isPreset"
             v-model="form.baseUrl"
             class="text-input"
@@ -443,7 +428,7 @@ const modelSuggestions = computed<string[]>(() => {
         <!-- 凭据区：按 auth_mode 渲染。预置只显示一个；Custom（isPreset=false）两个都显示 -->
         <div v-if="authMode === 'api_key' || !isPreset" class="form-field">
           <label>API Key</label>
-          <input
+          <AInput unstyled
             v-model="apiKeyInput"
             type="password"
             autocomplete="new-password"
@@ -462,7 +447,7 @@ const modelSuggestions = computed<string[]>(() => {
 
         <div v-if="authMode === 'auth_token' || !isPreset" class="form-field">
           <label>Auth Token</label>
-          <input
+          <AInput unstyled
             v-model="authTokenInput"
             type="password"
             autocomplete="new-password"
@@ -486,17 +471,16 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>默认模型</label>
-            <input
+            <AInput unstyled
               v-model="form.modelMappings.anthropicModel"
               class="text-input"
-              list="known-models-list"
               placeholder="留空用 provider 默认"
             />
           </div>
 
           <div class="form-field model-var-field">
             <label>旗舰模型（Opus）</label>
-            <input
+            <AInput unstyled
               v-model="form.modelMappings.defaultOpusModel"
               class="text-input"
               placeholder="留空不映射"
@@ -505,7 +489,7 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>均衡模型（Sonnet）</label>
-            <input
+            <AInput unstyled
               v-model="form.modelMappings.defaultSonnetModel"
               class="text-input"
               placeholder="留空不映射"
@@ -515,7 +499,7 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>轻量模型（Haiku）</label>
-            <input
+            <AInput unstyled
               v-model="form.modelMappings.defaultHaikuModel"
               class="text-input"
               placeholder="留空不映射"
@@ -525,10 +509,9 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>子代理模型</label>
-            <input
+            <AInput unstyled
               v-model="form.modelMappings.subagent"
               class="text-input"
-              list="known-models-list"
               placeholder="留空跟随主模型"
             />
             <span class="form-hint">主代理未指定模型时子代理的兜底，通常选便宜快的——主代理显式派发（如 sonnet）时以派发为准</span>
@@ -559,7 +542,7 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>上下文窗口 (tokens)</label>
-            <input
+            <AInput unstyled
               v-model="form.maxContextTokens"
               class="text-input"
               type="number"
@@ -571,7 +554,7 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>压缩窗口 (tokens)</label>
-            <input
+            <AInput unstyled
               v-model="form.autoCompactWindow"
               class="text-input"
               type="number"
@@ -583,7 +566,7 @@ const modelSuggestions = computed<string[]>(() => {
 
           <div class="form-field model-var-field">
             <label>触发百分比 (%)</label>
-            <input
+            <AInput unstyled
               v-model="form.autocompactPctOverride"
               class="text-input"
               type="number"
@@ -633,11 +616,6 @@ const modelSuggestions = computed<string[]>(() => {
     @cancel="showPicker = false"
   />
 
-  <!-- 模型建议 datalist（子代理/默认模型输入的 autocomplete 源）：
-       映射字段现有值 + 存量 knownModels（旧数据仍生效，只是不再手动编辑） -->
-  <datalist id="known-models-list">
-    <option v-for="m in modelSuggestions" :key="m" :value="m" />
-  </datalist>
 </template>
 
 <style scoped>

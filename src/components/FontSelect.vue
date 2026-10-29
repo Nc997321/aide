@@ -1,7 +1,7 @@
 <template>
   <div class="font-select">
     <ThemedSelect v-model="selectedValue" :options="options" block />
-    <input
+    <AInput unstyled
       v-if="selectedValue === '__custom__'"
       v-model="customValue"
       class="custom-input"
@@ -12,6 +12,7 @@
 </template>
 
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import ThemedSelect from "./ThemedSelect.vue";
 import {

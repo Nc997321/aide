@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 侧栏「连接移动端」卡片（LinkConnectPopover 点开后的内容）：配对二维码 + 中继地址 + 权限模式 + 开关。
 // **中继地址没有出厂默认**（2026-10-05 起）：用户自己填、点「生成」出码；改地址 = Host 立即重连，
 // 已配对的手机连的是旧地址、需要重新扫码（单设备模型，地址烧在二维码里）。
@@ -118,7 +119,7 @@ const expiring = computed(() => !!offer.value && secondsLeft.value <= 60);
       <p class="lc-relay-hint" role="status">
         {{ copyState === "fail" ? "复制失败，请选中下方链接手动复制。" : "模拟器可粘贴链接连接；配对完成前请保持此卡片打开。" }}
       </p>
-      <input
+      <AInput unstyled
         v-if="copyState === 'fail'"
         class="lc-input"
         type="text"
@@ -132,7 +133,7 @@ const expiring = computed(() => !!offer.value && secondsLeft.value <= 60);
 
     <span class="lc-field-label">中继地址</span>
     <div class="lc-relay-row">
-      <input
+      <AInput unstyled
         class="lc-input"
         type="text"
         placeholder="wss://你的中继"

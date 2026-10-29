@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 「用 Claude 账号登录」面板：引导页登录步与供应商设置（Anthropic 官方）共用。
 // 流程与跨界决定见 composables/useClaudeLogin.ts。
 import { onMounted, ref } from "vue";
@@ -80,11 +81,10 @@ onMounted(refreshAccount);
         </template>
       </div>
       <div class="code-row">
-        <input
+        <AInput unstyled
           v-model="code"
           class="code-input"
           type="text"
-          autocomplete="off"
           spellcheck="false"
           :placeholder="login.hostOpensBrowser.value ? '页面给了授权码的话粘贴到这里' : '粘贴授权码'"
           @keydown.enter="login.submitCode(code)"

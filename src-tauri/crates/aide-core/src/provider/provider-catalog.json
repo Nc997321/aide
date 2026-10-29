@@ -76,6 +76,14 @@
     }
   },
   {
+    "kind": "volcengine",
+    "name": "火山方舟",
+    "icon": "V",
+    "base_url": "https://ark.cn-beijing.volces.com/api/plan",
+    "auth_mode": "auth_token",
+    "actions": ["test_connection"]
+  },
+  {
     "kind": "qwen",
     "name": "千问",
     "icon": "Q",

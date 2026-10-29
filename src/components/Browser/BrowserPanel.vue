@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 // 内嵌浏览器主区面板：主区一级视图（跟「插件」「知识库」同级，不占会话 tab、不碰 pane 布局），
 // 自带标签条。
 //
@@ -84,7 +86,7 @@ const activeId = ref(tabs.value[0].id);
 const active = computed(() => tabs.value.find((t) => t.id === activeId.value) ?? tabs.value[0]);
 
 const surfaceEl = ref<HTMLElement | null>(null);
-const addressEl = ref<HTMLInputElement | null>(null);
+const addressEl = ref<AInputHandle | null>(null);
 const address = ref("");
 
 // 单一消息条：导航错误与书签反馈共用一行（两处各设一个就互相清掉，不会叠两条）。
@@ -186,7 +188,7 @@ const viewAllowed = computed(() => browserActive.value && !overlayLayerOpen.valu
 
 /** 地址栏回显：用户正在输入时不抢（否则事件一到就把输入冲掉）。 */
 function syncAddressFromTab() {
-  if (document.activeElement === addressEl.value) return;
+  if (document.activeElement === addressEl.value?.element) return;
   address.value = active.value?.url ?? "";
 }
 
@@ -778,7 +780,7 @@ onBeforeUnmount(() => {
         @click="forward"
       >›</button>
       <button class="bp-btn" title="刷新当前页面" @click="reload">⟳</button>
-      <input
+      <AInput unstyled
         ref="addressEl"
         v-model="address"
         class="bp-address"

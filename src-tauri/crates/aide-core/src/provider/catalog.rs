@@ -87,6 +87,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn volcengine_uses_agent_plan_and_token_auth() {
+        let preset = catalog_find(ProviderKind::Volcengine).unwrap();
+        assert_eq!(preset.name, "火山方舟");
+        assert_eq!(preset.base_url, "https://ark.cn-beijing.volces.com/api/plan");
+        assert_eq!(preset.auth_mode, AuthMode::AuthToken);
+        assert_eq!(preset.actions, vec!["test_connection"]);
+    }
+
+    #[test]
     fn qwen_defaults_parsed_from_catalog() {
         let p = catalog_find(ProviderKind::Qwen).unwrap();
         let d = p.defaults.as_ref().expect("qwen must carry defaults");

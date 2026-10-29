@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, watch, onMounted, provide, computed } from "vue";
 import { api } from "../api";
 import type { FileEntry } from "../types";
@@ -220,7 +221,7 @@ function onAddrInput(e: Event) {
     <!-- 地址栏 -->
     <div class="addr-bar">
       <button class="up-btn" v-tooltip="'上一级'" :disabled="multiple" @click="goUp">↑</button>
-      <input
+      <AInput unstyled
         class="addr-input"
         :value="addrValue"
         :placeholder="addrPlaceholder"

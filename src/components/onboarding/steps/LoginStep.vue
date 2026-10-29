@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, onMounted } from "vue";
 import { api } from "../../../api";
 import ClaudeAccountLogin from "../../ClaudeAccountLogin.vue";
@@ -51,7 +52,7 @@ async function saveApiKey() {
     <div class="divider">或</div>
     <span class="link" @click="showApiKey = true">改用 API key（去 console.anthropic.com 申请）</span>
     <template v-if="showApiKey">
-      <input class="api-key-input" type="password" autocomplete="new-password" v-model="apiKey" placeholder="sk-ant-..." />
+      <AInput unstyled class="api-key-input" type="password" autocomplete="new-password" v-model="apiKey" placeholder="sk-ant-..." />
       <div v-if="error" class="err">{{ error }}</div>
       <button class="btn-primary save-btn" :disabled="saving || !apiKey.trim()" @click="saveApiKey">
         {{ saving ? "保存中…" : "保存并继续" }}

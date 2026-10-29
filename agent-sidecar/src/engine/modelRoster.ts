@@ -149,9 +149,31 @@ export class ModelRoster {
     // 列表里已有完全一致的真名 → 直接用（wire id 与列表同值，最常见）
     if (this.realModels.includes(concreteModel)) return concreteModel;
     // 否则按前缀归一：wire id 常带变体后缀（glm-5.3-flash-cloud）
-    const hit = this.realModels.find(
+    const hit = [...this.realModels].sort((a, b) => b.length - a.length).find(
       (r) => concreteModel === r || concreteModel.startsWith(`${r}-`),
     );
-    return hit ?? concreteModel;
+    if (hit) return hit;
+    // 网关的 wire 型号可能把数字版本的点改成横杠，并附加构建日期。
+    // 只统一数字之间的分隔符；同等长度多候选不猜，交给实际型号兜底。
+    const versionKey = (value: string): string => value.replace(/(\d)\.(?=\d)/g, "$1-");
+    const wire = versionKey(concreteModel);
+    const candidates = this.realModels.filter((r) => {
+      const key = versionKey(r);
+      return wire === key || wire.startsWith(`${key}-`);
+    }).sort((a, b) => b.length - a.length);
+    if (candidates.length && (candidates.length === 1 || candidates[0].length > candidates[1].length)) {
+      return candidates[0];
+    }
+    return concreteModel;
+  }
+
+  /** 主线程已实际回报的型号必须可见；未知型号不能让 UI 回落列表首项。 */
+  adoptConcreteModel(concreteModel: string): string {
+    const value = this.resolveDropdownValue(concreteModel);
+    if (this.models.length > 0 && !this.realModels.includes(value)) {
+      this.models = [...this.models, { value, displayName: value }];
+      this.realModels = [...this.realModels, value];
+    }
+    return value;
   }
 }

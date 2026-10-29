@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 文档正文：查看 / 编辑 / 版本历史 三态。
 //
 // 编辑的锁走 useKbDocLock（30s 心跳续租，失锁禁存）；保存成功后不退出编辑——
@@ -353,7 +354,7 @@ function onReverted(): void {
 
     <template v-else>
       <header class="kb-doc-head">
-        <input v-model="draftTitle" class="kb-title-input" placeholder="标题" spellcheck="false" />
+        <AInput unstyled v-model="draftTitle" class="kb-title-input" placeholder="标题" spellcheck="false" />
         <div class="kb-meta">
           <span class="kb-ver" :class="{ stale: !lock.held.value }">v{{ doc.versionNo }}</span>
           <span v-if="lock.lost.value" class="kb-lock-lost">
@@ -364,7 +365,7 @@ function onReverted(): void {
       </header>
 
       <div class="kb-edit-bar">
-        <input
+        <AInput unstyled
           v-model="changeNote"
           class="kb-note-input"
           placeholder="修改说明（可选，只随下一次保存生效）"

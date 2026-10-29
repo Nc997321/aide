@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import { vOverlayLayer } from "../../directives/overlayLayer";
 import type { Bookmark } from "../../composables/browser/useBrowserBookmarks";
@@ -33,7 +34,7 @@ onUnmounted(() => window.removeEventListener("keydown", key));
           <button class="bp-fmenu__item" @click="moving = false">返回</button>
           <button v-for="path in folders" :key="JSON.stringify(path)" class="bp-fmenu__item" :disabled="JSON.stringify(path) === JSON.stringify(bookmark.folders)" @click="move(path)">{{ path.join(' / ') || '收藏栏（根目录）' }}</button>
           <form @submit.prevent="newFolder.trim() && move([...bookmark.folders, newFolder.trim()])">
-            <input v-model="newFolder" class="bp-folder-input" placeholder="新建文件夹名称" aria-label="新建文件夹名称" />
+            <AInput unstyled v-model="newFolder" class="bp-folder-input" placeholder="新建文件夹名称" aria-label="新建文件夹名称" />
             <button class="bp-fmenu__item" :disabled="!newFolder.trim()" type="submit">新建文件夹并移入</button>
           </form>
         </template>

@@ -277,6 +277,7 @@ export type ProviderKind =
   | "deepseek"
   | "zhipu"
   | "qwen"
+  | "volcengine"
   | "custom";
 
 /** 与 Rust `AuthMode` enum 对齐（serde rename_all = "snake_case"）。 */

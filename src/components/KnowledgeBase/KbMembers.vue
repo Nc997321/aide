@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 成员管理（仅管理员可见）。
 //
 // 邀请制的核心界面：管理员填用户名 → 生成一次性链接 → 发给同事。
@@ -94,8 +95,8 @@ function fmtTime(iso: string | null): string {
     <section class="kb-block">
       <h3>邀请新成员</h3>
       <div class="kb-form">
-        <input v-model="username" type="text" placeholder="用户名（登录用）" />
-        <input v-model="displayName" type="text" placeholder="昵称（显示用）" />
+        <AInput unstyled v-model="username" type="text" placeholder="用户名（登录用）" />
+        <AInput unstyled v-model="displayName" type="text" placeholder="昵称（显示用）" />
         <select v-model="spaceId">
           <option value="">不加入空间</option>
           <option v-for="s in props.spaces" :key="s.id" :value="s.id">{{ s.name }}</option>
@@ -117,7 +118,7 @@ function fmtTime(iso: string | null): string {
           ⚠️ 链接只显示这一次，服务端只存哈希。关掉就看不到了，需要就重新生成。
         </p>
         <div class="kb-linkrow">
-          <input
+          <AInput unstyled
             id="kb-invite-link"
             :value="inviteLink(props.lastInvite.token)"
             readonly

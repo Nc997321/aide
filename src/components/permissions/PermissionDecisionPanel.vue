@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed } from "vue";
 import ThemedSelect from "@/components/ThemedSelect.vue";
 import { permissionsApi } from "@/api/permissions";
@@ -61,7 +62,7 @@ const DECISION_LABEL: Record<string, string> = {
       </label>
       <label class="field">
         <span class="field-label">{{ inputLabel }}</span>
-        <input v-model="inputValue" class="text-input" :placeholder="inputPlaceholder" />
+        <AInput unstyled v-model="inputValue" class="text-input" :placeholder="inputPlaceholder" />
       </label>
     </div>
     <button class="btn-secondary" :disabled="loading" @click="onExplain">

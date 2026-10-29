@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { ref, watch, nextTick, computed, onUnmounted } from "vue";
 import IconOrChar from "../components/IconOrChar.vue";
 import Icon from "../components/Icon.vue";
@@ -35,7 +37,7 @@ const emit = defineEmits<{
 const query = ref("");
 const results = ref<PaletteResult[]>([]);
 const selectedIndex = ref(0);
-const inputRef = ref<HTMLInputElement | null>(null);
+const inputRef = ref<AInputHandle | null>(null);
 const panelRef = ref<HTMLElement | null>(null);
 let searchFn: ((q: string, limit: number) => Promise<PaletteResult[]>) | null = null;
 
@@ -112,7 +114,7 @@ watch(
     selectedIndex.value = 0;
     await nextTick();
     // Ctrl+P 进来时焦点还不在输入框；点击进来时已经在，focus() 是空操作
-    if (document.activeElement !== inputRef.value) inputRef.value?.focus();
+    if (document.activeElement !== inputRef.value?.element) inputRef.value?.focus();
     if (recentFn) {
       try {
         results.value = await recentFn();
@@ -174,7 +176,7 @@ defineExpose({ setSearchFn, setRecentFn });
   <div class="a-search">
     <div class="a-search-field" :class="{ 'a-search-field--open': open }">
       <span class="a-palette-icon"><Icon name="search" :size="13" /></span>
-      <input
+      <AInput unstyled
         ref="inputRef"
         v-model="query"
         class="a-palette-input"

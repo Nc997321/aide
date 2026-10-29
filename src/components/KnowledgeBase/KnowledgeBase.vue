@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 /**
  * 知识库主区视图（第一版：可读可搜）。
  * 与 MemoryObservatory 同范式——填满主区的一级视图，不是模态。
@@ -436,7 +437,7 @@ onMounted(() => {
 
       <div v-if="k.user.value" class="kb-searchbox">
         <Icon name="search" :size="13" :stroke-width="1.4" />
-        <input
+        <AInput unstyled
           :value="k.query.value"
           placeholder="搜索资料…"
           @input="onQueryInput(($event.target as HTMLInputElement).value)"

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed, watch } from "vue";
 import type { CustomizationItem } from "../../../types/customization";
 import { customizationApi, getAgentContent } from "../../../api/customization";
@@ -102,10 +103,10 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
     </div>
 
     <div v-if="tab === 'meta'" class="tab-pane">
-      <div class="field"><label>name</label><input v-model="name" :disabled="readOnly" /></div>
-      <div class="field"><label>description</label><input v-model="description" :disabled="readOnly" /></div>
-      <div class="field"><label>model <span class="hint">如 claude-sonnet-5 或 haiku</span></label><input v-model="model" :disabled="readOnly" /></div>
-      <div class="field"><label>tools <span class="hint">逗号分隔，如 Read, Grep, Bash</span></label><input v-model="toolsStr" :disabled="readOnly" /></div>
+      <div class="field"><label>name</label><AInput unstyled v-model="name" :disabled="readOnly" /></div>
+      <div class="field"><label>description</label><AInput unstyled v-model="description" :disabled="readOnly" /></div>
+      <div class="field"><label>model <span class="hint">如 claude-sonnet-5 或 haiku</span></label><AInput unstyled v-model="model" :disabled="readOnly" /></div>
+      <div class="field"><label>tools <span class="hint">逗号分隔，如 Read, Grep, Bash</span></label><AInput unstyled v-model="toolsStr" :disabled="readOnly" /></div>
       <div class="ed-actions" v-if="!readOnly"><button class="btn btn-accent save-btn" @click="saveMeta">保存</button></div>
     </div>
 

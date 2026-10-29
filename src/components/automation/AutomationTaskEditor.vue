@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 /** 自动化任务编辑器（新建/编辑共用）。分区表单：基本 / 执行配置 / 权限与安全 /
  *  调度 / 手册与通知。保存走 useAutomation.saveTask（create/update 由 editingTaskId 裁决）。 */
 import { computed, onMounted, reactive, ref } from "vue";
@@ -304,7 +305,7 @@ async function save(andRun: boolean) {
         <div class="fs-title">基本</div>
         <div class="field">
           <label>名称</label>
-          <input class="input" v-model="form.name" placeholder="例如：每日提交汇总" />
+          <AInput unstyled class="input" v-model="form.name" placeholder="例如：每日提交汇总" />
         </div>
         <div class="field prompt-field">
           <label>提示词</label>
@@ -396,7 +397,7 @@ async function save(andRun: boolean) {
           <div v-if="form.schedKind === 'cron'" class="sched-pane">
             <div class="sched-row">
               <ThemedSelect v-model="form.cronFreq" :options="freqOptions" />
-              <input class="input" type="time" v-model="form.time" />
+              <AInput unstyled class="input" type="time" v-model="form.time" />
               <span class="hint-inline">建议避开上午高峰，排队更少</span>
             </div>
             <div v-if="form.cronFreq === 'weekly'" class="chip-row" style="margin-top:10px">
@@ -409,14 +410,14 @@ async function save(andRun: boolean) {
               >{{ label }}</span>
             </div>
             <div v-if="form.cronFreq === 'monthly'" class="sched-row" style="margin-top:10px">
-              每月 <input class="input num-input" type="number" v-model.number="form.monthDay" min="1" max="31" /> 日
+              每月 <AInput unstyled class="input num-input" type="number" v-model.number="form.monthDay" min="1" max="31" /> 日
               <span class="hint-inline">超过当月天数时按月末执行</span>
             </div>
           </div>
 
           <div v-else-if="form.schedKind === 'interval'" class="sched-pane">
             <div class="sched-row">
-              每 <input class="input num-input" type="number" v-model.number="form.every" min="1" />
+              每 <AInput unstyled class="input num-input" type="number" v-model.number="form.every" min="1" />
               <ThemedSelect v-model="form.everyUnit" :options="everyUnitOptions" />
               执行一次
             </div>
@@ -424,8 +425,8 @@ async function save(andRun: boolean) {
 
           <div v-else class="sched-pane">
             <div class="sched-row">
-              <input class="input" type="date" v-model="form.onceDate" />
-              <input class="input" type="time" v-model="form.onceTime" />
+              <AInput unstyled class="input" type="date" v-model="form.onceDate" />
+              <AInput unstyled class="input" type="time" v-model="form.onceTime" />
               <span class="hint-inline">执行后自动停用，保留历史</span>
             </div>
           </div>
@@ -434,9 +435,9 @@ async function save(andRun: boolean) {
         <div class="field">
           <label>生效日期区间<span class="opt">可选，留空始终生效</span></label>
           <div class="sched-row">
-            <input class="input" type="date" v-model="form.validFrom" />
+            <AInput unstyled class="input" type="date" v-model="form.validFrom" />
             <span style="color:var(--aide-text-muted)">至</span>
-            <input class="input" type="date" v-model="form.validTo" />
+            <AInput unstyled class="input" type="date" v-model="form.validTo" />
           </div>
         </div>
 

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { computed, onMounted, ref, watch } from "vue";
 import DirTreePicker from "./DirTreePicker.vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
@@ -222,7 +223,7 @@ async function onConfirm() {
           </button>
           <button v-if="!showCustomSsh" class="of-machine add" :disabled="busy" @click="showCustomSsh = true">+ SSH 主机</button>
           <span v-else class="of-ssh-input">
-            <input
+            <AInput unstyled
               v-model="customSsh"
               :disabled="busy"
               placeholder="别名或 user@host"
@@ -253,11 +254,11 @@ async function onConfirm() {
               <p class="of-hint">克隆到 {{ host?.label ?? '当前 Host' }}，使用该 Host 已配置的 Git 凭据。目标目录必须尚不存在。</p>
               <label class="of-field">
                 <span>仓库地址</span>
-                <input v-model="gitUrl" data-testid="of-git-url" placeholder="HTTPS 或 SSH 仓库地址" spellcheck="false" autocomplete="off" @keydown.enter.prevent="onConfirm" />
+                <AInput unstyled v-model="gitUrl" data-testid="of-git-url" placeholder="HTTPS 或 SSH 仓库地址" spellcheck="false" @keydown.enter.prevent="onConfirm" />
               </label>
               <label class="of-field">
                 <span>项目目录名</span>
-                <input v-model="directoryName" data-testid="of-git-name" placeholder="从仓库地址自动填写，可修改" spellcheck="false" @input="directoryNameEdited = true" @keydown.enter.prevent="onConfirm" />
+                <AInput unstyled v-model="directoryName" data-testid="of-git-name" placeholder="从仓库地址自动填写，可修改" spellcheck="false" @input="directoryNameEdited = true" @keydown.enter.prevent="onConfirm" />
               </label>
             </fieldset>
             <span class="of-field-label">保存父目录</span>

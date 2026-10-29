@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 import { ref, computed, watch, onMounted, onUnmounted } from "vue";
 import { useWorkspaceLsp } from "../../composables/useWorkspaceLsp";
 import { formatMemory, useLspStatus, type LspServerStatus } from "../../composables/useLspStatus";
@@ -442,7 +443,7 @@ defineExpose({ openPanel });
             <!-- failed：可编辑 + 红色错误提示（后端回传的 stderr/握手详情） -->
             <div v-if="row.status === 'failed'" class="override-inline failed">
               <div class="path-row">
-                <input
+                <AInput unstyled
                   v-model="draftFor(row.lang).program"
                   class="path-input"
                   :class="{ 'has-value': draftFor(row.lang).program }"
@@ -451,7 +452,7 @@ defineExpose({ openPanel });
                 />
                 <button class="browse-btn" @click="openFilePicker(row.lang)">浏览…</button>
               </div>
-              <input
+              <AInput unstyled
                 v-model="draftFor(row.lang).args"
                 class="args-input"
                 placeholder="参数（空格分隔，可选）"
@@ -473,7 +474,7 @@ defineExpose({ openPanel });
             <!-- missing 或 ok 编辑态：可编辑 -->
             <div v-else-if="row.status === 'missing' || (row.status === 'ok' && isEditing(row.lang))" class="override-inline">
               <div class="path-row">
-                <input
+                <AInput unstyled
                   v-model="draftFor(row.lang).program"
                   class="path-input"
                   :class="{ 'has-value': draftFor(row.lang).program }"
@@ -482,7 +483,7 @@ defineExpose({ openPanel });
                 />
                 <button class="browse-btn" @click="openFilePicker(row.lang)">浏览…</button>
               </div>
-              <input
+              <AInput unstyled
                 v-model="draftFor(row.lang).args"
                 class="args-input"
                 placeholder="参数（空格分隔，可选）"
@@ -558,7 +559,7 @@ defineExpose({ openPanel });
           <button v-if="!manualOpen" class="jdk-manual-toggle" @click="manualOpen = true">＋ 手动添加 JDK…</button>
           <div v-else class="jdk-manual-form">
             <div class="jdk-manual-row">
-              <input
+              <AInput unstyled
                 v-model="manualPath"
                 class="jdk-input"
                 placeholder="JDK home 路径，如 C:\Program Files\Java\jdk-21"
@@ -566,7 +567,7 @@ defineExpose({ openPanel });
               />
             </div>
             <div class="jdk-manual-row">
-              <input
+              <AInput unstyled
                 v-model="manualName"
                 class="jdk-input"
                 placeholder="名称（可空，默认取目录名）"

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { ref, computed, onMounted, onUnmounted, nextTick, watch } from "vue";
 import WindowControls from "./WindowControls.vue";
 import SidebarToggle from "./SidebarToggle.vue";
@@ -69,7 +71,7 @@ defineExpose({ openLspPanel });
 const configDropOpen = ref(false);
 const runQuery = ref("");
 const highlightIndex = ref(0);
-const searchInput = ref<HTMLInputElement | null>(null);
+const searchInput = ref<AInputHandle | null>(null);
 const listRef = ref<HTMLElement | null>(null);
 
 const showSearch = computed(() => (props.runConfigs?.length ?? 0) > 6);
@@ -248,12 +250,11 @@ function isRowRunning(cfg: RunConfig): boolean {
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/>
                 </svg>
-                <input
+                <AInput unstyled
                   ref="searchInput"
                   v-model="runQuery"
                   type="text"
                   placeholder="筛选运行配置…"
-                  autocomplete="off"
                   spellcheck="false"
                   @input="onQueryInput"
                   @keydown="onDropKeydown"

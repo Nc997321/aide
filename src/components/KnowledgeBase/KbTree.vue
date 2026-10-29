@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
 // 知识库目录树。
 //
 // 单层 v-for 渲染 `flatten()` 的结果——**不递归组件**：扁平行的缩进更自然，
@@ -365,7 +366,7 @@ const vFocus = {
 
       <span class="kb-node-glyph"><KbNodeIcon :folder="row.isFolder" :mime="row.doc.mime" /></span>
 
-      <input
+      <AInput unstyled
         v-if="renaming === row.doc.id"
         data-kb-rename
         v-model="renameDraft"
@@ -445,7 +446,7 @@ const vFocus = {
       <span class="kb-node-glyph">
         <KbNodeIcon :folder="creating.kind === 'folder'" />
       </span>
-      <input
+      <AInput unstyled
         data-kb-new
         v-model="createDraft"
         class="kb-inline-input"

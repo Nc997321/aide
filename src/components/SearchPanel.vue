@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { ref, computed, watch } from "vue";
 import { api } from "../api";
 import type { SearchMatch, SearchOptions, SearchResponse } from "../types";
@@ -27,7 +29,7 @@ const previewError = ref("");
 const applying = ref(false);
 const applyResult = ref<ApplyResult | null>(null);
 const activePreviewFile = ref<string | null>(null);
-const queryInput = ref<HTMLInputElement | null>(null);
+const queryInput = ref<AInputHandle | null>(null);
 
 const { toastState, showToast } = useToast();
 
@@ -208,21 +210,21 @@ function toggleGroup(file: string) {
 <template>
   <div class="search-panel">
     <div class="search-input-row">
-      <input v-model="query" ref="queryInput" class="search-input" placeholder="搜索工作区…" spellcheck="false" />
+      <AInput unstyled v-model="query" ref="queryInput" class="search-input" placeholder="搜索工作区…" spellcheck="false" />
       <button v-if="query" class="clear-btn" @click="query = ''">×</button>
     </div>
     <div class="option-row">
       <label class="opt"><input type="checkbox" v-model="useRegex" /> 正则</label>
       <label class="opt"><input type="checkbox" v-model="caseSensitive" /> Aa</label>
       <label class="opt"><input type="checkbox" v-model="wholeWord" /> 全词</label>
-      <input v-model="fileMask" class="mask-input" placeholder="掩码 *.ts,*.vue" spellcheck="false" />
+      <AInput unstyled v-model="fileMask" class="mask-input" placeholder="掩码 *.ts,*.vue" spellcheck="false" />
     </div>
     <div class="mode-row">
       <button class="mode-btn" :class="{ active: mode === 'search' }" @click="switchMode('search')">查找</button>
       <button class="mode-btn" :class="{ active: mode === 'replace' }" @click="switchMode('replace')">替换</button>
     </div>
     <div v-if="mode === 'replace'" class="replace-row">
-      <input v-model="replaceWith" class="replace-input" placeholder="替换为…" spellcheck="false" />
+      <AInput unstyled v-model="replaceWith" class="replace-input" placeholder="替换为…" spellcheck="false" />
       <button class="preview-btn" :disabled="!query.trim() || previewing" @click="runPreview">
         {{ previewing ? "预览中…" : "预览替换" }}
       </button>

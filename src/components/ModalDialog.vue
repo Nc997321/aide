@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { ref, watch, nextTick } from "vue";
 import { useModal } from "../composables/useModal";
 import { vOverlayLayer } from "../directives/overlayLayer";
@@ -22,7 +24,7 @@ const {
   cancel,
 } = useModal();
 
-const inputRef = ref<HTMLInputElement | null>(null);
+const inputRef = ref<AInputHandle | null>(null);
 
 watch(visible, async (v) => {
   if (v && mode.value === "prompt") {
@@ -60,7 +62,7 @@ function onOverlayClick(e: MouseEvent) {
         <div v-if="message" class="modal-body">{{ message }}</div>
 
         <div v-if="mode === 'prompt'" class="modal-input-wrap">
-          <input
+          <AInput unstyled
             ref="inputRef"
             v-model="inputValue"
             class="modal-input"

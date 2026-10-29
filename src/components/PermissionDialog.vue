@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import AInput from "@/ui/AInput.vue";
+import type { AInputHandle } from "@/ui/input";
 import { ref, computed, reactive, watch, nextTick, onMounted, onUnmounted } from "vue";
 import type { PermissionRequest } from "@/types/chat";
 import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
@@ -137,7 +139,7 @@ function toggleCollapse() {
  *  仅 tool / plan 渲染入口（question 的「跳过」/ confirm 的「取消」不带理由）。 */
 const denyOpen = ref(false);
 const denyReason = ref("");
-const denyInputRef = ref<HTMLInputElement | null>(null);
+const denyInputRef = ref<AInputHandle | null>(null);
 function openDeny() {
   denyOpen.value = true;
   // 键盘流（Esc 打开理由输入）要求立刻可输入；鼠标流同样省一次点击。
@@ -556,7 +558,7 @@ const inputJson = computed(() => {
               <div class="perm-option-label">其他…</div>
             </button>
           </div>
-          <input
+          <AInput unstyled
             v-if="useFreeText[qi]"
             v-model="freeText[qi]"
             type="text"
@@ -609,7 +611,7 @@ const inputJson = computed(() => {
           <template v-if="bashPrefixValue(d) !== null">
             <div class="perm-remember-rule-row">
               <span class="perm-remember-idx">{{ i + 1 }}</span>
-              <input
+              <AInput unstyled
                 v-model="editableValues[i]"
                 class="perm-remember-value"
                 spellcheck="false"
@@ -660,7 +662,7 @@ const inputJson = computed(() => {
         <template v-else>
           <template v-if="denyOpen">
             <div class="perm-deny-row">
-              <input
+              <AInput unstyled
                 ref="denyInputRef"
                 v-model="denyReason"
                 class="perm-deny-input"

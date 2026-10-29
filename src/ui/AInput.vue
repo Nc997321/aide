@@ -1,49 +1,64 @@
-<script setup lang="ts">
-defineProps<{
-  modelValue: string;
-  placeholder?: string;
-  icon?: string;
-}>();
+<script setup lang="ts" generic="T extends string | number = string">
+import { ref } from "vue";
 
-defineEmits<{
-  "update:modelValue": [value: string];
-}>();
+const props = withDefaults(defineProps<{
+  modelValue?: T;
+  modelModifiers?: { trim?: boolean; number?: boolean; lazy?: boolean };
+  type?: string;
+  autocomplete?: string;
+  /** 保留调用页面的布局与外观；输入行为始终由本组件统一管理。 */
+  unstyled?: boolean;
+}>(), { type: "text", autocomplete: "off" });
+const emit = defineEmits<{ "update:modelValue": [value: T] }>();
+const element = ref<HTMLInputElement | null>(null);
+let composing = false;
+
+function update(event: Event): void {
+  const input = event.target as HTMLInputElement;
+  let value: string | number = props.modelModifiers?.trim ? input.value.trim() : input.value;
+  if (props.modelModifiers?.number || props.type === "number") {
+    const number = Number.parseFloat(String(value));
+    if (!Number.isNaN(number)) value = number;
+  }
+  emit("update:modelValue", value as T);
+}
+function onInput(event: Event): void {
+  if (!composing && !props.modelModifiers?.lazy) update(event);
+}
+function onChange(event: Event): void {
+  if (props.modelModifiers?.lazy) update(event);
+  if (props.modelModifiers?.trim && element.value) element.value.value = element.value.value.trim();
+}
+function onCompositionEnd(event: CompositionEvent): void {
+  if (!composing) return;
+  composing = false;
+  // 与 Vue 原生 v-model 一致：组合输入完成后再派发 input，让调用方也读到完整文字。
+  (event.target as HTMLInputElement).dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+defineExpose({
+  element,
+  focus: (options?: FocusOptions) => element.value?.focus(options),
+  blur: () => element.value?.blur(),
+  select: () => element.value?.select(),
+});
 </script>
 
 <template>
-  <div class="a-input">
-    <span v-if="icon" class="a-input__icon">{{ icon }}</span>
-    <input
-      class="a-input__field"
-      :value="modelValue"
-      :placeholder="placeholder"
-      @input="$emit('update:modelValue', ($event.target as HTMLInputElement).value)"
-    />
-  </div>
+  <input
+    ref="element"
+    :class="unstyled ? undefined : 'a-input__field'"
+    :type="type"
+    :autocomplete="autocomplete"
+    :value="modelValue === undefined ? $attrs.value : modelValue"
+    @input="onInput"
+    @change="onChange"
+    @compositionstart="composing = true"
+    @compositionend="onCompositionEnd"
+  />
 </template>
 
 <style scoped>
-.a-input {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  position: relative;
-  width: 100%;
-  backdrop-filter: var(--aide-surface-blur);
-  -webkit-backdrop-filter: var(--aide-surface-blur);
-}
-
-.a-input__icon {
-  position: absolute;
-  left: 11px;
-  top: 50%;
-  transform: translateY(-50%);
-  font-size: 13px;
-  color: var(--aide-text-muted);
-  pointer-events: none;
-  flex-shrink: 0;
-}
-
 .a-input__field {
   flex: 1;
   width: 100%;
@@ -68,11 +83,8 @@ defineEmits<{
   box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
 }
 
-.a-input.error .a-input__field {
+.a-input__field.error {
   border-color: color-mix(in srgb, var(--aide-danger) 55%, transparent);
 }
 
-.a-input__icon + .a-input__field {
-  padding-left: 32px;
-}
 </style>

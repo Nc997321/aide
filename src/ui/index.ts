@@ -2,6 +2,7 @@ export { default as AStatusDot } from "./AStatusDot.vue";
 export { default as ABadge } from "./ABadge.vue";
 export { default as AButton } from "./AButton.vue";
 export { default as AInput } from "./AInput.vue";
+export type { AInputHandle } from "./input";
 export { default as ACard } from "./ACard.vue";
 export { default as ATabBar } from "./ATabBar.vue";
 export { default as ARailBar } from "./ARailBar.vue";
