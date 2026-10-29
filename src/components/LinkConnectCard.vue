@@ -9,12 +9,26 @@
 //
 // 权限模式用分段控件、不用设置页原来的 ThemedSelect：它的弹层 Teleport 到 body，会被本卡片的
 // 「点外面关闭」误判成外部点击——点一下选项就关卡片并撤掉一次性密钥。分段没有弹层，绕开这个坑。
-import { computed, watch } from "vue";
+import { computed, ref, watch } from "vue";
 import AppLogo from "./AppLogo.vue";
 import { useLinkPairing } from "../composables/useLinkPairing";
 import { useSettings } from "../composables/useSettings";
 
 const { status, offer, error, note, busy, qrSrc, secondsLeft, mmss, stateText, relayDraft, setEnabled, showOffer, hideOffer, regenerate, revoke } = useLinkPairing();
+
+const copyState = ref<"idle" | "ok" | "fail">("idle");
+watch(() => offer.value?.uri, () => { copyState.value = "idle"; });
+
+async function copyPairingLink() {
+  const uri = offer.value?.uri;
+  if (!uri || busy.value || secondsLeft.value <= 0) return;
+  try {
+    await navigator.clipboard.writeText(uri);
+    if (offer.value?.uri === uri) copyState.value = "ok";
+  } catch {
+    if (offer.value?.uri === uri) copyState.value = "fail";
+  }
+}
 
 // ── 远程会话权限模式（从设置页「远程控制」tab 搬来；落盘仍是 settings.remote.permissionMode）──
 // 旧值迁移：权限模式 id 由 `default` 更名为 `manual`（对齐 CLI 命名）；旧文件读回来映射，别显示空白。
@@ -92,6 +106,29 @@ const expiring = computed(() => !!offer.value && secondsLeft.value <= 60);
       <template v-else-if="status?.paired && status.enabled">配对新手机会顶掉当前这台</template>
       <template v-else>&nbsp;</template>
     </p>
+
+    <template v-if="offer">
+      <button
+        type="button"
+        class="lc-btn"
+        :disabled="busy || secondsLeft <= 0"
+        data-testid="link-connect-copy"
+        @click="copyPairingLink"
+      >{{ copyState === "ok" ? "已复制配对链接" : "复制配对链接" }}</button>
+      <p class="lc-relay-hint" role="status">
+        {{ copyState === "fail" ? "复制失败，请选中下方链接手动复制。" : "模拟器可粘贴链接连接；配对完成前请保持此卡片打开。" }}
+      </p>
+      <input
+        v-if="copyState === 'fail'"
+        class="lc-input"
+        type="text"
+        readonly
+        aria-label="配对链接"
+        :value="offer.uri"
+        @focus="($event.target as HTMLInputElement).select()"
+        @click="($event.target as HTMLInputElement).select()"
+      />
+    </template>
 
     <span class="lc-field-label">中继地址</span>
     <div class="lc-relay-row">
