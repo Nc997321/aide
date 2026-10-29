@@ -116,8 +116,11 @@ const DAILY_COPY_POOL: readonly HeroCopy[] = [
   },
 ];
 
+const CHAT_COPY_POOL: readonly HeroCopy[] = [{ headline: "想聊点什么？", body: "讨论、解释、写作，专注对话，不使用工具。" }];
+
 /** 模式 → 文案池。新增模式时必须在这里给它一个池子（类型系统会强制）。 */
 export function heroCopyPool(mode: ChatMode): readonly HeroCopy[] {
+  if (mode === "chat") return CHAT_COPY_POOL;
   return mode === "daily" ? DAILY_COPY_POOL : PROJECT_COPY_POOL;
 }
 

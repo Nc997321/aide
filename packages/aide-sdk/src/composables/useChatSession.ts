@@ -1,3 +1,4 @@
+import { useSessionProfiles } from "./useSessionProfiles";
 import { computed, ref, watch, type Ref } from "vue";
 import { getTransport } from "../transport";
 import { api } from "../api";
@@ -68,6 +69,8 @@ export interface ImageAttachment {
 
 /** 一次发送的完整负载——sendMessage 直发与忙碌排队共用同一形状。 */
 export interface SendOptions {
+  inputDocuments?: string[];
+  sessionProfile?: "assistant" | "chat";
   images?: ImageAttachment[];
   resumeId?: string;
   initialModel?: string;
@@ -106,6 +109,7 @@ export interface SendOptions {
 }
 
 interface QueuedSend {
+  inputDocuments?: string[];
   prompt: string;
   images?: ImageAttachment[];
   mentions?: FileMentionResolution;
@@ -262,6 +266,8 @@ function sendQueued(
   const sendText = extra.length ? [baseText, ...extra].filter(Boolean).join("\n\n") : baseText;
   api.sendMessage({
     sessionId: sid,
+    sessionProfile: useSessionProfiles().profiles[sid] ?? null,
+    inputDocuments: item.inputDocuments?.length ? item.inputDocuments : null,
     prompt: sendText,
     workspaceRoot: sessionWs?.wsPath || null,
     images: item.images?.length ? item.images : null,
@@ -404,6 +410,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
     if (!sid) {
       sid = crypto.randomUUID();
       pendingSids.add(sid);
+      useSessionProfiles().set(sid, opts.sessionProfile ?? "assistant");
       // 空白面板首发：把工作区归属（创建时绑定快照，或发送时当前工作区）当场
       // 种进注册表——dispatchSend 的 workspaceRoot、finalize 后的落盘归属都读它，
       // 不再受「发出后用户切了工作区」影响。
@@ -439,6 +446,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       return sid;
     }
     const item: QueuedSend = {
+      inputDocuments: opts.inputDocuments,
       prompt,
       images: opts.images,
       initialModel: opts.initialModel ?? null,

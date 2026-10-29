@@ -30,6 +30,7 @@ import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
 import { SendImage, SendDisplayBlock } from '../../sdk/types';
 import { uuid } from './ChatWire';
+import { api } from '../../sdk/api';
 
 /** 附件上限（原型 MAX_ATTACH；＋格随余量显隐）。 */
 const MAX_ATTACH: number = 5;
@@ -45,6 +46,8 @@ const THUMB_EDGE: number = 256;
 const POSTER_EDGE: number = 320;
 /** 文件读取字节上限（512KB；超出拒绝——50k 字符内联远用不满）。 */
 const FILE_READ_MAX: number = 512 * 1024;
+/** 移动端文档上传限制，base64 后低于 Link 的帧上限。 */
+const DOCUMENT_UPLOAD_MAX: number = 4 * 1024 * 1024;
 /** 单文件内联字符上限（桌面 fileMentions MAX_MENTION_CHARS；截断后缀同格式）。 */
 const MENTION_MAX_CHARS: number = 50000;
 
@@ -154,6 +157,8 @@ export class Attachment {
   mediaType: string = 'image/jpeg';
   /** 文件正文（≤50k 截断后）。 */
   text: string = '';
+  /** 二进制文档主动上传后的 Host 暂存路径。 */
+  hostPath: string = '';
 
   constructor(type: string, name: string) {
     this.id = uuid();
@@ -289,7 +294,7 @@ export class ChatAttachments {
       const opts: picker.DocumentSelectOptions = new picker.DocumentSelectOptions();
       opts.maxSelectNumber = room;
       const uris: string[] = await d.select(opts);
-      this.addFileUris(uris);
+      await this.addFileUris(uris);
     } catch (e) {
       // 用户取消等：静默
     }
@@ -319,14 +324,14 @@ export class ChatAttachments {
     }
   }
 
-  private addFileUris(uris: string[]): void {
+  private async addFileUris(uris: string[]): Promise<void> {
     for (let i = 0; i < uris.length; i++) {
       if (this.room() <= 0) {
         break;
       }
       const a: Attachment = new Attachment('file', uriName(uris[i]));
       this.items = this.items.concat([a]);
-      this.encodeFile(a, uris[i]);
+      await this.encodeFile(a, uris[i]);
     }
   }
 
@@ -474,27 +479,37 @@ export class ChatAttachments {
   }
 
   /** 文件编码（同步）：白名单 + 512KB 闸门，UTF-8 fatal 解码拦二进制，50k 截断。 */
-  private encodeFile(a: Attachment, uri: string): void {
+  private async encodeFile(a: Attachment, uri: string): Promise<void> {
     let f: fs.File | null = null;
     try {
-      if (!TEXT_EXTS.includes(a.ext)) {
+      const document: boolean = a.ext === 'pdf' || a.ext === 'docx';
+      if (!document && !TEXT_EXTS.includes(a.ext)) {
         a.state = 'error';
-        a.errorText = '仅支持文本类文件';
-        this.pickToast('仅支持文本类文件');
+        a.errorText = '格式暂不支持';
+        this.pickToast('支持文本、PDF 和 DOCX 文档');
         return;
       }
       f = fs.openSync(uri, fs.OpenMode.READ_ONLY);
       const size: number = fs.statSync(f.fd).size;
-      if (size > FILE_READ_MAX) {
+      const limit: number = document ? DOCUMENT_UPLOAD_MAX : FILE_READ_MAX;
+      if (size > limit) {
         a.state = 'error';
-        a.errorText = '超过 512KB';
-        this.pickToast('文件超过 512KB 上限');
+        a.errorText = document ? '超过 4MB' : '超过 512KB';
+        this.pickToast(document ? '文档超过 4MB 上传上限' : '文件超过 512KB 上限');
         return;
       }
       a.sizeLabel = sizeLabelOf(size);
       const buf: ArrayBuffer = new ArrayBuffer(size);
       const ro: ReadOptions = { offset: 0, length: size };
       fs.readSync(f.fd, buf, ro);
+      if (document) {
+        const hostPath: string = await api.stageDocument(a.name, base64Of(buf));
+        if (!this.items.includes(a)) return;
+        a.hostPath = hostPath;
+        a.text = '文档将在发送时解析';
+        a.state = 'ready';
+        return;
+      }
       const tdo: util.TextDecoderOptions = { fatal: true };
       const dec: util.TextDecoder = new util.TextDecoder('utf-8', tdo);
       let text: string = dec.decodeWithStream(new Uint8Array(buf));
@@ -506,8 +521,9 @@ export class ChatAttachments {
       a.state = 'ready';
     } catch (e) {
       a.state = 'error';
-      a.errorText = '无法按文本读取';
-      this.pickToast('该文件无法按文本读取');
+      if (!this.items.includes(a)) return;
+      a.errorText = a.ext === 'pdf' || a.ext === 'docx' ? '文档上传失败' : '无法按文本读取';
+      this.pickToast(a.errorText);
     } finally {
       if (f !== null) {
         fs.closeSync(f);
@@ -516,6 +532,15 @@ export class ChatAttachments {
   }
 
   // ── 发送载荷组装（send 前同步快照；只收 ready 项）──
+
+  buildInputDocuments(): string[] {
+    const paths: string[] = [];
+    for (let i = 0; i < this.items.length; i++) {
+      const item: Attachment = this.items[i];
+      if (item.state === 'ready' && item.hostPath !== '') paths.push(item.hostPath);
+    }
+    return paths;
+  }
 
   /** images 载荷：图片 + 视频首帧（协议唯一媒体通道）；无媒体返回 null。 */
   buildImages(): SendImage[] | null {
@@ -535,7 +560,7 @@ export class ChatAttachments {
     const sections: string[] = [];
     for (let i = 0; i < this.items.length; i++) {
       const it: Attachment = this.items[i];
-      if (it.type === 'file' && it.state === 'ready') {
+      if (it.type === 'file' && it.state === 'ready' && it.hostPath === '') {
         sections.push(`--- 引用文件：${it.name} ---\n${it.text}\n--- 文件结束：${it.name} ---`);
       }
     }
@@ -566,7 +591,7 @@ export class ChatAttachments {
     for (let i = 0; i < this.items.length; i++) {
       const it: Attachment = this.items[i];
       if (it.type === 'file' && it.state === 'ready') {
-        out.push({ type: 'mention', path: it.name, content: it.text });
+        out.push({ type: 'mention', path: it.hostPath !== '' ? it.hostPath : it.name, content: it.text });
       }
     }
     return out.length > 0 ? out : null;

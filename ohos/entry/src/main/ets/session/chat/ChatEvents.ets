@@ -27,6 +27,7 @@
  * store.sid 即丢弃（btw 支线/其他会话/迟到事件不进本 store）。
  */
 import { api } from '../../sdk/api';
+import { workspaceModel } from '../WorkspaceModel';
 import { sessionsModel } from '../SessionsModel';
 import { Session, ContextUsage } from '../../sdk/types';
 import { ChatStore } from './ChatStore';
@@ -53,6 +54,13 @@ export function routeChatEvent(store: ChatStore, payload: Record<string, Object>
   }
   switch (type) {
     case 'session_init': {
+      const profile: string = str(payload, 'session_profile');
+      if (profile === 'chat' || profile === 'assistant') {
+        store.profileRevision += 1;
+        if (profile === 'chat') store.chatMode = 'chat';
+        else store.chatMode = workspaceModel.isDaily(store.spawnWsKey) ? 'daily' : 'project';
+        store.profileReady = true;
+      }
       if (store.pendingSpawn) {
         // spawn 定名：sidecar 已把路由键 re-key 成 SDK 真实 id（此后事件全带
         // 真实 id，原子切换无别名混流窗口），store 原地过户 + 落元数据
@@ -538,6 +546,8 @@ async function adoptSessionTitle(store: ChatStore, title: string): Promise<void>
 async function finalizeSpawn(store: ChatStore, realId: string): Promise<void> {
   const title: string = store.pendingSpawnTitle;
   const wsKey: string = store.spawnWsKey;
+  const wsPath: string = store.spawnWsPath;
+  const scopeKey: string = store.spawnScopeKey;
   store.sid = realId;
   store.pendingSpawn = false;
   store.pendingSpawnTitle = '';
@@ -545,8 +555,9 @@ async function finalizeSpawn(store: ChatStore, realId: string): Promise<void> {
   store.sessionName = name;
   try {
     const created: Session = await api.createSession(realId, name);
-    sessionsModel.adoptNewSession(created, wsKey);
+    if (wsKey !== '' && wsPath !== '') await api.setSessionWorkspace(realId, wsPath, wsKey);
+    sessionsModel.adoptNewSession(created, scopeKey);
   } catch (e) {
-    // 元数据落盘失败静默——jsonl 扫描兜底（名字退 id）
+    if (store.sid === realId) store.sysNote = '会话归属保存失败，请检查连接后重试；本次对话仍在原工作区运行';
   }
 }

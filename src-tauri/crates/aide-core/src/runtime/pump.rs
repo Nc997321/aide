@@ -84,6 +84,25 @@ pub fn start(p: Pump) {
                     // 还原旧行为：session_id = 路由键（前端路由），sdk_session_id = 真 ID。
                     if let Some(obj) = event.as_object_mut() {
                         if obj.get("type").and_then(|t| t.as_str()) == Some("session_init") {
+                            if let (Some(id), Some(profile)) = (
+                                obj.get("session_id").and_then(|v| v.as_str()),
+                                obj.get("session_profile").and_then(|v| v.as_str()),
+                            ) {
+                                if matches!(profile, "chat" | "assistant") {
+                                    let id = id.to_string();
+                                    let profile = profile.to_string();
+                                    let saved = tokio::task::spawn_blocking(move || {
+                                        crate::commands::session::write_session_meta_blocking(&id,
+                                            &crate::commands::session::SessionMetaPatch {
+                                                session_profile: crate::commands::session::MetaField::Set { value: profile },
+                                                ..Default::default()
+                                            })
+                                    }).await;
+                                    if !matches!(saved, Ok(Ok(()))) {
+                                        tracing::error!(?saved, "session profile persistence failed");
+                                    }
+                                }
+                            }
                             if let Some(sdk_sid) = obj.get("session_id").cloned() {
                                 obj.insert("sdk_session_id".to_string(), sdk_sid);
                             }

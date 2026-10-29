@@ -1,3 +1,4 @@
+import { useSessionProfiles } from "../useSessionProfiles";
 import { reactive, ref } from "vue";
 import { historicalToolCall } from "./reconcile";
 import { sessionContinuations } from "../useSessionContinuations";
@@ -664,6 +665,7 @@ export async function finalizeSession(tempId: string, realId: string) {
   }
   // provider 绑定也跟着搬迁：临时 id 在 sendMessage 时已盖戳，拿到真实 id 后不能丢
   identityStore.migrateBinding(tempId, realId);
+  useSessionProfiles().migrate(tempId, realId);
   // 工作区归属同样搬迁（sendMessage 首发时 seed 的创建时绑定快照），并当场落盘：
   // 归属是会话自身属性，重开/重载后要从档案接回来（否则 Rust 侧回落活动工作区）。
   // 定名之后才写 = 盘上永远是正式 id，不会留临时号孤儿档案（与 provider 同纪律）。
@@ -706,6 +708,7 @@ export function resetAllState(): void {
   sessionCreatedCallbacks.clear();
   const { state, removeSessionState } = useSessionState();
   for (const k of Object.keys(state)) removeSessionState(k);
+  useSessionProfiles().clearAll();
   useSessionWorkspaces().clearAll(); // 归属注册表同属模块级状态，一并归零
   useSessionAttachedWorkspaces().clearAll(); // 附加目录账本同上
   __resetComposerDraftsForTest(); // 输入框草稿同上

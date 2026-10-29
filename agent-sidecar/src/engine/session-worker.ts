@@ -108,6 +108,7 @@ const REINTERRUPT_AFTER_MS = 1_000;
 const REINTERRUPT_ATTEMPTS = 3;
 
 export interface SessionWorkerOptions {
+  prepareInput?: (cmd: Extract<SidecarCommand, { cmd: "send" }>) => Promise<Extract<SidecarCommand, { cmd: "send" }>>;
   cwd?: string;
   initialModel?: string;
   envOverrides?: Record<string, string>;
@@ -241,6 +242,8 @@ export class SessionWorker {
   // 非空时：policy hook 白名单裁决 + skills/plugins 关 + partial 关
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
+  private sessionProfile: "assistant" | "chat" = "assistant";
+  private profileInitialized = false;
   /** 本会话是子会话时的父会话 id（Host 派发子会话的 send 带 subsession_parent）。 */
   private subsessionParent?: string;
   /** 子会话空闲休眠（见 session-worker/idleSleep.ts）：只对子会话计时。 */
@@ -288,6 +291,7 @@ export class SessionWorker {
 
   // ---- 测试缝：可替换的 SDK query 实现 ----
   private queryFn: typeof query;
+  private readonly prepareInput?: SessionWorkerOptions["prepareInput"];
   /** btw 自毁回调（SessionManager 注入，见 SessionWorkerOptions.onSelfStop）。 */
   private readonly onSelfStop?: (worker: SessionWorker) => void;
   /** send 命令串行化：只在存在未完成的异步 send（例如图片 probe）时启用。 */
@@ -301,6 +305,7 @@ export class SessionWorker {
     this.emitToStdout = emitToStdout;
     this.routingKey = routingId;
     this.queryFn = opts.queryFn ?? query;
+    this.prepareInput = opts.prepareInput;
     this.onSelfStop = opts.onSelfStop;
     this.cwd = opts.cwd;
     this.envOverrides = opts.envOverrides ?? {};
@@ -323,6 +328,7 @@ export class SessionWorker {
   // ---- emit 快捷方法 ----
 
   private emit(event: ChatEvent): void {
+    if (event.type === "session_init") event.session_profile = this.sessionProfile;
     // message_stop 盖本轮 effort 戳：Stop hook 已把 API 侧坐实的档位（含静默降级）
     // 存进 lastStopEffort（时序：Stop hook → result → message_stop）。读取即清零——
     // 中断/出错轮次 Stop 不触发时，不会把上一轮的档位泄漏到这一轮。
@@ -850,7 +856,7 @@ export class SessionWorker {
     }
 
     const pending = this.handleSend(cmd);
-    if (!cmd.images?.length) {
+    if (!cmd.images?.length && !cmd.input_documents?.length) {
       // 不进串行队列（无图片 probe，不需要排队），但拒绝照样要上报：此前这里是
       // `void pending`，handleSend 同步段一抛就成了无人接的 rejection——没有
       // user_message、没有 error 帧，前端永远停在「正在思考」。
@@ -971,6 +977,15 @@ export class SessionWorker {
     // 有新消息进来：不睡了（下一次收轮重新计时）
     this.idleSleep.cancel();
     // 有新消息进来：值守的回报有人看，清零「连续无人回应」计数
+    if (!this.profileInitialized) {
+      this.sessionProfile = cmd.session_profile ?? "assistant";
+      this.profileInitialized = true;
+    }
+    if (cmd.input_documents?.length) {
+      if (!this.prepareInput) throw new Error("当前宿主不支持文档附件解析");
+      cmd = await this.prepareInput(cmd);
+      if (this.stopped) return;
+    }
     this.watches.userActivity();
     this.applySendRuntimeConfig(cmd);
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
@@ -984,7 +999,7 @@ export class SessionWorker {
     // 开关缺省（btw / 自动化等不下发的通道）按开处理：Host 的 ensure_server 才是把关处。
     syncLspWarmth(
       cmd.cwd ?? this.cwd ?? "",
-      cmd.lsp_enabled !== false,
+      this.sessionProfile !== "chat" && cmd.lsp_enabled !== false,
       (cmd.lsp_languages ?? []).length > 0,
       (e) => this.emit(e),
     );
@@ -1113,6 +1128,7 @@ export class SessionWorker {
           // 闭包桥接 private 成员（直接传 this 会被名义类型规则挡掉）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
           const queryCtx = await prepareQueryContext({
+            sessionProfile: this.sessionProfile,
             cwd: effectiveCwd,
             trusted,
             // 附加根的记忆注入只在 spawn 期进 system prompt（F6：中途 @ 的走消息级
@@ -1179,6 +1195,7 @@ export class SessionWorker {
                 lspLanguages,
                   },
               branch: {
+                sessionProfile: this.sessionProfile,
                 automationConfig: this.automationConfig,
               },
               model: {

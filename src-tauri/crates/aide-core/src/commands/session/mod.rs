@@ -19,6 +19,7 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("set_session_meta", set_session_meta),
     command!("set_session_workspace", set_session_workspace),
     command!("session_workspace", session_workspace),
+    command!("session_profile", session_profile),
     command!("session_model", session_model),
     command!("session_effort", session_effort),
     command!("session_provider", session_provider),
@@ -398,6 +399,7 @@ pub(crate) struct SessionMetaPatch {
     /// 子会话的父会话 id（Host 派发子会话时写；删父会话但保留子会话时 Clear）。
     pub parent_id: MetaField,
     pub handoff_id: MetaField,
+    pub session_profile: MetaField,
 }
 
 fn apply_field(v: &mut Value, key: &str, f: &MetaField) {
@@ -451,6 +453,7 @@ pub(crate) fn write_session_meta_blocking(id: &str, patch: &SessionMetaPatch) ->
     apply_field(&mut v, "wsKey", &patch.ws_key);
     apply_field(&mut v, "parentId", &patch.parent_id);
     apply_field(&mut v, "handoffId", &patch.handoff_id);
+    apply_field(&mut v, "sessionProfile", &patch.session_profile);
 
     fs::write(
         &path,
@@ -1293,6 +1296,24 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_profile_survives_session_creation_and_metadata_updates() {
+        let id = format!("test-chat-profile-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos());
+        assert_eq!(crate::session_store::our_session_profile(&id), None);
+        write_session_meta_blocking(&id, &SessionMetaPatch {
+            session_profile: MetaField::Set { value: "chat".into() },
+            ..Default::default()
+        }).unwrap();
+        // session_init 先保存能力；GUI 随后创建档案、更新模型都必须保留能力字段。
+        create_session_blocking(id.clone(), "纯聊天".into()).unwrap();
+        write_session_meta_blocking(&id, &SessionMetaPatch {
+            model: MetaField::Set { value: "model".into() },
+            ..Default::default()
+        }).unwrap();
+        assert_eq!(crate::session_store::our_session_profile(&id), Some(crate::session_store::SessionProfile::Chat));
+        fs::remove_file(our_sessions_dir().join(format!("{id}.json"))).unwrap();
+    }
+
+    #[tokio::test]
     async fn set_session_meta_writes_all_fields_in_one_pass() {
         // 回归（2026-09-08）：此前 provider / model / effort 各是一条命令，每条都
         // 自己 read-modify-write 一遍 `<id>.json`；前端 L1 用 Promise.all 并发写两个
@@ -1567,4 +1588,9 @@ mod tests {
         delete_session(id.clone()).await.unwrap();
         assert!(!path.exists(), "async 包装后仍应删除元数据");
     }
+}
+
+async fn session_profile(_core: Arc<Core>, a: SessionWorkspaceArgs) -> Result<crate::session_store::SessionProfile, String> {
+    tokio::task::spawn_blocking(move || crate::session_store::our_session_profile(&a.id).unwrap_or_default())
+        .await.map_err(|e| e.to_string())
 }

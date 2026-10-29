@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, flushPromises, enableAutoUnmount, type VueWrapper } from "@vue/test-utils";
 import { nextTick } from "vue";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { ProviderConfig } from "@/types";
 
 // 关掉的窗口监听/定时器随卸载一起清（本组件当前没有 window 监听，防后续新增时残留）
@@ -536,5 +538,21 @@ describe("ChatInputBox · 单行输入框（2026-10-16）", () => {
     await w.setProps({ currentPermissionMode: "bypassPermissions" });
     await nextTick();
     expect(w.find(".perm-mode-wrap").classes()).toContain("perm-mode-wrap--bypass");
+  });
+});
+
+describe("纯聊天输入", () => {
+  it("文档交给宿主预解析，保留附件内容入口并隐藏场景和权限", async () => {
+    const w = mountBox({ isHero: true, mode: "chat" });
+    expect(w.find(".scene-bar").exists()).toBe(false);
+    expect(w.find(".perm-mode-wrap").exists()).toBe(false);
+    const path = join(tmpdir(), "report.pdf");
+    await w.find("textarea").setValue(`总结 @${path}`);
+    await w.find("textarea").trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const [, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
+    expect(opts.inputDocuments).toEqual([path]);
+    expect(mocks.readFileContent).not.toHaveBeenCalledWith(path);
+    expect(opts.mentions.resolved[0].path).toBe(path);
   });
 });

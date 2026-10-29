@@ -156,6 +156,7 @@ impl Backend for FakeBackend {
                 "list_sessions" => Ok(json!(["s1", "s2"])),
                 // 回显参数：让向量看得到链路预处理（默认权限模式等）
                 "send_message" | "get_settings" | "list_pending_permissions" => Ok(params),
+                "stage_dropped_file" => Ok(json!("/host/staging/report.pdf")),
                 "set_model" => Err("model not found".into()),
                 "load_messages" => {
                     // 慢命令：证明慢调用不堵后面的帧（应答无序到达）

@@ -54,6 +54,7 @@ import { ChatModel, chatModel, EFFORT_TIERS, effortLabel, modelDisplayName } fro
 import { EffortTier } from '../session/ChatModel';
 import { ModelOption, ContextUsage } from '../sdk/types';
 import { ProviderMark } from '../session/ProviderLogos';
+import { CHAT_MODES, chatModeLabel, chatModeHeadline, chatModeDescription, chatModeSuggestions } from '../session/ChatMode';
 import { ProviderModel, providerModel } from '../session/ProviderModel';
 import { ChatStore } from '../session/chat/ChatStore';
 import {
@@ -75,7 +76,7 @@ import { VoiceChip } from '../session/chat/VoiceChip';
 import { StopChip } from '../session/chat/StopChip';
 import { readerModel } from '../session/chat/ReaderModel';
 import { ttsModel } from '../session/chat/TtsModel';
-import { ChatDrawer, drawerState, toastModel, ToastModel, wsAccentColor } from '../session/ChatDrawer';
+import { ChatDrawer, drawerState, toastModel, ToastModel } from '../session/ChatDrawer';
 import { SessionsModel, sessionsModel } from '../session/SessionsModel';
 import { WorkspaceModel, workspaceModel } from '../session/WorkspaceModel';
 import { automationModel } from '../session/AutomationModel';
@@ -308,6 +309,8 @@ export struct ChatPage {
   /** 可发：已连接 + 附件无编码中/错误项 +（有草稿或有附件）；附件-only 合法。 */
   canSend(): boolean {
     return this.conn.state === 'authed'
+      && this.store.profileReady
+      && !this.store.modeSelecting
       && !this.att.anyEncoding()
       && !this.att.anyError()
       && (this.draft.trim() !== '' || this.att.items.length > 0);
@@ -328,6 +331,7 @@ export struct ChatPage {
 
   /** 输入框占位：有附件提示可只发附件 / 忙碌排队 / 日常空会话轻引导 / 常规。 */
   private inputPlaceholder(): string {
+    if (this.store.chatMode === 'chat' && !this.store.isBusy && this.att.items.length === 0) return '聊点什么…';
     if (this.att.items.length > 0) {
       return '问问这些内容…（可只发附件）';
     }
@@ -438,7 +442,7 @@ export struct ChatPage {
 
       // 标题 + 副标题（工作区色点 + 名称，纯展示——切换都收在抽屉里）
       Column({ space: 3 }) {
-        Text(this.store.sessionName !== '' ? this.store.sessionName : '新会话')
+        Text(this.store.sid === '' ? '新建对话' : this.store.sessionName)
           .fontSize(16)
           .fontWeight(FontWeight.Medium)
           .fontColor($r('app.color.text_primary'))
@@ -446,14 +450,8 @@ export struct ChatPage {
           .textOverflow({ overflow: TextOverflow.Ellipsis })
           .constraintSize({ maxWidth: '82%' })
         Row({ space: 5 }) {
-          // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
-          Column()
-            .width(6)
-            .height(6)
-            .borderRadius(3)
-            .backgroundColor(wsAccentColor(this.ws.displayKey()))
-          Text(this.ws.selectedDisplayName())
-            .fontSize(10.5)
+          Text(this.store.profileReady ? chatModeLabel(this.store.chatMode) : '正在读取会话…')
+            .fontSize(11)
             .fontWeight(FontWeight.Medium)
             .fontColor($r('app.color.text_secondary'))
             .maxLines(1)
@@ -467,29 +465,35 @@ export struct ChatPage {
       // ⏻ 结束会话进程（stop_chat_session）：仅运行中显示（startedIds 闸门，
       // 事件流维持 + open/refresh 经 session_alive 对账）；点 = 确认后杀
       // 桌面 worker。未启动的历史会话不显示——没有进程可结束
-      if (this.sm.startedIds.indexOf(this.store.sid) >= 0) {
-        Row() {
-          SymbolGlyph($r('sys.symbol.power'))
-            .fontSize(17)
-            .fontColor([$r('app.color.status_danger')])
+      // 两侧固定等宽占位，标题始终相对应用中心，不随按钮显隐偏移。
+      Row() {
+        if (this.sm.startedIds.indexOf(this.store.sid) >= 0) {
+          Row() {
+            SymbolGlyph($r('sys.symbol.power'))
+              .fontSize(17)
+              .fontColor([$r('app.color.status_danger')])
+          }
+          .width(34)
+          .height(34)
+          .borderRadius(10)
+          .justifyContent(FlexAlign.Center)
+          .alignItems(VerticalAlign.Center)
+          .onClick(() => {
+            this.confirmStopSession();
+          })
         }
-        .width(34)
-        .height(34)
-        .borderRadius(10)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
-        .onClick(() => {
-          this.confirmStopSession();
-        })
       }
+      .width(34)
+      .height(34)
+      .justifyContent(FlexAlign.Center)
+      .alignItems(VerticalAlign.Center)
     }
     .width('100%')
     .padding({ left: 10, right: 10, top: 8, bottom: 10 })
     .alignItems(VerticalAlign.Center)
     // background() 而非 backgroundColor()：顶栏贴安全区顶缘，白卡背景延伸进
     // 状态栏避让区（组件级沉浸）——状态栏与顶栏连成一体，不再灰白割裂
-    .background($r('app.color.card_bg'))
-    .border({ width: { bottom: 1 }, color: $r('app.color.line') })
+    .background($r('app.color.page_bg'))
   }
 
   @Builder
@@ -563,52 +567,62 @@ export struct ChatPage {
 
   // ── 新会话空态 ──
 
-  /** 空态（store.sid 为空）：首条消息即 spawn，发往手机侧所选工作区。 */
+  @Builder
+  modeTabs() {
+    Row({ space: 3 }) {
+      ForEach(CHAT_MODES, (mode: string) => {
+        Button(chatModeLabel(mode), { type: ButtonType.Normal })
+          .layoutWeight(1).height(42).fontSize(14)
+          .enabled(!this.store.modeSelecting && this.ws.loaded && this.conn.state === 'authed')
+          .fontWeight(this.store.chatMode === mode ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.store.chatMode === mode ? $r('app.color.accent') : $r('app.color.text_secondary'))
+          .backgroundColor(this.store.chatMode === mode ? $r('app.color.card_bg') : Color.Transparent)
+          .borderRadius(11)
+          .accessibilityText(`${chatModeLabel(mode)}${this.store.chatMode === mode ? '，已选择' : ''}`)
+          .onClick(() => { void this.model.pickChatMode(mode); })
+      }, (mode: string) => mode)
+    }
+    .width('100%').padding(4).borderRadius(15).backgroundColor($r('app.color.input_bg'))
+  }
+
   @Builder
   emptyState() {
-    Column({ space: 7 }) {
-      Image($r('app.media.startIcon'))
-        .width(56)
-        .height(56)
-        .borderRadius(16)
-        .margin({ bottom: 3 })
-
-      Text('新会话')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-
-      Text() {
-        if (this.ws.isDaily(this.ws.selectedKey)) {
-          // 日常默认范围：定位文案替代工作区点名，强调色随日常暖橙
-          Span('发消息即创建')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-          Span(' · 日常对话')
-            .fontSize(12)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(wsAccentColor(this.ws.selectedKey))
-        } else if (this.ws.selectedKey === '' && this.ws.activeDisplayName() === '') {
-          // 跟随桌面且未解析出真名——保持占位文案
-          Span(' · 发往桌面当前工作区')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-        } else {
-          // 选定具体工作区，或跟随槽位已解析真名——点名展示
-          Span(' · 发往工作区 ')
-            .fontSize(12)
-            .fontColor($r('app.color.text_secondary'))
-          Span(this.ws.selectedDisplayName())
-            .fontSize(12)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.accent'))
+    Scroll() {
+      Column() {
+        this.modeTabs()
+        Column({ space: 12 }) {
+          Text(chatModeLabel(this.store.chatMode)).fontSize(12).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.accent')).letterSpacing(2).width('100%')
+          Text(chatModeHeadline(this.store.chatMode)).fontSize(30).fontWeight(FontWeight.Medium)
+            .fontColor($r('app.color.text_primary')).lineHeight(43).width('100%')
+          Text(chatModeDescription(this.store.chatMode)).fontSize(13).lineHeight(24)
+            .fontColor($r('app.color.text_secondary')).width('100%')
+          if (this.store.chatMode === 'project') {
+            Row({ space: 9 }) {
+              Text('项目').fontSize(12).fontColor($r('app.color.text_secondary'))
+              Text(this.ws.selectedDisplayName()).fontSize(14).fontColor($r('app.color.text_primary'))
+                .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+            }
+            .width('100%').constraintSize({ minHeight: 46 }).padding({ left: 14, right: 14 })
+            .borderRadius(12).border({ width: 1, color: $r('app.color.line') }).margin({ top: 6 })
+            .onClick(() => drawerState.openWorkspacePicker())
+          }
         }
+        .width('100%').alignItems(HorizontalAlign.Start).padding({ top: 40, bottom: 26 })
+        ForEach(chatModeSuggestions(this.store.chatMode), (suggestion: string) => {
+          Row() {
+            Text(suggestion).fontSize(13).fontColor($r('app.color.text_primary')).layoutWeight(1)
+            SymbolGlyph($r('sys.symbol.arrow_up_right')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+          }
+          .width('100%').constraintSize({ minHeight: 48 })
+          .border({ width: { bottom: 1 }, color: $r('app.color.line') })
+          .onClick(() => { this.draft = suggestion; })
+        }, (suggestion: string) => suggestion)
       }
+      .width('100%').padding({ left: 24, right: 24, top: 14, bottom: 22 })
     }
-    .width('100%')
-    .layoutWeight(1)
-    .justifyContent(FlexAlign.Center)
-    .padding({ left: 30, right: 30 })
+    .width('100%').layoutWeight(1).scrollBar(BarState.Off)
   }
 
   // ── 列表头部态 ──
@@ -1758,10 +1772,33 @@ export struct ChatPage {
     .padding({ left: 16, right: 16, bottom: 6 })
   }
 
+  private providerLabel(): string {
+    const provider = this.pv.activeProvider();
+    return provider !== null ? provider.name : (this.pv.refreshing ? '加载供应商…' : '选择供应商');
+  }
+
+  @Builder
+  providerChip() {
+    Row({ space: 6 }) {
+      if (this.pv.activeProvider() !== null) {
+        ProviderMark({ p: this.pv.activeProvider(), markSize: 12, tint: $r('app.color.text_secondary') })
+      }
+      Text(this.providerLabel()).fontSize(12).fontColor($r('app.color.text_secondary'))
+        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).constraintSize({ maxWidth: 200 })
+      SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+    }
+    .constraintSize({ minHeight: 32 }).padding({ left: 4, right: 6 })
+    .onClick(() => { this.store.handlePopups(); drawerState.openProviderPicker(); })
+  }
+
   @Builder
   inputBarView() {
     // 整块圆角输入卡：正文独占上层，附件 / 模型档位 / 发送收在底部操作栏。
-    Column({ space: 10 }) {
+    Column({ space: 4 }) {
+      Row() {
+        this.providerChip()
+        Blank()
+      }.width('100%')
       if (this.att.items.length > 0) {
         this.atStripView()
       }
@@ -1772,7 +1809,7 @@ export struct ChatPage {
         .onFocus(() => {
           this.store.handlePopups();
         })
-        .fontSize(18)
+        .fontSize(16)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.text_secondary'))
         .backgroundColor(Color.Transparent)
@@ -1802,12 +1839,12 @@ export struct ChatPage {
         Row() {
           SymbolGlyph($r('sys.symbol.arrow_up'))
             .fontSize(22)
-            .fontColor([this.canSend() ? $r('app.color.card_bg') : $r('app.color.text_secondary')])
+            .fontColor([this.canSend() ? $r('app.color.accent_foreground') : $r('app.color.text_secondary')])
         }
         .width(40)
         .height(40)
         .borderRadius(20)
-        .backgroundColor(this.canSend() ? $r('app.color.text_primary') : $r('app.color.input_bg'))
+        .backgroundColor(this.canSend() ? $r('app.color.accent') : $r('app.color.input_bg'))
         .justifyContent(FlexAlign.Center)
         .alignItems(VerticalAlign.Center)
         .accessibilityText('发送消息')
@@ -1827,7 +1864,7 @@ export struct ChatPage {
     .width('100%')
     .padding({ left: 12, right: 12, top: 10, bottom: 12 })
     .backgroundColor($r('app.color.card_bg'))
-    .borderRadius(28)
+    .borderRadius(22)
     .border({ width: 1, color: $r('app.color.line') })
   }
 
@@ -1835,7 +1872,9 @@ export struct ChatPage {
   @Builder
   modelChip() {
     Row({ space: 5 }) {
-      ProviderMark({ p: this.pv.activeProvider(), markSize: 14, tint: $r('app.color.text_secondary') })
+      if (this.pv.activeProvider() !== null) {
+        ProviderMark({ p: this.pv.activeProvider(), markSize: 14, tint: $r('app.color.text_secondary') })
+      }
       Text(this.modelChipLabel())
         .fontSize(14)
         .fontWeight(FontWeight.Medium)
@@ -1891,12 +1930,13 @@ export struct ChatPage {
           this.modelOptRow(o)
         }, (o: ModelOption) => o.value)
         if (this.store.modelOptions.length === 0) {
-          Text('正在获取模型列表…')
+          Text(this.store.modelsLoading ? '正在获取模型列表…' : (this.store.modelsError ? '加载失败，点击重试' : '该供应商暂无可用模型'))
             .fontSize(12)
             .fontColor($r('app.color.text_secondary'))
             .width('100%')
             .textAlign(TextAlign.Center)
             .padding({ top: 14, bottom: 14 })
+            .onClick(() => { void this.model.syncModelEffort(); })
         }
       }
       .width(this.modelPopWidth())
@@ -2114,7 +2154,7 @@ export struct ChatPage {
   /** chip 文案：选中项展示名 → 默认（选项集首位）→ 占位「模型」。 */
   private modelChipLabel(): string {
     if (this.store.modelOptions.length === 0) {
-      return '模型';
+      return this.store.modelsLoading ? '加载模型…' : (this.store.modelsError ? '重试加载模型' : '暂无模型');
     }
     const name: string | null = modelDisplayName(this.store.modelOptions, this.store.model);
     if (name !== null) {

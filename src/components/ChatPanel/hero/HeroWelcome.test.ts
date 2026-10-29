@@ -101,14 +101,14 @@ describe("HeroWelcome 模式分叉（日常 / 工程）", () => {
   it("分段控件标出当前模式（aria-selected + is-active）", () => {
     const daily = mount(HeroWelcome, { props: { ...props, mode: "daily" } });
     const btns = daily.findAll(".va-mode-btn");
-    expect(btns.map((b) => b.text())).toEqual(["日常", "工程"]);
-    expect(btns[0].classes()).toContain("is-active");
-    expect(btns[1].classes()).not.toContain("is-active");
+    expect(btns.map((b) => b.text())).toEqual(["纯聊天", "日常", "工程"]);
+    expect(btns[1].classes()).toContain("is-active");
+    expect(btns[0].classes()).not.toContain("is-active");
   });
 
   it("点另一个模式上抛 select-mode", async () => {
     const wrapper = mount(HeroWelcome, { props: { ...props, mode: "daily" } });
-    await wrapper.findAll(".va-mode-btn")[1].trigger("click");
+    await wrapper.findAll(".va-mode-btn")[2].trigger("click");
     expect(wrapper.emitted("select-mode")?.[0]).toEqual(["project"]);
   });
 

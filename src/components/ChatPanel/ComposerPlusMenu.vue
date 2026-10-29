@@ -12,7 +12,7 @@ import Icon from "../Icon.vue";
 import ComposerPopover from "./ComposerPopover.vue";
 import type { PlusAction } from "./composerPlus";
 
-const props = defineProps<{ subsession?: { running: number; max: number } | null }>();
+const props = defineProps<{ chatOnly?: boolean; subsession?: { running: number; max: number } | null }>();
 const emit = defineEmits<{ pick: [action: PlusAction] }>();
 
 const subFull = computed(() => !!props.subsession && props.subsession.running >= props.subsession.max);
@@ -52,7 +52,7 @@ function pick(action: PlusAction) {
         <span class="cplus-label">引用文件或目录</span>
         <span class="cplus-key">@</span>
       </button>
-      <button type="button" role="menuitem" class="cplus-item" @click="pick('slash')">
+      <button v-if="!chatOnly" type="button" role="menuitem" class="cplus-item" @click="pick('slash')">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M9 20L15 4" /></svg>
         <span class="cplus-label">命令与技能</span>
         <span class="cplus-key">/</span>

@@ -284,3 +284,17 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
     }
 }
+
+/// 会话能力配置与工作区归属独立；旧会话缺省仍为完整助手。
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionProfile {
+    #[default]
+    Assistant,
+    Chat,
+}
+pub fn our_session_profile(id: &str) -> Option<SessionProfile> {
+    let content = fs::read_to_string(our_sessions_dir().join(format!("{id}.json"))).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    serde_json::from_value(v.get("sessionProfile")?.clone()).ok()
+}

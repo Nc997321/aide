@@ -213,7 +213,7 @@ export type ChatEvent = ChatEventBody & { sourceId?: string; sourceOffset?: numb
 type ChatEventBody =
   | { type: "block_snapshot"; kind: "text" | "thinking"; text: string }
   | { type: "handoff_summary"; request_id: string; summary?: string; error?: string }
-  | { type: "session_init"; session_id: string }
+  | { type: "session_init"; session_id: string; session_profile?: "assistant" | "chat" }
   // model/modelLabel：本条 assistant 消息的真实 wire model（API 实际调用标识）——
   // 只盖在每条消息的首个块事件上（后续块事件不带）。modelLabel 是 sidecar 按
   // 别名表给出的展示建议（系统默认下是 "sonnet" 这类；第三方常解析出 Claude
@@ -548,6 +548,8 @@ export type SidecarCommand =
   | import("../desktop/handoff.js").HandoffCommand
   | {
       cmd: "send";
+      session_profile?: "assistant" | "chat";
+      input_documents?: string[];
       session_id: string;
       prompt: string;
       /** 图片附件（内嵌 base64），入口校验见 engine/imageAttachments.ts */

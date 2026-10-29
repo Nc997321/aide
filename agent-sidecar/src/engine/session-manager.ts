@@ -1,3 +1,4 @@
+import { prepareInputDocuments } from "../extensions/inputDocuments.js";
 import type {
   AskSideQuestionResult,
   BtwHistoryRound,
@@ -186,6 +187,7 @@ export class SessionManager {
       }
     };
     worker = new SessionWorker(sessionId, emit, {
+      prepareInput: prepareInputDocuments,
       cwd: cmd.cwd,
       envOverrides: cmd.env ?? {},
       // btw 回合结束自毁：按当前 routingKey 摘除（可能已 re-key 成真实会话 ID）。

@@ -328,3 +328,22 @@ describe("开合动画状态（原生浏览器视图据此推迟露头）", () =
     }
   });
 });
+
+describe("纯聊天的右栏可用性", () => {
+  it("隐藏原生浏览器和最大化，阻止展开，离开后恢复原来的面板状态", () => {
+    const p = useRightPanel();
+    p.ensureBrowserShown();
+    p.setMaximized(true);
+    p.available.value = false;
+    expect(p.browserActive.value).toBe(false);
+    expect(p.maximized.value).toBe(false);
+    p.select("git");
+    p.ensureTabShown("files");
+    p.openInBrowser("https://example.com");
+    expect(p.tab.value).toBe("browser");
+    expect(p.pendingBrowserUrl.value).toBe(null);
+    p.available.value = true;
+    expect(p.browserActive.value).toBe(true);
+    expect(p.maximized.value).toBe(true);
+  });
+});

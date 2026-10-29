@@ -1824,3 +1824,33 @@ describe("SessionWorker — btw 侧问（官方 side_question 通道）", () => 
   });
 });
 
+
+describe("纯聊天装配与异步附件", () => {
+  it("附件解析期间后续消息不会改变模式，输入经过预处理后仍无工具", async () => {
+    const events: ChatEvent[] = [];
+    let release!: () => void;
+    const ready = new Promise<void>(resolve => { release = resolve; });
+    let options: any;
+    const worker = new SessionWorker("chat-input", e => events.push(e), {
+      prepareInput: async cmd => { await ready; return { ...cmd, prompt: cmd.prompt + " 文档正文", input_documents: undefined }; },
+      queryFn: ((args: any) => {
+        options = args.options;
+        const gen: any = (async function* () {
+          for await (const _message of args.prompt) { /* 等 stop 收口 */ }
+        })();
+        return gen;
+      }) as any,
+    });
+    try {
+      worker.handleCommand({ cmd: "send", prompt: "hi", session_profile: "chat", input_documents: ["document.docx"] });
+      worker.handleCommand({ cmd: "send", prompt: "second", session_profile: "assistant" });
+      release();
+      await vi.waitFor(() => expect(options).toBeDefined());
+      worker._emitForTest({ type: "session_init", session_id: "real-chat" });
+      expect(options.tools).toEqual([]);
+      expect(options.mcpServers).toEqual({});
+      expect(events).toContainEqual(expect.objectContaining({ type: "session_init", session_profile: "chat" }));
+      expect(events).toContainEqual(expect.objectContaining({ type: "user_message", text: expect.stringContaining("文档正文") }));
+    } finally { worker.stop(); }
+  });
+});

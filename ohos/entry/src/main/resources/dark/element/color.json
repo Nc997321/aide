@@ -2,39 +2,39 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#0F1117"
+      "value": "#1E1E1C"
     },
     {
       "name": "page_bg",
-      "value": "#0F1117"
+      "value": "#1E1E1C"
     },
     {
       "name": "card_bg",
-      "value": "#1A1F2B"
+      "value": "#292926"
     },
     {
       "name": "input_bg",
-      "value": "#151926"
+      "value": "#33332E"
     },
     {
       "name": "text_primary",
-      "value": "#E8ECF4"
+      "value": "#EFEDE7"
     },
     {
       "name": "text_secondary",
-      "value": "#8A93A6"
+      "value": "#AAA99F"
     },
     {
       "name": "accent",
-      "value": "#4C8DFF"
+      "value": "#EDB585"
     },
     {
       "name": "accent_weak",
-      "value": "#144C8DFF"
+      "value": "#423326"
     },
     {
       "name": "status_ok",
-      "value": "#34C77B"
+      "value": "#9BBB9B"
     },
     {
       "name": "status_ok_weak",
@@ -62,7 +62,11 @@
     },
     {
       "name": "line",
-      "value": "#2A3142"
+      "value": "#393934"
+    },
+    {
+      "name": "accent_foreground",
+      "value": "#292116"
     }
   ]
 }

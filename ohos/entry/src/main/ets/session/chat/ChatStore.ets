@@ -28,6 +28,10 @@ export class ChatStore {
   /** 当前打开的会话 id（空串 = 未打开）。 */
   @Trace sid: string = '';
   @Trace sessionName: string = '';
+  @Trace chatMode: string = 'daily';
+  @Trace profileReady: boolean = true;
+  @Trace modeSelecting: boolean = false;
+  profileRevision: number = 0;
   @Trace messages: ChatMessage[] = [];
   /** 是否已从磁盘加载过历史（hydrate skip 分支闸门；失败回滚——见 ChatPagination）。 */
   @Trace hydrated: boolean = false;
@@ -49,6 +53,9 @@ export class ChatStore {
    * '' = 跟随桌面槽位（随 open/spawn 重置，resetForOpen 清空）。
    */
   @Trace spawnWsKey: string = '';
+  @Trace spawnWsPath: string = '';
+  /** 首发时的列表浏览范围，仅用于定名后刷新原列表，不作为工作区真相源。 */
+  spawnScopeKey: string = '';
   /** 挂起的权限请求队列（FIFO，弹层永远显示队头；并行工具会同时发多条）。 */
   @Trace pendingPermissions: PermissionRequest[] = [];
   /** 交互生命周期版本：快照返回期间有新事件时，丢弃旧快照重新读取。 */
@@ -90,6 +97,8 @@ export class ChatStore {
 
   /** 当前供应商的模型选项集（空 = 未加载；chip 回退占位文案，点击重同步）。 */
   @Trace modelOptions: ModelOption[] = [];
+  @Trace modelsLoading: boolean = false;
+  @Trace modelsError: boolean = false;
   /** 当前模型选择（协议 value；空 = 未选，语义 = 选项集首位即默认）。 */
   @Trace model: string = '';
   /** 当前思考档（恒为归一后三档 low/high/max；空 = 未同步）。 */
@@ -265,6 +274,10 @@ export class ChatStore {
   resetForOpen(sid: string, name: string): void {
     this.sid = sid;
     this.sessionName = name;
+    this.chatMode = 'daily';
+    this.profileReady = sid === '';
+    this.profileRevision += 1;
+    this.modeSelecting = false;
     this.replaceAllMessages([]);
     this.hydrated = false;
     this.hydrateFailed = false;
@@ -286,6 +299,8 @@ export class ChatStore {
     this.pendingSpawn = false;
     this.pendingSpawnTitle = '';
     this.spawnWsKey = '';
+    this.spawnWsPath = '';
+    this.spawnScopeKey = '';
     // 模型/effort 域随复位清空（切会话即切供应商上下文），open/newSession 随后重同步
     this.modelOptions = [];
     this.model = '';

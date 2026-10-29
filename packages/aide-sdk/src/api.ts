@@ -44,6 +44,8 @@ import type { LspBoardStatus, LspPreflight } from "./types/lspPacks";
 
 /** send_message 的完整负载（IPC 边界 DTO）。可空字段 null = Rust None。 */
 export interface SendMessageParams {
+  sessionProfile?: "assistant" | "chat" | null;
+  inputDocuments?: string[] | null;
   sessionId: string;
   prompt: string;
   /** 会话归属工作区根路径；null = Rust 回落当前活动工作区 */
@@ -255,6 +257,9 @@ export const api = {
     });
   },
   /** 读回会话自持的工作区归属；没记过 / 无档案 → null（存量会话是常态）。 */
+  sessionProfile(id: string): Promise<"assistant" | "chat"> {
+    return getTransport().invoke("session_profile", { id });
+  },
   sessionWorkspace(id: string): Promise<SessionWorkspaceRef | null> {
     return getTransport().invoke("session_workspace", { id });
   },

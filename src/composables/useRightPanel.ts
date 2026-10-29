@@ -22,6 +22,7 @@ export type RightTabId =
   | `app:${string}`;
 
 /** 默认收起（只留竖直 rail），沿用旧 rightCollapsed 的初值。 */
+const available = ref(true);
 const collapsed = ref(true);
 const tab = ref<RightTabId>("files");
 
@@ -42,7 +43,7 @@ const browserEverActive = ref(false);
 const pendingBrowserUrl = ref<string | null>(null);
 
 /** 浏览器视图此刻该不该露头：视图可见性总闸的一半（另一半是 App 的 overlayLayerOpen）。 */
-const browserActive = computed(() => tab.value === "browser" && !collapsed.value);
+const browserActive = computed(() => available.value && tab.value === "browser" && !collapsed.value);
 
 /**
  * 最大化 = 右栏铺满、聊天让位。**派生而非独立状态**：折叠或切走立刻为假，
@@ -52,7 +53,8 @@ const browserActive = computed(() => tab.value === "browser" && !collapsed.value
 const maximized = computed(() => wantMaximized.value && browserActive.value);
 
 /** rail / 快捷键的统一裁决（逐字沿用 App.vue 旧 onRailSelect 的三态语义）。 */
-function select(id: RightTabId) {  // 懒挂载：第一次点就挂，之后常驻（关面板只 setDisplayed(false)，页面与历史都留着）。
+function select(id: RightTabId) {
+  if (!available.value) return;  // 懒挂载：第一次点就挂，之后常驻（关面板只 setDisplayed(false)，页面与历史都留着）。
   if (id === "browser") browserEverActive.value = true;
   if (collapsed.value) {
     tab.value = id;
@@ -85,6 +87,7 @@ function setMaximized(on: boolean) {
  * 结算卡的「变更面板 ↗」都踩这个坑，故裁决收在这里一处。
  */
 function ensureTabShown(id: RightTabId) {
+  if (!available.value) return;
   if (id === "browser") browserEverActive.value = true; // 懒挂载：浏览器组件首次激活才挂
   tab.value = id;
   collapsed.value = false;
@@ -102,6 +105,7 @@ function ensureBrowserShown() {
  * 连开两个地址时后者覆盖前者：待打开的只有一个，排队没有语义。
  */
 function openInBrowser(url: string) {
+  if (!available.value) return;
   ensureBrowserShown();
   pendingBrowserUrl.value = url;
 }
@@ -207,6 +211,7 @@ function setWidth(name: "narrow" | "browser", px: number) {
 
 export function useRightPanel() {
   return {
+    available,
     collapsed,
     tab,
     wantMaximized,
@@ -232,6 +237,7 @@ export function useRightPanel() {
 
 /** 仅供测试复位模块单例（同 `__resetPaneLayoutForTest` 范式）。 */
 export function __resetRightPanelForTest() {
+  available.value = true;
   collapsed.value = true;
   tab.value = "files";
   wantMaximized.value = false;

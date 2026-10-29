@@ -87,7 +87,11 @@ const rightPanel = useRightPanel();
 // 浏览器视图的常驻订阅在这里安装**一次**（面板是懒挂载的，agent 可能在它之前就开 tab / 请求 focus）。
 // 逻辑全在 useBrowserViews 里，App 只负责"活着"这件事。
 useBrowserViews();
-const rightCollapsed = rightPanel.collapsed;
+const rightAvailable = rightPanel.available;
+const rightCollapsed = computed({
+  get: () => !rightAvailable.value || rightPanel.collapsed.value,
+  set: (value: boolean) => { if (rightAvailable.value) rightPanel.collapsed.value = value; },
+});
 const rightTab = rightPanel.tab;
 const { unstagedFiles, hasChanges, loadStatus, currentBranch } = useGit();
 
@@ -174,6 +178,7 @@ const gridTemplateColumns = computed(() => {
     : leftCollapsed.value
       ? "10px"
       : "var(--aide-left-w, 280px)";
+  if (!rightAvailable.value) return `${left} 1px minmax(400px, 1fr) 0px 0px`;
   if (browserMaximized.value) return `${left} 1px 0px 1px 1fr`;
   const right = rightCollapsed.value ? "var(--aide-rail-w, 40px)" : "var(--aide-right-w, 300px)";
   return `${left} 1px minmax(400px, 1fr) 1px ${right}`;
@@ -236,6 +241,7 @@ const paletteRef = ref<InstanceType<typeof ACommandPalette> | null>(null);
 // 「当前会话」= 聚焦分屏组激活 tab 的会话——布局层的计算属性，所有下游
 // （右面板 / 权限弹窗 / 标题栏 / 侧栏高亮）沿用旧的单一 activeSessionId 语义。
 const paneLayout = usePaneLayout();
+watch(paneLayout.activeChatMode, mode => { rightAvailable.value = mode !== "chat"; }, { immediate: true, flush: "sync" });
 const automation = useAutomation();
 const marketplace = useMarketplace();
 // 观测台面板开关（模块级状态，主区视图范式；数据闭包在 MemoryObservatory 组件内部）
@@ -438,6 +444,7 @@ const RAIL_DIGIT_TABS: Record<string, RightTabId> = {
 /** 快捷键打开搜索面板：展开右侧 + 切到 search tab + 预选模式并聚焦输入框。
  *  面板已打开时重复按快捷键 = 聚焦输入框（IDEA 行为）。 */
 function openSearchPanel(mode: "search" | "replace") {
+  if (!rightAvailable.value) return;
   if (rightCollapsed.value) {
     rightTab.value = "search";
     rightCollapsed.value = false;
@@ -1104,6 +1111,7 @@ onUnmounted(() => {
       :run-states="runStates"
       :left-collapsed="leftCollapsed"
       :right-collapsed="rightCollapsed"
+      :right-available="rightAvailable"
       :workspace-root="workspacePath"
       @open-palette="paletteOpen = true"
       @run-project="onRunProject"
@@ -1227,14 +1235,14 @@ onUnmounted(() => {
 
       <!-- Right resize handle -->
       <div
-        v-show="!rightCollapsed"
+        v-show="rightAvailable && !rightCollapsed"
         class="resize-handle resize-handle-right"
         :class="{ active: rightResize.isDragging.value }"
         @mousedown="rightResize.onMousedown"
       />
 
       <!-- Right panel：content + 常驻竖直工具栏（IDEA 式） -->
-      <div class="panel-right" :class="{ collapsed: rightCollapsed }">
+      <div v-show="rightAvailable" class="panel-right" :class="{ collapsed: rightCollapsed }">
         <!-- 收起动画期间内容留着（否则轨道还在收、里面已经空了）；动画一落定才真摘掉 -->
         <div v-show="!rightCollapsed || rightPanel.layoutAnimating.value" class="panel-right-inner">
           <div class="tab-content">

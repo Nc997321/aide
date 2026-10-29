@@ -1,4 +1,4 @@
-import { computed, reactive } from "vue";
+import { computed, reactive, watch } from "vue";
 import {
   createEmptyRoot,
   createTab,
@@ -19,6 +19,8 @@ import {
   type TabItem,
   viewSessionOf,
 } from "./paneLayout/tree";
+import { useSessionProfiles } from "@aide/sdk/composables/useSessionProfiles";
+import { isDailyKey } from "@aide/sdk/utils/dailyWorkspace";
 import { useSubsessions } from "./useSubsessions";
 import { useSessionState } from "./useSessionState";
 // 模式表是全项目唯一一份定义（ChatPanel/modes.ts，零依赖的叶子模块）：这里只借它的
@@ -49,11 +51,9 @@ interface LayoutState {
    */
   defaultWs?: TabItem["pendingWs"] | null;
   /**
-   * 零 tab 欢迎态的**模式意图**（日常 / 工程）。只在没有 tab 时用 —— 一旦有了
-   * 空白 tab，模式就由那个 tab 的 pendingWs 派生（isDailyKey），而 pendingWs 是
-   * 落盘的，所以切走再回来不会丢。这里必须单独存，不能从 defaultWs 推：「工程 +
-   * 还没选工作区」与「日常」都表现为「没有归属」，光看 defaultWs 分不开。
-   * 与 defaultWs 同生命周期（不落盘、reset 清）。
+   * 欢迎态的下一会话模式；空白 tab 保存 pendingProfile 和 pendingWs，
+   * 已启动会话由 Host 档案中的能力配置和工作区归属共同识别。
+   * 此意图不落盘，reset 时恢复默认。
    */
   chatMode: ChatMode;
 }
@@ -104,6 +104,18 @@ export function tabWsKeyOf(tab: TabItem | null): string {
   if (tab.sessionId) return useSessionWorkspaces().workspaceOf(tab.sessionId)?.wsKey ?? "";
   return tab.pendingWs?.wsKey ?? "";
 }
+
+/** 所有 UI 共用的模式判定：能力档案优先，旧会话仍按工作区派生。 */
+export function chatModeOf(tab: TabItem | null, fallback: ChatMode): ChatMode {
+  if (!tab) return fallback;
+  const sid = viewSessionOf(tab);
+  const profile = sid ? useSessionProfiles().profiles[sid] : tab.pendingProfile;
+  if (profile === "chat") return "chat";
+  return isDailyKey(tabWsKeyOf(tab)) ? "daily" : "project";
+}
+watch(() => viewSessionOf(focusedTab()), sid => {
+  if (sid) void useSessionProfiles().ensure(sid).catch(e => console.warn("读取会话能力失败", e));
+}, { immediate: true });
 
 /** 树被换根/规范化后的统一收尾：空树兜底空根组（欢迎态）+ 修正聚焦引用。 */
 function commitRoot(newRoot: PaneNode | null) {
@@ -191,6 +203,7 @@ export function usePaneLayout() {
       preview.sessionId = null;
       delete preview.drillChildId;
       preview.pendingName = pendingName;
+      preview.pendingProfile = layout.chatMode === "chat" ? "chat" : "assistant";
       // 复用预览 tab = 换一个空白面板：归属快照跟着换绑（无新快照则清除旧绑定）
       if (pendingWs) preview.pendingWs = pendingWs;
       else delete preview.pendingWs;
@@ -199,6 +212,7 @@ export function usePaneLayout() {
       return;
     }
     const tab = createTab(null, pendingName, pendingWs);
+    tab.pendingProfile = layout.chatMode === "chat" ? "chat" : "assistant";
     group.tabs.push(tab);
     group.previewTabId = tab.id;
     activateTab(group, tab.id);
@@ -218,9 +232,11 @@ export function usePaneLayout() {
     layout.defaultWs = ws ?? null;
   }
 
-  /** hero（零 tab）模式意图：只在没有 tab 时有效（有 tab 时模式由 pendingWs 派生）。 */
+  /** 更新新会话模式意图，并同步当前空白 tab 的能力配置。 */
   function setChatMode(mode: ChatMode) {
     layout.chatMode = mode;
+    const tab = focusedTab();
+    if (tab && !tab.sessionId) tab.pendingProfile = mode === "chat" ? "chat" : "assistant";
   }
 
   /** 侧栏右键「在新标签页打开」：显式动作，无论启动与否都开固定 tab。 */
@@ -392,6 +408,7 @@ export function usePaneLayout() {
     const hit = findTabById(layout.root, tabId);
     if (hit) {
       hit.tab.sessionId = sessionId;
+      delete hit.tab.pendingProfile;
       delete hit.tab.pendingWs; // 归属已种进注册表（sendMessage seed），tab 不留冗余
     }
   }
@@ -522,6 +539,7 @@ export function usePaneLayout() {
     /** 聚焦组激活 tab 的工作区归属 key（"" = 无归属 / 欢迎态）。右栏模式策略等下游用，
      *  与 activeSessionId 同一处取值，走同一个 tabWsKeyOf —— 别在别处重算。 */
     activeTabWsKey: computed(() => tabWsKeyOf(focusedTab())),
+    activeChatMode: computed(() => chatModeOf(focusedTab(), layout.chatMode)),
     /** 是否一个 tab 都没有（零会话欢迎态）——此时欢迎页本身就是新建会话页，
      *  「新建会话」动作（Ctrl+N / 侧栏 +）应 no-op，不再开冗余空白 tab */
     hasAnyTab: computed(() => listGroups(layout.root).some((g) => g.tabs.length > 0)),

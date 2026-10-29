@@ -33,7 +33,7 @@
  */
 import { getTransport } from './transport';
 import {
-  Session, WorkspaceInfo, ActiveWorkspace, DailyWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft,
+  SessionWorkspaceRef, Session, WorkspaceInfo, ActiveWorkspace, DailyWorkspace, LoadMessagesResult, BgTaskInfo, PermissionRuleDraft,
   ProviderConfigView, ModelOption, IdentityDrift, SendImage, SendDisplayBlock,
   Schedule, AutomationTask, AutomationTaskInput, RunRecord, RunStats
 } from './types';
@@ -81,6 +81,8 @@ export interface SessionMetaPatch {
 export interface SendMessageParams {
   sessionId: string;
   prompt: string;
+  sessionProfile?: string;
+  inputDocuments?: string[];
   /** 会话归属工作区根路径；null = Rust 回落当前活动工作区。 */
   workspaceRoot: string | null;
   /** 图片附件（拍照/相册/视频首帧海报；Rust Option<Vec<ImageAttachment>>）；null = 无图。 */
@@ -173,12 +175,28 @@ export class AideApi {
    * 发送一条用户消息（fire-and-forget 语义由调用方决定：新会话 Rust 现拉起进程
    * 较慢，调用点通常不 await 到底、catch 兜底——对照上游 sendMessage 注释）。
    */
+  sessionProfile(id: string): Promise<string> {
+    return getTransport().invoke<string>('session_profile', { 'id': id });
+  }
+  setSessionWorkspace(id: string, path: string, key: string): Promise<void> {
+    return getTransport().invoke<void>('set_session_workspace', {
+      'id': id, 'wsPath': MetaField.set(path), 'wsKey': MetaField.set(key)
+    });
+  }
+  sessionWorkspace(id: string): Promise<SessionWorkspaceRef | null> {
+    return getTransport().invoke<SessionWorkspaceRef | null>('session_workspace', { 'id': id });
+  }
+  stageDocument(name: string, base64: string): Promise<string> {
+    return getTransport().invoke<string>('stage_dropped_file', { 'name': name, 'base64': base64 });
+  }
   sendMessage(params: SendMessageParams): Promise<void> {
     const args: Record<string, Object> = {
       'sessionId': params.sessionId,
       'prompt': params.prompt,
       'jumpQueue': params.jumpQueue
     };
+    if (params.sessionProfile !== undefined) args['sessionProfile'] = params.sessionProfile;
+    if (params.inputDocuments !== undefined) args['inputDocuments'] = params.inputDocuments;
     if (params.workspaceRoot !== null) {
       args['workspaceRoot'] = params.workspaceRoot;
     }

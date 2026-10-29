@@ -62,6 +62,7 @@ pub static GROUPS: &[Group] = &[
             "session_effort",
             "session_provider",
             "session_workspace",
+            "session_profile",
             "set_session_workspace",
             "session_identity_drift",
             "set_session_meta",
@@ -101,8 +102,8 @@ pub static GROUPS: &[Group] = &[
     },
     Group {
         id: "files",
-        title: "文件（只读，限已注册工作区）",
-        methods: &["read_file_content", "read_file_base64"],
+        title: "文件（工作区只读与主动上传暂存）",
+        methods: &["read_file_content", "read_file_base64", "stage_dropped_file"],
     },
     Group {
         id: "automation",
@@ -230,6 +231,8 @@ mod tests {
     fn group_lookup_and_unknown_methods() {
         assert_eq!(Catalog::group_of("send_message"), Some("chat"));
         assert_eq!(Catalog::group_of("list_sessions"), Some("sessions"));
+        assert_eq!(Catalog::group_of("session_profile"), Some("sessions"));
+        assert_eq!(Catalog::group_of("stage_dropped_file"), Some("files"));
         // 桌面专属的命令不对远程开放
         for m in ["write_file_content", "pty_spawn_shell", "git_status", "set_providers_secret"] {
             assert_eq!(Catalog::group_of(m), None, "{m} must not be exposed");

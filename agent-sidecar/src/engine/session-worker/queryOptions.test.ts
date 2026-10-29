@@ -42,6 +42,21 @@ function parts(over: {
 type Opts = Record<string, any>;
 
 describe("buildSpawnQueryOptions", () => {
+  it("纯聊天不暴露任何工具/插件/技能/hooks，即使已有上下文或自动化覆盖", () => {
+    const o = buildSpawnQueryOptions(parts({ branch: {
+      sessionProfile: "chat",
+      automationConfig: { taskId: "t", runId: "r", preset: "auto", tools: ["Read"], mcpAllowlist: [], taskDir: "", sessionDir: "" },
+    } }));
+    expect(o.tools).toEqual([]);
+    expect(o.allowedTools).toEqual([]);
+    expect(o.mcpServers).toEqual({});
+    expect(o.hooks).toEqual({});
+    expect(o.skills).toEqual([]);
+    expect(o.plugins).toEqual([]);
+    expect(o.strictMcpConfig).toBe(true);
+    expect(typeof o.systemPrompt).toBe("string");
+    expect(o.settingSources).toEqual([]);
+  });
   it("信任工作区基线：无 strictMcpConfig，instructions/hooks/mcp/env 从 ctx 直通", () => {
     const o = buildSpawnQueryOptions(parts()) as Opts;
     expect(o.strictMcpConfig).toBeUndefined();

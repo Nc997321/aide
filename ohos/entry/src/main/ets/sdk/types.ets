@@ -366,3 +366,9 @@ export interface RunStats {
   /** 0..1；null = 无用量样本。 */
   cacheReadRatio: number | null;
 }
+
+/** Host 档案中的会话归属（缺席字段保留空值）。 */
+export interface SessionWorkspaceRef {
+  wsPath?: string;
+  wsKey?: string;
+}

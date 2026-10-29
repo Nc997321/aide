@@ -98,5 +98,18 @@
       { "send": { "type": "call", "id": 77, "method": "list_pending_permissions", "params": { "sessionId": "s1" } } },
       { "expect": { "type": "result", "id": 77, "value": { "sessionId": "s1" } } }
     ]
+  },
+  {
+    "name": "explicit document upload returns a host path for input preprocessing, not general file writes",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "call", "id": 1, "method": "stage_dropped_file", "params": { "name": "report.pdf", "base64": "JVBERg==" } } },
+      { "expect": { "type": "result", "id": 1, "value": "/host/staging/report.pdf" } },
+      { "send": { "type": "call", "id": 2, "method": "send_message", "params": { "sessionId": "chat", "prompt": "summarize", "sessionProfile": "chat", "inputDocuments": ["/host/staging/report.pdf"] } } },
+      { "expect": { "type": "result", "id": 2, "value": { "sessionProfile": "chat", "inputDocuments": ["/host/staging/report.pdf"] } } },
+      { "send": { "type": "call", "id": 3, "method": "write_file_content", "params": {} } },
+      { "expect": { "type": "error", "id": 3, "code": "unknown_method" } }
+    ]
   }
 ]

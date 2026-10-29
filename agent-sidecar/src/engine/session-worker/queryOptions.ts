@@ -18,6 +18,8 @@ import { automationQueryOverrides, type AutomationConfig } from "../../desktop/a
 import { resolveClaudeExe } from "../claudeExe.js";
 import type { PreparedQueryContext } from "./queryContext.js";
 
+import { resolveSessionProfile, type SessionProfile } from "../sessionProfile.js";
+
 export interface QuerySpawnParts {
   runtime: {
     abortController: AbortController;
@@ -44,6 +46,7 @@ export interface QuerySpawnParts {
     lspLanguages: string[];
   };
   branch: {
+    sessionProfile?: SessionProfile;
     automationConfig: AutomationConfig | undefined;
   };
   model: {
@@ -79,6 +82,7 @@ function pluginDirs(p: QuerySpawnParts): SdkPluginConfig[] {
 }
 
 export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
+  const profile = resolveSessionProfile(p.branch.sessionProfile);
   return {
     abortController: p.runtime.abortController,
     permissionMode: p.runtime.permissionMode,
@@ -89,7 +93,7 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // buildDispatchPluginsOption 不注入项目级散装 plugin（项目 skills/agents
     // 不进 agent）。user 级不受影响。
     ...(p.workspace.trusted ? {} : { strictMcpConfig: true }),
-    systemPrompt: {
+    systemPrompt: profile.systemPrompt ?? {
       type: "preset" as const,
       preset: "claude_code" as const,
       append: p.runtime.ctx.instructions,
@@ -126,8 +130,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     disallowedTools: ["EnterWorktree", "ExitWorktree"],
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
-    skills: p.branch.automationConfig ? [] : "all",
-    plugins: p.branch.automationConfig ? [] : pluginDirs(p),
+    skills: !profile.toolsEnabled || p.branch.automationConfig ? [] : "all",
+    plugins: !profile.toolsEnabled || p.branch.automationConfig ? [] : pluginDirs(p),
     hooks: p.runtime.ctx.hooks,
     // 终装链（内建+用户 → automation 白名单过滤 → 会话级头注入）见 queryContext.ts。
     mcpServers: p.runtime.ctx.mcpServers,
@@ -161,6 +165,7 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // 只带 persistSession:false,不碰工具列表(缓存前缀红线)。
     // 自动化:tools 收成白名单 + maxTurns/maxBudgetUsd 护栏透传。
     ...automationQueryOverrides(p.branch.automationConfig),
+    ...(!profile.toolsEnabled ? { tools: [], allowedTools: [], mcpServers: {}, hooks: {}, strictMcpConfig: true } : {}),
     env: p.runtime.cliEnv,
   };
 }

@@ -60,6 +60,7 @@ export class WorkspaceModel {
   @Trace loadingMetas: boolean = false;
   /** 重连监听标记（监听挂传输实例只挂一次；镜像 SessionsModel.ensureListener）。 */
   private listening: boolean = false;
+  private pendingRefresh: Promise<void> | null = null;
   /** 用户已显式选过范围（App 运行期内默认日常让位；重启回落）。 */
   private userPicked: boolean = false;
   /** 主机世代（resetForHost 自增）：在途 refresh 的迟到响应按世代丢弃。 */
@@ -68,6 +69,8 @@ export class WorkspaceModel {
   /** 换主机整体复位（HostSync 编排）：清全量内存面，等 refresh 重建
    *  （userPicked 一并清——新主机重新默认日常）。 */
   resetForHost(): void {
+    this.pendingRefresh = null;
+    this.refreshing = false;
     this.hostEpoch++;
     this.workspaces = [];
     this.selectedKey = '';
@@ -96,18 +99,30 @@ export class WorkspaceModel {
 
   /** 拉取工作区列表 + 活动工作区 + 日常身份（authed 前置；防重入；三路并行互不牵连）。 */
   async refresh(): Promise<void> {
-    if (this.refreshing || connModel.state !== 'authed') {
+    if (connModel.state !== 'authed') {
       return;
     }
+    if (this.pendingRefresh !== null) return this.pendingRefresh;
     this.refreshing = true;
     const epoch: number = this.hostEpoch;
+    const pending: Promise<void> = this.load(epoch);
+    this.pendingRefresh = pending;
+    await pending;
+    if (epoch === this.hostEpoch) {
+      this.pendingRefresh = null;
+      this.refreshing = false;
+    }
+  }
+
+  private async load(epoch: number): Promise<void> {
+    let listLoaded: boolean = false;
     const activeJob: Promise<void> = this.fetchActive(epoch);
     const dailyJob: Promise<void> = this.fetchDaily(epoch);
     try {
       const list: WorkspaceInfo[] = await api.listWorkspaces();
       if (epoch === this.hostEpoch) {
         this.workspaces = list;
-        this.loaded = true;
+        listLoaded = true;
       }
     } catch (e) {
       // 拉取失败静默：工作区卡退占位；弹层按 loaded 呈现空态，重开即重试
@@ -116,8 +131,8 @@ export class WorkspaceModel {
       await dailyJob;
       if (epoch === this.hostEpoch) {
         this.adoptDailyDefault();
+        if (listLoaded) this.loaded = true;
       }
-      this.refreshing = false;
     }
   }
 

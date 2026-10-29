@@ -308,10 +308,10 @@ Host 主动结束连接前的原因帧（加密的 Link 帧），随后关闭：
 | 组 | 方法 |
 |---|---|
 | `chat` 聊天控制 | `send_message` `permission_response` `interrupt_session` `withdraw_queued_message` `stop_chat_session` `stop_bg_task` `set_model` `set_effort` `set_permission_mode` `btw_ask` `get_default_models` `get_default_permission_modes` |
-| `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` `list_pending_permissions` |
+| `sessions` 会话与元数据 | `list_sessions` `list_sessions_for_workspace` `create_session` `delete_session` `rename_session` `auto_rename_session` `load_messages` `session_last_event` `session_model` `session_effort` `session_provider` `session_workspace` `session_profile` `set_session_workspace` `session_identity_drift` `set_session_meta` `session_alive` `list_bg_tasks` `list_pending_permissions` |
 | `workspace` 工作区 | `list_workspaces` `daily_workspace` `get_active_workspace` `is_workspace_trusted` `trust_workspace` `untrust_workspace` |
 | `settings` 设置与供应商 | `get_settings` `set_settings` `get_providers` `set_providers` `get_active_provider_id` `set_active_provider_id` `get_provider_catalog` `refresh_models` `claude_credentials_exist` `load_notifications` `save_notifications` |
-| `files` 文件（只读，限已注册工作区） | `read_file_content` `read_file_base64` |
+| `files` 文件（工作区只读与主动上传暂存） | `read_file_content` `read_file_base64` `stage_dropped_file` |
 | `automation` 自动化任务 | `list_automations` `get_automation` `create_automation` `update_automation` `delete_automation` `set_automation_enabled` `list_automation_runs` `automation_run_stats` `run_automation_now` `get_automation_playbook` `redistill_automation` |
 
 **远程专属行为**（只此一处，由 Host 在转发前应用）：
@@ -480,3 +480,23 @@ cargo run -p aide-link --features transport --example test_host -- \
 
 迁移建议：先让手机端在 v1 之上实现一个与现有 `AideTransport { invoke, listen }` 同形的适配器
 （`invoke → call`、`listen("chat-event") → event`），上层 SDK 不用动。
+
+### 会话能力配置（2026-10-29）
+
+`send_message` 可选参数 `sessionProfile: "assistant" | "chat"`，仅用于新会话；已有档案以 Host 保存值为准。
+`session_profile {id}` 返回配置（旧会话默认 `"assistant"`）。`chat-event` 的 `session_init` 增加
+`session_profile` 字段，Host 在真实会话 ID 确认后保存 `sessionProfile` 再广播，所有客户端据此更新缓存。
+`chat` 不挂载内置工具、MCP、插件、skills 或执行 hooks；工作区仍用于转录定位，不代表文件访问能力。
+手机 UI 无需改动，续写纯聊天会话时 Host 自动恢复该配置。
+
+用户提供的图片仍走原有 `images` 输入。`send_message.inputDocuments?: string[]` 是用户主动添加的 Host
+文档路径（PDF / DOCX，最多 8 份）；Host 传至 sidecar 的 `input_documents`，宿主输入适配器复用现有
+文档解析器，在输入模型之前转为正文，并通过原有 `user_message.display` 回灌解析内容。
+PDF 最多解析前 100 页，单文档沿用解析器字符/字节上限；分页或字符截断、扫描页无文字层都会标注。
+此预处理不向模型挂载读取工具，也不允许模型自主选择额外文件。
+
+### 移动端主动上传文档（2026-10-29）
+
+暴露 Host 既有命令 `stage_dropped_file {name, base64}`，返回 Host 暂存文件路径，仅允许最终文件名、
+不接受任意目标路径。鸿蒙选择 PDF / DOCX 后显式上传（单文件 4 MiB 上限），发送时将返回路径
+放进 `send_message.inputDocuments`；由同一宿主输入解析适配器处理，不为手机另建解析器或模型工具。

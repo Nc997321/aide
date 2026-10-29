@@ -1,41 +1,7 @@
 /**
- * 抽屉组件（v3：聊天升主屏，会话列表收进左侧抽屉）——对照 design/remote/
- * app.html 的 .dr-panel 结构：设备卡（主机字母头像 + 连接状态点 + 主机名 +
- * 红字断开 + 切换主机胶囊）/ 工作区卡（色彩字母头像 + 名称/路径/三态计数 +
- * 切换；日常态 = 气泡头像 + 定位副标题占掉路径行）/ 自动化区
- * 段（呼吸点 + 折叠 + ＋ 新建；任务行两行制 + 行内启停小开关）/ 历史会话
- *（＋ 新会话 + ↻ 刷新 + 三态状态点列表）/ 底部搜索框，外加供应商、工作区、
- * 切换主机三个半模态弹层。
- *
- *  - 开合状态（drawerState，含两个半模态开关）与轻提示（toastModel）是全局
- *    单例：ChatPage 顶栏 ☰ 与 toast 宿主（ChatPage 挂载）跨组件共享；系统
- *    返回经 Index.onBackPress → drawerState.handleBack 逐层收起，@Trace 深度观察
- *  - 三态状态点：待确认（橙，呼吸）> 回复中（绿，呼吸）> 已启动（蓝，静态），
- *    列表只留点不带文字；颜色语义的文字说明只在工作区卡计数处（原型同）
- *  - 自动化区段（原型 design/automation/app.html .aut-sec，位置紧跟工作区
- *    卡）：列表四态——首拉加载中 / 拉取失败（11 命令未进远程 REGISTRY 时的
- *    常态，错误条 + 重试入口）/ 空态引导新建 / 任务行（有旧行时刷新失败照
- *    显旧行）；行点击开详情浮层不收抽屉（浮层全屏盖住，返回时抽屉仍在——
- *    原型 backFs 同款）；小开关 hitTestBehavior(Block) 阻冒泡（ArkUI 默认
- *    父子点击同时触发）
- *  - 会话点击 = chatModel.open 切会话（同会话幂等收敛，只收抽屉）；待确认
- *    会话切换后 toast 提示「有请求等待确认」；preview 文本为协议缺口，不展示
- *  - 会话行长按 = 删除（delete_session：确认后杀运行中 worker + 删桌面记录，
- *    当前打开的会话删后整体回空态）；存活会话行尾 ⏻ = 结束进程不删记录
- *  - 设备卡断开（原型 dr-quit 红字版）：先收抽屉再 disconnectActive——Index
- *    观察 conn 状态落回连接页（原 SessionsPage 顶栏断开入口随任务 5 迁入）
- *  - 设备卡切换主机胶囊 → hsSheet 半模态（hosts 列表 + 添加新主机扫码行）：
- *    v1 单活切换，选中即 conn.switchTo，复位编排见 session/HostSync
- *  - 半模态自绘（遮罩 + 底部面板 + transition），不依赖 bindSheet——与原型
- *    像素对齐，且选中描边/脚注/呼吸点均可用现有资源表达
- *  - 弹层计数快照来自 WorkspaceModel.loadMetas（'' 槽位 + 日常 + 各工作区
- *    并行拉取）；工作区切换只改浏览范围与 spawn 去向，不改桌面活动工作区
- *    （协议无写 RPC；读走 get_active_workspace，跟随槽位解析真名）
- *  - 「日常」行置顶弹层首行（design/daily/app.html 原型）：气泡头像 +
- *    「默认」角标 + 定位副标题，无路径行——日常路径是内部概念永不展示
- *    （桌面 spec：docs/superpowers/specs/2026-09-20-daily-mode-design.md）；
- *    旧桌面无 daily_workspace RPC 时整个日常层不存在，列表与升级前一致
- *  - 主机名来自 hello_ok（conn.hostName；配对/旧凭据缺失时 UI 占位「aide Host」）
+ * 轻量会话抽屉：新建与搜索置顶、工作区仅作列表范围、历史会话按日期分组。
+ * 自动化与主机管理位于底部；供应商选择从聊天输入区打开，复用这里的弹层。
+ * 模型/连接/自动化行为沿用现有服务，布局本身不修改会话状态。
  */
 import { ConnModel, connModel, hostColor, hostTint, hostShortId } from '../conn/ConnModel';
 import { scanBarcode, scanCore } from '@kit.ScanKit';
@@ -49,6 +15,7 @@ import { ChatStore } from './chat/ChatStore';
 import { SessionsModel, sessionsModel } from './SessionsModel';
 import { SessionRow, nestSessions } from './SessionTree';
 import { WorkspaceModel, workspaceModel, WsMeta, baseName } from './WorkspaceModel';
+import { chatModeLabel } from './ChatMode';
 import { ProviderModel, providerModel } from './ProviderModel';
 import { ProviderMark } from './ProviderLogos';
 import { Session, WorkspaceInfo, ProviderConfigView, AutomationTask } from '../sdk/types';
@@ -152,8 +119,11 @@ export class DrawerState {
   @Trace pvSheet: boolean = false;
   @Trace wsSheet: boolean = false;
   @Trace hsSheet: boolean = false;
+  @Trace automationSheet: boolean = false;
+  @Trace pickerOnly: boolean = false;
 
   openDrawer(): void {
+    this.pickerOnly = false;
     this.open = true;
   }
 
@@ -162,10 +132,28 @@ export class DrawerState {
     this.pvSheet = false;
     this.wsSheet = false;
     this.hsSheet = false;
+    this.automationSheet = false;
+    this.pickerOnly = false;
+  }
+
+  openProviderPicker(): void {
+    this.open = true;
+    this.pickerOnly = true;
+    this.pvSheet = true;
+  }
+
+  openWorkspacePicker(): void {
+    this.open = true;
+    this.pickerOnly = true;
+    this.wsSheet = true;
+    void workspaceModel.refresh();
+    void workspaceModel.loadMetas();
   }
 
   /** 系统返回逐层收起：半模态 > 抽屉；无浮层返回 false 交还默认行为（退出）。 */
   handleBack(): boolean {
+    if (this.pickerOnly) { this.close(); return true; }
+    if (this.automationSheet) { this.automationSheet = false; return true; }
     if (this.hsSheet) {
       this.hsSheet = false;
       return true;
@@ -286,6 +274,7 @@ export struct ChatDrawer {
       this.dr.pvSheet = false;
       this.dr.wsSheet = false;
       this.dr.hsSheet = false;
+      this.dr.automationSheet = false;
       return;
     }
     // 每次开抽屉都重拉工作区（列表 + 活动工作区）：真名跟随桌面切换、桌面新
@@ -327,12 +316,26 @@ export struct ChatDrawer {
     return flat;
   }
 
-  private activePvName(): string {
-    const p: ProviderConfigView | null = this.pv.activeProvider();
-    return p !== null ? p.name : '供应商';
+  private dateGroup(timestamp: number): string {
+    const now: Date = new Date();
+    const d: Date = new Date(timestamp);
+    if (d.toDateString() === now.toDateString()) return '今天';
+    const yesterday: Date = new Date(now.getTime() - 86400000);
+    return d.toDateString() === yesterday.toDateString() ? '昨天' : '更早';
   }
 
-  /** 供应商行副标题：kind 短名；未配置密钥追加提示（脱敏视图只有布尔）。 */
+  private showDateHeader(id: string): boolean {
+    const rows: SessionRow[] = this.sessionRows();
+    let previous: string = '';
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].depth !== 0) continue;
+      const group: string = this.dateGroup(rows[i].s.timestamp);
+      if (rows[i].s.id === id) return previous !== group;
+      previous = group;
+    }
+    return false;
+  }
+
   private providerDesc(p: ProviderConfigView): string {
     if (p.kind === 'system_default') {
       return '跟随桌面设置的首选供应商';
@@ -352,7 +355,7 @@ export struct ChatDrawer {
       const w: WorkspaceInfo = this.ws.workspaces[i];
       out.push(new WsOpt(w.key, baseName(w.name), w.name, w.missing));
     }
-    return out;
+    return this.dr.pickerOnly ? out.filter((option: WsOpt) => option.key !== '' && !this.ws.isDaily(option.key)) : out;
   }
 
   /** 弹层计数快照取值（null = 未拉取，UI 隐藏该段）。 */
@@ -535,6 +538,7 @@ export struct ChatDrawer {
 
   async onPvPick(p: ProviderConfigView): Promise<void> {
     this.dr.pvSheet = false;
+    if (this.dr.pickerOnly) this.dr.close();
     if (p.id === this.pv.activeId) {
       return;
     }
@@ -566,6 +570,12 @@ export struct ChatDrawer {
 
   onWsPick(o: WsOpt): void {
     this.dr.wsSheet = false;
+    const forProject: boolean = this.dr.pickerOnly;
+    if (forProject) this.dr.close();
+    if (forProject && this.ws.isDaily(o.key)) {
+      toastModel.show('请选择工程工作区', 'warn');
+      return;
+    }
     if (o.key === this.ws.selectedKey) {
       return;
     }
@@ -580,114 +590,75 @@ export struct ChatDrawer {
     return this.conn.hostName !== null && this.conn.hostName !== '' ? this.conn.hostName : 'aide Host';
   }
 
-  /** 主机字母头像首字母。 */
-  private hostInitial(): string {
-    return this.hostTitle().substring(0, 1).toUpperCase();
-  }
-
   @Builder
   deviceHead() {
-    Column({ space: 12 }) {
-      Row({ space: 10 }) {
-        // 主机字母头像（did 哈希取色，稳定不变）
-        Column() {
-          Text(this.hostInitial())
-            .fontSize(16)
-            .fontWeight(FontWeight.Bold)
-            .fontColor(hostColor(this.conn.activeDeviceId))
-        }
-        .width(38)
-        .height(38)
-        .borderRadius(11)
-        .backgroundColor(hostTint(this.conn.activeDeviceId))
-        .justifyContent(FlexAlign.Center)
-        .alignItems(HorizontalAlign.Center)
-
-        Column({ space: 2 }) {
-          Text(this.hostTitle())
-            .fontSize(15)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_primary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-          Row({ space: 5 }) {
-            if (this.conn.state === 'authed') {
-              // 容器圆替代 Circle().fill()（drawing 组件 fill 本 SDK 报 API 26 兼容告警）
-              Column().width(6).height(6).borderRadius(3).backgroundColor($r('app.color.status_ok'))
-            } else {
-              PulseDot({ color: $r('app.color.status_warn'), dotSize: 6 })
-            }
-            Text(this.conn.state === 'authed' ? '已连接' : '设备离线 · 自动重连中')
-              .fontSize(11)
-              .fontColor($r('app.color.text_secondary'))
-          }
-          .alignItems(VerticalAlign.Center)
-          // 红字断开（原型 dr-quit 红字版；凭据保留，连接页可重连）
-          Text('断开连接')
-            .fontSize(11)
-            .fontColor($r('app.color.status_danger'))
-            .onClick(() => {
-              this.onDisconnectTap();
-            })
-        }
-        .layoutWeight(1)
-        .alignItems(HorizontalAlign.Start)
-
-        // 切换主机胶囊（开 hsSheet 半模态）
-        Row() {
-          Text('切换主机')
-            .fontSize(11.5)
-            .fontWeight(FontWeight.Medium)
-            .fontColor($r('app.color.text_secondary'))
-        }
-        .padding({ left: 11, right: 11, top: 6, bottom: 6 })
-        .borderRadius(99)
-        .border({ width: 1, color: $r('app.color.line') })
-        .backgroundColor($r('app.color.card_bg'))
-        .alignItems(VerticalAlign.Center)
-        .onClick(() => {
-          this.onHostSwitchTap();
-        })
+    Row() {
+      Text('Aide').fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.text_primary'))
+      Text('.').fontSize(28).fontWeight(FontWeight.Bold).fontColor($r('app.color.accent'))
+      Blank()
+      Button({ type: ButtonType.Normal }) {
+        SymbolGlyph($r('sys.symbol.chevron_left')).fontSize(18).fontColor([$r('app.color.text_secondary')])
       }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      // 供应商徽标（点击开切换弹层）
-      Row({ space: 6 }) {
-        ProviderMark({ p: this.pv.activeProvider(), markSize: 12, tint: $r('app.color.accent') })
-        Text(this.activePvName())
-          .fontSize(12)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.accent'))
-          .maxLines(1)
-          .constraintSize({ maxWidth: 190 })
-        SymbolGlyph($r('sys.symbol.chevron_down'))
-          .fontSize(10)
-          .fontColor([$r('app.color.accent')])
-          .opacity(0.6)
-      }
-      .padding({ left: 12, right: 12, top: 5, bottom: 5 })
-      .borderRadius(99)
-      .backgroundColor($r('app.color.accent_weak'))
-      .alignItems(VerticalAlign.Center)
-      .constraintSize({ maxWidth: '100%' })
-      .onClick(() => {
-        this.onPvBadgeTap();
-      })
+      .width(44).height(44).borderRadius(12).backgroundColor(Color.Transparent)
+      .accessibilityText('收起会话列表')
+      .onClick(() => this.dr.close())
     }
-    .width('100%')
-    .padding({ left: 14, right: 14, top: 14, bottom: 12 })
-    .alignItems(HorizontalAlign.Start)
+    .width('100%').padding({ left: 22, right: 16, top: 18, bottom: 10 })
   }
 
   @Builder
-  sectionLabel(title: string) {
-    Text(title)
-      .fontSize(12)
-      .fontColor($r('app.color.text_secondary'))
-      .letterSpacing(1)
-      .width('100%')
-      .padding({ left: 15, right: 15, top: 8, bottom: 6 })
+  newConversationButton() {
+    Button({ type: ButtonType.Normal }) {
+      Row({ space: 9 }) {
+        SymbolGlyph($r('sys.symbol.plus')).fontSize(17).fontColor([$r('app.color.accent_foreground')])
+        Text('新建对话').fontSize(15).fontWeight(FontWeight.Medium).fontColor($r('app.color.accent_foreground'))
+      }.justifyContent(FlexAlign.Center)
+    }
+    .width('100%').height(48).borderRadius(14).backgroundColor($r('app.color.accent'))
+    .onClick(() => this.onNewSession())
+  }
+
+  @Builder
+  workspaceFilter() {
+    Row({ space: 6 }) {
+      Text(this.ws.selectedDisplayName()).fontSize(13).fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary')).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+      SymbolGlyph($r('sys.symbol.chevron_down')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+      Blank()
+      Text(`${this.sm.sessions.length} 场对话`).fontSize(11).fontColor($r('app.color.text_secondary'))
+    }
+    .width('100%').height(48).padding({ left: 22, right: 22 })
+    .onClick(() => this.onWsCardTap())
+  }
+
+  @Builder
+  drawerFooter() {
+    Column() {
+      Row({ space: 10 }) {
+        SymbolGlyph($r('sys.symbol.clock')).fontSize(18).fontColor([$r('app.color.text_secondary')])
+        Text('自动化').fontSize(14).fontColor($r('app.color.text_primary')).layoutWeight(1)
+        if (this.am.loaded) {
+          Text(`${this.am.tasks.length} 个任务`).fontSize(11).fontColor($r('app.color.text_secondary'))
+        }
+        SymbolGlyph($r('sys.symbol.chevron_right')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+      }
+      .width('100%').height(48).padding({ left: 6, right: 6 })
+      .onClick(() => { this.dr.automationSheet = true; this.am.ensureLoaded(); })
+
+      Row({ space: 6 }) {
+        Column().width(6).height(6).borderRadius(3)
+          .backgroundColor(this.conn.state === 'authed' ? $r('app.color.status_ok') : $r('app.color.status_warn'))
+        Text(this.hostTitle()).fontSize(12).fontColor($r('app.color.text_primary'))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).layoutWeight(1)
+        SymbolGlyph($r('sys.symbol.chevron_up')).fontSize(14).fontColor([$r('app.color.text_secondary')])
+      }
+      .width('100%').constraintSize({ minHeight: 48 }).padding({ left: 6, right: 6 })
+      .border({ width: { top: 1 }, color: $r('app.color.line') })
+      .accessibilityText(`${this.hostTitle()}，${this.conn.state === 'authed' ? '已连接' : '正在重连'}，点击管理连接`)
+      .onClick(() => this.onHostSwitchTap())
+    }
+    .width('100%').padding({ left: 18, right: 18, bottom: 12 })
+    .border({ width: { top: 1 }, color: $r('app.color.line') })
   }
 
   // ── 工作区卡 ──
@@ -721,79 +692,6 @@ export struct ChatDrawer {
       : key === '' ? WS_TINTS[0] : WS_TINTS[wsColorIdx(key)])
     .justifyContent(FlexAlign.Center)
     .alignItems(VerticalAlign.Center)
-  }
-
-  /** 工作区卡计数（当前浏览范围 = sessionsModel 现势列表；只列非零项）。 */
-  @Builder
-  wsCardMeta() {
-    Text() {
-      Span(`${this.sm.sessions.length} 个会话`).fontColor($r('app.color.text_secondary'))
-      if (this.sm.startedCount() > 0) {
-        Span(` · ${this.sm.startedCount()} 个已启动`).fontColor($r('app.color.accent'))
-      }
-      if (this.sm.liveCount() > 0) {
-        Span(` · ${this.sm.liveCount()} 个回复中`).fontColor($r('app.color.status_ok'))
-      }
-      if (this.sm.waitCount() > 0) {
-        Span(` · ${this.sm.waitCount()} 个待确认`).fontColor($r('app.color.status_warn'))
-      }
-    }
-    .fontSize(10.5)
-    .maxLines(1)
-    .textOverflow({ overflow: TextOverflow.Ellipsis })
-    .margin({ top: 3 })
-  }
-
-  @Builder
-  wsCard() {
-    Row({ space: 11 }) {
-      this.wsAvatar(this.ws.displayKey(), this.ws.selectedDisplayName(), 42, 12, 19)
-      Column({ space: 1 }) {
-        Text(this.ws.selectedDisplayName())
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor($r('app.color.text_primary'))
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis })
-        if (this.ws.isDaily(this.ws.selectedKey)) {
-          // 日常态：定位副标题占掉路径行——内部目录永不展示
-          Text(DAILY_DESC)
-            .fontSize(10.5)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        } else if (this.ws.selectedPath() !== '') {
-          Text(this.ws.selectedPath())
-            .fontSize(10.5)
-            .fontColor($r('app.color.text_secondary'))
-            .maxLines(1)
-            .textOverflow({ overflow: TextOverflow.Ellipsis })
-        }
-        this.wsCardMeta()
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-
-      Row({ space: 2 }) {
-        Text('切换')
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.accent'))
-        SymbolGlyph($r('sys.symbol.chevron_right'))
-          .fontSize(12)
-          .fontColor([$r('app.color.accent')])
-      }
-      .alignItems(VerticalAlign.Center)
-    }
-    .width('100%')
-    .padding({ left: 12, right: 12, top: 11, bottom: 11 })
-    .borderRadius(14)
-    .backgroundColor($r('app.color.card_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
-    .alignItems(VerticalAlign.Center)
-    .onClick(() => {
-      this.onWsCardTap();
-    })
   }
 
   // ── 自动化区段（对照原型 .aut-sec；详情/表单浮层本体在 ChatPage 根栈挂载）──
@@ -1068,50 +966,6 @@ export struct ChatDrawer {
 
   // ── 历史会话区段 ──
 
-  @Builder
-  historyHeader() {
-    Row({ space: 8 }) {
-      Text('历史会话')
-        .fontSize(12)
-        .fontColor($r('app.color.text_secondary'))
-        .letterSpacing(1)
-        .layoutWeight(1)
-      Row() {
-        SymbolGlyph($r('sys.symbol.plus'))
-          .fontSize(16)
-          .fontColor([$r('app.color.text_secondary')])
-      }
-      .width(28)
-      .height(28)
-      .borderRadius(8)
-      .justifyContent(FlexAlign.Center)
-      .alignItems(VerticalAlign.Center)
-      .onClick(() => {
-        this.onNewSession();
-      })
-      if (this.sm.refreshing) {
-        LoadingProgress().width(14).height(14).color($r('app.color.accent'))
-      } else {
-        Row() {
-          SymbolGlyph($r('sys.symbol.arrow_clockwise'))
-            .fontSize(14)
-            .fontColor([$r('app.color.text_secondary')])
-        }
-        .width(28)
-        .height(28)
-        .borderRadius(8)
-        .justifyContent(FlexAlign.Center)
-        .alignItems(VerticalAlign.Center)
-        .onClick(() => {
-          void this.sm.refresh();
-        })
-      }
-    }
-    .width('100%')
-    .padding({ left: 15, right: 15, top: 8, bottom: 6 })
-    .alignItems(VerticalAlign.Center)
-  }
-
   /** 三态状态点（只留点不带文字，优先级见类头；'none' 占空位保持对齐）。 */
   @Builder
   statusDot(status: string) {
@@ -1145,18 +999,14 @@ export struct ChatDrawer {
           .backgroundColor($r('app.color.accent_weak'))
       }
 
-      Text(s.name)
-        .fontSize(14)
-        .fontWeight(FontWeight.Medium)
-        .fontColor($r('app.color.text_primary'))
-        .maxLines(1)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .layoutWeight(1)
-      if (s.timestamp > 0) {
-        Text(relTime(s.timestamp))
-          .fontSize(11)
-          .fontColor($r('app.color.text_secondary'))
+      Column({ space: 5 }) {
+        Text(s.name).fontSize(14).fontWeight(FontWeight.Medium).fontColor($r('app.color.text_primary'))
+          .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis }).width('100%')
+        Text(s.id === this.store.sid && this.store.profileReady
+          ? `${chatModeLabel(this.store.chatMode)} · ${relTime(s.timestamp)}` : relTime(s.timestamp))
+          .fontSize(11).fontColor($r('app.color.text_secondary')).maxLines(1)
       }
+      .layoutWeight(1).alignItems(HorizontalAlign.Start)
       // ⏻ 结束会话进程（stop_chat_session）：运行时存活的会话才显示（started
       // 含回复中/待确认）；点 = 确认后杀桌面 worker，非当前会话只清徽标。
       // hitTestBehavior(Block) 阻冒泡（行点击是切会话，父子不并触发——同
@@ -1181,8 +1031,7 @@ export struct ChatDrawer {
     .width('100%')
     .padding({ left: 12, right: 12, top: 11, bottom: 11 })
     .borderRadius(14)
-    .backgroundColor(s.id === this.store.sid ? $r('app.color.accent_weak') : $r('app.color.card_bg'))
-    .border({ width: 1, color: s.id === this.store.sid ? $r('app.color.accent') : $r('app.color.line') })
+    .backgroundColor(s.id === this.store.sid ? $r('app.color.accent_weak') : Color.Transparent)
     .alignItems(VerticalAlign.Center)
     .onClick(() => {
       this.onSessionTap(s);
@@ -1199,7 +1048,7 @@ export struct ChatDrawer {
 
   @Builder
   sessionList() {
-    List({ space: 8 }) {
+    List({ space: 4 }) {
       if (this.sm.lastError !== '') {
         ListItem() {
           Text(`列表拉取失败，点击重试`)
@@ -1236,7 +1085,13 @@ export struct ChatDrawer {
         } else {
           ForEach(this.sessionRows(), (r: SessionRow) => {
             ListItem() {
-              this.sessionRow(r.s, r.depth)
+              Column() {
+                if (r.depth === 0 && this.showDateHeader(r.s.id)) {
+                  Text(this.dateGroup(r.s.timestamp)).fontSize(11).fontColor($r('app.color.text_secondary'))
+                    .width('100%').padding({ left: 12, top: 15, bottom: 7 })
+                }
+                this.sessionRow(r.s, r.depth)
+              }.width('100%')
             }
             // 子会话缩进挂在父会话下（嵌套见 SessionTree.nestSessions）
             .padding({ left: r.depth * 16 })
@@ -1255,26 +1110,25 @@ export struct ChatDrawer {
   searchBox() {
     Row({ space: 8 }) {
       SymbolGlyph($r('sys.symbol.magnifyingglass'))
-        .fontSize(13)
+        .fontSize(16)
         .fontColor([$r('app.color.text_secondary')])
       TextInput({ placeholder: '搜索会话', text: this.query })
         .onChange((value: string) => {
           this.query = value;
         })
-        .fontSize(13)
+        .fontSize(16)
         .fontColor($r('app.color.text_primary'))
         .placeholderColor($r('app.color.text_secondary'))
         .backgroundColor(Color.Transparent)
         .caretColor($r('app.color.accent'))
         .padding({ left: 0, right: 0, top: 0, bottom: 0 })
-        .height(36)
+        .height(40)
         .layoutWeight(1)
     }
     .width('100%')
-    .padding({ left: 14, right: 14, top: 9, bottom: 9 })
-    .borderRadius(99)
-    .backgroundColor($r('app.color.card_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
+    .padding({ left: 12, right: 12, top: 2, bottom: 2 })
+    .borderRadius(12)
+    .backgroundColor($r('app.color.input_bg'))
     .alignItems(VerticalAlign.Center)
   }
 
@@ -1408,7 +1262,7 @@ export struct ChatDrawer {
     Column() {
       this.sheetGrip()
       Row({ space: 8 }) {
-        Text('切换工作区')
+        Text(this.dr.pickerOnly ? '选择项目' : '切换工作区')
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
@@ -1555,7 +1409,7 @@ export struct ChatDrawer {
     Column() {
       this.sheetGrip()
       Row({ space: 8 }) {
-        Text('切换主机')
+        Text('连接与主机')
           .fontSize(16)
           .fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.text_primary'))
@@ -1594,7 +1448,7 @@ export struct ChatDrawer {
                   .fontSize(14)
                   .fontWeight(FontWeight.Medium)
                   .fontColor($r('app.color.text_primary'))
-                  .maxLines(1)
+                  .maxLines(2)
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                 Text(hostShortId(h.deviceId) + (h.lastSeen > 0 ? ` · 上次连接 ${relTime(h.lastSeen)}` : ''))
                   .fontSize(10.5)
@@ -1670,6 +1524,10 @@ export struct ChatDrawer {
       .scrollBar(BarState.Off)
       .edgeEffect(EdgeEffect.Spring)
 
+      Button('断开当前连接').fontSize(13).height(44).width('100%')
+        .fontColor($r('app.color.status_danger')).backgroundColor(Color.Transparent)
+        .onClick(() => this.onDisconnectTap())
+
       Text('主机名来自 Host 设置 · 新主机在 Host aide → 设置 → Link 生成二维码')
         .fontSize(11)
         .fontColor($r('app.color.text_secondary'))
@@ -1710,27 +1568,18 @@ export struct ChatDrawer {
         Row() {
           Column() {
             this.deviceHead()
-            this.sectionLabel('工作区')
-            Column() {
-              this.wsCard()
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, bottom: 8 })
-
-            this.autSection()
-
-            this.historyHeader()
-            this.sessionList()
-
-            Column() {
+            Column({ space: 12 }) {
+              this.newConversationButton()
               this.searchBox()
-            }
-            .width('100%')
-            .padding({ left: 12, right: 12, top: 10, bottom: 14 })
+            }.width('100%').padding({ left: 18, right: 18 })
+            this.workspaceFilter()
+            this.sessionList()
+            this.drawerFooter()
           }
-          .width('85%')
-          .constraintSize({ maxWidth: 310 })
+          .width('90%')
+          .constraintSize({ maxWidth: 360 })
           .height('100%')
+          .visibility(this.dr.pickerOnly ? Visibility.Hidden : Visibility.Visible)
           .backgroundColor($r('app.color.page_bg'))
           .border({ width: { right: 1 }, color: $r('app.color.line') })
           .onClick(() => {
@@ -1745,6 +1594,24 @@ export struct ChatDrawer {
         .hitTestBehavior(HitTestMode.None)
         .transition(TransitionEffect.translate({ x: -320 }).animation({ duration: 260, curve: Curve.Friction }))
 
+        if (this.dr.automationSheet) {
+          Column() {
+            Column() {
+              this.sheetGrip()
+              Scroll() {
+                this.autSection()
+              }.width('100%').layoutWeight(1).scrollBar(BarState.Off)
+              Button('收起').fontSize(14).height(44).backgroundColor(Color.Transparent)
+                .fontColor($r('app.color.text_secondary')).onClick(() => { this.dr.automationSheet = false; })
+            }
+            .width('100%').height('65%').padding({ top: 12, bottom: 20 })
+            .borderRadius({ topLeft: 24, topRight: 24 }).backgroundColor($r('app.color.card_bg'))
+            .onClick(() => {})
+          }
+          .width('100%').height('100%').justifyContent(FlexAlign.End).backgroundColor(MASK_COLOR)
+          .onClick(() => { this.dr.automationSheet = false; })
+        }
+
         // 供应商弹层（遮罩即全屏容器 + 底部对齐）
         if (this.dr.pvSheet) {
           Column() {
@@ -1755,7 +1622,8 @@ export struct ChatDrawer {
           .justifyContent(FlexAlign.End)
           .backgroundColor(MASK_COLOR)
           .onClick(() => {
-            this.dr.pvSheet = false;
+            if (this.dr.pickerOnly) this.dr.close();
+            else this.dr.pvSheet = false;
           })
           .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
         }
@@ -1770,7 +1638,8 @@ export struct ChatDrawer {
           .justifyContent(FlexAlign.End)
           .backgroundColor(MASK_COLOR)
           .onClick(() => {
-            this.dr.wsSheet = false;
+            if (this.dr.pickerOnly) this.dr.close();
+            else this.dr.wsSheet = false;
           })
           .transition(TransitionEffect.OPACITY.animation({ duration: 220, curve: Curve.EaseOut }))
         }

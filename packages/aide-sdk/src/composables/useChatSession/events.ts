@@ -1,3 +1,4 @@
+import { useSessionProfiles } from "../useSessionProfiles";
 import { api } from "../../api";
 import type { SessionContinued } from "../../api";
 import { sessionContinuations } from "../useSessionContinuations";
@@ -314,6 +315,12 @@ export function handleChatEvent(e: Record<string, unknown>): void {
 
   switch (e["type"]) {
     case "session_init": {
+      if (e["session_profile"] === "chat" || e["session_profile"] === "assistant") {
+        const profile = e["session_profile"];
+        useSessionProfiles().set(sid, profile);
+        const real = e["sdk_session_id"];
+        if (typeof real === "string") useSessionProfiles().set(real, profile);
+      }
       const sdkSid = e["sdk_session_id"] as string | undefined;
       if (sdkSid && isPendingSession(sid) && sdkSid !== sid) {
         // 临时 key 首次被 SDK 确认：finalizeSession 同步段已把 running 盖到 realId

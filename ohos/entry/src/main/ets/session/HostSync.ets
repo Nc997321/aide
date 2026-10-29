@@ -32,11 +32,12 @@ export function registerHostSync(): void {
 function onHostChanged(info: HostChangedInfo): void {
   drawerState.close();
   // 停播报/听书 + store 回空态（resetForOpen('')）+ 附件清空 + 模型域重同步
-  chatModel.newSession();
   sessionsModel.resetForHost();
   workspaceModel.resetForHost();
   providerModel.resetForHost();
   automationModel.resetForHost();
+  // 先清旧主机供应商，再启动 newSession 内的模型同步，避免读到旧缓存。
+  chatModel.newSession();
   // 并行重建（此时已 authed；各模型防重入/世代守卫齐备）
   void sessionsModel.refresh();
   void workspaceModel.refresh();

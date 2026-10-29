@@ -265,6 +265,10 @@ pub struct SendMessageArgs {
     pub(crate) session_id: String,
     pub(crate) prompt: String,
     #[serde(default)]
+    pub(crate) session_profile: Option<crate::session_store::SessionProfile>,
+    #[serde(default)]
+    pub(crate) input_documents: Option<Vec<String>>,
+    #[serde(default)]
     pub(crate) images: Option<Vec<serde_json::Value>>,
     /// 发起方附带的渲染描述（见 SendOptions.display）；None = 按纯文本气泡渲染。
     #[serde(default)]
@@ -358,6 +362,8 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     let SendMessageArgs {
         session_id,
         prompt,
+        session_profile,
+        input_documents,
         images,
         display,
         resume_id,
@@ -477,6 +483,12 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
 
     // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
     // 项目 .aide/claude/skills/ / 项目 .mcp.json（见 session-worker.ts startLoop）。
+    let profile = crate::session_store::our_session_profile(&session_id)
+        .or(session_profile).unwrap_or_default();
+    cmd["session_profile"] = json!(profile);
+    if let Some(documents) = input_documents {
+        cmd["input_documents"] = json!(documents);
+    }
     cmd["trusted"] = json!(crate::commands::workspace::is_path_trusted(&cwd_str));
     if let Some(root) = &scoped_config_root {
         cmd["config_dir"] = json!(root.to_string_lossy());
@@ -486,7 +498,11 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     // 探不到语言的工作区连 settings 都不必读，故这个调用很便宜。
     // 远程工作区（WSL / SSH）在目标机上探测（语言服务器也跑在那里），见 lsp_languages_for_send。
     timer.mark("build");
-    cmd["lsp_languages"] = json!(lsp_languages_for_send(&app, &cwd_str).await);
+    cmd["lsp_languages"] = if profile == crate::session_store::SessionProfile::Chat {
+        json!([])
+    } else {
+        json!(lsp_languages_for_send(&app, &cwd_str).await)
+    };
     timer.mark("lsp_langs");
     // 本工作区的 LSP 开关：sidecar 据此决定预热 / 作废就绪记录（工具照挂，关时 Host 回 disabled）。
     // 把关仍在 ensure_server——这里只是让 sidecar 少发注定被拒的预热。

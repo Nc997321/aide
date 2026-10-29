@@ -88,3 +88,12 @@ export type RelayClientFrame =
   | { type: "keepalive" };
 
 export type RelayHostFrame = { type: "connect_error"; reason: "unknown_code" | "device_offline" | "superseded" | (string & {}) };
+
+/** chat-event 内的会话能力字段；旧 Host 缺席时兼容为完整助手。 */
+export type SessionProfile = "assistant" | "chat";
+export interface SessionInitPayload {
+  type: "session_init";
+  session_id: string;
+  sdk_session_id?: string;
+  session_profile?: SessionProfile;
+}

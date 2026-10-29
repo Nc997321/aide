@@ -505,7 +505,7 @@ function formatResetTime(resetsAt: number | null): string | null {
 // 只在欢迎态生效：场景定的是「这次对话做什么」，随首条消息发出后就在上下文里了，
 // 之后的消息不再重复带。
 const pickedScene = ref<Scene | null>(null);
-const activeScene = computed(() => (props.isHero ? pickedScene.value : null));
+const activeScene = computed(() => (props.isHero && props.mode !== "chat" ? pickedScene.value : null));
 
 function fillSceneExample(ex: SceneExample) {
   inputText.value = ex.prompt;
@@ -519,6 +519,7 @@ function fillSceneExample(ex: SceneExample) {
 
 /** placeholder 按优先级线性化（原为三层嵌套三元；加模式分叉会变四层）。 */
 const placeholder = computed(() =>
+  (props.mode === "chat" ? "聊点什么…" : undefined) ??
   activeScene.value?.placeholder ??
   inputPlaceholder({
     busy: props.isBusy,
@@ -607,6 +608,7 @@ watch(slashSelectedIndex, async () => {
 });
 
 watch(inputText, (val) => {
+  if (props.mode === "chat") { slashDropdownVisible.value = false; return; }
   const match = val.match(/^\/(\S*)$/); // / 开头且无空格
   if (match) {
     slashFilter.value = match[1];
@@ -1228,7 +1230,7 @@ async function performSend() {
   // + 二次确认）；btw 无参数打开侧栏、有参数直接在侧栏问。查不到才走 skill / 普通文本。
   {
     const cmdMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
-    const action = cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
+    const action = props.mode !== "chat" && cmdMatch ? quickActions.find((a) => a.command === cmdMatch[1]) : undefined;
     if (action) {
       const args = (cmdMatch?.[2] ?? "").trim();
       if (action.kind === "btw") {
@@ -1254,7 +1256,7 @@ async function performSend() {
 
   let finalPrompt = text;
   const slashMatch = text.match(/^\/(\S+)(?:\s+([\s\S]*))?$/);
-  if (slashMatch) {
+  if (slashMatch && props.mode !== "chat") {
     const skillName = slashMatch[1];
     const userText = (slashMatch[2] ?? "").trim();
     const skill = skillList.value.find((s) => s.name === skillName);
@@ -1272,15 +1274,22 @@ async function performSend() {
   // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
   // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
   // 自己打的字混在一个气泡里，读起来很差。
+  const inputDocuments: string[] = [];
   const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, {
-    readFile: api.readFileContent,
+    readFile: async (path) => {
+      if (props.mode === "chat" && /\.(pdf|docx)$/i.test(path)) {
+        inputDocuments.push(path);
+        return "（文档将在发送时解析）";
+      }
+      return api.readFileContent(path);
+    },
     // 有 listDir 才认得目录（@目录 = 授权 + 一级清单）；attachedDirs 命中则只发一行
     // 宣告，不把清单和指令每轮重注一遍。
-    listDir: api.listDirectory,
+    listDir: props.mode === "chat" ? undefined : api.listDirectory,
     attachedDirs: attachedDirs.value,
     // 对方仓的 auto memory 索引（F6：query 只 spawn 一次，中途 @ 的记忆只有这条路
     // 当轮可达）。memory 目录的 key 规则在 Rust，前端不抄——由命令按目录解析。
-    memoryIndex: (dir) => memoryObservatoryApi.indexForDir(dir),
+    memoryIndex: props.mode === "chat" ? undefined : (dir) => memoryObservatoryApi.indexForDir(dir),
   });
 
   // @目录 授权：本条 @ 的目录（剔主根、去重后）并上本端已知账本 —— **已知全量**语义
@@ -1293,6 +1302,7 @@ async function performSend() {
   sentKbIds = kbrefs.map((r) => r.selectionId);
   if (kbrefs.length) usageTips.markUsed("kb-selection");
   const sendOpts: SendOptions = {
+    inputDocuments: inputDocuments.length ? inputDocuments : undefined,
     images: images.length ? images : undefined,
     kbrefs: kbrefs.length ? kbrefs : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
@@ -1478,7 +1488,7 @@ const { actions: quickActions } = useQuickActions();
     </div>
     <!-- 欢迎页场景条：选场景 → 换成该场景的示例提示词 -->
     <SceneBar
-      v-if="isHero"
+      v-if="isHero && props.mode !== 'chat'"
       :active="activeScene"
       @select="pickedScene = $event"
       @example="fillSceneExample"
@@ -1560,7 +1570,7 @@ const { actions: quickActions } = useQuickActions();
       <!-- 单行输入（2026-10-16）：[＋] 文本 [发送] 一行横排（模型 / 权限 / 用量在下方状态行），
            文本随内容撑高（useAutoGrow），两侧控件贴底（align-items:flex-end）。 -->
       <div class="composer-row">
-        <ComposerPlusMenu :subsession="props.subsession ?? null" @pick="onPlusAction" />
+        <ComposerPlusMenu :chat-only="props.mode === 'chat'" :subsession="props.mode === 'chat' ? null : (props.subsession ?? null)" @pick="onPlusAction" />
         <input
           ref="filePickerEl"
           type="file"
@@ -1608,7 +1618,7 @@ const { actions: quickActions } = useQuickActions();
     <div class="composer-foot">
       <div class="composer-foot-side">
         <div
-          v-if="displayPermissionModes.length"
+          v-if="props.mode !== 'chat' && displayPermissionModes.length"
           class="perm-mode-wrap"
           :class="{ 'perm-mode-wrap--bypass': selectedPermissionMode === 'bypassPermissions' }"
           v-tooltip="selectedPermissionMode === 'bypassPermissions'

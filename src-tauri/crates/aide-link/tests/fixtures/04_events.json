@@ -77,5 +77,16 @@
       { "emit": { "name": "system-notification", "payload": {} } },
       { "expect_none": true }
     ]
+  },
+  {
+    "name": "session capability profile reaches subscribed clients on the existing chat event channel",
+    "steps": [
+      { "send": { "type": "hello" } },
+      { "expect": { "type": "hello_ok" } },
+      { "send": { "type": "subscribe", "sessions": ["s-chat"] } },
+      { "expect": { "type": "subscribed" } },
+      { "emit": { "name": "chat-event", "payload": { "type": "session_init", "session_id": "s-chat", "sdk_session_id": "s-chat", "session_profile": "chat" } } },
+      { "expect": { "type": "event", "name": "chat-event", "payload": { "type": "session_init", "session_id": "s-chat", "session_profile": "chat" } } }
+    ]
   }
 ]

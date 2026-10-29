@@ -175,7 +175,7 @@ export class ChatModel {
     if (raw.startsWith('/') || raw.startsWith('\\') || /^[A-Za-z]:[\\/]/.test(raw)) {
       return raw;
     }
-    const root: string = workspaceModel.rootOfKey(this.store.spawnWsKey);
+    const root: string = this.store.spawnWsPath !== '' ? this.store.spawnWsPath : workspaceModel.rootOfKey(this.store.spawnWsKey);
     if (root === '') {
       return raw;
     }
@@ -205,6 +205,7 @@ export class ChatModel {
     readerModel.stop(); // 听书同理：面板播放列表是旧会话快照，切走即收
     this.ensureListener();
     this.store.resetForOpen(sid, name);
+    void this.restoreChatMode(sid);
     void this.syncPendingPermissions();
     // 归属范围 = 打开瞬间的浏览范围（日常会话的档位默认判定；finalize 归属
     // 核对不读它——pendingSpawn 恒 false，见 ChatEvents.finalizeSpawn）
@@ -273,10 +274,12 @@ export class ChatModel {
     let images: SendImage[] | null = null;
     let display: SendDisplayBlock[] | null = null;
     let full: string = text;
+    let inputDocuments: string[] = [];
     if (att !== null && att.items.length > 0) {
       images = att.buildImages();
       display = att.buildDisplay(text);
       full = att.composePrompt(text);
+      inputDocuments = att.buildInputDocuments();
       att.reset();
     }
     let sid: string = this.store.sid;
@@ -288,13 +291,18 @@ export class ChatModel {
       const keepOptions: ModelOption[] = this.store.modelOptions;
       const keepModel: string = this.store.model;
       const keepEffort: string = this.store.effort;
+      const keepMode: string = this.store.chatMode;
       sid = uuid();
       this.store.resetForOpen(sid, '新会话');
       this.store.modelOptions = keepOptions;
       this.store.model = keepModel;
       this.store.effort = keepEffort;
+      this.store.chatMode = keepMode;
+      this.store.profileReady = true;
       this.store.pendingSpawn = true;
-      this.store.spawnWsKey = workspaceModel.selectedKey;
+      this.store.spawnScopeKey = workspaceModel.selectedKey;
+      this.store.spawnWsKey = workspaceModel.displayKey();
+      this.store.spawnWsPath = workspaceModel.selectedRoot() ?? workspaceModel.activePath;
       this.store.hydrated = true; // 新会话无历史可拉：跳过 hydrate，避免加载卡常驻
     }
     const wasBusy: boolean = this.store.isBusy;
@@ -314,18 +322,20 @@ export class ChatModel {
     this.store.turnWithdrawRequested = false;
     // 直发路径同样不落气泡：与桌面端同源，统一由 user_message 事件渲染。本地乐观
     // 渲染意味着只有发起方看得见自己提的问题——手机上发的在桌面端消失，反之亦然。
-    this.dispatchSend(sid, full, images, display, wasBusy, spawn, queueId);
+    this.dispatchSend(sid, full, images, display, wasBusy, spawn, queueId, inputDocuments);
   }
 
   /** 真实发送（fire-and-forget；失败兜底复位——对照上游 sendQueued 的 catch）。 */
   private async dispatchSend(sid: string, text: string, images: SendImage[] | null,
     display: SendDisplayBlock[] | null, wasBusy: boolean, spawn: boolean,
-    queueId: string | null): Promise<void> {
+    queueId: string | null, inputDocuments: string[]): Promise<void> {
     try {
       await api.sendMessage({
         sessionId: sid,
         prompt: text,
-        workspaceRoot: spawn ? workspaceModel.selectedRoot() : null,
+        sessionProfile: this.store.chatMode === 'chat' ? 'chat' : 'assistant',
+        inputDocuments: inputDocuments.length > 0 ? inputDocuments : undefined,
+        workspaceRoot: this.store.spawnWsPath !== '' ? this.store.spawnWsPath : (spawn ? workspaceModel.selectedRoot() : null),
         images: images,
         display: display,
         provider: null,
@@ -376,11 +386,63 @@ export class ChatModel {
     }
   }
 
+  /** 档案回种不能覆盖更晚到达的 session_init。 */
+  private async restoreChatMode(sid: string): Promise<void> {
+    const revision: number = this.store.profileRevision;
+    try {
+      const profile: string = await api.sessionProfile(sid);
+      const workspace = await api.sessionWorkspace(sid);
+      if (this.store.sid !== sid || this.store.profileRevision !== revision) return;
+      if (workspace !== null && workspace.wsKey !== undefined) this.store.spawnWsKey = workspace.wsKey;
+      if (workspace !== null && workspace.wsPath !== undefined) this.store.spawnWsPath = workspace.wsPath;
+      this.store.chatMode = profile === 'chat' ? 'chat'
+        : (workspaceModel.isDaily(this.store.spawnWsKey) ? 'daily' : 'project');
+      this.store.profileReady = true;
+    } catch (e) {
+      if (this.store.sid !== sid || this.store.profileRevision !== revision) return;
+      this.store.chatMode = workspaceModel.isDaily(this.store.spawnWsKey) ? 'daily' : 'project';
+      this.store.profileReady = true; // 旧 Host 兼容；续发能力仍由 Host 档案裁决。
+    }
+  }
+
+  async pickChatMode(mode: string): Promise<void> {
+    if (this.store.sid !== '' || this.store.modeSelecting || !['chat', 'daily', 'project'].includes(mode)) return;
+    const revision: number = this.store.profileRevision;
+    this.store.modeSelecting = true;
+    try {
+      // 旧 Host 会忽略不认识的 send 参数；必须先确认支持，避免界面写纯聊天却仍挂工具。
+      if (mode === 'chat') await api.sessionProfile('');
+      if (!workspaceModel.loaded) await workspaceModel.refresh();
+      if (this.store.sid !== '' || this.store.profileRevision !== revision) return;
+      if (mode !== 'project') {
+        if (workspaceModel.daily === null) {
+          this.store.sysNote = '当前主机没有可用的日常工作区，请更新主机后重试';
+          return;
+        }
+        workspaceModel.select(workspaceModel.daily.key);
+      } else if (workspaceModel.isDaily(workspaceModel.displayKey())) {
+        const projects = workspaceModel.workspaces.filter(w => !workspaceModel.isDaily(w.key));
+        if (projects.length === 0) {
+          this.store.sysNote = '当前主机还没有工程工作区，请先在主机上添加项目';
+          return;
+        }
+        workspaceModel.select(projects[0].key);
+      }
+      this.store.chatMode = mode;
+      this.store.sysNote = '';
+    } catch (e) {
+      if (this.store.profileRevision === revision) this.store.sysNote = '当前主机暂不可用或不支持纯聊天，请检查连接并更新主机';
+    } finally {
+      if (this.store.profileRevision === revision) this.store.modeSelecting = false;
+    }
+  }
+
   /** 新会话（抽屉「＋」）：回空态等待首条消息 spawn（对照原型 showEmpty）。 */
   newSession(): void {
     ttsModel.stop(); // 离开当前会话即停（对照原型 showEmpty）
     readerModel.stop(); // 听书同理：不读旧会话
     this.store.resetForOpen('', '新会话');
+    this.store.chatMode = !workspaceModel.loaded || workspaceModel.isDaily(workspaceModel.displayKey()) ? 'daily' : 'project';
     attachmentsModel.reset();
     void this.syncModelEffort();
   }
@@ -538,14 +600,29 @@ export class ChatModel {
    *    「冷缓存 / respawn」语义，没有跟随全局的必要，不受存活影响。
    *  - 空会话（未 spawn）跳过记忆读取——会话 id 尚不存在，选择随首条消息带出
    */
+  private modelSyncRevision: number = 0;
+
   async syncModelEffort(): Promise<void> {
+    const revision: number = ++this.modelSyncRevision;
+    this.store.modelsLoading = true;
+    this.store.modelsError = false;
+    try {
+      await this.loadModelEffort(revision);
+    } finally {
+      if (revision === this.modelSyncRevision) this.store.modelsLoading = false;
+    }
+  }
+
+  private async loadModelEffort(revision: number): Promise<void> {
     const sid: string = this.store.sid;
     let p: ProviderConfigView | null = providerModel.activeProvider();
     if (p === null) {
       await providerModel.refresh();
       p = providerModel.activeProvider();
     }
+    if (revision !== this.modelSyncRevision || this.store.sid !== sid) return;
     if (p === null) {
+      this.store.modelsError = true;
       return; // 离线/拉取失败：chip 留占位，点击 chip 重试（onModelChipTap 兜底）
     }
     let alive: boolean = false;
@@ -568,7 +645,7 @@ export class ChatModel {
     }
     try {
       const opts: ModelOption[] = await this.fetchModelOptions(p);
-      if (this.store.sid !== sid) {
+      if (revision !== this.modelSyncRevision || this.store.sid !== sid) {
         return; // 会话已切走：不回写新会话
       }
       this.store.modelOptions = opts;
@@ -601,9 +678,10 @@ export class ChatModel {
           // 记忆读失败静默——回落供应商默认
         }
       }
+      if (revision !== this.modelSyncRevision) return;
       this.store.effort = effort !== '' ? effort : this.scopeEffortDefault(sid, p);
     } catch (e) {
-      // 选项集拉取失败静默——chip 留占位，点击重开浮层即重同步
+      if (revision === this.modelSyncRevision) this.store.modelsError = true;
     }
   }
 

@@ -616,3 +616,19 @@ describe("usePaneLayout activeTabWsKey", () => {
     expect(pl.activeTabWsKey.value).toBe("");
   });
 });
+
+describe("纯聊天模式", () => {
+  it("从欢迎页进入空白 tab 再绑定会话，模式跟随会话而非目录", async () => {
+    const { useSessionProfiles } = await import("@aide/sdk/composables/useSessionProfiles");
+    const pl = usePaneLayout();
+    pl.setChatMode("chat");
+    expect(pl.activeChatMode.value).toBe("chat");
+    pl.openBlankTab("聊天");
+    expect(pl.activeChatMode.value).toBe("chat");
+    useSessionProfiles().set("chat-session", "chat");
+    pl.bindSession(focused().activeTabId!, "chat-session");
+    pl.setChatMode("project");
+    expect(pl.activeChatMode.value).toBe("chat");
+    useSessionProfiles().clearAll();
+  });
+});

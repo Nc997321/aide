@@ -70,6 +70,8 @@ export interface PdfReadOptions {
   mode?: "markdown" | "structure";
   /** 页范围："3" | "1-5" | "1,3,5-7"。不传时 ≤ PDF_DEFAULT_PAGE_LIMIT 页读全部，否则只读前 PDF_PREVIEW_PAGES 页 */
   pages?: string;
+  /** 非交互式输入解析可指定前 N 页；上限沿用单次读取护栏。 */
+  pageLimit?: number;
 }
 
 /** getTextContent item 的最小形状（不依赖 pdfjs-dist 类型导出，避免类型路径漂移） */
@@ -210,6 +212,11 @@ export async function parsePdf(buffer: Buffer, opts: PdfReadOptions = {}): Promi
     const parsed = parsePagesSpec(opts.pages, totalPages);
     if (!parsed.ok) return { ok: false, reason: "invalid_arg", detail: parsed.detail };
     readPages = parsed.pages;
+  } else if (opts.pageLimit !== undefined) {
+    if (!Number.isInteger(opts.pageLimit) || opts.pageLimit < 1 || opts.pageLimit > PDF_MAX_PAGES_PER_READ) {
+      return { ok: false, reason: "invalid_arg", detail: "invalid pageLimit" };
+    }
+    readPages = Array.from({ length: Math.min(opts.pageLimit, totalPages) }, (_, i) => i + 1);
   } else if (totalPages <= PDF_DEFAULT_PAGE_LIMIT) {
     readPages = Array.from({ length: totalPages }, (_, i) => i + 1);
   } else {

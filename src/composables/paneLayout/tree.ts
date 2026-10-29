@@ -27,6 +27,8 @@ export interface TabItem {
   sessionId: string | null;
   /** 空白面板预起的名字，等 SDK 确认真实 id 后由 App.vue 取走用于落盘 */
   pendingName?: string;
+  /** 空白 tab 的能力意图；定名后由 Host 会话档案接管。 */
+  pendingProfile?: "assistant" | "chat";
   /**
    * 空白面板创建时的工作区归属快照（创建时绑定）：布局是全局一份，切工作区
    * 不动聊天区 tab，没有它首条消息会落到「当前」工作区而不是创建时的那个。

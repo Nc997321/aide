@@ -40,6 +40,16 @@ function deps(over: Partial<Parameters<typeof prepareQueryContext>[0]> = {}) {
 }
 
 describe("prepareQueryContext", () => {
+  it("纯聊天在装配前退出：不加载磁盘指令，也不调用 hook 工厂", async () => {
+    writeFileSync(join(dir, "CLAUDE.md"), "PROJECT-SECRET");
+    const fail = () => { throw new Error("纯聊天不应装配 hooks"); };
+    const ctx = await prepareQueryContext(deps({
+      trusted: true, sessionProfile: "chat", lspLanguages: ["typescript"],
+      processEnv: { CLAUDE_CONFIG_DIR: dir },
+      session: { makePolicyHook: fail, makeStopEffortHook: fail, makeModelSwitchGuard: fail },
+    }));
+    expect(ctx).toEqual({ instructions: "", hooks: {}, hookManifest: [], mcpServers: {}, appAllowRules: [] });
+  });
   it("宿主提示包含文档交付协议，不依赖文档 MCP 是否挂载", async () => {
     const ctx = await prepareQueryContext(deps({ processEnv: { CLAUDE_CONFIG_DIR: dir } }));
     expect(ctx.instructions).toContain(DOCUMENT_ARTIFACT_HINT);

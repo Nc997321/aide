@@ -22,7 +22,10 @@ import { loadLspHint } from "../lspHint.js";
 import { crossMemoryMcpRegistration } from "../crossMemory.js";
 import { subsessionMcpRegistration, type SubsessionContext } from "../../extensions/subsessions.js";
 
+import { resolveSessionProfile, type SessionProfile } from "../sessionProfile.js";
+
 export interface QueryContextDeps {
+  sessionProfile?: SessionProfile;
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
   cwd: string;
   trusted: boolean;
@@ -68,6 +71,10 @@ export interface PreparedQueryContext {
 }
 
 export async function prepareQueryContext(deps: QueryContextDeps): Promise<PreparedQueryContext> {
+  const profile = resolveSessionProfile(deps.sessionProfile);
+  if (!profile.toolsEnabled) {
+    return { instructions: "", hooks: {}, hookManifest: [], mcpServers: {}, appAllowRules: [] };
+  }
   // 文档工具(docx + pdf):注册条件=!trusted 跳过、AIDE_DOCX_TOOLS=off 跳过
   // 无 emit 参数——docx/pdf 一次性同步解析，不走主进程 IPC。
   const docsMcp = docsMcpRegistration(deps.cwd, deps.processEnv, deps.trusted);

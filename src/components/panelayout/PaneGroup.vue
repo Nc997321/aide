@@ -4,7 +4,7 @@ import { api, type SessionHandoff } from "@aide/sdk/api";
 import ChatPanel from "../ChatPanel/ChatPanel.vue";
 import PaneTabBar from "./PaneTabBar.vue";
 import BtwPanel from "../BtwPanel.vue";
-import { tabWsKeyOf, usePaneLayout } from "../../composables/usePaneLayout";
+import { chatModeOf, usePaneLayout } from "../../composables/usePaneLayout";
 import { useChatSession, type SendOptions } from "../../composables/useChatSession";
 import type { PermissionRuleDraft } from "../../types/permissions";
 import { useContextMenu } from "../../composables/useContextMenu";
@@ -15,6 +15,7 @@ import {
   ensureDailyWorkspace,
   isDailyKey,
 } from "@aide/sdk/utils/dailyWorkspace";
+import { useSessionProfiles } from "@aide/sdk/composables/useSessionProfiles";
 import type { ChatMode } from "../ChatPanel/modes";
 import { paneTabMenuItems } from "../../menus/contextMenus";
 import { WORKSPACE_PATH_KEY } from "./keys";
@@ -46,6 +47,7 @@ watch(sessionIdRef, async (sid, _before, onCleanup) => {
   onCleanup(() => { stale = true; });
   handoff.value = null;
   if (!sid) return;
+  void useSessionProfiles().ensure(sid).catch(e => console.warn("读取会话能力失败", e));
   try {
     const value = await api.sessionHandoff(sid);
     if (!stale) handoff.value = value;
@@ -129,6 +131,7 @@ async function onSend(prompt: string, opts: SendOptions) {
   // 工作区。无快照（欢迎态同 tick 建 tab / 拆组空白 tab）兜底当前工作区。
   const sid = await sendMessage(prompt, {
     ...opts,
+    sessionProfile: currentMode.value === "chat" ? "chat" : "assistant",
     workspace: tab.sessionId ? undefined : (tab.pendingWs ?? wsSnapshot()),
   });
   if (!sid) return;
@@ -174,9 +177,9 @@ async function onNewTab() {
   // 新建对话的默认落点听**模式意图**：日常 → 日常工作区（先确保归属已装载）；
   // 工程 → hero 上选定的归属（defaultWs），没选就快照当前活动工作区——布局全局
   // 一份、切工作区不动 tab，不快照的话首条消息会落到「当前」工作区而不是创建时的那个。
-  if (pl.layout.chatMode === "daily") await ensureDailyWorkspace();
+  if (pl.layout.chatMode !== "project") await ensureDailyWorkspace();
   const ws =
-    pl.layout.chatMode === "daily"
+    pl.layout.chatMode !== "project"
       ? (dailyWorkspaceBind() ?? undefined)
       : (pl.layout.defaultWs ?? projectWsSnapshot());
   if (pl.layout.defaultWs) pl.setDefaultWs(null);
@@ -197,17 +200,9 @@ function onPickWorkspace(ws: WorkspaceInfo) {
   }
 }
 
-/** 当前 tab 的归属 key —— 取 key 的唯一实现在 usePaneLayout 的 tabWsKeyOf（活着的会话
- *  问注册表，空白 tab 看 pendingWs），这里只是把它接到本组的激活 tab 上。 */
-const tabWsKey = computed<string>(() => tabWsKeyOf(activeTab.value));
-
-/** 当前在用什么模式：有 tab 就看那个 tab 的归属，没有 tab 看布局上的意图。
- *  ⚠️ 活着的会话必须走注册表 —— 发送后 tab 的 pendingWs 会被删（usePaneLayout
- *  的 promote 路径），只看 pendingWs 会把日常会话误判成工程。
- *  其余（含未绑）算工程：未绑时首条消息会落到活动工作区（后端 cwd 链第三级），
- *  与「工程」的语义一致。 */
+/** 模式判定共用布局层规则：会话能力优先，普通助手再按工作区区分日常/工程。 */
 const currentMode = computed<ChatMode>(() =>
-  tabWsKey.value ? (isDailyKey(tabWsKey.value) ? "daily" : "project") : pl.layout.chatMode,
+  chatModeOf(activeTab.value, pl.layout.chatMode),
 );
 
 /**
@@ -219,8 +214,8 @@ const currentMode = computed<ChatMode>(() =>
  */
 async function onPickMode(mode: ChatMode) {
   pl.setChatMode(mode);
-  if (mode === "daily") await ensureDailyWorkspace();
-  const bind = mode === "daily" ? dailyWorkspaceBind() : projectWsSnapshot();
+  if (mode !== "project") await ensureDailyWorkspace();
+  const bind = mode !== "project" ? dailyWorkspaceBind() : projectWsSnapshot();
   const tab = activeTab.value;
   if (tab && !tab.sessionId) {
     pl.setTabPendingWs(tab.id, bind ?? undefined);

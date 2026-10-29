@@ -22,6 +22,7 @@ const props = defineProps<{
   runStates?: Record<string, RunStatus>;
   leftCollapsed?: boolean;
   rightCollapsed?: boolean;
+  rightAvailable?: boolean;
   // 当前工作区根路径（LSP 徽章/面板用）
   workspaceRoot?: string;
 }>();
@@ -345,6 +346,7 @@ function isRowRunning(cfg: RunConfig): boolean {
       <AppProcessIndicator :workspace-root="workspaceRoot" />
       <LspIndicator ref="lspIndicatorRef" :workspace-root="workspaceRoot" />
       <SidebarToggle
+        v-if="rightAvailable !== false"
         side="right"
         :collapsed="!!rightCollapsed"
         @toggle="$emit('toggle-right')"
