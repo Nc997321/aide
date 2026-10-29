@@ -17,6 +17,7 @@ import {
   computeRestoreScrollTop,
   findRestorableSkeleton,
   findViewportPageIndex,
+  pagesInPrefetchBand,
   insertionIndex,
   isRecycleMutating,
   liveMessageCount,
@@ -390,6 +391,30 @@ describe("useChatSession/recycle 页级回收", () => {
     expect(ledger[4].loaded).toBe(true); // 末页紧贴视口上方：留着
     expect(ledger[3].loaded).toBe(true);
     expect(ledger.slice(0, 3).every((p) => !p.loaded)).toBe(true);
+  });
+
+  it("一屏跨多页：预取带内页在重复结算及无 DOM 淘汰时保持驻留，离开后可回收", async () => {
+    const sid = "prefetch-protection";
+    const store = setupSession(sid, Array.from({ length: 20 }, () => makePage({ count: 1, bytes: 1024 * 1024 })), 0);
+    const rows = buildRows(sid, store.messages);
+    const heights = new Map(rows.map((r) => [r.id, 100] as [string, number]));
+    const cum = buildCumulative(rows, heights);
+    const protectedPages = pagesInPrefetchBand(500, 200, rows, cum);
+    setViewportHot(sid, findViewportPageIndex(500, rows, cum), protectedPages);
+    expect(protectedPages.has(9)).toBe(true); // 超出视口顶 ±1 页，仍在预取带内。
+    releasePage(sid, 9, 100);
+    invokeMock.mockResolvedValueOnce(pageResult("restored", 1));
+    expect(await restorePage(sid, 9)).toBe(1);
+    for (let pass = 0; pass < 4; pass++) {
+      releaseFarthestPages(sid, { budget: 2 * 1024 * 1024 }, (i) => heights.get(rows[i].id));
+      const currentRows = buildRows(sid, store.messages);
+      expect(findRestorableSkeleton(500, 200, currentRows, buildCumulative(currentRows, heights))).toBe(-1);
+      for (const i of protectedPages) expect(pageLedgers.get(sid)![i].loaded).toBe(true);
+    }
+    expect(pageLedgers.get(sid)![19].loaded).toBe(false); // 远端仍可回收。
+    setViewportHot(sid, 19, new Set([19]));
+    releaseFarthestPages(sid, { budget: 0 });
+    expect(pageLedgers.get(sid)![9].loaded).toBe(false);
   });
 
   it("findViewportPageIndex：无台账（全 live）返回 -1", () => {

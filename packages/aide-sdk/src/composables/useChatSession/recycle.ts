@@ -61,8 +61,14 @@ const HOT_ZONE_RADIUS = 1;
 
 /** 视口热区上报（滚动层持续写入；evict 二阶段无 DOM 上下文时据此避让）。 */
 const viewportHot = new Map<string, number>();
-export function setViewportHot(sid: string, pageIndex: number): void {
+const viewportProtected = new WeakMap<PageEntry[], ReadonlySet<number>>();
+export function setViewportHot(sid: string, pageIndex: number, protectedPages?: ReadonlySet<number>): void {
   viewportHot.set(sid, pageIndex);
+  const ledger = pageLedgers.get(sid);
+  if (ledger) {
+    if (protectedPages) viewportProtected.set(ledger, protectedPages);
+    else viewportProtected.delete(ledger);
+  }
 }
 
 /** 页级 mutate 互斥（restore 有 await 间隙；release 同步无间隙不用占）：
@@ -178,6 +184,9 @@ export function releaseFarthestPages(
   for (let i = 0; i < ledger.length && bytes > opts.budget; i++) {
     const p = ledger[i];
     if (!p.loaded) continue;
+    // 几何预取带内的页不可回收，否则 restore → settle 会反复释放同一页。
+    // evict 无 DOM，也必须遵守滚动层上报的保护范围。
+    if (viewportProtected.get(ledger)?.has(i)) continue;
     // 热区豁免：视口 ±K 页
     if (hot !== undefined && Math.abs(i - hot) <= HOT_ZONE_RADIUS) continue;
     // 尾部豁免：无 hot 上下文时保留最新 N 页（evict 路径兜底语义）
@@ -208,6 +217,7 @@ export function tightenResidentPages(
 ): number {
   const ledger = pageLedgers.get(sid);
   if (!ledger || ledger.length === 0) return 0;
+  viewportProtected.delete(ledger); // 切入重新落位，旧视口几何不再适用。
   // 锚行 id = 页台账条目 id（page 行与 skeleton 行同 id），直接反查页索引——
   // 不必建行也不必视口推算（切入时量不到新会话的视口）。
   const hot = opts.anchorRowId ? ledger.findIndex((p) => p.id === opts.anchorRowId) : -1;
@@ -386,6 +396,26 @@ export function findRestorableSkeleton(
     }
   }
   return best;
+}
+
+/** 与骨架预取使用同一几何范围；保护所有相交页，不能只保护视口顶 ±1 页。 */
+export function pagesInPrefetchBand(
+  scrollTop: number,
+  clientHeight: number,
+  rows: readonly Row[],
+  cum: readonly number[],
+  margin = 1.5,
+): ReadonlySet<number> {
+  const top = scrollTop - clientHeight * margin;
+  const bottom = scrollTop + clientHeight * (1 + margin);
+  const pages = new Set<number>();
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i];
+    if (row.kind !== "page" && row.kind !== "skeleton") continue;
+    if (cum[i + 1] < top || cum[i] > bottom) continue;
+    pages.add(row.pageIndex);
+  }
+  return pages;
 }
 
 /** 取回后的 scrollTop 补偿（纯函数）：rowTopBefore = 页顶相对视口顶的原位置

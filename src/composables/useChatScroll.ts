@@ -12,6 +12,7 @@ import {
   buildRows,
   findRestorableSkeleton,
   findViewportPageIndex,
+  pagesInPrefetchBand,
   isRecycleMutating,
   liveMessageCount,
   liveSkeletonInBand,
@@ -595,7 +596,8 @@ export function useChatScroll(
     const cum = buildCumulative(rows.value, heights);
     const vpTop = rowsViewportTop(el);
     const pageIdx = findViewportPageIndex(vpTop, rows.value, cum);
-    if (pageIdx >= 0) setViewportHot(sid, pageIdx);
+    if (pageIdx >= 0) setViewportHot(sid, pageIdx,
+      pagesInPrefetchBand(vpTop, el.clientHeight, rows.value, cum, SKELETON_PREFETCH_MARGIN));
     if (loadedPagesBytes(sid) > RECYCLE_BYTES_BUDGET) {
       releaseFarthestPages(
         sid,
@@ -639,6 +641,7 @@ export function useChatScroll(
     const el = scrollEl.value;
     const cum = buildCumulative(oldRows, heights);
     const pageIdx = el ? findViewportPageIndex(rowsViewportTop(el), oldRows, cum) : -1;
+    setViewportHot(oldId, pageIdx); // 切走撤销几何保护，允许后台收紧。
     const released = releaseFarthestPages(
       oldId,
       { budget: 0, hotPageIndex: pageIdx >= 0 ? pageIdx : undefined },
