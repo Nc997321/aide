@@ -12,7 +12,7 @@ describe("用户文档输入预处理", () => {
     const path = join(dir, "attachment.docx");
     const data = await Packer.toBuffer(new Document({ sections: [{ children: [new Paragraph("附件里的正文")] }] }));
     await writeFile(path, data);
-    const cmd = { cmd: "send" as const, prompt: "帮我总结", session_profile: "chat" as const,
+    const cmd = { cmd: "send" as const, session_id: "input-doc-test", prompt: "帮我总结", session_profile: "chat" as const,
       input_documents: [path, path], display: [{ type: "mention" as const, path, content: "待解析" }] };
     const prepared = await prepareInputDocuments(cmd);
     expect(prepared.prompt).toContain("附件里的正文");
@@ -25,7 +25,7 @@ describe("用户文档输入预处理", () => {
     dir = await mkdtemp(join(tmpdir(), "aide-input-doc-"));
     const path = join(dir, "bad.pdf");
     await writeFile(path, "not a pdf");
-    await expect(prepareInputDocuments({ cmd: "send", prompt: "hi", input_documents: [path] })).rejects.toThrow("附件解析失败");
-    await expect(prepareInputDocuments({ cmd: "send", prompt: "hi", input_documents: Array.from({ length: 9 }, (_, i) => `${i}.pdf`) })).rejects.toThrow("最多添加 8");
+    await expect(prepareInputDocuments({ cmd: "send", session_id: "input-doc-test", prompt: "hi", input_documents: [path] })).rejects.toThrow("附件解析失败");
+    await expect(prepareInputDocuments({ cmd: "send", session_id: "input-doc-test", prompt: "hi", input_documents: Array.from({ length: 9 }, (_, i) => `${i}.pdf`) })).rejects.toThrow("最多添加 8");
   });
 });

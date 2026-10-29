@@ -1842,8 +1842,8 @@ describe("纯聊天装配与异步附件", () => {
       }) as any,
     });
     try {
-      worker.handleCommand({ cmd: "send", prompt: "hi", session_profile: "chat", input_documents: ["document.docx"] });
-      worker.handleCommand({ cmd: "send", prompt: "second", session_profile: "assistant" });
+      worker.handleCommand({ cmd: "send", session_id: worker.routingKey, prompt: "hi", session_profile: "chat", input_documents: ["document.docx"] });
+      worker.handleCommand({ cmd: "send", session_id: worker.routingKey, prompt: "second", session_profile: "assistant" });
       release();
       await vi.waitFor(() => expect(options).toBeDefined());
       worker._emitForTest({ type: "session_init", session_id: "real-chat" });
