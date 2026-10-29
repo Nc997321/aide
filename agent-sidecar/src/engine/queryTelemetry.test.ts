@@ -18,7 +18,9 @@ function collect() {
  */
 function fullUsage(): SDKControlGetContextUsageResponse {
   return {
-    categories: [{ name: "MCP tools", tokens: 19_700, isDeferred: false, color: "#7B61FF" }],
+    // SDK 平台包的类型版本不完全一致：kind 在部分版本必填、部分版本未声明。
+    // 结构化展开保留真实响应字段，同时兼容两种类型声明。
+    categories: [{ name: "MCP tools", tokens: 19_700, isDeferred: false, color: "#7B61FF", ...{ kind: "used" as const } }],
     totalTokens: 125_500,
     maxTokens: 160_000,
     rawMaxTokens: 200_000,
