@@ -1,6 +1,6 @@
 [package]
 name = "aide-computer"
-version = "2.2.0"
+version = "2.3.1"
 edition = "2021"
 description = "Computer use for Aide agents: read windows through UI Automation, act with real input, verify. Tauri-free; the desktop shell plugs it into the agent bridge."
 
