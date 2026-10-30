@@ -40,12 +40,31 @@ pub fn runtime_process_env(proxy: &str) -> HashMap<String, String> {
 }
 
 fn apply_proxy(env_vars: &mut HashMap<String, String>, proxy: &str) {
-    if proxy.is_empty() {
-        return;
+    if !proxy.is_empty() {
+        for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
+            env_vars.insert(k.to_string(), proxy.to_string());
+        }
     }
-    for k in ["HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"] {
-        env_vars.insert(k.to_string(), proxy.to_string());
+    // CLI 访问本机 CPA/Ollama 等服务必须直连，不能把回环请求交给外部代理。
+    // 空 proxy 仍可能继承 Host 的代理；合并两种大小写，保留用户已有的绕过规则。
+    let upper = std::env::var("NO_PROXY").unwrap_or_default();
+    let lower = std::env::var("no_proxy").unwrap_or_default();
+    let bypass = loopback_proxy_bypass(&[&upper, &lower]);
+    for k in ["NO_PROXY", "no_proxy"] {
+        env_vars.insert(k.to_string(), bypass.clone());
     }
+}
+
+fn loopback_proxy_bypass(existing: &[&str]) -> String {
+    let mut entries = Vec::new();
+    for value in existing.iter().copied().chain(std::iter::once("localhost,127.0.0.1,::1")) {
+        for entry in value.split(',').map(str::trim).filter(|s| !s.is_empty()) {
+            if !entries.iter().any(|s: &&str| s.eq_ignore_ascii_case(entry)) {
+                entries.push(entry);
+            }
+        }
+    }
+    entries.join(",")
 }
 
 /// 剥掉 cargo 注入的 target 段。`cargo run` 会把当前构建的 profile 目录
@@ -129,7 +148,19 @@ C:\\Users\\yangx\\.cargo\\bin";
         let env = runtime_process_env("http://127.0.0.1:7890");
         assert_eq!(env.get("HTTPS_PROXY"), Some(&"http://127.0.0.1:7890".to_string()));
         assert!(env.keys().all(|k| k.to_ascii_lowercase().ends_with("_proxy")), "{env:?}");
-        assert!(runtime_process_env("").is_empty());
+        for proxy in ["", "http://127.0.0.1:7890"] {
+            let env = runtime_process_env(proxy);
+            assert_eq!(env["NO_PROXY"], env["no_proxy"]);
+            for host in ["localhost", "127.0.0.1", "::1"] {
+                assert!(env["NO_PROXY"].split(',').any(|s| s.eq_ignore_ascii_case(host)));
+            }
+        }
+    }
+
+    #[test]
+    fn proxy_bypass_preserves_user_rules_and_deduplicates() {
+        assert_eq!(loopback_proxy_bypass(&[" .example.test,LOCALHOST ", "127.0.0.1,,.example.test"]),
+            ".example.test,LOCALHOST,127.0.0.1,::1");
     }
 
     #[test]
