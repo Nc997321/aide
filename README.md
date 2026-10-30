@@ -21,6 +21,7 @@ Aide bundles the Claude Agent SDK runtime through Anthropic's official distribut
 ## Features
 
 - **Chat with Claude** — streaming via the Claude Agent SDK in a Node.js sidecar, rendered as styled chat bubbles, with an interrupt (stop) button
+- **Compact process history** — one current-instruction row opens its details and earlier steps; file edits keep a live diff preview until the next instruction. See [docs/chat-process.md](docs/chat-process.md)
 - **Context compaction feedback** — shows a live, theme-aware status while the agent is compressing context, without inventing a percentage
 - **Session management** — reads directly from the aide-managed Claude config dir (`~/.aide/claude/`), in Claude Code's native format, so nothing is locked into a private database
 - **File tree** — lazy-loaded directory browser, filtered (skips `.`, `node_modules`, `target`, `dist`)

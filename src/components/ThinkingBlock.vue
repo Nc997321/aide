@@ -18,12 +18,21 @@ import { useStreamChunks } from "@/composables/useStreamChunks";
  *  （切换回运行中的长会话时集中爆发）。现在的对策见下方 useStreamChunks 段：
  *  正文切成「稳定的前缀文本节点 + 有界的尾部 span」，重排范围从窗口上限缩到尾巴上界；
  *  钉底读数仍按帧合并一次（schedulePin）。 */
-const props = defineProps<{ text: string; truncated?: TruncatedInfo; streaming?: boolean }>();
+const props = withDefaults(defineProps<{
+  text: string;
+  truncated?: TruncatedInfo;
+  streaming?: boolean;
+  presentation?: "standalone" | "process";
+  showContent?: boolean;
+}>(), { presentation: "standalone", showContent: true });
+const expanded = defineModel<boolean>("expanded", { default: false });
 
 /** 用户是否手动 toggle 过——一旦操作，details 开合完全由用户决定，流式默认不再覆盖。 */
 const userOverride = ref(false);
 const userOpen = ref(false);
-const open = computed(() => (userOverride.value ? userOpen.value : !!props.streaming));
+const open = computed(() => props.presentation === "process"
+  ? expanded.value
+  : userOverride.value ? userOpen.value : !!props.streaming);
 const bodyRef = ref<HTMLDivElement | undefined>();
 
 /** 尾巴块数上界。可见窗口 320px ≈ 17 行 ≈ 680 字，800 字（400 块）留足余量；
@@ -42,7 +51,7 @@ const TAIL_MAX_CHUNKS = 400;
  *
  *  非流式时把源锁成空串：历史消息挂载时不必白算一遍块表（模板那时走
  *  streamingBody 全文渲染，根本不看块表）。 */
-const streamSource = computed(() => (props.streaming ? props.text : ""));
+const streamSource = computed(() => (props.streaming && props.showContent ? props.text : ""));
 const { settled, clipped, chunks } = useStreamChunks(streamSource, { maxChunks: TAIL_MAX_CHUNKS });
 
 // 流式期：thinking-body 限高 320px + 钉底跟随（逐字增长时内部滚到底），让用户看到
@@ -88,6 +97,10 @@ onUnmounted(() => {
 });
 function onToggle(e: Event) {
   const target = e.target as HTMLDetailsElement;
+  if (props.presentation === "process") {
+    expanded.value = target.open;
+    return;
+  }
   // 程序化 :open 变化也触发 toggle——此时 target.open 与 computed open 一致，不是
   // 用户操作，忽略；只有用户点击导致两者不一致时才接管（避免流式自动展开/折叠
   // 污染 userOverride，使结束折叠失效）。
@@ -101,14 +114,17 @@ function onToggle(e: Event) {
   <details class="thinking" :class="{ 'thinking--streaming': streaming }" :open="open" @toggle="onToggle">
     <summary class="thinking-head">
       <span class="thinking-caret" aria-hidden="true"></span>
-      <span>思考</span>
-      <span aria-hidden="true">·</span>
-      <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
+      <span>{{ streaming ? "正在思考…" : "思考" }}</span>
+      <template v-if="showContent">
+        <span aria-hidden="true">·</span>
+        <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
+      </template>
+      <slot name="summary-extra" />
     </summary>
     <!-- 流式期：前缀文本节点 + 逐块淡入的尾巴。模板刻意写成紧凑形式——容器的
          white-space 是 pre-wrap，元素之间任何残留的空白文本节点都会渲染成可见空格。
          非流式期回整段渲染（折叠态子树不排版，全文布局只付一次）。 -->
-    <div ref="bodyRef" class="thinking-body">
+    <div v-if="showContent" ref="bodyRef" class="thinking-body">
       <template v-if="streaming"
         ><span v-if="clipped">…</span
         ><span>{{ settled }}</span
@@ -122,6 +138,7 @@ function onToggle(e: Event) {
       <!-- 非流式（含结束后）：整段渲染。折叠态 details 子树不排版，全文布局只付一次。 -->
       <template v-else>{{ text }}</template>
     </div>
+    <slot v-if="open" name="history" />
   </details>
 </template>
 

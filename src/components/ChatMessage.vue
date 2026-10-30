@@ -10,8 +10,7 @@ import { collectDocumentArtifacts } from "@aide/sdk/utils/documentArtifacts";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import KbRefCard from "./KbRefCard.vue";
 import PageRefCard from "./PageRefCard.vue";
-import NarrationGroup from "./narration/NarrationGroup.vue";
-import NarrationIcon from "./narration/NarrationIcon.vue";
+import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
@@ -106,9 +105,8 @@ const documentPresentation = computed(() =>
     : collectDocumentArtifacts(props.message.blocks, props.workspacePath),
 );
 
-/** user 消息不分组（@mention 的 tool_call 是附件展示，保持逐条）；assistant 消息走
- *  segmentBlocks：相邻同类工具调用合成一句旁白，思考按「显示思考过程」开关显示或隐藏
- *  （见 blockSegments.ts 文件头）。 */
+/** 用户附件保持逐条；assistant 的连续过程共用当前指令入口，正文保留原位。
+ *  当前指令只在下一条指令出现或回答结束时交接，不被正文打断。 */
 const segments = computed<Segment[]>(() =>
   isUser.value
     ? props.message.blocks.map((block, index) => ({ kind: "block" as const, block, index }))
@@ -166,30 +164,15 @@ function handleTextClick(e: MouseEvent) {
   >
     <div :class="wrapClass">
       <template v-for="seg in segments" :key="seg.index">
-        <!-- 旁白段：一次调用 = 一行 ToolCallBlock（头行就是一句话，点开看细节）；相邻同类
-             多次 = 合成一句的 NarrationGroup（点开逐条）。消息尾那段是「当前这一步」。 -->
-        <template v-if="seg.kind === 'narration'">
-          <ToolCallBlock
-            v-if="seg.blocks.length === 1"
-            :block="seg.blocks[0]"
-            :current="seg.current"
-            :workspace-path="workspacePath"
-            :bg-tasks="bgTasks"
-            @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
-          />
-          <NarrationGroup
-            v-else
-            :blocks="seg.blocks"
-            :workspace-path="workspacePath"
-            :bg-tasks="bgTasks"
-            @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"
-          />
-        </template>
-        <!-- 思考被隐藏（默认）时，模型正在思考的那一刻只留一行提示，免得像卡住了 -->
-        <div v-else-if="seg.kind === 'thinking_live'" class="msg-thinking-live narr-row">
-          <span class="msg-thinking-icon"><NarrationIcon name="bulb" /></span>
-          <span class="aide-narr-live">正在思考…</span>
-        </div>
+        <ProcessGroup
+          v-if="seg.kind === 'process'"
+          :segment="seg"
+          :finalized="!message.streaming"
+          :show-thinking="settings.showThinking"
+          :workspace-path="workspacePath"
+          :bg-tasks="bgTasks"
+          @open-bg-dock="emit('open-bg-dock', $event)"
+        />
         <!-- 正文渲染收进 StreamingText（分段 + 渐显波；@click 靠单根 fallthrough
              落到 .msg-text 上，与工具块的文件码点击共用 handleTextClick）。 -->
         <template v-else-if="seg.block.type === 'text'">
@@ -452,24 +435,6 @@ function handleTextClick(e: MouseEvent) {
 .msg-turn :deep(.tool-item + .tool-item) {
   margin-top: 0;
 }
-/* 连续几句旁白读起来是一段，行距收紧（gap 8px → 2px）；与正文之间仍是 8px */
-.msg-turn > :deep(.narr-row + .narr-row) {
-  margin-top: -6px;
-}
-
-.msg-thinking-live {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  font-size: 13px;
-  line-height: 1.6;
-  padding: 2px 0;
-}
-.msg-thinking-icon {
-  display: inline-flex;
-  color: var(--aide-accent);
-}
-
 /* .msg-text 的 Markdown 正文样式已提到 styles/global.css（btw 抽屉共用）——
    选择器与这里原本的一致，只是从 scoped :deep 变成全局后代选择器。 */
 

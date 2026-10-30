@@ -22,9 +22,8 @@ import { useSettings } from "@/composables/useSettings";
 const props = withDefaults(
   defineProps<{
     block: ToolCallBlock;
-    /** 「当前这一步」：这条调用是消息的最后一块（blockSegments 的 currentId）——头行下
-     *  带几行结果预览（变更类工具是 diff 片段）。后面一有别的块就不再是 current，
-     *  预览收回、只剩头行。 */
+    /** 头行下显示当前预览。聊天过程仅为当前写入开启，保留到下一条指令或回合结束；
+     *  其它调用点可独立选择是否预览结果。 */
     current?: boolean;
     /** 强制卡片外观。查询类工具默认是无框的「工具行」；用户气泡里的 @引用合成卡
      *  是附件而不是过程，落在 accent 实心底上，需要自己的底与边。 */
@@ -42,7 +41,7 @@ const emit = defineEmits<{
   "open-bg-dock": [taskId: string];
 }>();
 
-const expanded = ref(false);
+const expanded = defineModel<boolean>("expanded", { default: false });
 const { openResolved } = useFileResolver();
 const { settings } = useSettings();
 
@@ -235,6 +234,7 @@ const readRange = computed(() =>
         @click="openChangeFile"
         >打开 ↗</span
       >
+      <slot name="summary-extra" />
       <svg
         :class="['ti-chev', expanded ? 'ti-chev--open' : '']"
         width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
@@ -283,6 +283,7 @@ const readRange = computed(() =>
       <pre v-else-if="block.result" class="ti-result">{{ block.result }}</pre>
       <div v-else class="ti-pending">等待结果…</div>
     </div>
+    <slot v-if="expanded" name="history" />
   </div>
 </template>
 
@@ -575,7 +576,7 @@ const readRange = computed(() =>
 .tool-item--line .ti-row:hover {
   background: var(--aide-surface-default);
 }
-/* +N −M / 打开 紧跟旁白文字（与合并旁白 NarrationGroup 一致）。卡片态的 margin-left:auto
+/* +N −M / 打开 紧跟旁白文字。卡片态的 margin-left:auto
    在这里要撤掉：箭头也是 auto，两段 auto 平分剩余空间会把它们挤到行中间。 */
 .tool-item--line .ti-diff {
   margin-left: 0;

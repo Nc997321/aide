@@ -1,19 +1,8 @@
 // @vitest-environment jsdom
 /**
- * 渲染规模回归守卫：**相邻同类调用必须真的合成一句**（旁白，2026-10-20 取代过程胶囊），
- * 以及单个块组件的节点数不许膨胀。
- *
- * 由来（2026-09-14 实测）：当时 ChatMessage 的 segments 在定稿后才走二阶段合并成
- * 过程胶囊，流式期是平铺。实测一条 170 块的长回合：**平铺 1355 节点 vs 收拢 82 节点
- * = 16.5×**。2026-10-10 起流式期也收拢已落定的过程项（只有还没出结果的留在外面），
- * 所以平铺基线改用「全部未出结果」的同形回合来造。
- *
- * 这个 16.5× 不是任何一次冻结的主因（250 块 ≈ 2000 节点，量级太小），但它是
- * **一个真实的退化面**：一旦二阶段合并失效（finalized 门控写错、mergeProcessRuns
- * 的判定被改坏、过程项判定把某类块漏在外面），DOM 会静默涨 16 倍而没人发现。
- * 本文件钉的就是这条——不是性能测试，是"收拢有没有在工作"的守卫。
- *
- * 量的是 DOM 节点数（布局成本的乘数）。jsdom 没有布局引擎，量不出毫秒。
+ * 渲染规模回归守卫：连续过程共用一个入口，收起时历史子树不挂载；
+ * 普通块与正文隔开的单步过程也不能膨胀为重组件。
+ * 量的是 DOM 节点数（布局成本的乘数），jsdom 不测真实布局耗时。
  */
 import { describe, it, expect, vi } from "vitest";
 
@@ -100,9 +89,8 @@ function longTurnBlocks(): ContentBlock[] {
 }
 
 describe("ChatMessage 渲染规模守卫", () => {
-  // 旁白改版（2026-10-20）后不再有过程胶囊；守的是同一个退化面——相邻同类调用必须
-  // 真的合成一句，而不是逐条平铺。合并句默认收起，15 次 Read 的节点数应与 1 次同量级。
-  it("相邻同类调用真的合成一句：15 次读文件 ≈ 1 次的节点数", { timeout: 30_000 }, () => {
+  // 连续过程默认收起，历史子树按需挂载；15 次 Read 的节点数应与 1 次同量级。
+  it("连续过程按需挂载：15 次读文件 ≈ 1 次的节点数", { timeout: 30_000 }, () => {
     const reads = (n: number): ContentBlock[] =>
       Array.from({ length: n }, (_, i) => ({
         type: "tool_call" as const,
@@ -128,14 +116,9 @@ describe("ChatMessage 渲染规模守卫", () => {
       ["正文", text],
     ];
     for (const [label, make] of kinds) {
-      // 工具卡标成未出结果、思考之间隔一个不可折叠块——否则 100 块会被收成一个
-      // 胶囊，量到的就不是单块组件的成本了
-      const blocks = Array.from({ length: 100 }, (_, i) => make(i)).flatMap((b) =>
-        b.type === "tool_call"
-          ? [{ ...b, isPending: true }]
-          : b.type === "thinking"
-            ? [b, { type: "text", text: "。" } as ContentBlock]
-            : [b],
+      // 非正文块之间插入正文，确保测到 100 个独立入口，而非一个折叠组。
+      const blocks = Array.from({ length: 100 }, (_, i) => make(i)).flatMap((b): ContentBlock[] =>
+        b.type === "text" ? [b] : [b, { type: "text", text: "。" }],
       );
       const n = measure(makeMessage(blocks, true));
       // 2026-09-14 基线：工具卡 ~8 / 思考 ~6.7 / 正文 ~3.7 节点每块。
@@ -178,6 +161,71 @@ describe("ChatMessage — 定位锚点属性", () => {
       expect(root.attributes("data-msg-id"), `role=${role}`).toBe(message.id);
       w.unmount();
     }
+  });
+});
+
+describe("ChatMessage — 过程接线", () => {
+  it("正文保留原位且不撤掉写入预览，下一指令与结束才收起", async () => {
+    const write: ContentBlock = {
+      type: "tool_call", id: "write", name: "Write", input: { file_path: "src/a.ts", content: "const a = 2;" },
+      isPending: false, result: "updated",
+    };
+    const message = makeMessage([toolCall(1), write], true);
+    const w = mount(ChatMessage, {
+      props: { message }, global: { directives: { tooltip: {} }, stubs: { StaticDiff: true } },
+    });
+    try {
+      expect(w.findAll(".ti-row")).toHaveLength(1);
+      expect(w.find(".ti-peek-diff").exists()).toBe(true);
+      const withBody: ChatMessageType = { ...message, blocks: [...message.blocks, { type: "text", text: "保留的解释正文" }, thinking(0)] };
+      await w.setProps({ message: withBody });
+      expect(w.find(".msg-text").text()).toBe("保留的解释正文");
+      expect(w.find(".ti-peek-diff").exists()).toBe(true);
+      const next = { ...withBody, blocks: [...withBody.blocks, toolCall(2)] };
+      await w.setProps({ message: next });
+      expect(w.findAll(".process-group")).toHaveLength(2);
+      expect(w.find(".ti-peek").exists()).toBe(false);
+      await w.find(".ti-row").trigger("click");
+      expect(w.find(".process-history").exists()).toBe(true);
+      // 非当前组也必须在结束时收起，不能只依赖 current 从 true 变 false。
+      await w.setProps({ message: { ...next, streaming: false } });
+      expect(w.find(".process-history").exists()).toBe(false);
+    } finally { w.unmount(); }
+  });
+
+  it("后台入口经过当前行与历史行均可透传，点击徽章不展开过程", async () => {
+    const bash: ContentBlock = {
+      type: "tool_call", id: "bash-bg", name: "Bash", input: { command: "pnpm test" }, result: "running", isPending: false,
+    };
+    const message = makeMessage([toolCall(1), bash], true);
+    const w = mount(ChatMessage, {
+      props: {
+        message,
+        bgTasks: [{ id: "task-bg", toolUseId: "bash-bg", status: "running", output: "", startedAt: 0 }],
+      },
+      global: { directives: { tooltip: {} }, stubs: { BashOutputBlock: true } },
+    });
+    try {
+      await w.find(".ti-bgchip").trigger("click");
+      expect(w.emitted("open-bg-dock")).toEqual([["task-bg"]]);
+      expect(w.find(".process-history").exists()).toBe(false);
+      await w.setProps({ message: { ...message, blocks: [...message.blocks, toolCall(2)] } });
+      await w.find(".ti-row").trigger("click");
+      await w.find(".process-history .ti-bgchip").trigger("click");
+      expect(w.emitted("open-bg-dock")).toEqual([["task-bg"], ["task-bg"]]);
+    } finally { w.unmount(); }
+  });
+
+  it("用户引用附件保留卡片，不进入过程分组", () => {
+    const w = mount(ChatMessage, {
+      props: { message: { ...makeMessage([toolCall(1)], false), role: "user" } },
+      global: { directives: { tooltip: {} } },
+    });
+    try {
+      expect(w.find(".process-group").exists()).toBe(false);
+      expect(w.find(".tool-item").exists()).toBe(true);
+      expect(w.find(".tool-item--line").exists()).toBe(false);
+    } finally { w.unmount(); }
   });
 });
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
+import { computed } from "vue";
 import type { SubagentBlock } from "@/types/chat";
 import SubagentTimeline from "./subagent/SubagentTimeline.vue";
 import NarrationIcon from "./narration/NarrationIcon.vue";
@@ -12,7 +12,7 @@ import { subagentStatus, subagentStepCount } from "@/utils/subagent";
  */
 const props = defineProps<{ block: SubagentBlock }>();
 
-const expanded = ref(false);
+const expanded = defineModel<boolean>("expanded", { default: false });
 
 /** 状态三态：跑 / 完成 / 出错 —— 摘要胶囊、左条、文字色都据它取。 */
 const status = computed(() => subagentStatus(props.block));
@@ -42,6 +42,7 @@ const headTip = computed(() =>
       <span :class="['sa-text', { 'aide-narr-live': status === 'run' }]" v-tooltip="headTip"
         >{{ sentence.head }}<span class="sa-desc">「{{ sentence.desc }}」</span><span :class="{ 'sa-err': status === 'err' }">{{ sentence.tail }}</span></span
       >
+      <slot name="summary-extra" />
       <svg
         class="sa-chev" :class="{ 'sa-chev--open': expanded }"
         width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
@@ -51,6 +52,7 @@ const headTip = computed(() =>
     </button>
     <div v-if="expanded" class="sa-body">
       <SubagentTimeline :block="block" />
+      <slot name="history" />
     </div>
   </div>
 </template>

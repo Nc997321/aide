@@ -111,6 +111,23 @@ describe("ThinkingBlock", () => {
     expect(stub.cancel).toHaveBeenCalled();
   });
 
+  it("独立模式仍保留用户手动开合，不被后续流式状态覆盖", async () => {
+    const w = mount(ThinkingBlock, { props: { text: "思考正文", streaming: false } });
+    try {
+      const details = w.find("details");
+      details.element.open = true;
+      await details.trigger("toggle");
+      expect(details.element.open).toBe(true);
+      await w.setProps({ streaming: true });
+      await w.setProps({ streaming: false });
+      expect(details.element.open).toBe(true);
+      details.element.open = false;
+      await details.trigger("toggle");
+      await w.setProps({ streaming: true });
+      expect(details.element.open).toBe(false);
+    } finally { w.unmount(); }
+  });
+
   it("truncated 时计数徽标显示原始字节数", () => {
     const w = mount(ThinkingBlock, {
       props: { text: "abc", truncated: { originalBytes: 2048 }, streaming: false },

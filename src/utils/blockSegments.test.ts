@@ -1,87 +1,91 @@
 import { describe, expect, it } from "vitest";
 import type { ContentBlock, ToolCallBlock } from "@/types/chat";
-import { segmentBlocks, type Segment } from "./blockSegments";
+import { isChangeTool, processHead, segmentBlocks, type Segment } from "./blockSegments";
 
 let nextId = 0;
-function tool(name: string, over: Partial<ToolCallBlock> = {}): ToolCallBlock {
-  return { type: "tool_call", id: `t${nextId++}`, name, input: {}, isPending: false, ...over };
+function tool(name: string): ToolCallBlock {
+  return { type: "tool_call", id: `t${nextId++}`, name, input: {}, isPending: false };
 }
-const text = (t: string): ContentBlock => ({ type: "text", text: t });
-const thinking = (t: string): ContentBlock => ({ type: "thinking", text: t });
-const subagent = (id: string): ContentBlock => ({
-  type: "subagent", id, agentName: "Explore", description: "", entries: [], isPending: false,
+const text = (value: string): ContentBlock => ({ type: "text", text: value });
+const thinking = (value: string): ContentBlock => ({ type: "thinking", text: value });
+const subagent = (): ContentBlock => ({
+  type: "subagent", id: "s", agentName: "Explore", description: "查引用", entries: [], isPending: false,
 });
-
-/** 段的简写：narration → "N:Read,Read"，block → 块类型，thinking_live → "…" */
-function shape(segs: Segment[]): string[] {
-  return segs.map((s) =>
-    s.kind === "narration" ? `N:${s.blocks.map((b) => b.name).join(",")}` : s.kind === "block" ? s.block.type : "…",
-  );
+function shape(segments: Segment[]): string[] {
+  return segments.map(segment => segment.kind === "process"
+    ? segment.blocks.map(block => block.type === "tool_call" ? block.name : block.type).join(",")
+    : segment.block.type);
 }
 
-describe("segmentBlocks（旁白）", () => {
-  it("空 blocks → 空段", () => {
+describe("segmentBlocks（单行过程入口）", () => {
+  it("空数组、空白正文不产生空组", () => {
     expect(segmentBlocks([])).toEqual([]);
+    expect(segmentBlocks([text("  \n")])).toEqual([]);
   });
 
-  it("相邻同类调用合成一句；别类另起一句", () => {
-    const segs = segmentBlocks([tool("Read"), tool("Read"), tool("Grep"), tool("Read")], { finalized: true });
-    expect(shape(segs)).toEqual(["N:Read,Read", "N:Grep", "N:Read"]);
+  it("不同工具和子代理合为同一个过程组", () => {
+    const segments = segmentBlocks([tool("Read"), tool("Grep"), subagent(), tool("Edit")]);
+    expect(shape(segments)).toEqual(["Read,Grep,subagent,Edit"]);
+    expect(segments[0]).toMatchObject({ index: 0, current: true });
   });
 
-  it("Grep 与 Glob 同属搜索，合成一句；Edit 与 Write 同属修改", () => {
-    const segs = segmentBlocks([tool("Grep"), tool("Glob"), tool("Edit"), tool("Write")], { finalized: true });
-    expect(shape(segs)).toEqual(["N:Grep,Glob", "N:Edit,Write"]);
+  it("正文和引用卡保留原位，切开过程组；index 使用原始块下标", () => {
+    const blocks: ContentBlock[] = [tool("Read"), text("结论"), tool("Bash"), { type: "image", data: "", mediaType: "image/png" }, tool("Edit")];
+    const segments = segmentBlocks(blocks);
+    expect(shape(segments)).toEqual(["Read", "text", "Bash", "image", "Edit"]);
+    expect(segments.map(segment => segment.index)).toEqual([0, 1, 2, 3, 4]);
+    expect(segments[0]).toMatchObject({ current: false });
+    expect(segments[4]).toMatchObject({ current: true });
   });
 
-  it("内置浏览器的各种动作合成一句（始终一行）", () => {
-    const segs = segmentBlocks(
-      [tool("mcp__aide-browser__browser_tab"), tool("mcp__aide-browser__browser_read"), tool("mcp__aide-browser__browser_act")],
-      { finalized: true },
-    );
-    expect(shape(segs)).toEqual(["N:mcp__aide-browser__browser_tab,mcp__aide-browser__browser_read,mcp__aide-browser__browser_act"]);
+  it("正文到达不撤掉当前写入，下一指令才交接", () => {
+    const edit = tool("Write");
+    expect(segmentBlocks([edit, text("解释")])[0]).toMatchObject({ current: true });
+    const segments = segmentBlocks([edit, text("解释"), tool("Read")]);
+    expect(segments[0]).toMatchObject({ current: false });
+    expect(segments[2]).toMatchObject({ current: true });
   });
 
-  it("不同的第三方 MCP 不合并；同一个合并", () => {
-    const segs = segmentBlocks(
-      [tool("mcp__figma__get_file"), tool("mcp__figma__get_node"), tool("mcp__github__list_prs")],
-      { finalized: true },
-    );
-    expect(shape(segs)).toEqual(["N:mcp__figma__get_file,mcp__figma__get_node", "N:mcp__github__list_prs"]);
+  it("结果是否pending不影响当前指令，回答结束后取消所有当前标记", () => {
+    for (const isPending of [true, false]) {
+      const segments = segmentBlocks([{ ...tool("Edit"), isPending }], { finalized: true });
+      expect(segments[0]).toMatchObject({ current: false });
+    }
   });
 
-  it("正文、子代理切断合并", () => {
-    const segs = segmentBlocks([tool("Read"), text("a"), tool("Read"), subagent("s"), tool("Read")], { finalized: true });
-    expect(shape(segs)).toEqual(["N:Read", "text", "N:Read", "subagent", "N:Read"]);
+  it("显示思考时思考加入过程，后续思考不提前取代写入标题", () => {
+    const segments = segmentBlocks([thinking("先想"), tool("Write"), thinking("再想")], { showThinking: true });
+    expect(shape(segments)).toEqual(["thinking,Write,thinking"]);
+    const segment = segments[0];
+    if (segment.kind !== "process") throw new Error("缺少过程组");
+    expect(processHead(segment.blocks)).toMatchObject({ name: "Write" });
+    expect(segment.current).toBe(true);
   });
 
-  it("思考隐藏（默认）：不渲染、也不切断合并", () => {
-    const segs = segmentBlocks([tool("Read"), thinking("想"), tool("Read")], { finalized: true });
-    expect(shape(segs)).toEqual(["N:Read,Read"]);
+  it("思考正文隐藏：中间思考省略，尾部思考只在流式时保留提示", () => {
+    expect(shape(segmentBlocks([tool("Read"), thinking("隐藏"), tool("Grep")]))).toEqual(["Read,Grep"]);
+    expect(shape(segmentBlocks([thinking("隐藏"), text("正文")]))).toEqual(["text"]);
+    expect(shape(segmentBlocks([thinking("正在想")]))).toEqual(["thinking"]);
+    expect(segmentBlocks([thinking("结束")], { finalized: true })).toEqual([]);
   });
 
-  it("思考显示：原位渲染并切断合并", () => {
-    const segs = segmentBlocks([tool("Read"), thinking("想"), tool("Read")], { finalized: true, showThinking: true });
-    expect(shape(segs)).toEqual(["N:Read", "thinking", "N:Read"]);
+  it("只有思考时取最后一个思考块，正文之间只保留最后一组为current", () => {
+    const segments = segmentBlocks([thinking("一"), text("正文"), thinking("二"), thinking("三")], { showThinking: true });
+    expect(segments[0]).toMatchObject({ current: false });
+    const tail = segments[2];
+    if (tail.kind !== "process") throw new Error("缺少过程组");
+    expect(tail.current).toBe(true);
+    expect(processHead(tail.blocks)).toMatchObject({ text: "三" });
   });
 
-  it("思考隐藏但正在流式思考（最后一块）→ 一行「正在思考…」；不是最后一块就没有", () => {
-    expect(shape(segmentBlocks([tool("Read"), thinking("想")]))).toEqual(["N:Read", "…"]);
-    expect(shape(segmentBlocks([thinking("想"), text("a")]))).toEqual(["text"]);
-    // 定稿后不留
-    expect(shape(segmentBlocks([tool("Read"), thinking("想")], { finalized: true }))).toEqual(["N:Read"]);
+  it("正文后的思考不撤掉之前写入的当前状态", () => {
+    const segments = segmentBlocks([tool("Edit"), text("解释"), thinking("继续想")], { showThinking: true });
+    expect(segments[0]).toMatchObject({ current: true });
+    expect(segments[2]).toMatchObject({ current: false });
   });
 
-  it("current：段的最后一块是消息最后一块", () => {
-    const segs = segmentBlocks([tool("Read"), text("a"), tool("Bash"), tool("Bash")]);
-    expect(segs[0]).toMatchObject({ kind: "narration", current: false });
-    expect(segs[2]).toMatchObject({ kind: "narration", current: true, index: 2 });
-    const later = segmentBlocks([tool("Bash"), text("b")]);
-    expect(later[0]).toMatchObject({ current: false });
-  });
-
-  it("index 是段首块在原数组里的下标", () => {
-    const segs = segmentBlocks([text("a"), tool("Read"), tool("Read"), text("b")], { finalized: true });
-    expect(segs.map((s) => s.index)).toEqual([0, 1, 3]);
+  it("变更工具名单包含全部写入类型，不把查询当变更", () => {
+    for (const name of ["Edit", "MultiEdit", "Write", "NotebookEdit"]) expect(isChangeTool(name)).toBe(true);
+    expect(isChangeTool("Read")).toBe(false);
   });
 });
