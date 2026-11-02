@@ -1,5 +1,6 @@
-import { ref, watch, computed, type ComputedRef, type Ref } from "vue";
-import { api } from "../api";
+import { ref, watch, computed, onScopeDispose, getCurrentScope, type ComputedRef, type Ref } from "vue";
+import { api } from "@aide/sdk/api";
+import { listen } from "@aide/sdk";
 import type { SkillMeta } from "../types";
 import { useQuickActions } from "./useQuickActions";
 
@@ -29,14 +30,41 @@ export function useSlashCommands(
   const localSkills = ref<SkillMeta[]>([]);
   const { actions } = useQuickActions();
 
-  // skills 随工作区变化重扫（onMounted 时 workspacePath 往往还是空串）
+  const revision = ref(0);
+  const removedPluginSkills = ref(new Set<string>());
+  let disposed = false;
+  let unlisten: (() => void) | undefined;
+  const subscription = listen("plugins-changed", () => { revision.value++; });
+  void subscription.then((stop) => {
+    if (disposed) stop();
+    else unlisten = stop;
+  }).catch(() => { /* 无事件传输时仍可按工作区扫描 */ });
+  if (getCurrentScope()) onScopeDispose(() => {
+    disposed = true;
+    unlisten?.();
+  });
+
+  // 先订阅再扫描，避免初次扫描期间错过插件变更。
   watch(
-    workspacePath,
-    async (ws) => {
+    [workspacePath, revision],
+    async ([ws], _previous, onCleanup) => {
+      let stale = false;
+      onCleanup(() => { stale = true; });
+      await subscription.catch(() => {});
+      if (stale || disposed) return;
       try {
-        localSkills.value = await api.scanPluginSkills(ws ?? "");
+        const skills = await api.scanPluginSkills(ws ?? "");
+        if (stale || disposed) return;
+        const names = new Set(skills.map((s) => s.name));
+        const removed = new Set(removedPluginSkills.value);
+        for (const skill of localSkills.value) {
+          if (skill.source.startsWith("plugin:") && !names.has(skill.name)) removed.add(skill.name);
+        }
+        for (const name of names) removed.delete(name);
+        removedPluginSkills.value = removed;
+        localSkills.value = skills;
       } catch {
-        localSkills.value = [];
+        if (!stale && !disposed) localSkills.value = [];
       }
     },
     { immediate: true },
@@ -46,7 +74,8 @@ export function useSlashCommands(
     const all: SlashCommandOption[] = [
       ...actions.map((a) => ({ name: a.command, description: a.label, source: "内置" })),
       ...localSkills.value.map((s) => ({ name: s.name, description: s.description, source: s.source })),
-      ...(sdkCommands() ?? []).map((name) => ({ name, description: "", source: "" })),
+      // 已卸载技能不能被存活会话的旧 SDK 清单重新补回来。
+      ...(sdkCommands() ?? []).filter((name) => !removedPluginSkills.value.has(name)).map((name) => ({ name, description: "", source: "" })),
     ];
     const seen = new Set<string>();
     return all.filter((o) => !seen.has(o.name) && !!seen.add(o.name));

@@ -45,7 +45,9 @@ export function browserReferencePath(env: Env, name: string): string {
 
 export const SKILL_CONTENT = `---
 name: browser-inspect
-description: Use when the user points you at a design prototype, wireframe, or spec page and asks what it contains or what to build from it — or asks you to read, operate, test or debug a page in Aide's embedded browser (multi-step work with the aide-browser tools).
+description: Use when reading a design prototype or spec page, or reading, operating, testing or debugging pages in Aide’s embedded browser.
+metadata:
+  short-description: 阅读原型与网页，操作和调试内置浏览器
 ---
 
 # Reading a live page as a specification

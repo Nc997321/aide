@@ -16,7 +16,9 @@ export function designSkillPath(env: SkillEnv): string {
 
 export const DESIGN_SKILL_CONTENT = `---
 name: aide-design
-description: Use BEFORE writing the HTML/CSS of anything a person will look at — an Aide sidebar app's UI, an HTML slide deck, a standalone HTML page such as a report, prototype, dashboard or landing page.
+description: Use before writing HTML/CSS for a sidebar app, HTML slide deck or standalone HTML page.
+metadata:
+  short-description: 设计网页、应用界面和 HTML 幻灯片
 ---
 
 # 做一个好看、好用的页面

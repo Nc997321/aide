@@ -670,7 +670,9 @@ async fn install_plugin(core: Arc<Core>, a: InstallPluginArgs) -> Result<(), Str
         install_plugin_blocking(&service, &source_id, &plugin_name, None)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    core.emit("plugins-changed", serde_json::json!(null));
+    Ok(())
 }
 
 /// 安装插件（阻塞实现，UI 命令与启动期内置插件安装共用）。
@@ -734,7 +736,9 @@ async fn uninstall_plugin(core: Arc<Core>, a: UninstallPluginArgs) -> Result<(),
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    core.emit("plugins-changed", serde_json::json!(null));
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -788,7 +792,9 @@ async fn update_plugin(core: Arc<Core>, a: UpdatePluginArgs) -> Result<(), Strin
         Ok(())
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    core.emit("plugins-changed", serde_json::json!(null));
+    Ok(())
 }
 
 #[derive(Deserialize)]

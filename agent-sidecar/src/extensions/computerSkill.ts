@@ -20,7 +20,9 @@ export function computerSkillPath(env: SkillEnv): string {
 
 export const COMPUTER_SKILL_CONTENT = `---
 name: computer-use
-description: Use when the user asks you to do something in a desktop application on their computer (not Aide's embedded browser) — open an app, fill something in, send or save something, read what a window shows, or drive a program running in a terminal. Multi-step work with the aide-computer tools.
+description: Use when viewing or operating desktop apps on the user’s computer, including terminal programs. Excludes Aide’s embedded browser.
+metadata:
+  short-description: 查看屏幕，操作电脑上的桌面应用
 ---
 
 # Operating desktop applications

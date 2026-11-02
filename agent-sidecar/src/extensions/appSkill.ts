@@ -18,7 +18,9 @@ export function appSkillPath(env: SkillEnv): string {
 
 export const APP_SKILL_CONTENT = `---
 name: aide-app
-description: Use when the user asks to build, change or debug a tool, panel, dashboard, mini-game or other custom feature INSIDE Aide itself (e.g. "在 Aide 里做一个接口调试工具", "给侧边栏加个小游戏").
+description: Use when building, changing or debugging a sidebar app inside Aide.
+metadata:
+  short-description: 创建或修改 Aide 侧栏应用
 ---
 
 # 给 Aide 写侧栏应用

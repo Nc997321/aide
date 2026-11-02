@@ -27,7 +27,9 @@ export function webAcceptanceSkillPath(env: SkillEnv): string {
 
 export const WEB_ACCEPTANCE_SKILL_CONTENT = `---
 name: web-acceptance
-description: Use ONLY after building or changing a web feature, when the user asks to test / walk through / accept it (开发完了测一下、走查、验收). Not for exploratory checks like one button or a blank page.
+description: Use ONLY after building or changing a web feature when asked to test or accept it. Not for exploratory checks.
+metadata:
+  short-description: 对开发完成的网页功能进行走查和验收
 ---
 
 # 开发完成后的验收走查

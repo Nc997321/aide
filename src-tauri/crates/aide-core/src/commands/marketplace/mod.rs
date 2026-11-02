@@ -251,7 +251,9 @@ async fn set_plugin_enabled(core: Arc<Core>, a: SetPluginEnabledArgs) -> Result<
         write_enabled_plugins_manifest(&service)
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    core.emit("plugins-changed", serde_json::json!(null));
+    Ok(())
 }
 
 // ── Commands ──

@@ -16,7 +16,9 @@ export function videoSkillPath(env: SkillEnv): string {
 
 export const VIDEO_SKILL_CONTENT = `---
 name: aide-video
-description: Use when the user asks to make, produce or edit a video — explainer, promo, motion graphics, animated chart, or a subtitled cut of screen recordings (e.g. "做一个产品介绍视频", "把录屏剪成带字幕的演示").
+description: Use when creating or editing videos, including animation, screen recordings and subtitles.
+metadata:
+  short-description: 制作、剪辑视频，添加字幕和动画
 ---
 
 # 用 Remotion 做视频

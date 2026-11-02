@@ -101,7 +101,7 @@ fn scan_dir(skills_dir: &Path, source: &str, provider: &str) -> Vec<SkillMeta> {
         let (name, description) = parse_frontmatter(&content);
         result.push(SkillMeta {
             name: name.unwrap_or_else(|| dir_name.clone()),
-            description: description.unwrap_or_default(),
+            description: menu_description(&content).or(description).unwrap_or_default(),
             source: source.to_string(),
             file_path: skill_file.to_string_lossy().replace('\\', "/"),
             provider: provider.to_string(),
@@ -132,6 +132,27 @@ fn scan_enabled_plugins(manifest_path: &Path, provider: &str) -> Vec<SkillMeta> 
         result.extend(scan_dir(&skills_dir, &source, provider));
     }
     result
+}
+
+/// 菜单优先展示 metadata.short-description；模型仍使用原始 description。
+/// 只读取 frontmatter 的 metadata 子项，不把正文或其他 metadata 当作简介。
+fn menu_description(content: &str) -> Option<String> {
+    let after = content.trim_start().strip_prefix("---")?;
+    let fm = after.split_once("\n---")?.0;
+    let mut in_metadata = false;
+    for line in fm.lines() {
+        if !line.starts_with(char::is_whitespace) && !line.trim().is_empty() {
+            in_metadata = line.trim() == "metadata:";
+        } else if in_metadata {
+            if let Some(value) = line.trim().strip_prefix("short-description:") {
+                let value = value.trim().trim_matches('"').trim_matches('\'');
+                if !value.is_empty() {
+                    return Some(value.chars().take(120).collect());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// 解析 SKILL.md YAML frontmatter，返回 (name, description)
@@ -182,6 +203,14 @@ mod tests {
     }
 
     #[test]
+    fn menu_description_is_optional_and_scoped_to_metadata() {
+        assert_eq!(menu_description("---\nname: x\ndescription: Model trigger\nmetadata:\n  short-description: 中文简介\n---\nBody"), Some("中文简介".into()));
+        assert_eq!(menu_description("---\nname: x\ndescription: Model trigger\n---\nmetadata:\n  short-description: Body"), None);
+        assert_eq!(menu_description("---\nmetadata:\n  other: value\nother:\n  short-description: Wrong section\n---"), None);
+        assert_eq!(parse_frontmatter("---\nname: x\ndescription: Model trigger\nmetadata:\n  short-description: 中文简介\n---").1, Some("Model trigger".into()));
+    }
+
+    #[test]
     fn test_parse_frontmatter_basic() {
         let content = "---\nname: my-skill\ndescription: \"Does something useful\"\n---\n# Body";
         let (name, desc) = parse_frontmatter(content);
@@ -225,7 +254,7 @@ mod tests {
         make_skill_dir(
             &tmp,
             "debugging",
-            "---\nname: systematic-debugging\ndescription: \"Debug issues\"\n---\n",
+            "---\nname: systematic-debugging\ndescription: \"Debug issues\"\nmetadata:\n  short-description: 排查问题\n---\n",
         );
 
         let skills = scan_dir(&tmp, "user", "claude");
@@ -235,6 +264,8 @@ mod tests {
         assert!(names.contains(&"brainstorming"));
         assert!(names.contains(&"systematic-debugging"));
         assert_eq!(skills[0].provider, "claude");
+        assert_eq!(skills.iter().find(|s| s.name == "systematic-debugging").unwrap().description, "排查问题");
+        assert_eq!(skills.iter().find(|s| s.name == "brainstorming").unwrap().description, "Brainstorm ideas");
 
         fs::remove_dir_all(&tmp).unwrap();
     }

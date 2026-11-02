@@ -5,15 +5,16 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ref, nextTick } from "vue";
 
-const invokeMock = vi.fn();
-vi.mock("@tauri-apps/api/core", () => ({
-  invoke: (...args: unknown[]) => invokeMock(...args),
-}));
+const { invokeMock, listenMock } = vi.hoisted(() => ({ invokeMock: vi.fn(), listenMock: vi.fn() }));
+vi.mock("@aide/sdk/api", () => ({ api: { scanPluginSkills: (...args: unknown[]) => invokeMock(...args) } }));
+vi.mock("@aide/sdk", () => ({ listen: (...args: unknown[]) => listenMock(...args) }));
 
 import { filterSlashCommands, useSlashCommands } from "./useSlashCommands";
 
 async function flush() {
   await Promise.resolve();
+  await Promise.resolve();
+  await nextTick();
   await Promise.resolve();
   await nextTick();
 }
@@ -24,6 +25,8 @@ const BUILTIN = ["btw", "compact", "clear"];
 describe("useSlashCommands", () => {
   beforeEach(() => {
     invokeMock.mockReset();
+    listenMock.mockReset();
+    listenMock.mockResolvedValue(() => {});
   });
 
   it("会话未开始（SDK 清单为 null）：命令注册表 + 本地技能（含描述）", async () => {
@@ -64,6 +67,38 @@ describe("useSlashCommands", () => {
     await flush();
 
     expect(options.value.map((o) => o.name)).toEqual(BUILTIN);
+  });
+
+  it("Host 卸载事件触发重扫，旧 SDK 清单不能复活插件技能；重装后可恢复", async () => {
+    const plugin = { ...SKILL, name: "frontend-design", source: "plugin:frontend-design" };
+    invokeMock.mockResolvedValue([plugin]);
+    const { options, localSkills } = useSlashCommands(() => "/workspace", () => [plugin.name, "context"]);
+    await flush();
+    expect(options.value.some((o) => o.name === plugin.name)).toBe(true);
+    const changed = listenMock.mock.calls[0][1];
+    expect(listenMock.mock.calls[0][0]).toBe("plugins-changed");
+    invokeMock.mockResolvedValue([]);
+    changed({ payload: null });
+    await flush();
+    expect(localSkills.value).toEqual([]);
+    expect(options.value.map((o) => o.name)).toEqual([...BUILTIN, "context"]);
+    invokeMock.mockResolvedValue([plugin]);
+    changed({ payload: null });
+    await flush();
+    expect(options.value.find((o) => o.name === plugin.name)?.source).toBe(plugin.source);
+  });
+
+  it("慢扫描不能覆盖插件变更后的新结果", async () => {
+    let finish!: (skills: typeof SKILL[]) => void;
+    invokeMock.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const { localSkills } = useSlashCommands(() => "/workspace", () => null);
+    await flush();
+    invokeMock.mockResolvedValue([]);
+    listenMock.mock.calls[0][1]({ payload: null });
+    await flush();
+    finish([SKILL]);
+    await flush();
+    expect(localSkills.value).toEqual([]);
   });
 
   it("scanPluginSkills 失败时本地清单为空，不抛异常，其余来源照常", async () => {

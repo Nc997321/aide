@@ -24,7 +24,7 @@ describe("videoSkill", () => {
 
     const content = readFileSync(file, "utf8");
     expect(content.startsWith("---\nname: aide-video\n")).toBe(true);
-    expect(content).toContain("make, produce or edit a video");
+    expect(content).toContain("creating or editing videos");
   });
 
   it("硬纪律都写在模型读得到的地方", () => {
