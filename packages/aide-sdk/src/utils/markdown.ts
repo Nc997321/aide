@@ -270,11 +270,10 @@ const insightExtension: TokenizerAndRendererExtension = {
       tokens: this.lexer.blockTokens(body.join("\n"), []),
     };
   },
-  // 标签是固定字面量，body 走既有渲染管线（转义纪律不变），无新增 XSS 面。
+  // 用 aside 表达补充说明，不添加可见标题；正文沿用既有渲染与转义管线。
   renderer(token: Tokens.Generic): string {
     return (
       '<aside class="aide-insight">' +
-      '<span class="aide-insight-label">★ Insight</span>' +
       `<div class="aide-insight-body">${this.parser.parse(token.tokens ?? [])}</div>` +
       "</aside>"
     );

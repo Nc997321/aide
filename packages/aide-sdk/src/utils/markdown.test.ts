@@ -214,7 +214,8 @@ describe("Insight 旁注块", () => {
       "前言。\n\n★ Insight ─────────────────────\n旁注正文。\n- 要点一\n─────────────────────\n",
     );
     expect(html).toContain('<aside class="aide-insight">');
-    expect(html).toContain("★ Insight");
+    expect(html).not.toContain("aide-insight-label");
+    expect(html).not.toContain("★ Insight");
     expect(html).toContain("旁注正文。");
     expect(html).toContain("<li>要点一</li>");
     // 两条定界横线被丢掉（脚手架，不是内容）

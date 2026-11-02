@@ -37,10 +37,10 @@ const closeBehaviorOptions: { value: CloseBehavior; label: string }[] = [
  *  自定义样式走插件通道（plugin 的 output-styles 目录），不在这里列。 */
 const outputStyleOptions = [
   { value: "default", label: "默认（不改变输出风格）" },
-  { value: "Proactive", label: "Proactive（多行动、少打断）" },
-  { value: "Concise", label: "Concise（简洁作答）" },
-  { value: "Explanatory", label: "Explanatory（附 Insight 讲解）" },
-  { value: "Learning", label: "Learning（协作式，留 TODO(human) 给你写）" },
+  { value: "Proactive", label: "主动（多行动、少打断）" },
+  { value: "Concise", label: "简洁（精简作答）" },
+  { value: "Explanatory", label: "讲解（补充原理与说明）" },
+  { value: "Learning", label: "学习（协作完成，留部分代码供你练习）" },
 ];
 import { formatShortcut, detectConflicts } from "../utils/shortcut";
 import { applyTheme, themes } from "../themes";
