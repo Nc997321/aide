@@ -3,9 +3,11 @@
  *
  * 结构（对照 design/remote/app.html 屏 2 .ch-*）：
  *  - 顶栏：☰ 开抽屉 + 标题/副标题（工作区色点 + 名称，纯展示）
- *  - 停止回复 chip：输入栏上方右侧悬空（StopChip，仅回复中渲染——红色均衡器
+ *  - 停止回复 chip：停靠区/输入栏上方右侧悬空（StopChip，仅回复中渲染——红色均衡器
  *    跳动条浮在页底背景上，点击 interrupt——残段冻结后落「已停止会话」系统
- *    分隔线，见 ChatModel.interrupt；闲态不占位）
+ *    分隔线，见 ChatModel.interrupt；闲态不占位；后台任务停靠区在它之下）
+ *  - 后台任务停靠区（BgTaskDock）：停止 chip 之下、输入栏之上（bgTasks 非空
+ *    才渲染；弹窗期间输入框让位但停靠区照常——后台任务跨权限应答存活）
  *  - 结束会话进程：顶栏右端 ⏻（仅运行中显示——startedIds 闸门，open/refresh
  *    经 session_alive 对账，事件流维持）——确认后 stop_chat_session 杀桌面
  *    worker，徽标本机即清（用户主动杀抑制 session_dead 事件）
@@ -2278,7 +2280,7 @@ export struct ChatPage {
 
   build() {
     Stack({ alignContent: Alignment.Top }) {
-      // 主列：顶栏 / 横幅 / 时间线或空态 / 停靠区 / 输入区
+      // 主列：顶栏 / 横幅 / 时间线或空态 / 停止 chip / 停靠区 / 输入区
       Column() {
         this.topBar()
 
@@ -2308,9 +2310,6 @@ export struct ChatPage {
         .layoutWeight(1)
         .opacity(this.conn.switching ? 0.45 : 1)
 
-        if (this.store.bgTasks.length > 0) {
-          BgTaskDock({ store: this.store })
-        }
         if (this.store.sysNote !== '') {
           this.sysNoteView()
         }
@@ -2326,6 +2325,13 @@ export struct ChatPage {
           if (this.canStop()) {
             this.stopChipRow()
           }
+        }
+        // 后台任务停靠区：停止 chip 之下、输入栏之上（后台任务跨权限应答存活，
+        // 弹窗期间输入框让位但停靠区照常）
+        if (this.store.bgTasks.length > 0) {
+          BgTaskDock({ store: this.store })
+        }
+        if (this.store.pendingPermissions.length === 0) {
           this.inputBarView()
         }
       }
