@@ -30,3 +30,6 @@ pub fn profile(lang: LanguageId) -> &'static dyn ServerProfile {
         _ => &DefaultProfile,
     }
 }
+
+/// 文档归属不变，只有进程 / 状态 / 预热共用服务身份。
+pub fn server_language(lang: LanguageId) -> LanguageId { profile(lang).server_language(lang) }

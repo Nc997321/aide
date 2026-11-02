@@ -266,6 +266,19 @@ pub fn representative_sources(
     out
 }
 
+/// 就绪探针候选：同一工程的首文件可能是空文件 / re-export 壳，必须能换靶子。
+pub fn probe_sources(root: &Path, lang: LanguageId, max: usize) -> Vec<std::path::PathBuf> {
+    let mut out = representative_sources(root, lang, max.min(4));
+    if out.len() >= max { return out; }
+    walk_targets(root, |path, ext, l| {
+        if l == lang && is_probe_target(ext, lang) && !out.iter().any(|p| p == path) {
+            out.push(path.to_path_buf());
+        }
+        out.len() < max
+    });
+    out
+}
+
 /// 名字像测试的文件（各语言通行的那几种写法）。见 `count_and_first` 里的用法。
 fn is_test_file(name: &str) -> bool {
     let stem = name.rsplit_once('.').map(|(s, _)| s).unwrap_or(name);
@@ -893,6 +906,22 @@ mod tests {
     /// 代表文件要**按顶层目录摊开**，且重目录不当代表。
     /// 本仓库实测：只递根层的 `vite.config.ts`（属于只含它一个文件的 `tsconfig.node.json`），
     /// `src/` 里的符号按名**永远**查不到（20s 重试也没用）。
+    #[test]
+    fn probe_candidates_include_more_than_the_first_file_in_a_project() {
+        let d = tmp_dir("probe_shell");
+        fs::create_dir_all(d.join("src")).unwrap();
+        fs::write(d.join("src/api.ts"), "export { api } from './impl';").unwrap();
+        fs::write(d.join("src/impl.ts"), "export function api() {}").unwrap();
+        fs::create_dir_all(d.join("node_modules")).unwrap();
+        fs::write(d.join("node_modules/no.ts"), "export class Wrong {}").unwrap();
+        let files = probe_sources(&d, LanguageId::TypeScript, 24);
+        assert!(files.contains(&d.join("src/api.ts")));
+        assert!(files.contains(&d.join("src/impl.ts")));
+        assert!(!files.contains(&d.join("node_modules/no.ts")));
+        assert_eq!(probe_sources(&d, LanguageId::TypeScript, 1).len(), 1);
+        fs::remove_dir_all(d).unwrap();
+    }
+
     #[test]
     fn representative_sources_reach_maven_package_depth() {
         // Maven 标准布局：源码在 src/main/java/<包路径>/ 下，比语言计数的 4 层深得多

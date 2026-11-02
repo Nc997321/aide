@@ -16,6 +16,13 @@ use std::path::Path;
 pub struct TsProfile;
 
 impl ServerProfile for TsProfile {
+    fn server_language(&self, _: crate::lsp::detector::LanguageId) -> crate::lsp::detector::LanguageId {
+        crate::lsp::detector::LanguageId::TypeScript
+    }
+    fn languages(&self, _: crate::lsp::detector::LanguageId) -> Vec<crate::lsp::detector::LanguageId> {
+        vec![crate::lsp::detector::LanguageId::TypeScript, crate::lsp::detector::LanguageId::JavaScript]
+    }
+
     fn bundled(&self) -> Option<(&'static str, &'static str)> {
         Some(("typescript", "typescript-language-server"))
     }

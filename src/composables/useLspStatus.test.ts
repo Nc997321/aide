@@ -75,6 +75,19 @@ describe("useLspStatus", () => {
     });
   });
 
+  it.each([["javascript"], ["javascript", "typescript"]])("uses one shared service for %j", async (...detected) => {
+    invoke.mockImplementation(async (cmd: string) => {
+      if (cmd === "lsp_detect_languages") return detected;
+      if (cmd === "lsp_ensure_server") return { ok: true, ready: true };
+      return undefined;
+    });
+    const { langs } = createStatus(() => "/ws", ref(true));
+    await vi.waitFor(() => expect(langs.value).toEqual([{ lang: "typescript", status: "ok" }]));
+    expect(invoke.mock.calls.filter(([cmd]) => cmd === "lsp_ensure_server")).toEqual([
+      ["lsp_ensure_server", { workspaceRoot: "/ws", lang: "typescript" }],
+    ]);
+  });
+
   it("does not probe when LSP disabled", async () => {
     const enabled = ref(false);
     createStatus(() => "/ws", enabled);

@@ -17,6 +17,10 @@ pub struct InitOptionsCtx<'a> {
 }
 
 pub trait ServerProfile {
+    /// 多种文档语言共享同一服务时的进程与状态身份。
+    fn server_language(&self, lang: LanguageId) -> LanguageId { lang }
+    fn languages(&self, lang: LanguageId) -> Vec<LanguageId> { vec![lang] }
+
     /// 捆绑资源子目录 + 二进制名（None = 该语言不捆绑，靠 which / 用户覆盖）。
     fn bundled(&self) -> Option<(&'static str, &'static str)> {
         None
@@ -171,7 +175,10 @@ pub fn resolve(
     settings: &AppSettings,
     resources: &dyn crate::resources::HostResources,
 ) -> Option<ServerSource> {
-    let override_cfg = settings.lsp.servers.get(lang.id_str());
+    let lang = crate::lsp::profiles::server_language(lang);
+    let override_cfg = crate::lsp::profiles::profile(lang).languages(lang).into_iter()
+        .filter_map(|l| settings.lsp.servers.get(l.id_str()))
+        .find(|o| !o.program.is_empty());
     let pack = crate::lsp::packs::launch_for(lang, resources);
     let bundled = bundled_source(lang, resources);
     let which = which_source(lang);

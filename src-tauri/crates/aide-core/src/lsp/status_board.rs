@@ -154,7 +154,7 @@ impl StatusBoard {
     }
 
     pub fn get(&self, workspace: &str, lang: LanguageId) -> Option<LangStatus> {
-        self.map.lock().ok()?.get(&(workspace.to_string(), lang)).cloned()
+        self.map.lock().ok()?.get(&(workspace.to_string(), super::profiles::server_language(lang))).cloned()
     }
 
     /// 某工作区全部语言的当前状态（前端打开面板时回种用）。
@@ -169,7 +169,7 @@ impl StatusBoard {
     pub fn update(&self, workspace: &str, lang: LanguageId, f: impl FnOnce(&mut LangStatus)) {
         let changed = {
             let Ok(mut map) = self.map.lock() else { return };
-            let entry = map.entry((workspace.to_string(), lang)).or_insert_with(|| LangStatus::new(Phase::Off));
+            let entry = map.entry((workspace.to_string(), super::profiles::server_language(lang))).or_insert_with(|| LangStatus::new(Phase::Off));
             let before = entry.clone();
             f(entry);
             entry.derive_phase();
@@ -181,6 +181,7 @@ impl StatusBoard {
     }
 
     fn emit(&self, workspace: &str, lang: LanguageId, s: &LangStatus) {
+        let lang = super::profiles::server_language(lang);
         let mut payload = serde_json::to_value(s).unwrap_or(Value::Null);
         if let Value::Object(o) = &mut payload {
             o.insert("workspaceRoot".into(), Value::String(workspace.to_string()));
@@ -215,7 +216,7 @@ impl StatusBoard {
     /// [`PROGRESS_EMIT_INTERVAL`] 内最多广播一次（状态照常更新，下一次变化时带出最新值；
     /// 阶段变化不受节流，永远即时）。
     pub fn progress(&self, workspace: &str, lang: LanguageId, percent: Option<u8>, message: Option<String>) {
-        let key = (workspace.to_string(), lang);
+        let key = (workspace.to_string(), super::profiles::server_language(lang));
         let throttled = self
             .last_progress
             .lock()
@@ -294,7 +295,7 @@ impl StatusBoard {
     /// 停一台（工作区, 语言）：取消它进行中的探测，再进 `phase`（休眠用）。顺序同 `stop_workspace`。
     pub fn stop_lang(&self, workspace: &str, lang: LanguageId, phase: Phase) {
         if let Ok(mut warms) = self.warms.lock() {
-            if let Some(w) = warms.remove(&(workspace.to_string(), lang)) {
+            if let Some(w) = warms.remove(&(workspace.to_string(), super::profiles::server_language(lang))) {
                 w.abort.abort();
             }
         }
@@ -326,7 +327,7 @@ impl StatusBoard {
     /// 该（工作区, 语言）进行中的就绪探测（单飞）：有就返回它的接收端。
     pub fn warm_in_flight(&self, workspace: &str, lang: LanguageId) -> Option<watch::Receiver<Option<AgentLspStatus>>> {
         let warms = self.warms.lock().ok()?;
-        let rx = warms.get(&(workspace.to_string(), lang)).map(|w| w.rx.clone())?;
+        let rx = warms.get(&(workspace.to_string(), super::profiles::server_language(lang))).map(|w| w.rx.clone())?;
         drop(warms);
         let pending = rx.borrow().is_none();
         pending.then_some(rx)
@@ -344,7 +345,7 @@ impl StatusBoard {
             let (_tx, rx) = watch::channel(Some(AgentLspStatus::Error));
             return rx;
         };
-        let key = (workspace.to_string(), lang);
+        let key = (workspace.to_string(), super::profiles::server_language(lang));
         if let Some(w) = warms.get(&key) {
             if w.rx.borrow().is_none() {
                 return w.rx.clone();
@@ -406,6 +407,18 @@ mod tests {
     fn board() -> (Arc<Rec>, StatusBoard) {
         let rec = Arc::new(Rec::default());
         (rec.clone(), StatusBoard::new(rec))
+    }
+
+    #[test]
+    fn js_and_ts_share_status_and_stop() {
+        let (_, b) = board();
+        b.enter("/w", LanguageId::JavaScript, Phase::Indexing, None);
+        b.set_nav("/w", LanguageId::TypeScript, true);
+        b.set_symbols("/w", LanguageId::JavaScript, SymbolsCap::Ready);
+        assert_eq!(b.snapshot("/w").len(), 1);
+        assert_eq!(b.get("/w", LanguageId::TypeScript).unwrap().phase, Phase::Ready);
+        b.stop_lang("/w", LanguageId::JavaScript, Phase::Sleeping);
+        assert_eq!(b.get("/w", LanguageId::TypeScript).unwrap().phase, Phase::Sleeping);
     }
 
     #[test]

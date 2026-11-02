@@ -290,6 +290,7 @@ pub fn start_warm(
     workspace_root: &str,
     lang: crate::lsp::detector::LanguageId,
 ) -> tokio::sync::watch::Receiver<Option<AgentLspStatus>> {
+    let lang = super::profiles::server_language(lang);
     let board = &core.lsp_board;
     if board.nav_ready(workspace_root, lang) && board.symbols_ready(workspace_root, lang) {
         let (_tx, rx) = tokio::sync::watch::channel(Some(AgentLspStatus::Ready));
@@ -324,29 +325,41 @@ async fn warm_one(core: &Arc<crate::Core>, ws: &str, lang: crate::lsp::detector:
     };
     let access = WorkspaceAccess::of(ws);
     prime_project(&access, &h, ws, lang).await;
-    let Some(probe_file) = first_source_file(&access, ws, lang).await else {
-        return AgentLspStatus::Indexing;
-    };
     let board = &core.lsp_board;
-    let nav = probe_ready(&access, &h, &probe_file, ws, WARM_PROBE_BUDGET).await;
-    board.set_nav(ws, lang, nav);
-    if !nav {
-        return AgentLspStatus::Indexing;
-    }
-    // 按名查询能力：实测「一个确定存在的名字能按名查到」。实测（po-api，jdtls 1.58）
-    // ServiceReady 之后第一次 workspace/symbol 要 25s——这一下在这里吃掉，不留给 agent。
     let caps = h.capabilities.lock().await.clone();
-    if caps.as_ref().is_some_and(|c| !crate::lsp::manager::declares_workspace_symbol(c)) {
-        board.set_symbols(ws, lang, SymbolsCap::Unsupported);
-    } else if let Some(name) = probe_symbol_name(&h, ws, &probe_file).await {
-        let deadline = std::time::Instant::now() + WARM_PROBE_BUDGET;
-        if matches!(search_symbol(&h, lang, &name, deadline, RETRY_INTERVAL).await, Ok(ref hits) if !hits.is_empty()) {
-            board.set_symbols(ws, lang, SymbolsCap::Ready);
-        } else {
-            tracing::info!(ws, lang = lang.id_str(), name, "lsp warm: 按名探针在预算内没命中，按名查询仍未确认");
-        }
+    let supports_symbols = !caps.as_ref().is_some_and(|c| !crate::lsp::manager::declares_workspace_symbol(c));
+    let mut files = Vec::new();
+    for language in super::profiles::profile(lang).languages(lang) {
+        files.extend(access.probe_sources(ws, language, 24).await);
     }
-    AgentLspStatus::Ready
+    let deadline = std::time::Instant::now() + WARM_PROBE_BUDGET;
+    // 空列表只说明这个文件没有声明，换靶子；所有候选共享一个预算。
+    while std::time::Instant::now() < deadline {
+        for file in &files {
+            if std::time::Instant::now() >= deadline { break; }
+            if let Some(language) = crate::lsp::lang_from_ext_of(file) {
+                if ensure_doc_open(&access, &h, ws, file, language).await.is_err() { continue; }
+            }
+            if supports_symbols {
+                if let Some(name) = probe_symbol_name(&h, ws, file).await {
+                    board.set_nav(ws, lang, true);
+                    if matches!(search_symbol(&h, lang, &name, deadline, RETRY_INTERVAL).await, Ok(ref hits) if !hits.is_empty()) {
+                        board.set_symbols(ws, lang, SymbolsCap::Ready);
+                        return AgentLspStatus::Ready;
+                    }
+                }
+            } else if probe_ready(&access, &h, file, ws, std::time::Duration::from_millis(1)).await {
+                board.set_nav(ws, lang, true);
+                board.set_symbols(ws, lang, SymbolsCap::Unsupported);
+                return AgentLspStatus::Ready;
+            }
+        }
+        if files.is_empty() { break; }
+        tokio::time::sleep(RETRY_INTERVAL).await;
+    }
+    tracing::warn!(ws, lang = lang.id_str(), "lsp warm: 就绪探测未通过，候选文件已轮换；不是持续索引进度");
+    board.progress(ws, lang, None, Some("就绪探测未通过；可继续使用，后续请求会重试".into()));
+    AgentLspStatus::Indexing
 }
 
 /// 按名探针的靶子：探测文件结构里第一个「像声明的」名字（类 / 接口 / 枚举 / 结构 / 函数 / 方法）。
@@ -776,18 +789,6 @@ fn ambiguous_outcome(name: &str, cands: Vec<SymbolCandidate>) -> AgentQueryOutco
             "{n} symbols named `{name}` — read them and re-query with an explicit                  {{file, line, character}} for the one you want"
         ),
     })
-}
-
-/// 找一个该语言的源文件，用作就绪探测的靶子（`probe_ready` 要一个磁盘上真实存在的文件）。
-async fn first_source_file(
-    access: &WorkspaceAccess,
-    workspace_root: &str,
-    lang_id: crate::lsp::detector::LanguageId,
-) -> Option<String> {
-    first_source_files(access, workspace_root, lang_id, 1)
-        .await
-        .into_iter()
-        .next()
 }
 
 /// 该语言的代表文件（每个顶层目录一个，最多 `max` 个）。

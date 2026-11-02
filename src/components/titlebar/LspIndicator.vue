@@ -108,7 +108,7 @@ const langRows = computed(() => status.langs.value.map((x) => {
   const pack = packs.packForLang(x.lang);
   return {
     ...x,
-    name: installGuideFor(x.lang)?.displayName ?? x.lang,
+    name: x.lang === "typescript" ? "TypeScript / JavaScript" : installGuideFor(x.lang)?.displayName ?? x.lang,
     server: installGuideFor(x.lang)?.serverBinary ?? "—",
     pack,
     /** 未装 / 起不来，且有对应语言包没装上：给一键安装 */
@@ -183,7 +183,10 @@ const savedOverrides = ref<Record<string, { program: string; args: string[] }>>(
 async function loadOverrides() {
   try {
     const s = await api.getSettings();
-    savedOverrides.value = s.lsp?.servers ?? {};
+    savedOverrides.value = { ...(s.lsp?.servers ?? {}) };
+    if (!savedOverrides.value.typescript && savedOverrides.value.javascript) {
+      savedOverrides.value.typescript = savedOverrides.value.javascript;
+    }
     overrides.value = {};
     for (const [lang, o] of Object.entries(savedOverrides.value)) {
       overrides.value[lang] = { program: o.program, args: o.args.join(" ") };
@@ -206,6 +209,8 @@ function hasOverride(lang: string): boolean {
 async function saveOverride(lang: string) {
   const d = draftFor(lang);
   const servers = { ...savedOverrides.value };
+  // 共享服务的旧 JavaScript 覆盖随本次显式保存迁移，清除时也不让旧配置复活。
+  if (lang === "typescript") delete servers.javascript;
   if (d.program.trim()) {
     servers[lang] = {
       program: d.program.trim(),

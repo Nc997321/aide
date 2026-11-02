@@ -60,6 +60,7 @@ export function boardNote(b: LspBoardStatus, now: number): string | undefined {
     case "loading":
       return tail("加载工程");
     case "indexing":
+      if (b.message?.startsWith("就绪探测未通过")) return [b.message, waited(b.since, now)].filter(Boolean).join(" · ");
       return tail(b.nav ? "跳转可用，按名查询索引中" : "建立索引中");
     case "sleeping":
       return "空闲休眠中，用到时自动唤醒";
@@ -233,7 +234,7 @@ export function useLspStatus(getWorkspaceRoot: () => string, enabled: Ref<boolea
       // 先订阅再探测，按文件启动的语言即使不在项目列表中也不会漏掉。
       await ensureListening();
       if (!isCurrent()) return;
-      const detected = await api.lspDetectLanguages(workspaceRoot);
+      const detected = [...new Set((await api.lspDetectLanguages(workspaceRoot)).map(lang => lang === "javascript" ? "typescript" : lang))];
       if (!isCurrent()) return;
       const results = await Promise.all(
         detected.map(async (lang): Promise<LspLangStatus> => {

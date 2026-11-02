@@ -55,6 +55,14 @@ impl WorkspaceAccess {
     }
 
     /// 该语言的代表文件（正斜杠），最多 `max` 个。
+    pub async fn probe_sources(&self, root: &str, lang: LanguageId, max: usize) -> Vec<String> {
+        let root = std::path::PathBuf::from(root);
+        tokio::task::spawn_blocking(move || {
+            crate::lsp::detector::probe_sources(&root, lang, max).into_iter()
+                .map(|p| p.to_string_lossy().into_owned()).collect()
+        }).await.unwrap_or_default()
+    }
+
     pub async fn representative_sources(&self, root: &str, lang: LanguageId, max: usize) -> Vec<String> {
         let root = std::path::PathBuf::from(root);
         tokio::task::spawn_blocking(move || {

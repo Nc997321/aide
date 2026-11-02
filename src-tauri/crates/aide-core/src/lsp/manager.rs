@@ -253,6 +253,7 @@ impl LspManager {
         core: &crate::Core,
         settings: &crate::app_settings::AppSettings,
     ) -> Result<Arc<ServerHandle>, EnsureError> {
+        let lang = super::profiles::server_language(lang);
         let key = (workspace.to_string(), lang);
         // 快路径：活着的 server 不排 spawn_lock 的队（锁只为「同一时刻只 spawn 一台」，
         // 拿已有句柄不该跟别的语言的 spawn 抢）。
@@ -373,6 +374,7 @@ impl LspManager {
     /// 语言包装上 / 卸掉时用：下一次请求按新的查找链重启（换成刚装的那份）；之前因为
     /// PATH 上的错误版本启动失败而进入冷却的，也要立刻能重试，不用等冷却期过去。
     pub async fn kill_lang(&self, lang: LanguageId) {
+        let lang = super::profiles::server_language(lang);
         self.failures.lock().await.retain(|(_, l), _| *l != lang);
         let removed: Vec<Arc<ServerHandle>> = {
             let mut map = self.handles.lock().await;
@@ -386,6 +388,7 @@ impl LspManager {
 
     /// 按（工作区, 语言）回收一台 server（空闲休眠用；`kill_workspace` 的细粒度版）。
     pub async fn kill_server(&self, workspace: &str, lang: LanguageId) {
+        let lang = super::profiles::server_language(lang);
         let removed = self
             .handles
             .lock()
@@ -411,6 +414,7 @@ impl LspManager {
     }
 
     pub async fn get(&self, workspace: &str, lang: LanguageId) -> Option<Arc<ServerHandle>> {
+        let lang = super::profiles::server_language(lang);
         self.handles
             .lock()
             .await
@@ -1266,6 +1270,19 @@ pub(crate) mod tests {
             last_used: AtomicU64::new(now_ms()),
             _child: None,
         })
+    }
+
+    #[tokio::test]
+    async fn javascript_lookup_reuses_typescript_handle() {
+        let mock = mock_server::spawn_mock_lsp();
+        let transport = LspTransport::with_reader_source(mock.transport_stdin, mock.transport_stdout);
+        let h = make_handle(transport, true);
+        let mgr = LspManager::new();
+        mgr.handles.lock().await.insert(("/w".into(), LanguageId::TypeScript), h.clone());
+        assert!(Arc::ptr_eq(&mgr.get("/w", LanguageId::JavaScript).await.unwrap(), &h));
+        assert!(Arc::ptr_eq(&mgr.get("/w", LanguageId::TypeScript).await.unwrap(), &h));
+        assert_eq!(mgr.alive_handles().await.len(), 1);
+        assert!(mgr.get("/other", LanguageId::JavaScript).await.is_none());
     }
 
     /// 简化 reader：只处理 ResolveWaiter（把响应送回 tx），忽略 diagnostics/log 等
