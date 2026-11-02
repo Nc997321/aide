@@ -99,7 +99,7 @@ const statusChip = computed<{ text: string; tone: "work" | "ok" | "bad" | "idle"
   background: var(--aide-surface-default);
 }
 .kr-head:focus-visible {
-  outline: 2px solid var(--aide-accent);
+  outline: 2px solid var(--aide-text-secondary);
   outline-offset: -2px;
 }
 .kr-icon {

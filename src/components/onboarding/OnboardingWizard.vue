@@ -105,7 +105,7 @@ function onPrimary() {
 .btn-primary {
   padding: 13px 20px; border-radius: var(--aide-radius-md); background: var(--aide-accent-gradient);
   color: #eef0ff; font-size: 13.5px; font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset); border: 1px solid rgba(150,170,255,.45);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset); border: 1px solid rgba(150,170,255,.45);
 }
 .btn-primary:hover { transform: translateY(-1px); filter: brightness(1.07); }
 .btn-ghost {

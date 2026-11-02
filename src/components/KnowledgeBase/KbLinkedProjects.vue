@@ -122,5 +122,5 @@ function openPicker(e: MouseEvent): void {
   border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 .kb-linked-x:focus-visible,
-.kb-linked-add:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-linked-add:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 </style>

@@ -168,5 +168,5 @@ const show = computed(() => items.value.length >= 2);
   color: var(--aide-text-primary);
   border-left-color: var(--aide-accent);
 }
-.kb-outline-item:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-outline-item:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 </style>

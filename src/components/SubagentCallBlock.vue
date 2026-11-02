@@ -113,7 +113,7 @@ const headTip = computed(() =>
   transform: rotate(90deg);
 }
 .sa-head:focus-visible {
-  outline: 1px solid var(--aide-accent);
+  outline: 1px solid var(--aide-text-secondary);
   outline-offset: 1px;
 }
 /* 展开的时间线：缩进 + 细竖线，与合并旁白的展开同一个样子 */

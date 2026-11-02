@@ -1326,7 +1326,7 @@ const inputJson = computed(() => {
   border-color: var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
 }
 
 .perm-btn--solid:hover:not(:disabled) {

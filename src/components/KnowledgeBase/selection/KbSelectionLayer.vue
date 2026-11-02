@@ -898,7 +898,7 @@ function badgeText(o: Overlay): string {
 .ksl-cta:focus-visible,
 .ksl-btn:focus-visible,
 .ksl-intent:focus-visible {
-  outline: 2px solid var(--aide-accent);
+  outline: 2px solid var(--aide-text-secondary);
   outline-offset: 1px;
 }
 
@@ -1043,8 +1043,8 @@ function badgeText(o: Overlay): string {
   color: var(--aide-text-muted);
 }
 .ksl-input:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring);
+  border-color: var(--aide-focus-border);
+  box-shadow: none;
 }
 .ksl-intents {
   display: flex;
@@ -1103,7 +1103,7 @@ function badgeText(o: Overlay): string {
   background: var(--aide-accent-gradient, var(--aide-accent));
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow);
+  box-shadow: var(--aide-shadow-sm);
 }
 .ksl-btn--primary:hover {
   background: var(--aide-accent-gradient, var(--aide-accent-hover));
@@ -1176,8 +1176,8 @@ function badgeText(o: Overlay): string {
   outline: none;
 }
 .ksl-tray-input:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring);
+  border-color: var(--aide-focus-border);
+  box-shadow: none;
 }
 .ksl-tray .ksl-btn {
   border-radius: 14px;

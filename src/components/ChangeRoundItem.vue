@@ -158,7 +158,7 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
 }
 
 .changelog-round-toggle:focus-visible {
-  outline: 1px solid var(--aide-accent);
+  outline: 1px solid var(--aide-text-secondary);
   outline-offset: -1px;
 }
 
@@ -210,7 +210,7 @@ const emptyLabel = computed(() => (props.round.pending ? "等待文件变更…"
 }
 
 .changelog-round-locate:focus-visible {
-  outline: 1px solid var(--aide-accent);
+  outline: 1px solid var(--aide-text-secondary);
   outline-offset: -1px;
 }
 

@@ -95,7 +95,7 @@ const vFocus = {
   outline: none;
 }
 .kb-form input:focus,
-.kb-form select:focus { box-shadow: var(--aide-accent-ring); }
+.kb-form select:focus { box-shadow: none; }
 .kb-form-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 8px; }
 .kb-btn {
   padding: 7px 14px;
@@ -109,7 +109,7 @@ const vFocus = {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-btn:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.kb-btn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-btn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-btn.primary {
   border-color: transparent;
   background: var(--aide-accent);

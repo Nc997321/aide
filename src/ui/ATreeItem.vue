@@ -56,9 +56,8 @@ defineEmits<{
 }
 
 .a-tree-item--active {
-  background: var(--aide-accent-subtle);
-  color: var(--aide-text-primary);
-  box-shadow: inset 2px 0 0 var(--aide-accent);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
 
 .a-tree-item__arrow {

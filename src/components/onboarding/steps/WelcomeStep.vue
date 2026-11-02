@@ -18,7 +18,7 @@ import AppLogo from "../../AppLogo.vue";
 /* AppLogo 自带 3px 圆角；hero 态覆写为 14px + accent 辉光 + 顶部受光 */
 .logo-big :deep(.app-logo) {
   border-radius: 14px;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
 }
 .eyebrow {
   font-size: 10px; color: var(--aide-accent); font-weight: 600;

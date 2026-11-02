@@ -150,13 +150,13 @@ function onAuxClick(e: MouseEvent, tab: TabItem) {
 }
 
 .pane-tab--active {
-  background: var(--aide-bg-base);
-  color: var(--aide-text-primary);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
 
-/* 聚焦组的激活 tab 才有 accent 顶线——一眼分辨「当前会话」在哪个组 */
+/* 聚焦组用中性顶线区分，避免把选中态当作强调状态。 */
 .pane-tab-bar--focused .pane-tab--active {
-  border-top-color: var(--aide-accent);
+  border-top-color: var(--aide-control-selected-border);
 }
 
 /* 预览 tab：斜体（VS Code 惯例） */

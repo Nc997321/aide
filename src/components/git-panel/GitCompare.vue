@@ -295,11 +295,11 @@ watch(headBranch, triggerAnim);
 .div-seg { height: 100%; transition: width 240ms var(--aide-ease-t); }
 .div-seg-ahead {
   background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 45%, transparent);
+  box-shadow: none;
 }
 .div-seg-behind {
   background: var(--aide-warning);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-warning) 45%, transparent);
+  box-shadow: none;
 }
 .div-spine {
   width: 2px; flex-shrink: 0;

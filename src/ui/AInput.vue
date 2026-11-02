@@ -79,8 +79,8 @@ defineExpose({
 }
 
 .a-input__field:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
+  border-color: var(--aide-focus-border);
+  box-shadow: var(--aide-shadow-inset);
 }
 
 .a-input__field.error {

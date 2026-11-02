@@ -258,7 +258,7 @@ const expiring = computed(() => !!offer.value && secondsLeft.value <= 60);
 }
 .lc-input:focus {
   outline: none;
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 .lc-input:disabled {
   opacity: 0.55;

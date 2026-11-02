@@ -174,7 +174,7 @@ function onSubmit() {
   border-radius: var(--aide-radius-md);
   font-size: 12px;
 }
-.text-input:focus { outline: none; border-color: var(--aide-accent); }
+.text-input:focus { outline: none; border-color: var(--aide-focus-border); }
 .form-error {
   margin: 0;
   padding: 8px 10px;

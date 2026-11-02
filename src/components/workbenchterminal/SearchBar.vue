@@ -7,7 +7,7 @@ import { useTerminalSearch } from "../../composables/useTerminalSearch";
 /**
  * 终端搜索条：纯视图层，状态全部来自 useTerminalSearch。
  * 视觉配方与 CodeEditor.vue 的 .cm-panel.cm-search / .cm-textfield / .cm-button
- * 严格一致（bg-raised 面板、12px 输入框、accent focus ring），让终端与编辑器
+ * 严格一致（bg-raised 面板、12px 输入框、中性 focus border），让终端与编辑器
  * 两处搜索 UI 观感统一。
  */
 const { query, caseSensitive, activeResults, close, findNext, findPrev } = useTerminalSearch();
@@ -100,8 +100,8 @@ const countText = computed(() => {
   box-shadow: var(--aide-shadow-inset);
 }
 .wb-search-input:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring);
+  border-color: var(--aide-focus-border);
+  box-shadow: none;
 }
 .wb-search-input::placeholder {
   color: var(--aide-text-muted);

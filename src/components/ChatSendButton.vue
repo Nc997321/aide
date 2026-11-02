@@ -227,7 +227,7 @@ onUnmounted(() => {
   border-radius: var(--aide-radius-md);
   background: var(--aide-accent-gradient);
   color: var(--aide-text-on-accent);
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
   cursor: pointer;
   transition: filter var(--aide-ease-t), background var(--aide-ease-t), color var(--aide-ease-t);
 }
@@ -249,7 +249,7 @@ onUnmounted(() => {
 }
 
 .chat-send-btn:focus-visible {
-  outline: 2px solid var(--aide-accent);
+  outline: 2px solid var(--aide-text-secondary);
   outline-offset: 2px;
 }
 

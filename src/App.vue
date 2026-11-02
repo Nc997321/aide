@@ -1505,7 +1505,7 @@ onUnmounted(() => {
 .resize-handle:hover,
 .resize-handle.active {
   background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 20%, transparent);
+  box-shadow: none;
 }
 
 /* ── Right panel inner ── */

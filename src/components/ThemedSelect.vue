@@ -291,8 +291,8 @@ onUnmounted(() => {
 }
 
 .themed-select-option.selected {
-  background: var(--aide-accent-subtle);
-  color: var(--aide-text-primary);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
 
 .themed-select-option-label {
@@ -303,7 +303,7 @@ onUnmounted(() => {
 
 .themed-select-check {
   flex-shrink: 0;
-  color: var(--aide-accent);
+  color: var(--aide-control-selected-text);
 }
 
 /* Transition */

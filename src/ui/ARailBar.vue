@@ -4,7 +4,7 @@ import type { Tab } from "./ATabBar.vue";
 /**
  * 竖直工具栏（IntelliJ IDEA 风格右侧边缘 stripe）。
  * 与 {@link ./ATabBar.vue} 共用 `Tab` 类型，但布局/交互语义独立：
- * 竖直排列、激活左缘条、badge 角标、点已激活项由父裁决折叠。
+ * 竖直排列、中性选中表面、badge 角标、点已激活项由父裁决折叠。
  * ATabBar 的横向样式被 GitPanel 依赖，故不复用、不改造。
  */
 const props = defineProps<{
@@ -85,21 +85,8 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .a-rail-btn--active {
-  color: var(--aide-accent);
-  background: var(--aide-accent-subtle);
-}
-
-/* IDEA 标志：激活按钮左缘竖条 */
-.a-rail-btn--active::before {
-  content: "";
-  position: absolute;
-  left: -4px;
-  top: 4px;
-  bottom: 4px;
-  width: 2.5px;
-  border-radius: 2px;
-  background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 60%, transparent);
+  color: var(--aide-control-selected-text);
+  background: var(--aide-control-selected-bg);
 }
 
 .a-rail-btn__icon {

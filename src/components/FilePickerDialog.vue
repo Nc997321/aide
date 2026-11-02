@@ -97,6 +97,6 @@ function onConfirm() {
 .of-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-border); transition: all var(--aide-ease-t); }
 .of-btn.cancel { background: transparent; color: var(--aide-text-secondary); }
 .of-btn.cancel:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.of-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow); }
+.of-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-shadow-sm); }
 .of-btn.confirm:hover { filter: brightness(1.07); }
 </style>

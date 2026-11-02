@@ -58,7 +58,7 @@ async function openDocument(document: DocumentArtifact) {
 .document-artifacts { display: grid; gap: calc(var(--aide-space-unit) * 2); margin: calc(var(--aide-space-unit) * 3) 0; }
 .document-artifact { display: flex; align-items: flex-start; gap: calc(var(--aide-space-unit) * 3); width: 100%; min-width: 0; padding: calc(var(--aide-space-unit) * 3); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-base); color: var(--aide-text-primary); text-align: left; font: inherit; cursor: pointer; transition: background var(--aide-ease-t), border-color var(--aide-ease-t); }
 .document-artifact:hover { background: var(--aide-surface-hover); border-color: var(--aide-border-strong); }
-.document-artifact:focus-visible { outline: 2px solid var(--aide-accent); outline-offset: 2px; }
+.document-artifact:focus-visible { outline: 2px solid var(--aide-text-secondary); outline-offset: 2px; }
 .document-artifact:disabled { cursor: wait; }
 .document-artifact-icon { flex-shrink: 0; padding: calc(var(--aide-space-unit) * 2); border-radius: var(--aide-radius-sm); background: var(--aide-surface-default); color: var(--aide-agent-accent); }
 .document-artifact-content { display: grid; flex: 1; min-width: 0; gap: var(--aide-space-unit); overflow-wrap: anywhere; }

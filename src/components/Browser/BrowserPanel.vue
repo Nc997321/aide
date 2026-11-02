@@ -951,11 +951,11 @@ onBeforeUnmount(() => {
   background: var(--aide-surface-hover);
   color: var(--aide-text-primary);
 }
-/* 活动标签 = 当前所在页面（与侧栏导航行同语言：accent 轻量标记） */
+/* 活动标签只表达当前页面，使用主题的中性选中表面。 */
 .bp-tab.on {
-  color: var(--aide-text-primary);
-  background: var(--aide-bg-base);
-  border-color: var(--aide-accent);
+  color: var(--aide-control-selected-text);
+  background: var(--aide-control-selected-bg);
+  border-color: var(--aide-control-selected-border);
 }
 
 /* agent 开的 tab：一枚小菱形（与"自己开的"一眼分开）。颜色走语义 token，不硬编码。 */
@@ -1075,7 +1075,7 @@ onBeforeUnmount(() => {
   outline: none;
 }
 .bp-address:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 
 /* ★ 已收藏 = accent（与侧栏导航行的选中语言一致） */

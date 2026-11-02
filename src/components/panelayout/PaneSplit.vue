@@ -139,7 +139,7 @@ function onHandleMousedown(e: MouseEvent, idx: number) {
   width: 3px;
   left: 1px;
   background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 50%, transparent);
+  box-shadow: none;
 }
 
 .pane-split--v > .pane-split__handle:hover::after,
@@ -147,6 +147,6 @@ function onHandleMousedown(e: MouseEvent, idx: number) {
   height: 3px;
   top: 1px;
   background: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 50%, transparent);
+  box-shadow: none;
 }
 </style>

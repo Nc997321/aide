@@ -200,7 +200,7 @@ defineExpose({ focus: () => view?.focus() });
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-md-tool:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
-.kb-md-tool:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-md-tool:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-md-tool.b { font-weight: 700; }
 .kb-md-tool.i { font-style: italic; }
 .kb-md-tool.m { font-family: var(--aide-font-mono); }

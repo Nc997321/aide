@@ -266,7 +266,7 @@ function onInvitePaste(e: ClipboardEvent): void {
   color: var(--aide-text-primary);
   border-bottom-color: var(--aide-accent);
 }
-.kb-tab:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-tab:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 
 label {
   display: flex;
@@ -286,7 +286,7 @@ input {
   outline: none;
   transition: box-shadow var(--aide-ease-t);
 }
-input:focus { box-shadow: var(--aide-accent-ring); }
+input:focus { box-shadow: none; }
 input::placeholder { color: var(--aide-text-muted); }
 
 .kb-err {
@@ -309,7 +309,7 @@ input::placeholder { color: var(--aide-text-muted); }
 }
 .kb-primary:hover:not(:disabled) { background: var(--aide-accent-hover); }
 .kb-primary:disabled { opacity: 0.45; cursor: default; }
-.kb-primary:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-primary:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-foot {
   display: flex;
   justify-content: flex-end;
@@ -325,7 +325,7 @@ input::placeholder { color: var(--aide-text-muted); }
   transition: color var(--aide-ease-t);
 }
 .kb-link:hover { color: var(--aide-text-primary); }
-.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 .kb-addr small {
   font-size: 11.5px;
   color: var(--aide-text-muted);

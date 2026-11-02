@@ -527,7 +527,7 @@ function onReverted(): void {
   transition: color var(--aide-ease-t);
 }
 .kb-crumb:hover { color: var(--aide-text-primary); }
-.kb-crumb:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-crumb:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 .kb-crumb-sep { opacity: 0.5; }
 
 .kb-doc-head h1 {
@@ -583,7 +583,7 @@ function onReverted(): void {
   border-color: var(--aide-border);
 }
 
-.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 
 .kb-lock-note {
   margin: 14px 0 0;
@@ -679,7 +679,7 @@ function onReverted(): void {
   outline: none;
   transition: border-color var(--aide-ease-t);
 }
-.kb-note-input:focus { border-bottom-color: var(--aide-accent); }
+.kb-note-input:focus { border-bottom-color: var(--aide-focus-border); }
 .kb-note-input::placeholder { color: var(--aide-text-muted); }
 .kb-savemsg { font-size: 11.5px; color: var(--aide-success); }
 .kb-err-inline { font-size: 11.5px; color: var(--aide-danger); }
@@ -701,7 +701,7 @@ function onReverted(): void {
   border-color: var(--aide-border);
 }
 .kb-btn:disabled { opacity: 0.4; cursor: default; }
-.kb-btn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-btn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-btn.primary {
   color: var(--aide-text-on-accent);
   background: var(--aide-accent);
@@ -825,7 +825,7 @@ function onReverted(): void {
 .kb-body :deep(.kb-code:hover .kb-copy),
 .kb-body :deep(.kb-copy:focus-visible) { opacity: 1; }
 .kb-body :deep(.kb-copy:hover) { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
-.kb-body :deep(.kb-copy:focus-visible) { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-body :deep(.kb-copy:focus-visible) { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-body :deep(.kb-code pre) {
   margin: 0;
   padding: 12px 14px;
@@ -863,7 +863,7 @@ function onReverted(): void {
   cursor: pointer;
   border-bottom: 1px solid color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
-.kb-body :deep(.kb-wiki:hover) { border-bottom-color: var(--aide-accent); }
+.kb-body :deep(.kb-wiki:hover) { border-bottom-color: var(--aide-focus-border); }
 .kb-body :deep(.kb-wiki.missing) {
   color: var(--aide-text-muted);
   cursor: default;

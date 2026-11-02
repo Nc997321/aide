@@ -76,7 +76,7 @@ async function saveApiKey() {
 .btn-primary {
   width: 100%; padding: 13px 20px; border-radius: var(--aide-radius-md);
   background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-size: 13.5px; font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
   border: 1px solid rgba(150,170,255,.45); cursor: pointer; transition: all .16s var(--aide-ease);
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
 }
@@ -96,7 +96,7 @@ async function saveApiKey() {
   font-size: 12.5px; font-family: var(--aide-font-mono); box-shadow: var(--aide-highlight-inset);
 }
 .api-key-input:focus {
-  outline: none; border-color: var(--aide-accent);
+  outline: none; border-color: var(--aide-focus-border);
   box-shadow: var(--aide-highlight-inset), 0 0 0 2.5px rgba(150,170,255,.42);
 }
 .err { font-size: 11.5px; color: var(--aide-danger); width: 100%; text-align: left; }

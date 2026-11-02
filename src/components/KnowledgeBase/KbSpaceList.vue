@@ -128,12 +128,11 @@ const vFocus = {
 }
 .kb-spacerow:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
 .kb-spacerow.on {
-  background: var(--aide-surface-active);
-  color: var(--aide-text-primary);
-  box-shadow: inset 2px 0 0 var(--aide-accent);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
-.kb-spacerow:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
-.kb-spacerow.on:focus-visible { box-shadow: inset 2px 0 0 var(--aide-accent), var(--aide-accent-ring); }
+.kb-spacerow:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
+.kb-spacerow.on:focus-visible { box-shadow: var(--aide-focus-ring); }
 
 .kb-space-name {
   flex: 1 1 auto;
@@ -170,7 +169,7 @@ const vFocus = {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-rowbtn:hover { color: var(--aide-text-primary); background: var(--aide-surface-active); }
-.kb-rowbtn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-rowbtn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 
 .kb-inline-input {
   flex: 1 1 auto;

@@ -168,7 +168,7 @@ async function decide(approve: boolean): Promise<void> {
   background: var(--aide-accent-gradient);
   border-color: transparent;
   color: var(--aide-text-on-accent);
-  box-shadow: var(--aide-accent-glow);
+  box-shadow: var(--aide-shadow-sm);
 }
 .mswitch-btn--primary:hover {
   background: var(--aide-accent-gradient);

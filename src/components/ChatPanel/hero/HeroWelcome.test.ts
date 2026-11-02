@@ -53,14 +53,14 @@ describe("HeroWelcome 渲染", () => {
     expect(text).toContain("发个目标、贴段报错，或直接指个文件——我先读代码再动手。");
   });
 
-  it("modelName 缺省显示「默认模型」，传入则显示模型名", async () => {
+  it("工程欢迎页不重复显示输入框已有的模型名", async () => {
     const wrapper = mount(HeroWelcome, {
       props: { mode: "project", workspacePath: "", modelName: "" },
     });
-    expect(wrapper.text()).toContain("默认模型");
+    expect(wrapper.text()).not.toContain("默认模型");
 
     await wrapper.setProps({ modelName: "Claude Opus" });
-    expect(wrapper.text()).toContain("Claude Opus");
+    expect(wrapper.text()).not.toContain("Claude Opus");
   });
 
   it("workspacePath 透传给 WorkspacePicker", () => {

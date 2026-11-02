@@ -27,7 +27,7 @@ defineProps<{
 
 .a-status-dot--running {
   background: var(--aide-success);
-  box-shadow: 0 0 7px color-mix(in srgb, var(--aide-success) 80%, transparent);
+  box-shadow: none;
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
@@ -40,14 +40,14 @@ defineProps<{
 
 .a-status-dot--attention {
   background: var(--aide-warning);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-warning) 60%, transparent);
+  box-shadow: none;
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 
 /* 健康度轴：可恢复错误 → 红 */
 .a-status-dot--warning {
   background: var(--aide-danger);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-danger) 50%, transparent);
+  box-shadow: none;
   animation: a-dot-pulse 2s ease-in-out infinite;
 }
 

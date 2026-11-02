@@ -96,7 +96,7 @@ const dividerX = computed(() => (props.side === "left" ? 5 : 11));
 }
 
 .sidebar-toggle:focus-visible {
-  outline: 2px solid var(--aide-accent);
+  outline: 2px solid var(--aide-text-secondary);
   outline-offset: -2px;
 }
 

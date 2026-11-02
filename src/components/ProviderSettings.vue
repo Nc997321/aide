@@ -802,7 +802,7 @@ async function handleDelete() {
 }
 
 .text-input:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 
 select.text-input {

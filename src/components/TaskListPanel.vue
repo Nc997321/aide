@@ -203,7 +203,7 @@ const summaryCurrentState = computed(() => {
 .task-summary-icon--completed {
   background: var(--aide-accent-gradient);
   color: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  box-shadow: none;
 }
 .task-summary-icon--in_progress {
   color: var(--aide-accent);
@@ -310,7 +310,7 @@ const summaryCurrentState = computed(() => {
 .task-item-completed .task-icon {
   background: var(--aide-accent-gradient);
   color: var(--aide-accent);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 40%, transparent);
+  box-shadow: none;
 }
 
 /* In progress: accent ring */

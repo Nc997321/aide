@@ -322,7 +322,7 @@ function toggleGroup(file: string) {
 .search-input:focus,
 .mask-input:focus,
 .replace-input:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 .clear-btn {
   background: none;

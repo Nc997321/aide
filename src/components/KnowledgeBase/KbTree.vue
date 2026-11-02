@@ -495,14 +495,13 @@ const vFocus = {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-treerow:hover { background: var(--aide-surface-hover); }
-/* 与外壳、空间列表同一套选中配方：底色 + 左侧 accent 条 */
+/* 与公共导航一致：中性底色与文字表达选中，键盘焦点独立显示。 */
 .kb-treerow.on {
-  background: var(--aide-surface-active);
-  color: var(--aide-text-primary);
-  box-shadow: inset 2px 0 0 var(--aide-accent);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
-.kb-treerow:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
-.kb-treerow.on:focus-visible { box-shadow: inset 2px 0 0 var(--aide-accent), var(--aide-accent-ring); }
+.kb-treerow:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
+.kb-treerow.on:focus-visible { box-shadow: var(--aide-focus-ring); }
 
 .kb-caret {
   flex: 0 0 16px;
@@ -520,8 +519,8 @@ const vFocus = {
 }
 .kb-caret.open { transform: rotate(90deg); }
 .kb-treerow:hover .kb-caret { color: var(--aide-text-secondary); }
-.kb-treerow.on .kb-caret { color: var(--aide-accent); }
-.kb-caret:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-treerow.on .kb-caret { color: var(--aide-control-selected-text); }
+.kb-caret:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-caret-spacer { flex: 0 0 16px; }
 
 /* 图标自带类型色（KbNodeIcon）；选中态靠行底与标题加亮表达，不再给图标换色 */
@@ -539,7 +538,7 @@ const vFocus = {
   white-space: nowrap;
 }
 .kb-treerow.is-folder > .kb-label { font-weight: 500; }
-.kb-treerow.on > .kb-label { color: var(--aide-text-primary); }
+.kb-treerow.on > .kb-label { color: var(--aide-control-selected-text); }
 .kb-treerow:hover > .kb-label { color: var(--aide-text-primary); }
 
 /* 关联项目标签：行内的小胶囊，不抢标题——标题先收缩、标签保形（单个标签过长才省略） */
@@ -574,7 +573,7 @@ const vFocus = {
   background: color-mix(in srgb, var(--aide-warning) 10%, transparent);
   border-color: color-mix(in srgb, var(--aide-warning) 40%, transparent);
 }
-.kb-row-tag:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-row-tag:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 
 .kb-empty-mark {
   flex: 0 0 auto;
@@ -618,7 +617,7 @@ const vFocus = {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-rowbtn:hover { color: var(--aide-text-primary); background: var(--aide-surface-active); }
-.kb-rowbtn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-rowbtn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 
 /* 文件选择器只是个通道，不进布局 */
 .kb-file-input { display: none; }

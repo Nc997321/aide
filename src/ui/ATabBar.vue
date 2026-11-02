@@ -85,20 +85,9 @@ function onKeydown(e: KeyboardEvent) {
 }
 
 .a-tab--active {
-  color: var(--aide-text-primary);
+  color: var(--aide-control-selected-text);
+  background: var(--aide-control-selected-bg);
   font-weight: 500;
-}
-
-.a-tab--active::after {
-  content: '';
-  position: absolute;
-  left: 10px;
-  right: 10px;
-  bottom: -1px;
-  height: 2px;
-  border-radius: 2px;
-  background: var(--aide-accent-gradient);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--aide-accent) 55%, transparent);
 }
 
 .a-tab__icon {

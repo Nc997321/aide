@@ -228,8 +228,8 @@ function onResizeStart(e: MouseEvent) {
   color: var(--aide-text-secondary);
 }
 .wb-tab.active {
-  background: var(--aide-surface-hover);
-  color: var(--aide-text-primary);
+  background: var(--aide-control-selected-bg);
+  color: var(--aide-control-selected-text);
 }
 
 .wb-tab-label { pointer-events: none; }

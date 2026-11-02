@@ -218,7 +218,7 @@ function fmtTime(iso: string | null): string {
   outline: none;
 }
 .kb-form input[type="text"]:focus,
-.kb-form select:focus { box-shadow: var(--aide-accent-ring); }
+.kb-form select:focus { box-shadow: none; }
 .kb-check {
   display: inline-flex;
   align-items: center;
@@ -240,7 +240,7 @@ function fmtTime(iso: string | null): string {
 }
 .kb-primary:hover:not(:disabled) { background: var(--aide-accent-hover); }
 .kb-primary:disabled { opacity: 0.45; cursor: default; }
-.kb-primary:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-primary:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-created {
   margin-top: 20px;
   padding-top: 20px;
@@ -304,7 +304,7 @@ function fmtTime(iso: string | null): string {
 }
 .kb-link:hover { color: var(--aide-text-primary); }
 .kb-link.danger:hover { color: var(--aide-danger); }
-.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 .kb-err { margin-top: 0; margin-bottom: 12px; font-size: 12px; color: var(--aide-danger); }
 .kb-none { font-size: 13px; color: var(--aide-text-muted); }
 </style>

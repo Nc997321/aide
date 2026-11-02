@@ -366,7 +366,7 @@ async function onConfirm() {
   background: var(--aide-bg-base); color: var(--aide-text-primary); font: inherit;
 }
 .of-mode:focus-visible, .of-field input:focus-visible {
-  outline: 2px solid var(--aide-accent); outline-offset: 2px;
+  outline: 2px solid var(--aide-text-secondary); outline-offset: 2px;
 }
 .of-clone :deep(.dir-picker) { min-height: 140px; }
 .of-destination { display: flex; flex-direction: column; gap: var(--aide-space-unit); font-size: 12px; color: var(--aide-text-secondary); }
@@ -378,6 +378,6 @@ async function onConfirm() {
 .of-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .of-btn.cancel { background: transparent; color: var(--aide-text-secondary); }
 .of-btn.cancel:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.of-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow); }
+.of-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-shadow-sm); }
 .of-btn.confirm:hover { filter: brightness(1.07); }
 </style>

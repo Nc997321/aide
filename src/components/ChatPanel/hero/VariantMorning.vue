@@ -43,7 +43,7 @@ const emit = defineEmits<{
     <h1 class="va-headline">{{ copy.headline }}</h1>
     <p class="va-body">{{ copy.body }}</p>
 
-    <!-- 分隔线下那一行：工程给环境脚注（归属 + 模型，交互保留在 WorkspacePicker）；
+    <!-- 分隔线下那一行：工程给环境脚注（归属，交互保留在 WorkspacePicker）；
          日常**没有工作区这个概念**，给「接着上次」——最近一场日常对话，点一下回去。
          日常不放模型名：同一个名字就在正下方输入盒的模型下拉里。一场都没聊过就整段不渲染 -->
     <template v-if="mode === 'project'">
@@ -51,8 +51,6 @@ const emit = defineEmits<{
       <div class="va-meta">
         <span class="va-meta-label">新会话位于</span>
         <WorkspacePicker :path="workspacePath" @select="(ws) => emit('select-workspace', ws)" />
-        <span class="va-meta-sep">·</span>
-        <span class="va-meta-model">{{ modelName }}</span>
       </div>
     </template>
     <template v-else-if="resume">
@@ -86,7 +84,7 @@ const emit = defineEmits<{
 }
 
 /* 模式分段控件（日常 / 工程）：与下方问候行的间距 = 父 .va 的 gap 10px + 这里的
-   margin-bottom 20px。选中态用 accent 渐变，与输入盒发送键同一套视觉语言。 */
+   margin-bottom 20px。选中态使用主题的中性表面，与其他标签一致。 */
 .va-modes {
   display: inline-flex;
   gap: 2px;
@@ -112,9 +110,8 @@ const emit = defineEmits<{
   color: var(--aide-text-primary);
 }
 .va-mode-btn.is-active {
-  color: var(--aide-text-on-accent);
-  background: var(--aide-accent-gradient);
-  box-shadow: var(--aide-accent-glow);
+  color: var(--aide-control-selected-text);
+  background: var(--aide-control-selected-bg);
 }
 
 .va-greeting {
@@ -179,12 +176,6 @@ const emit = defineEmits<{
 }
 .va-meta-label {
   color: var(--aide-text-muted);
-}
-.va-meta-sep {
-  color: var(--aide-text-muted);
-}
-.va-meta-model {
-  color: var(--aide-accent);
 }
 
 /* 「接着上次」：平时是一行安静的脚注，hover 才显出它是个入口（标题提亮、箭头滑出） */

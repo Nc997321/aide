@@ -684,9 +684,9 @@ defineExpose({ openPanel });
 }
 .lang-row:hover { background: var(--aide-surface-default); }
 .st-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.st-ok { background: var(--aide-success); box-shadow: 0 0 4px color-mix(in srgb, var(--aide-success) 40%, transparent); }
-.st-miss { background: var(--aide-warning); box-shadow: 0 0 4px color-mix(in srgb, var(--aide-warning) 40%, transparent); }
-.st-err { background: var(--aide-danger); box-shadow: 0 0 4px color-mix(in srgb, var(--aide-danger) 40%, transparent); }
+.st-ok { background: var(--aide-success); box-shadow: none; }
+.st-miss { background: var(--aide-warning); box-shadow: none; }
+.st-err { background: var(--aide-danger); box-shadow: none; }
 .st-idle { background: var(--aide-text-muted); opacity: 0.5; }
 /* indexing：旋转 spinner 替代静态圆点（accent 色 = 进行中，区别于绿色就绪） */
 .st-dot-spin { color: var(--aide-accent); flex-shrink: 0; animation: jdk-spin 0.8s linear infinite; }
@@ -710,7 +710,7 @@ defineExpose({ openPanel });
   border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
   padding: 4px 8px; outline: none; font-family: inherit;
 }
-.path-input:focus { border-color: var(--aide-accent); }
+.path-input:focus { border-color: var(--aide-focus-border); }
 .path-input.has-value { color: var(--aide-text-secondary); }
 .browse-btn {
   background: var(--aide-accent-subtle); color: var(--aide-accent);
@@ -724,7 +724,7 @@ defineExpose({ openPanel });
   border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
   padding: 4px 8px; outline: none; font-family: inherit;
 }
-.args-input:focus { border-color: var(--aide-accent); }
+.args-input:focus { border-color: var(--aide-focus-border); }
 .err-hint { font-size: 10.5px; color: var(--aide-danger); line-height: 1.5; word-break: break-word; }
 .override-actions { display: flex; gap: 6px; justify-content: flex-end; }
 .save-btn {
@@ -859,7 +859,7 @@ defineExpose({ openPanel });
   border-radius: var(--aide-radius-sm); color: var(--aide-text-primary); font-size: 11px;
   padding: 4px 8px; outline: none; font-family: inherit;
 }
-.jdk-input:focus { border-color: var(--aide-accent); }
+.jdk-input:focus { border-color: var(--aide-focus-border); }
 .jdk-input::placeholder { color: var(--aide-text-muted); }
 .jdk-add-btn {
   background: var(--aide-accent-subtle); color: var(--aide-accent);

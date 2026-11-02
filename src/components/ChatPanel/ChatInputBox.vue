@@ -1723,11 +1723,11 @@ const { actions: quickActions } = useQuickActions();
   border-radius: var(--aide-radius-lg);
   background: var(--aide-bg-deep);
   border: 1px solid var(--aide-border);
-  transition: all var(--aide-ease-t);
+  transition: border-color var(--aide-ease-t);
 }
 
 .chat-input-box:focus-within {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 
 /* 运行中聚焦不再整圈 accent 描边——边框保持素色，让彗星环成为唯一的彩色信号 */
@@ -1735,16 +1735,7 @@ const { actions: quickActions } = useQuickActions();
   border-color: var(--aide-border);
 }
 
-/* 会话运行时输入盒流光（双向对追双彗星 + 柔光晕）：纯 CSS 单伪元素，零 JS。
-   ::before 的 conic 渐变随 @property 角度旋转（两颗彗星相隔 180° 对跑），
-   2 层 mask + exclude 只露出 1px 锐环、精确压盖住边框；光晕用 drop-shadow
-   实现——关键教训：filter 作用于 mask 之后的结果，所以 drop-shadow 严格
-   跟随环形（盒内一笔不画，glass 半透明背景主题也安全）；而 blur 在 mask 前
-   生效、会被 mask 裁出硬边平顶光带（"粗边框"观感的来源），不能用。
-   另注意此 WebView2 只支持单值 mask-composite，3 层以上多值组合整条失效
-   （退化成全叠加、光楔糊满输入框），mask 层数必须 ≤2。
-   渐变淡出端用 color-mix 0% 同色透明，不用 transparent 关键字（透明黑插值
-   会经过发暗中间色、光带显脏）。颜色全走主题 token，空闲时无伪元素零开销。 */
+/* 运行状态沿输入框边缘转动；轮廓与父元素贴合，不向外扩散光晕。 */
 @property --aide-input-comet {
   syntax: "<angle>";
   initial-value: 0deg;
@@ -1759,9 +1750,10 @@ const { actions: quickActions } = useQuickActions();
 .chat-input-box.session-running::before {
   content: "";
   position: absolute;
-  inset: 0;
+  /* 补齐父元素的 1px 边框，圆角直接继承输入框。 */
+  inset: -1px;
   padding: 1px;
-  border-radius: var(--aide-radius-sm);
+  border-radius: inherit;
   pointer-events: none;
   background: conic-gradient(
     from var(--aide-input-comet),
@@ -1779,7 +1771,6 @@ const { actions: quickActions } = useQuickActions();
   mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--aide-accent) 85%, transparent));
   animation: chat-input-comet 3.2s linear infinite;
 }
 

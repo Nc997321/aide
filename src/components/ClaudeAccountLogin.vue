@@ -124,7 +124,7 @@ onMounted(refreshAccount);
 .btn-primary {
   padding: 13px 20px; border-radius: var(--aide-radius-md);
   background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-size: 13.5px; font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
   border: 1px solid var(--aide-border); cursor: pointer; transition: all .16s var(--aide-ease);
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
 }
@@ -140,7 +140,7 @@ onMounted(refreshAccount);
   background: var(--aide-surface-default); border: 1px solid var(--aide-border);
   color: var(--aide-text-primary); font-size: 12.5px; font-family: inherit;
 }
-.code-input:focus { outline: none; border-color: var(--aide-accent); }
+.code-input:focus { outline: none; border-color: var(--aide-focus-border); }
 .code-submit { padding: 10px 14px; font-size: 12.5px; white-space: nowrap; }
 .waiting-actions { display: flex; justify-content: space-between; gap: 12px; }
 .link {

@@ -210,7 +210,7 @@ function badgeClass(s: Row["status"]): string {
   font-size: 12.5px;
   outline: none;
 }
-.search input:focus { border-color: var(--aide-accent); }
+.search input:focus { border-color: var(--aide-focus-border); }
 .search input::placeholder { color: var(--aide-text-muted); }
 
 .group { margin-bottom: 18px; }

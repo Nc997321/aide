@@ -86,7 +86,7 @@ async function confirm() {
 .confirm-btn {
   width: 100%; padding: 10px 16px; border-radius: var(--aide-radius-md);
   background: var(--aide-accent-gradient); color: var(--aide-text-on-accent); font-size: 13px; font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
   border: 1px solid rgba(150,170,255,.45); cursor: pointer;
   transition: all .16s var(--aide-ease);
 }

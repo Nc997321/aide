@@ -323,7 +323,7 @@ async function createEditor() {
           fontSize: "12.5px !important",
         },
         ".cm-vim-panel input:focus": {
-          outline: "1px solid var(--aide-accent) !important",
+          outline: "1px solid var(--aide-focus-border) !important",
           outlineOffset: "1px !important",
         },
         ".cm-panel.cm-search": {
@@ -341,8 +341,8 @@ async function createEditor() {
           boxShadow: "var(--aide-shadow-inset) !important",
         },
         ".cm-textfield:focus": {
-          borderColor: "var(--aide-accent) !important",
-          boxShadow: "var(--aide-accent-ring) !important",
+          borderColor: "var(--aide-focus-border) !important",
+          boxShadow: "var(--aide-shadow-inset) !important",
           outline: "none !important",
         },
         ".cm-button": {

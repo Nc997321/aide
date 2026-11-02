@@ -202,7 +202,7 @@ function fmt(iso: string): string {
 }
 .kb-link:hover:not(:disabled) { color: var(--aide-text-primary); }
 .kb-link:disabled { opacity: 0.4; cursor: default; }
-.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 .kb-err {
   margin: 0 0 12px;
   font-size: 12px;

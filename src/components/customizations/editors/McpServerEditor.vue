@@ -191,7 +191,7 @@ function save() {
   padding: 8px 10px; font-size: 13px; color: var(--aide-text-primary);
   outline: none; font-family: inherit;
 }
-.field input:focus, .field textarea:focus { border-color: var(--aide-accent); }
+.field input:focus, .field textarea:focus { border-color: var(--aide-focus-border); }
 .field textarea { resize: vertical; min-height: 54px; font-family: ui-monospace, monospace; font-size: 12px; }
 .field input:disabled { opacity: 0.7; }
 .hint { font-size: 11px; color: var(--aide-text-muted); margin-left: 6px; }
@@ -208,7 +208,7 @@ function save() {
 .dot-unk { background: var(--aide-text-muted); opacity: 0.5; }
 .dot-spin { border: 2px solid var(--aide-surface-active); border-top-color: var(--aide-warning); width: 12px; height: 12px; background: transparent; animation: sp 1s linear infinite; }
 @keyframes sp { to { transform: rotate(360deg); } }
-.dot-ok { background: var(--aide-success); box-shadow: 0 0 6px color-mix(in srgb, var(--aide-success) 50%, transparent); }
+.dot-ok { background: var(--aide-success); box-shadow: none; }
 .dot-fail { background: var(--aide-danger); }
 .status-text { font-size: 12px; color: var(--aide-text-secondary); }
 .status-fail { color: var(--aide-danger); }

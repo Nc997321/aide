@@ -974,10 +974,8 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   box-shadow: var(--aide-highlight-inset), var(--aide-shadow-sm);
 }
 .session-style-card .session-row.on {
-  border-color: color-mix(in srgb, var(--aide-accent) 35%, transparent);
-  background:
-    linear-gradient(135deg, var(--aide-accent-subtle) 0%, transparent 60%),
-    var(--aide-bg-raised);
+  border-color: var(--aide-control-selected-border);
+  background: var(--aide-control-selected-bg);
 }
 
 /* 皮肤·行式：surface 淡底 + hover 加深 + 选中 accent-subtle 底 + 名称转 accent。
@@ -991,10 +989,10 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
   background: var(--aide-surface-hover);
 }
 .session-style-row .session-row.on {
-  background: var(--aide-accent-subtle);
+  background: var(--aide-control-selected-bg);
 }
 .session-style-row .session-row.on .session-name {
-  color: var(--aide-accent);
+  color: var(--aide-control-selected-text);
 }
 
 /* ── 状态流光：会话条目左缘 2px 竖条，原状态点（AStatusDot）的颜色/动效一比一搬来——
@@ -1673,7 +1671,7 @@ defineExpose({ newSession, loadSessions, addSession, selectSessionFromWorkspace,
 .btn.primary {
   background: var(--aide-accent-gradient);
   color: var(--aide-text-on-accent);
-  box-shadow: var(--aide-accent-glow);
+  box-shadow: var(--aide-shadow-sm);
   border-color: color-mix(in srgb, var(--aide-accent) 40%, transparent);
 }
 .btn.primary:hover {

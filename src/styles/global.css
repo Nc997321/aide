@@ -59,11 +59,15 @@
   --aide-border: rgba(255,214,160,.09);
   --aide-border-subtle: rgba(255,214,160,.045);
   --aide-border-strong: rgba(255,220,175,.16);
+  --aide-focus-border: color-mix(in srgb, var(--aide-text-secondary) 55%, transparent);
+  --aide-focus-ring: 0 0 0 2px var(--aide-text-secondary);
+  --aide-control-selected-bg: var(--aide-surface-active);
+  --aide-control-selected-text: var(--aide-text-primary);
+  --aide-control-selected-border: var(--aide-border-strong);
   --aide-highlight-inset: inset 0 1px 0 rgba(255,235,210,.07);
   --aide-accent-gradient: linear-gradient(180deg,#e6bd8e,#cf9c66);
-  --aide-accent-glow: 0 6px 20px rgba(212,165,116,.28);
   --aide-accent-ring: 0 0 0 2.5px rgba(217,171,120,.32);
-  --aide-ambient-glow: radial-gradient(700px 240px at 50% -60px, rgba(224,181,132,.09), transparent 70%);
+  --aide-ambient-glow: none;
   --aide-shadow-sm: 0 1px 2px rgba(0,0,0,.28);
   --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34), 0 1px 4px rgba(0,0,0,.22);
   --aide-shadow-lg: 0 18px 56px rgba(0,0,0,.5), 0 4px 14px rgba(0,0,0,.3);
@@ -427,4 +431,10 @@ html, body, #app {
    正常宽度下完全惰性（700px 下有无此行结果逐像素一致）。 */
 .msg-text {
   overflow-x: auto;
+}
+
+/* 键盘焦点与鼠标选中分离；组件可自行布局，焦点轮廓统一由主题提供。 */
+:where(button, a[href], [role="tab"], [role="button"], select, summary):focus-visible {
+  outline: 2px solid var(--aide-text-secondary);
+  outline-offset: 2px;
 }

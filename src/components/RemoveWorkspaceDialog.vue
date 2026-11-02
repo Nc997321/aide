@@ -76,7 +76,7 @@ const wsName = () => {
 .rw-btn { padding: 7px 16px; border-radius: var(--aide-radius-md); font-size: 13px; cursor: pointer; font-family: inherit; border: 1px solid var(--aide-border); transition: all var(--aide-ease-t); }
 .rw-btn.cancel { background: transparent; color: var(--aide-text-secondary); }
 .rw-btn.cancel:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.rw-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-accent-glow); }
+.rw-btn.confirm { background: var(--aide-accent-gradient); border-color: transparent; color: var(--aide-text-on-accent); box-shadow: var(--aide-shadow-sm); }
 .rw-btn.confirm.danger { background: var(--aide-danger); border-color: transparent; box-shadow: none; }
 .rw-btn.confirm:hover { filter: brightness(1.07); }
 </style>

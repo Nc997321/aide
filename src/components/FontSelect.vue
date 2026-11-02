@@ -147,6 +147,6 @@ function onCustomInput() {
   color: var(--aide-text-muted);
 }
 .custom-input:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 </style>

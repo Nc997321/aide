@@ -54,17 +54,17 @@ defineProps<{ state: ToastState; placement?: "outside-top" | "inside-bottom" }>(
 
 .a-toast--success .a-toast-dot {
   background: var(--aide-success);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-success) 60%, transparent);
+  box-shadow: none;
 }
 
 .a-toast--danger .a-toast-dot {
   background: var(--aide-danger);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-danger) 60%, transparent);
+  box-shadow: none;
 }
 
 .a-toast--info .a-toast-dot {
   background: var(--aide-info);
-  box-shadow: 0 0 10px color-mix(in srgb, var(--aide-info) 60%, transparent);
+  box-shadow: none;
 }
 
 .a-toast-text {

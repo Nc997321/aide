@@ -78,7 +78,7 @@
   height: 6.5px;
   border-radius: 2px;
   transform: none;
-  box-shadow: 0 0 6px color-mix(in srgb, var(--aide-danger) 50%, transparent);
+  box-shadow: none;
 }
 
 .interrupt-btn:active {

@@ -355,7 +355,7 @@ const placeholder = computed(() => (pending.value ? "等这条答完再问…" :
   transition: border-color var(--aide-ease-t);
 }
 .btwp-input-box:focus-within {
-  border-color: var(--aide-border-strong);
+  border-color: var(--aide-focus-border);
 }
 .btwp-input {
   flex: 1;

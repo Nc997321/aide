@@ -974,7 +974,7 @@ defineExpose({ reload });
 
 .commit-bar { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--aide-surface-default); }
 .commit-input { flex: 1; background: var(--aide-bg-base); border: 1px solid var(--aide-surface-hover); border-radius: 4px; padding: 5px 8px; font-size: 12px; color: var(--aide-text-primary); outline: none; font-family: inherit; }
-.commit-input:focus { border-color: var(--aide-accent); }
+.commit-input:focus { border-color: var(--aide-focus-border); }
 .commit-btn { background: var(--aide-success); border: none; color: var(--aide-text-on-accent); padding: 5px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; font-weight: 600; font-family: inherit; }
 .commit-btn:hover:not(:disabled) { filter: brightness(1.15); }
 .commit-btn:disabled { opacity: 0.35; cursor: not-allowed; }

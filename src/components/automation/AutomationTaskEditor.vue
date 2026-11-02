@@ -590,8 +590,8 @@ async function save(andRun: boolean) {
 }
 .input:focus,
 .textarea:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring);
+  border-color: var(--aide-focus-border);
+  box-shadow: none;
 }
 .textarea {
   min-height: 96px;
@@ -820,7 +820,7 @@ async function save(andRun: boolean) {
   border-color: transparent;
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow);
+  box-shadow: var(--aide-shadow-sm);
 }
 .btn.primary:hover:not(:disabled) {
   filter: brightness(1.1);

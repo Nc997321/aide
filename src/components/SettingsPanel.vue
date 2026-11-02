@@ -1095,7 +1095,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 .vim-key-target:focus {
   outline: none;
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 .vim-keymap-suggest {
   display: flex;
@@ -1209,7 +1209,7 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .text-input:focus {
-  border-color: var(--aide-accent);
+  border-color: var(--aide-focus-border);
 }
 
 /* 缩进格数：窄数字输入，不占满整行 */

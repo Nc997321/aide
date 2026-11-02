@@ -80,7 +80,7 @@ const rectLine = computed(() => {
   background: var(--aide-surface-default);
 }
 .pr-head:focus-visible {
-  outline: 2px solid var(--aide-accent);
+  outline: 2px solid var(--aide-text-secondary);
   outline-offset: -2px;
 }
 .pr-mark {

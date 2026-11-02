@@ -740,7 +740,7 @@ onMounted(() => {
 }
 .kb-home.back { cursor: pointer; transition: color var(--aide-ease-t); }
 .kb-home.back:hover { color: var(--aide-accent); }
-.kb-home:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-home:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-home-caret { transform: rotate(180deg); }
 
 /* 新建：面板里最主要的动作，给它实心和字 */
@@ -763,7 +763,7 @@ onMounted(() => {
 }
 .kb-newbtn:hover:not(:disabled) { background: var(--aide-accent-hover); }
 .kb-newbtn:disabled { opacity: 0.4; cursor: default; }
-.kb-newbtn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-newbtn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-spacer { flex: 1; }
 
 /* 检索框：唯一有"面"的元素，内凹而不是描边（描边是模板感的来源） */
@@ -780,7 +780,7 @@ onMounted(() => {
   color: var(--aide-text-muted);
   transition: box-shadow var(--aide-ease-t);
 }
-.kb-searchbox:focus-within { box-shadow: var(--aide-accent-ring); }
+.kb-searchbox:focus-within { box-shadow: none; }
 .kb-searchbox input {
   width: 240px;
   border: none;
@@ -811,7 +811,7 @@ onMounted(() => {
 .kb-iconbtn:hover { color: var(--aide-text-primary); background: var(--aide-surface-hover); }
 .kb-iconbtn:disabled { opacity: 0.4; cursor: default; background: none; }
 .kb-clearq:focus-visible,
-.kb-iconbtn:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-iconbtn:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 
 /* ── 索引态：整屏目录 ─────────────────────────────────── */
 .kb-index {
@@ -898,7 +898,7 @@ onMounted(() => {
   border-color: var(--aide-border);
   transform: translateY(-1px);
 }
-.kb-card:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-card:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-card-title {
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -974,7 +974,7 @@ onMounted(() => {
   transition: color var(--aide-ease-t);
 }
 .kb-link:hover { color: var(--aide-text-primary); }
-.kb-link:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); border-radius: 3px; }
+.kb-link:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); border-radius: 3px; }
 
 /* ── 阅读态：左目录栏 + 正文 ───────────────────────────── */
 .kb-reading {

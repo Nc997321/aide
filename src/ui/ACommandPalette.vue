@@ -246,8 +246,8 @@ defineExpose({ setSearchFn, setRecentFn });
 }
 .a-search-field--open {
   background: var(--aide-bg-raised);
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring);
+  border-color: var(--aide-focus-border);
+  box-shadow: none;
 }
 
 .a-search-kbd {

@@ -106,7 +106,7 @@ function save() {
   padding: 8px 10px; font-size: 13px; color: var(--aide-text-primary);
   outline: none; font-family: inherit;
 }
-.field input:focus, .field select:focus { border-color: var(--aide-accent); }
+.field input:focus, .field select:focus { border-color: var(--aide-focus-border); }
 .field input:disabled, .field select:disabled { opacity: 0.7; }
 .hint { font-size: 11px; color: var(--aide-text-muted); margin-left: 6px; }
 .ed-actions { display: flex; gap: 8px; align-items: center; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--aide-surface-default); }

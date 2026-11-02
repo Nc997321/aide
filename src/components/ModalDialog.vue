@@ -180,8 +180,8 @@ function onOverlayClick(e: MouseEvent) {
 }
 
 .modal-input:focus {
-  border-color: var(--aide-accent);
-  box-shadow: var(--aide-accent-ring), var(--aide-shadow-inset);
+  border-color: var(--aide-focus-border);
+  box-shadow: var(--aide-shadow-inset);
 }
 
 .modal-custom-body {
@@ -238,7 +238,7 @@ function onOverlayClick(e: MouseEvent) {
   border: 1px solid var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
 }
 
 .btn-confirm:hover {

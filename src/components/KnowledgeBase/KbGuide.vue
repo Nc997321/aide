@@ -209,7 +209,7 @@ async function copyCompose(): Promise<void> {
   transition: background var(--aide-ease-t), color var(--aide-ease-t);
 }
 .kb-copy:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
-.kb-copy:focus-visible { outline: none; box-shadow: var(--aide-accent-ring); }
+.kb-copy:focus-visible { outline: none; box-shadow: var(--aide-focus-ring); }
 .kb-code {
   margin: 0;
   padding: 12px 14px;

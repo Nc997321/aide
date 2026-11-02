@@ -120,7 +120,7 @@ const DECISION_LABEL: Record<string, string> = {
   border-radius: var(--aide-radius-sm);
   font-size: 11.5px;
 }
-.text-input:focus { outline: none; border-color: var(--aide-accent); }
+.text-input:focus { outline: none; border-color: var(--aide-focus-border); }
 .btn-secondary {
   height: 28px;
   padding: 0 12px;

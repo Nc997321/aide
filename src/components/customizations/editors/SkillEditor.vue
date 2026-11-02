@@ -167,7 +167,7 @@ function sourceLabel(s: NonNullable<CustomizationItem["source"]>): string {
 .field { margin-bottom: 12px; }
 .field label { display: block; font-size: 12px; color: var(--aide-text-secondary); margin-bottom: 5px; }
 .field input, .field textarea { width: 100%; box-sizing: border-box; background: var(--aide-surface-default); border: 1px solid transparent; border-radius: var(--aide-radius-md); padding: 8px 10px; font-size: 13px; color: var(--aide-text-primary); outline: none; font-family: inherit; }
-.field input:focus, .field textarea:focus { border-color: var(--aide-accent); }
+.field input:focus, .field textarea:focus { border-color: var(--aide-focus-border); }
 .field input:disabled { opacity: 0.7; }
 .cm-mock { width: 100%; box-sizing: border-box; background: var(--aide-bg-deep); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm); padding: 12px; font-family: ui-monospace, monospace; font-size: 12px; line-height: 1.6; color: var(--aide-text-primary); min-height: 160px; resize: vertical; }
 .scripts-list { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }

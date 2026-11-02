@@ -76,14 +76,20 @@ export interface ThemeTokens {
   highlightInset: string;
   /** 主按钮/开关/选中条的渐变强调 */
   accentGradient: string;
-  /** 主按钮与关键焦点的彩色辉光投影 */
-  accentGlow: string;
-  /** 输入框/焦点环 */
+  /** 品牌强调环；普通输入焦点使用 focusBorder，键盘焦点使用 focusRing */
   accentRing: string;
-  /** 对话区顶部环境光晕（空间主光源） */
+  /** 对话区顶部环境背景；当前主题不添加光晕 */
   ambientGlow: string;
   /** 悬停/浮层用第三档边框 */
   borderStrong: string;
+  /** 输入控件聚焦边框：中性色，不附加外圈 */
+  focusBorder: string;
+  /** 键盘导航焦点：清晰的硬边环，无模糊光晕 */
+  focusRing: string;
+  /** 普通标签、导航与选项的选中表面 */
+  controlSelectedBg: string;
+  controlSelectedText: string;
+  controlSelectedBorder: string;
   /** 统一动效曲线 */
   ease: string;
   /** 时长+曲线快捷写法 */

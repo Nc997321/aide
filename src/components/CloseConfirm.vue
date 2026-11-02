@@ -114,7 +114,7 @@ const vFocus = { mounted: (el: HTMLElement) => el.focus() };
 }
 .cc-btn:focus-visible {
   outline: none;
-  box-shadow: var(--aide-accent-ring);
+  box-shadow: var(--aide-focus-ring);
 }
 .cc-btn--cancel {
   background: transparent;
@@ -138,7 +138,7 @@ const vFocus = { mounted: (el: HTMLElement) => el.focus() };
   border: 1px solid var(--aide-border-strong);
   color: var(--aide-text-on-accent);
   font-weight: 600;
-  box-shadow: var(--aide-accent-glow), var(--aide-highlight-inset);
+  box-shadow: var(--aide-shadow-sm), var(--aide-highlight-inset);
 }
 .cc-btn--primary:hover {
   filter: brightness(1.07);
