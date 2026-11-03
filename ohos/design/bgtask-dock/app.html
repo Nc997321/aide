@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>后台任务停靠区 · 连体单卡原型</title>
+<style>
+  /* 配色镜像 entry/src/main/resources/{base,dark}/element/color.json */
+  :root, [data-theme=light] {
+    --page-bg:#FAF9F6; --card-bg:#FFFFFF; --input-bg:#F0EEE8;
+    --text:#272724; --text-2:#797972; --line:#E9E7E0;
+    --accent:#B86633; --ok:#56836A; --danger:#F53F3F;
+  }
+  [data-theme=dark] {
+    --page-bg:#1E1E1C; --card-bg:#292926; --input-bg:#33332E;
+    --text:#EFEDE7; --text-2:#AAA99F; --line:#393934;
+    --accent:#EDB585; --ok:#9BBB9B; --danger:#F0524F;
+  }
+  * { box-sizing:border-box; margin:0; padding:0 }
+  html, body { height:100% }
+  body {
+    font-family:"HarmonyOS Sans SC", -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background:var(--page-bg); color:var(--text);
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+
+  /* ── 页面布景（只为给停靠区一个真实上下文）── */
+  .topbar { display:flex; align-items:center; gap:6px; padding:12px 12px 10px; background:var(--card-bg); border-bottom:1px solid var(--line); flex:none }
+  .back { display:flex; padding:2px; color:var(--text) }
+  .title { flex:1; font-size:17px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .tl { flex:1; overflow-y:auto; padding:14px 16px 16px; display:flex; flex-direction:column; gap:16px }
+  .m-user { display:flex; flex-direction:column; align-items:flex-end }
+  .b-user { max-width:82%; background:var(--accent); color:#fff; font-size:15px; line-height:1.55; padding:10px 14px; border-radius:16px 16px 4px 16px; white-space:pre-wrap }
+  .m-ai { display:flex; flex-direction:column; align-items:flex-start }
+  .ai-text { max-width:95%; font-size:15px; line-height:1.65; white-space:pre-wrap }
+  .inputbar { display:flex; gap:8px; align-items:center; padding:10px 12px; padding-bottom:calc(10px + env(safe-area-inset-bottom)); background:var(--card-bg); border-top:1px solid var(--line); flex:none }
+  .field { flex:1; background:var(--input-bg); border-radius:20px; min-height:40px; padding:10px 14px; font-size:14px; color:var(--text-2); display:flex; align-items:center }
+  .send { width:40px; height:40px; flex:none; border-radius:50%; background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center }
+
+  /* ── 停靠区 · after：连体单卡（状态条即卡片头）── */
+  .dock { margin:8px 12px 2px; background:var(--card-bg); border:1px solid var(--line); border-radius:12px; overflow:hidden; transition:opacity .45s; flex:none }
+  .dock.fade { opacity:0 }
+  .dock-bar { display:flex; align-items:center; gap:8px; padding:8px 12px; font-size:12px; color:var(--text-2); cursor:pointer; user-select:none }
+  .dock.open:not(.before) .dock-bar { box-shadow:inset 0 -1px 0 var(--line); justify-content:center; padding:4px 12px 3px } /* 把手化：头/身发丝线 + 居中收起箭头 */
+  .dock.open:not(.before) .dot,
+  .dock.open:not(.before) .bar-txt,
+  .dock.open:not(.before) .bar-cmd { display:none }
+  .dot { width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none; animation:pulse 1.6s infinite }
+  .dot.set { animation:none }
+  .dot.fail { background:var(--danger) }
+  .bar-txt { font-weight:600; color:var(--text); white-space:nowrap }
+  .bar-cmd { font-family:Consolas, "Cascadia Code", monospace; font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 }
+  .caret { flex:none; display:flex; color:var(--text-2); transition:transform .2s }
+  .dock.open .caret { transform:rotate(180deg) }
+  .dock-body { display:none }
+  .dock.open .dock-body { display:block; animation:panelIn .25s ease-out }
+  @keyframes panelIn { from { opacity:0; transform:translateY(-4px) } }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+  /* 多任务限高内滚：长输出不再把输入栏顶出屏 */
+  .task-list { max-height:42vh; overflow-y:auto; scrollbar-width:thin }
+  .task { padding:9px 12px }
+  .task-sep { height:1px; background:var(--line) }
+  .task-head { display:flex; align-items:center; gap:8px }
+  .st { width:14px; flex:none; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--ok); line-height:1 }
+  .st.running::after { content:""; width:10px; height:10px; border-radius:50%; background:var(--ok); animation:pulse 1.6s infinite }
+  .st.fail { color:var(--danger) }
+  .st.stop { color:var(--text-2) }
+  .main { flex:1; min-width:0; display:flex; flex-direction:column; gap:2px }
+  .nm { font-size:12px; font-weight:500; color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .cd { font-family:Consolas, "Cascadia Code", monospace; font-size:11px; color:var(--text-2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis }
+  .cd:empty { display:none }
+  .dur { font-family:Consolas, "Cascadia Code", monospace; font-size:11px; color:var(--text-2); flex:none }
+  .stop-btn { flex:none; font-family:inherit; font-size:11px; padding:2px 7px; border-radius:6px; border:1px solid var(--line); color:var(--text-2); background:transparent; cursor:pointer }
+  .stop-btn:hover { border-color:var(--text-2) }
+  .out { margin:8px 0 10px; background:var(--input-bg); border-radius:8px; padding:8px 10px; font-family:Consolas, "Cascadia Code", monospace; font-size:11px; line-height:17px; color:var(--text-2); max-height:132px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; scrollbar-width:thin }
+  .out:empty { display:none }
+
+  /* ── before：现状两卡断开（对照用；数字对齐 BgTaskDock.ets 现状）── */
+  .dock.before { margin:0; background:transparent; border:0; border-radius:0; overflow:visible }
+  .dock.before .dock-bar { margin:8px 12px 2px; padding:7px 12px; background:var(--card-bg); border:1px solid var(--line); border-radius:10px }
+  .dock.before .dock-body { margin:6px 12px 2px; background:var(--card-bg); border:1px solid var(--line); border-radius:12px; overflow:hidden }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <span class="back" id="back"></span>
+  <span class="title">aide · 工作区会话</span>
+</div>
+
+<div class="tl">
+  <div class="m-user"><div class="b-user">把文档站起个本地服务，顺便跑一遍构建</div></div>
+  <div class="m-ai"><div class="ai-text">好，都挂到后台了：开发服务器和构建同时跑，构建完我把结果贴给你。</div></div>
+</div>
+
+<div class="dock open" id="dock">
+  <div class="dock-bar" id="bar">
+    <span class="dot" id="barDot"></span>
+    <span class="bar-txt" id="barTxt"></span>
+    <span class="bar-cmd" id="barCmd"></span>
+    <span class="caret" id="caret"></span>
+  </div>
+  <div class="dock-body">
+    <div class="task-list" id="list"></div>
+  </div>
+</div>
+
+<div class="inputbar">
+  <div class="field">发送消息</div>
+  <div class="send" id="send"></div>
+</div>
+
+<script>
+(function () {
+'use strict';
+
+/* ── URL 参数即初始形态：variant=before|after theme=light|dark
+      scenario=single|multi|done|failed open=0|1 id=实例id ── */
+var q = new URLSearchParams(location.search);
+var ID = q.get('id') || 's1';
+var SCENARIO = q.get('scenario') || 'multi';
+var OPEN = q.get('open') !== '0';
+if (q.get('variant') === 'before') { document.getElementById('dock').classList.add('before'); }
+if (q.get('theme') === 'dark') { document.documentElement.dataset.theme = 'dark'; }
+
+var ICONS = {
+  back: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>',
+  send: '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 19V5M5 12l7-7 7 7"/></svg>',
+  chev: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg>'
+};
+document.getElementById('back').innerHTML = ICONS.back;
+document.getElementById('send').innerHTML = ICONS.send;
+document.getElementById('caret').innerHTML = ICONS.chev;
+
+var dock = document.getElementById('dock');
+var bar = document.getElementById('bar');
+var barDot = document.getElementById('barDot');
+var barTxt = document.getElementById('barTxt');
+var barCmd = document.getElementById('barCmd');
+var list = document.getElementById('list');
+
+var LINGER_MS = 2500;            /* 对照 BgTaskDock.ets LINGER_MS */
+var OUT_CAP = 1200;              /* 原型演示截断阈值（真机 BG_OUTPUT_CAP = 64KB） */
+
+/* ── 假数据：形状对齐 ChatBlocks.ets BgTask ── */
+var POOL = {
+  dev: {
+    command: 'pnpm dev', description: '启动开发服务器',
+    init: ['$ pnpm dev', '', '  VITE v6.0.7  ready in 412 ms', '', '  ➜  Local:   http://localhost:5173/', '  ➜  Network: use --host to expose'],
+    loop: ['10:24:11 [vite] hmr update /src/App.vue', '10:24:19 [vite] page reload src/store/chat.ts', '10:24:26 [vite] hmr update /src/theme/tokens.css', '10:24:33 [vite] hmr update /src/pages/Chat.vue']
+  },
+  serve: {
+    command: 'python -m http.server 8080', description: '静态文件服务',
+    init: ['$ python -m http.server 8080', 'Serving HTTP on 0.0.0.0 port 8080 (http://0.0.0.0:8080/) ...'],
+    loop: ['127.0.0.1 - - "GET / HTTP/1.1" 200 -', '127.0.0.1 - - "GET /assets/index.css HTTP/1.1" 200 -', '127.0.0.1 - - "GET /favicon.ico HTTP/1.1" 404 -']
+  },
+  docs: {
+    command: 'pnpm docs:build', description: '构建文档站',
+    init: ['$ pnpm docs:build', 'vitepress v1.3.4 building for production...', '\u2713 38 modules transformed.', 'rendering chunks...', 'build complete in 8.4s'],
+    loop: []
+  },
+  cargo: {
+    command: 'cargo build --release', description: '',
+    init: ['$ cargo build --release', '   Compiling aide-core v0.4.2', 'error[E0308]: mismatched types', '  --> src/session.rs:52:23', '   |', '52 |     let n: u32 = tasks.len();', '   |            ---   ^^^^^^^^^^^^^ expected `u32`, found `usize`', '   |', 'error: could not compile `aide-core` (lib) due to 1 previous error'],
+    loop: []
+  },
+  watch: {
+    command: 'cargo watch -x check', description: '增量检查',
+    init: ['[Running \'cargo check\']', '    Checking aide-core v0.4.2', '    Finished dev profile in 3.2s'],
+    loop: ['[Running \'cargo check\']', '    Checking aide-core v0.4.2', '    Finished dev profile in 2.8s']
+  },
+  test: {
+    command: 'pnpm test -- --watch', description: '监听跑用例',
+    init: ['RUN  v2.1.0  watch mode'],
+    loop: [' \u2713 src/store/chat.spec.ts (12 tests)', ' \u2713 src/utils/mention.spec.ts (8 tests)', ' Test Files  2 passed (2)']
+  }
+};
+
+var tasks = [];
+var els = {};          /* id -> { st, nm, cd, dur, stopBtn, out } */
+var lingerT = null;
+var spawnSpecs = ['watch', 'test', 'serve'];
+var spawnIdx = 0;
+
+function pad2(n) { return n < 10 ? '0' + n : '' + n; }
+function fmtClock(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000));
+  return pad2(Math.floor(s / 3600)) + ':' + pad2(Math.floor((s % 3600) / 60)) + ':' + pad2(s % 60);
+}
+function fmtShort(ms) {
+  var s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) { return s + 's'; }
+  return Math.floor(s / 60) + 'm' + (s % 60) + 's';
+}
+
+function mkTask(spec, status, startedAgo, endedAgo, withOutput, truncated) {
+  var now = Date.now();
+  var t = {
+    id: spec + '-' + Math.random().toString(36).slice(2, 7),
+    spec: spec,
+    command: POOL[spec].command,
+    description: POOL[spec].description,
+    status: status,
+    output: withOutput ? POOL[spec].init.join('\n') : '',
+    startedAt: now - startedAgo,
+    endedAt: endedAgo > 0 ? now - endedAgo : 0,
+    truncatedBytes: truncated || 0,
+    streamId: 0
+  };
+  return t;
+}
+
+function buildScenario(name) {
+  if (name === 'single') {
+    return [mkTask('dev', 'running', 3000, 0, true, 0)];
+  }
+  if (name === 'done') {
+    return [mkTask('dev', 'completed', 12000, 0, true, 0), mkTask('docs', 'completed', 20000, 8000, true, 0)];
+  }
+  if (name === 'failed') {
+    return [mkTask('cargo', 'failed', 9000, 2000, true, 0), mkTask('docs', 'completed', 20000, 8000, true, 0)];
+  }
+  return [mkTask('dev', 'running', 52000, 0, true, 0), mkTask('serve', 'running', 21000, 0, true, 1892), mkTask('docs', 'completed', 20000, 8000, true, 0)];
+}
+
+/* ── 渲染 ── */
+
+function nameText(t) { return t.description !== '' ? t.description : t.command; }
+
+function statusGlyph(t) {
+  if (t.status === 'failed') { return '\u2717'; }
+  if (t.status === 'stopped') { return '\u25A0'; }
+  return '\u2713';
+}
+
+function buildRow(t, first) {
+  if (!first) {
+    var sep = document.createElement('div');
+    sep.className = 'task-sep';
+    list.appendChild(sep);
+  }
+  var row = document.createElement('div');
+  row.className = 'task';
+  row.innerHTML =
+    '<div class="task-head">' +
+      '<span class="st"></span>' +
+      '<div class="main"><div class="nm"></div><div class="cd"></div></div>' +
+      '<span class="dur"></span>' +
+      '<button class="stop-btn">\u25A0 终止</button>' +
+    '</div>' +
+    '<div class="out"></div>';
+  list.appendChild(row);
+  var refs = {
+    st: row.querySelector('.st'),
+    nm: row.querySelector('.nm'),
+    cd: row.querySelector('.cd'),
+    dur: row.querySelector('.dur'),
+    stopBtn: row.querySelector('.stop-btn'),
+    out: row.querySelector('.out')
+  };
+  refs.stopBtn.addEventListener('click', function () { stopTask(t); });
+  els[t.id] = refs;
+  renderTask(t);
+}
+
+function renderTask(t) {
+  var refs = els[t.id];
+  var running = t.status === 'running';
+  refs.st.className = 'st' + (running ? ' running' : t.status === 'failed' ? ' fail' : t.status === 'stopped' ? ' stop' : '');
+  refs.st.textContent = running ? '' : statusGlyph(t);
+  refs.nm.textContent = nameText(t);
+  refs.cd.textContent = (t.command !== '' && t.command !== nameText(t)) ? t.command : '';
+  refs.dur.textContent = fmtClock((running ? Date.now() : t.endedAt) - t.startedAt);
+  refs.stopBtn.style.display = running ? '' : 'none';
+  refs.out.textContent = t.truncatedBytes > 0 ? '\u2026\u5DF2\u622A\u65AD ' + t.truncatedBytes + ' \u5B57\u8282\n' + t.output : t.output;
+  refs.out.scrollTop = refs.out.scrollHeight;
+}
+
+function renderBar() {
+  var running = 0, anyFailed = false, firstRun = null, lastEnd = null, i, t;
+  for (i = 0; i < tasks.length; i++) {
+    t = tasks[i];
+    if (t.status === 'running') { running++; if (!firstRun) { firstRun = t; } }
+    else {
+      if (t.status === 'failed') { anyFailed = true; }
+      if (!lastEnd || t.endedAt >= lastEnd.endedAt) { lastEnd = t; }
+    }
+  }
+  /* 摘要始终按收起态计算：展开态（after 变体）由 CSS 把手化隐藏，收起即原样回归 */
+  if (running > 0) {
+    barDot.className = 'dot';
+    barTxt.textContent = running + ' \u4E2A\u540E\u53F0\u4EFB\u52A1\u8FD0\u884C\u4E2D';
+    barCmd.textContent = firstRun ? firstRun.command : '';
+  } else {
+    barDot.className = 'dot set' + (anyFailed ? ' fail' : '');
+    barTxt.textContent = anyFailed ? '\u2717 \u540E\u53F0\u4EFB\u52A1\u5DF2\u7ED3\u675F' : '\u2713 \u540E\u53F0\u4EFB\u52A1\u5DF2\u5B8C\u6210';
+    barCmd.textContent = (lastEnd && lastEnd.command !== '') ? lastEnd.command + ' \u00B7 ' + fmtShort(lastEnd.endedAt - lastEnd.startedAt) : '';
+  }
+}
+
+function renderAll() {
+  list.innerHTML = '';
+  els = {};
+  for (var i = 0; i < tasks.length; i++) { buildRow(tasks[i], i === 0); }
+  renderBar();
+}
+
+/* ── 输出流（截头保尾，摊还策略对照 appendBgOutput）── */
+
+function appendLine(t, line) {
+  t.output = (t.output === '' ? '' : t.output + '\n') + line;
+  if (t.output.length > OUT_CAP * 2) {
+    t.truncatedBytes += (t.output.length - OUT_CAP) * 2;
+    t.output = t.output.substring(t.output.length - OUT_CAP);
+  }
+}
+
+function startStream(t) {
+  var spec = POOL[t.spec];
+  if (!spec.loop.length) { return; }
+  var i = 0;
+  t.streamId = setInterval(function () {
+    if (t.status !== 'running') { clearInterval(t.streamId); return; }
+    appendLine(t, spec.loop[i % spec.loop.length]);
+    i++;
+    renderTask(t);
+  }, 2400);
+}
+
+/* ── 走表：秒级 bump，仅刷运行中任务的时长 ── */
+setInterval(function () {
+  for (var i = 0; i < tasks.length; i++) {
+    var t = tasks[i];
+    if (t.status === 'running' && els[t.id]) {
+      els[t.id].dur.textContent = fmtClock(Date.now() - t.startedAt);
+    }
+  }
+}, 1000);
+
+/* ── 生命周期：跨轮存活 / 完成即焚 / 停留期内新任务取消即焚 ── */
+
+function cancelLinger() {
+  if (lingerT) { clearTimeout(lingerT); lingerT = null; }
+}
+
+function scheduleLinger() {
+  cancelLinger();
+  if (tasks.length) {
+    lingerT = setTimeout(function () {
+      lingerT = null;
+      dock.classList.add('fade');
+      setTimeout(function () {
+        tasks = [];
+        els = {};
+        list.innerHTML = '';
+        dock.style.display = 'none';
+        dock.classList.remove('open');
+      }, 480);
+    }, LINGER_MS);
+  }
+}
+
+function endTask(t, status) {
+  t.status = status;
+  t.endedAt = Date.now();
+  clearInterval(t.streamId);
+  renderTask(t);
+  renderBar();
+  var running = 0;
+  for (var i = 0; i < tasks.length; i++) { if (tasks[i].status === 'running') { running++; } }
+  if (running === 0) { scheduleLinger(); }
+}
+
+function stopTask(t) { endTask(t, 'stopped'); }
+
+function spawn() {
+  cancelLinger();
+  dock.style.display = '';
+  dock.classList.remove('fade');
+  var kept = [];
+  for (var i = 0; i < tasks.length; i++) {
+    if (tasks[i].status === 'running') { kept.push(tasks[i]); } else { clearInterval(tasks[i].streamId); }
+  }
+  tasks = kept;
+  var spec = spawnSpecs[spawnIdx % spawnSpecs.length];
+  spawnIdx++;
+  var t = mkTask(spec, 'running', 0, 0, true, 0);
+  tasks.push(t);
+  renderAll();
+  startStream(t);
+}
+
+function completeAll() {
+  var touched = false;
+  for (var i = 0; i < tasks.length; i++) {
+    if (tasks[i].status === 'running') { endTask(tasks[i], 'completed'); touched = true; }
+  }
+  if (!touched && tasks.length) { scheduleLinger(); }
+}
+
+function setScenario(name) {
+  SCENARIO = ['single', 'multi', 'done', 'failed'].indexOf(name) >= 0 ? name : 'multi';
+  reset();
+}
+
+function reset() {
+  cancelLinger();
+  for (var i = 0; i < tasks.length; i++) { clearInterval(tasks[i].streamId); }
+  tasks = buildScenario(SCENARIO);
+  dock.style.display = '';
+  dock.classList.remove('fade');
+  setOpen(OPEN);
+  renderAll();
+  for (var j = 0; j < tasks.length; j++) {
+    if (tasks[j].status === 'running') { startStream(tasks[j]); }
+  }
+}
+
+/* ── 展台遥控：{event:'cmd',cmd:...}；跨屏同步走 {event:'sync'} ── */
+
+function setTheme(name) { document.documentElement.dataset.theme = name; }
+
+function setOpen(v) {
+  dock.classList.toggle('open', v);
+  renderBar();
+}
+
+function applyCmd(d, fromSync) {
+  if (!d || !d.cmd) { return; }
+  switch (d.cmd) {
+    case 'toggle': setOpen(!dock.classList.contains('open')); break;
+    case 'open': setOpen(true); break;
+    case 'close': setOpen(false); break;
+    case 'spawn': spawn(); break;
+    case 'completeAll': completeAll(); break;
+    case 'reset': reset(); break;
+    case 'scenario': setScenario(d.name); break;
+    case 'theme': setTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'); break;
+  }
+  /* theme 不跨屏同步（展台各屏主题独立呈现浅/深对照）；其余命令广播中继 */
+  if (!fromSync && d.cmd !== 'theme') {
+    parent.postMessage({ event: 'sync', from: ID, payload: d }, '*');
+  }
+}
+
+bar.addEventListener('click', function () { applyCmd({ cmd: 'toggle' }, true); });
+
+window.addEventListener('message', function (e) {
+  var d = e.data;
+  if (!d) { return; }
+  if (d.event === 'cmd') { applyCmd(d, false); }
+  else if (d.event === 'sync' && d.from !== ID) { applyCmd(d.payload, true); }
+});
+
+reset();
+})();
+</script>
+</body>
+</html>

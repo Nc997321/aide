@@ -2,9 +2,12 @@
  * 停靠区后台任务组件（bg_task_* 的消费端；对照 design/chat-layout-mock.html
  * 的 .bgt-bar/.bgt-panel，三变体共用）。
  *
- * 结构：状态条胶囊（● 脉冲 + 「N 个后台任务运行中」/「✓ 后台任务已完成」+
- * 命令摘要 + ▾）+ 可展开任务列表面板（状态/名称/命令/走表时长/■ 终止 +
- * 纯文本尾部输出贴尾滚动——移动端不做 xterm）。
+ * 结构：连体单卡（对照 design/bgtask-dock/ 原型）：收起 = 胶囊摘要
+ * （● 脉冲 + 「N 个后台任务运行中」/「✓ 后台任务已完成」+ 命令摘要 + ▾）；
+ * 展开 = 头部退化细把手（居中 ▴ 整行收起——摘要与列表重复，头部只留
+ * 「收起」这一个功能）+ 发丝线 + 任务列表（状态/名称/命令/走表时长/
+ * ■ 终止 + 纯文本尾部输出贴尾滚动——移动端不做 xterm），列表限高
+ * 内滚（panelMax，多任务长输出不把输入栏顶出屏）。
  *
  * 生命周期语义（对照桌面 BgTaskDock 的移动端取舍）：
  *  - 跨轮次存活：message_stop 不清 bgTasks，状态条跨轮次常驻
@@ -206,6 +209,8 @@ struct BgTaskItem {
 @ComponentV2
 export struct BgTaskDock {
   @Require @Param store: ChatStore;
+  /** 任务列表限高（vp；页面按根高折算传入，列表内滚不顶飞输入栏）。 */
+  @Require @Param panelMax: number;
   /** 面板展开态（点状态条翻转；随组件卸载复位）。 */
   @Local panelOpen: boolean = false;
   /** 走表时钟（秒级 bump；仅存在运行中任务时更新，全终态不空转重渲染）。 */
@@ -341,6 +346,7 @@ export struct BgTaskDock {
 
   // ── 视图 ──
 
+  /** 收起态胶囊摘要行（点开详情）。 */
   @Builder
   barView() {
     Row({ space: 8 }) {
@@ -351,7 +357,7 @@ export struct BgTaskDock {
           .width(7)
           .height(7)
           .borderRadius(3.5)
-          .backgroundColor($r('app.color.status_ok'))
+          .backgroundColor(this.anyFailed() ? $r('app.color.status_danger') : $r('app.color.status_ok'))
       }
       Text(this.barText())
         .fontSize(12)
@@ -371,46 +377,68 @@ export struct BgTaskDock {
       SymbolGlyph($r('sys.symbol.chevron_down'))
         .fontSize(12)
         .fontColor([$r('app.color.text_secondary')])
-        .rotate({ angle: this.panelOpen ? 180 : 0 })
     }
     .width('100%')
     .padding({ left: 12, right: 12, top: 7, bottom: 7 })
-    .borderRadius(10)
-    .backgroundColor($r('app.color.card_bg'))
-    .border({ width: 1, color: $r('app.color.line') })
     .alignItems(VerticalAlign.Center)
-    .margin({ left: 12, right: 12, top: 8, bottom: 2 })
     .onClick(() => {
-      this.panelOpen = !this.panelOpen;
+      this.panelOpen = true;
     })
   }
 
+  /** 展开态细把手：居中 ▴ 整行收起。 */
+  @Builder
+  handleView() {
+    Row() {
+      SymbolGlyph($r('sys.symbol.chevron_down'))
+        .fontSize(14)
+        .fontColor([$r('app.color.text_secondary')])
+        .rotate({ angle: 180 })
+    }
+    .width('100%')
+    .height(28)
+    .justifyContent(FlexAlign.Center)
+    .onClick(() => {
+      this.panelOpen = false;
+    })
+  }
+
+  /** 任务列表：限高内滚（panelMax 由页面按根高折算传入）。 */
   @Builder
   panelView() {
+    Scroll() {
+      Column() {
+        ForEach(this.store.bgTasks, (t: BgTask, idx: number) => {
+          if (idx > 0) {
+            Divider().strokeWidth(1).color($r('app.color.line'))
+          }
+          BgTaskItem({ task: t, now: this.now })
+        }, (t: BgTask) => t.id)
+      }
+      .width('100%')
+    }
+    .width('100%')
+    .constraintSize({ maxHeight: this.panelMax })
+    .scrollBar(BarState.Off)
+    .edgeEffect(EdgeEffect.Spring)
+  }
+
+  build() {
     Column() {
-      ForEach(this.store.bgTasks, (t: BgTask, idx: number) => {
-        if (idx > 0) {
-          Divider().strokeWidth(1).color($r('app.color.line'))
-        }
-        BgTaskItem({ task: t, now: this.now })
-      }, (t: BgTask) => t.id)
+      if (this.panelOpen) {
+        this.handleView()
+        Divider().strokeWidth(1).color($r('app.color.line'))
+        this.panelView()
+      } else {
+        this.barView()
+      }
     }
     .width('100%')
     .borderRadius(12)
     .backgroundColor($r('app.color.card_bg'))
     .border({ width: 1, color: $r('app.color.line') })
     .clip(true)
-    .margin({ left: 12, right: 12, top: 6, bottom: 2 })
-  }
-
-  build() {
-    Column() {
-      this.barView()
-      if (this.panelOpen) {
-        this.panelView()
-      }
-    }
-    .width('100%')
+    .margin({ left: 12, right: 12, top: 8, bottom: 2 })
     .transition(TransitionEffect.asymmetric(
       TransitionEffect.OPACITY.combine(TransitionEffect.translate({ y: 8 })).animation({ duration: 300, curve: Curve.EaseOut }),
       TransitionEffect.OPACITY.animation({ duration: 450, curve: Curve.EaseOut })

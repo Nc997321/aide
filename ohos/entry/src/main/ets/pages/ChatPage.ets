@@ -2327,9 +2327,9 @@ export struct ChatPage {
           }
         }
         // 后台任务停靠区：停止 chip 之下、输入栏之上（后台任务跨权限应答存活，
-        // 弹窗期间输入框让位但停靠区照常）
+        // 弹窗期间输入框让位但停靠区照常）；列表限高 = 根高 42%（保底 180）
         if (this.store.bgTasks.length > 0) {
-          BgTaskDock({ store: this.store })
+          BgTaskDock({ store: this.store, panelMax: Math.max(this.rootHeight * 0.42, 180) })
         }
         if (this.store.pendingPermissions.length === 0) {
           this.inputBarView()
