@@ -3,7 +3,8 @@
  * 的 .pm 权限应答卡）：FIFO 永远只应答队头，卡片头部带「还有 N 条排队」徽标。
  * 两形态（judgePermissionKind 判定，消费 PermissionShape 的解析/打包）：
  *  - 澄清提问（AskUserQuestion）：标题「需要澄清」，逐题整行选项卡（圆点 +
- *    选项 + 描述），「其他」行内直接输入回答；未全部作答前「提交回答」置灰，
+ *    选项 + 描述），「其他」行内直接输入回答；题目列表一屏限高内滚（bodyMax），
+ *    再长「提交回答 / 跳过」也恒在卡尾可达；未全部作答前「提交回答」置灰，
  *    作答打包 answers 走 permission_response；「跳过」= 无理由拒绝。
  *  - 计划批准（ExitPlanMode）：标题「计划待批准」，计划正文（input.plan）
  *    按消息区同一 Markdown 管线渲染、一屏限高内滚——批准前必须能读完全文，
@@ -12,6 +13,8 @@
  *  - 工具调用（未知工具同款卡）：工具名做标题 + 入参摘要盒；允许 / 拒绝整行
  *    排布；拒绝两步式——点拒绝原地展开理由输入（可留空）→ 确认拒绝 / 返回，
  *    理由走协议 message 通道。
+ * 三形态卡头均带「收起」：先回看上文对话再回来作答，收起后折成一行小条
+ * （形态标签 + 排队徽标，点按整条展开）；队头请求切换（新请求到顶）自动展开。
  * 作答草稿状态随 PermissionRequest 实例走（@Trace 字段级观察，队头切换即
  * 全新草稿）；组件零业务逻辑，只做展示与派发（对照 PWA PermissionSheet）。
  */
@@ -25,9 +28,42 @@ import { MarkdownText } from './MarkdownText';
 @ComponentV2
 export struct PermissionSheet {
   @Require @Param store: ChatStore;
-  /** 计划正文滚动区的限高（页面按根高度折算传入——不能用 List 视口高：
-   *  卡片出现会压缩 List，用它会形成布局反馈环）。 */
-  @Require @Param planBodyMax: number;
+  /** 卡内滚动区（计划正文 / 提问题目列表）的限高（页面按根高度折算传入——
+   *  不能用 List 视口高：卡片出现会压缩 List，用它会形成布局反馈环）。 */
+  @Require @Param bodyMax: number;
+
+  // ── 收起/展开：收起 = 卡片折成一行小条（先回看对话再作答）；队头切换
+  //    （作答队头 / 新请求到顶）自动展开——新请求必须可见 ──
+
+  @Local collapsed: boolean = false;
+  @Local headId: string = '';
+
+  aboutToAppear(): void {
+    const head: PermissionRequest | undefined = this.store.pendingPermissions[0];
+    this.headId = head !== undefined ? head.id : '';
+  }
+
+  @Monitor('store.pendingPermissions')
+  onQueueChange() {
+    const head: PermissionRequest | undefined = this.store.pendingPermissions[0];
+    const id: string = head !== undefined ? head.id : '';
+    if (id !== this.headId) {
+      this.headId = id;
+      this.collapsed = false;
+    }
+  }
+
+  /** 收起态小条的形态标签（与各卡标题同源）。 */
+  private headLabel(p: PermissionRequest): string {
+    const kind: string = judgePermissionKind(p.name);
+    if (kind === 'question') {
+      return '需要澄清';
+    }
+    if (kind === 'plan') {
+      return '计划待批准';
+    }
+    return p.name;
+  }
 
   // ── 作答草稿读取（草稿数组整体替换，读侧随渲染追踪）──
 
@@ -55,6 +91,57 @@ export struct PermissionSheet {
         .fontSize(11)
         .fontColor($r('app.color.text_secondary'))
     }
+  }
+
+  /** 卡头行（三形态共用）：标题 + 排队徽标 + 「收起」入口。 */
+  @Builder
+  cardHead(title: string) {
+    Row() {
+      Text(title)
+        .fontSize(15)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+      Blank()
+      this.queueBadgeView()
+      Text('收起')
+        .fontSize(12)
+        .fontColor($r('app.color.text_secondary'))
+        .padding({ left: 10, right: 2, top: 6, bottom: 6 })
+        .onClick(() => {
+          this.collapsed = true;
+        })
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
+  }
+
+  /** 收起态小条：形态标签 + 排队徽标一行；点按整条展开回卡片。 */
+  @Builder
+  collapsedBar(p: PermissionRequest) {
+    Row() {
+      Text(this.headLabel(p))
+        .fontSize(13)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.text_primary'))
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+        .constraintSize({ maxWidth: '60%' })
+      Text('已收起 · 点按展开')
+        .fontSize(11)
+        .fontColor($r('app.color.text_secondary'))
+        .maxLines(1)
+        .layoutWeight(1)
+        .margin({ left: 8 })
+      this.queueBadgeView()
+    }
+    .width('100%')
+    .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+    .borderRadius(12)
+    .backgroundColor($r('app.color.card_bg'))
+    .border({ width: 1, color: $r('app.color.line') })
+    .onClick(() => {
+      this.collapsed = false;
+    })
   }
 
   /** 单/多选圆点（对照 mock .pm-radio：选中描边着色 + 内嵌实心点）。 */
@@ -123,20 +210,23 @@ export struct PermissionSheet {
   @Builder
   questionCard(p: PermissionRequest) {
     Column({ space: 10 }) {
-      Row() {
-        Text('需要澄清')
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-        Blank()
-        this.queueBadgeView()
+      this.cardHead('需要澄清')
+
+      // 题目列表一屏限高内滚（对照计划卡正文同款限高）：题目/选项再多，
+      // 底部按钮行也不会被顶出屏外
+      Scroll() {
+        Column({ space: 10 }) {
+          ForEach(p.questions, (spec: QuestionSpec, qi: number) => {
+            this.questionItem(p, spec, qi)
+          }, (spec: QuestionSpec, qi: number) => `${p.id}-q${qi}`)
+        }
+        .width('100%')
       }
       .width('100%')
-      .alignItems(VerticalAlign.Center)
-
-      ForEach(p.questions, (spec: QuestionSpec, qi: number) => {
-        this.questionItem(p, spec, qi)
-      }, (spec: QuestionSpec, qi: number) => `${p.id}-q${qi}`)
+      .align(Alignment.Top)
+      .constraintSize({ maxHeight: this.bodyMax })
+      .scrollBar(BarState.Auto)
+      .edgeEffect(EdgeEffect.Spring)
 
       Button('提交回答')
         .fontSize(14)
@@ -279,16 +369,7 @@ export struct PermissionSheet {
   @Builder
   planCard(p: PermissionRequest) {
     Column({ space: 10 }) {
-      Row() {
-        Text('计划待批准')
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-        Blank()
-        this.queueBadgeView()
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
+      this.cardHead('计划待批准')
 
       if (p.fromSubagentName !== '') {
         Text(`来自子代理 ${p.fromSubagentName}`)
@@ -308,7 +389,7 @@ export struct PermissionSheet {
       }
       .width('100%')
       .align(Alignment.Top)
-      .constraintSize({ maxHeight: this.planBodyMax })
+      .constraintSize({ maxHeight: this.bodyMax })
       .scrollBar(BarState.Auto)
       .edgeEffect(EdgeEffect.Spring)
 
@@ -350,16 +431,7 @@ export struct PermissionSheet {
   @Builder
   toolCard(p: PermissionRequest) {
     Column({ space: 10 }) {
-      Row() {
-        Text(p.name)
-          .fontSize(15)
-          .fontWeight(FontWeight.Medium)
-          .fontColor($r('app.color.text_primary'))
-        Blank()
-        this.queueBadgeView()
-      }
-      .width('100%')
-      .alignItems(VerticalAlign.Center)
+      this.cardHead(p.name)
 
       if (p.fromSubagentName !== '') {
         Text(`来自子代理 ${p.fromSubagentName}`)
@@ -415,7 +487,9 @@ export struct PermissionSheet {
     Column() {
       ForEach(this.store.pendingPermissions, (p: PermissionRequest, i: number) => {
         if (i === 0) {
-          if (judgePermissionKind(p.name) === 'question') {
+          if (this.collapsed) {
+            this.collapsedBar(p)
+          } else if (judgePermissionKind(p.name) === 'question') {
             this.questionCard(p)
           } else if (judgePermissionKind(p.name) === 'plan') {
             this.planCard(p)

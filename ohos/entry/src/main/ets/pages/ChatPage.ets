@@ -1142,8 +1142,9 @@ export struct ChatPage {
     return Math.max(this.listHeight - THINK_CAP_RESERVE, THINK_CAP_MIN);
   }
 
-  /** 计划卡正文一屏限高：根高度折半（保底 200，短计划不撑空、长计划按钮仍在卡尾）。 */
-  private planBodyMax(): number {
+  /** 权限卡内滚动区（计划正文 / 提问题目列表）一屏限高：根高度折半（保底 200，
+   *  短内容不撑空、长内容内滚而提交/批准按钮恒在卡尾）。 */
+  private sheetBodyMax(): number {
     return Math.max(this.rootHeight * 0.5, 200);
   }
 
@@ -2319,7 +2320,7 @@ export struct ChatPage {
         // 弹窗期间输入框整块让位（对照原型「弹窗期间输入框隐藏」）：未决请求
         // 挂着时新消息本就会排队等答完，答完输入框回归
         if (this.store.pendingPermissions.length > 0) {
-          PermissionSheet({ store: this.store, planBodyMax: this.planBodyMax() })
+          PermissionSheet({ store: this.store, bodyMax: this.sheetBodyMax() })
         } else {
           // 停止回复 chip：输入栏上方右侧悬空（页底背景），仅回复中占位
           if (this.canStop()) {
