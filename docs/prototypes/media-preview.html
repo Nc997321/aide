@@ -315,14 +315,14 @@ h1,h2 { font-size: 13px; font-weight: 600; }
           <p class="segment-hint" id="segment-hint">停在要看的位置设起点，再移动到另一处设终点。</p>
         </div>
         <div class="source-picker"><label for="source-select">这次交付的文件</label><select id="source-select" aria-label="切换素材或版本"></select></div>
-        <div class="preview-bottom"><button id="save-local" class="quiet" type="button"><svg class="icon"><use href="#i-save"/></svg>保存到本机</button><button id="load-local" class="quiet" type="button"><svg class="icon"><use href="#i-folder"/></svg>试播本机文件</button></div>
+        <div class="preview-bottom"><button id="save-local" class="quiet" type="button"><svg class="icon"><use href="#i-save"/></svg>另存为…</button><button id="load-local" class="quiet" type="button"><svg class="icon"><use href="#i-folder"/></svg>试播本机文件</button></div>
         <input id="local-files" class="local-picker" type="file" accept="video/*,audio/*,.mp4,.wav,.webm,.mp3,.m4a,.ogg" multiple aria-label="选择本机音视频文件">
         <p class="status-message" id="preview-status" role="status" aria-live="polite">示例可模拟播放；选择本机文件后可真实播放，文件不会上传。</p>
       </div>
     </section>
   </main>
 </div>
-<dialog id="save-dialog" class="dialog" aria-labelledby="save-title"><h2 id="save-title">保存到本机</h2><p>正式版会打开系统保存对话框，让你选择文件名和保存位置。</p><span id="save-name" class="save-filename mono"></span><p class="small muted">此处仅演示确认与取消，不会写入文件。不会上传文件，也不会自动转码。</p><div class="dialog-actions"><button id="cancel-save" type="button">取消</button><button id="confirm-save" class="primary" type="button">确认（演示）</button></div></dialog>
+<dialog id="save-dialog" class="dialog" aria-labelledby="save-title"><h2 id="save-title">另存为…</h2><p>正式版会打开系统保存对话框，让你选择文件名和保存位置。</p><span id="save-name" class="save-filename mono"></span><p class="small muted">此处仅演示确认与取消，不会写入文件。不会上传文件，也不会自动转码。</p><div class="dialog-actions"><button id="cancel-save" type="button">取消</button><button id="confirm-save" class="primary" type="button">确认（演示）</button></div></dialog>
 <script>
 const $ = (id) => document.getElementById(id);
 const fixtures = [

@@ -218,6 +218,18 @@ function adoptView(v: BrowserViewDto): Tab {
   return t;
 }
 
+/** 外部页面优先沿用未输入、未导航的空标签，不留下启动占位页。 */
+function attachTab(incoming: Tab): Tab {
+  const empty = tabs.value.find((t) => !t.viewId && !t.url && !creatingTabs.has(t)
+    && (t.id !== activeId.value || !address.value.trim()));
+  if (empty) {
+    Object.assign(empty, incoming, { id: empty.id });
+    return empty;
+  }
+  tabs.value.push(incoming);
+  return incoming;
+}
+
 /** 摘掉一个标签，**不动视图**（视图已被销毁，或由别的驱动者负责）。空表时补一个空标签。 */
 function dropTab(id: string) {
   const i = tabs.value.findIndex((t) => t.id === id);
@@ -237,7 +249,7 @@ function dropTab(id: string) {
 /** 库里有的视图而标签条上没有 → 补标签（agent 开 tab 时面板还没挂载就是这条路径）。 */
 function adoptMissing(views: BrowserViewDto[]) {
   for (const v of views) {
-    if (!tabs.value.some((t) => t.viewId === v.id)) tabs.value.push(adoptView(v));
+    if (!tabs.value.some((t) => t.viewId === v.id)) attachTab(adoptView(v));
   }
 }
 
@@ -300,7 +312,7 @@ function applyViewEvent(e: ViewEventDto) {
     }
     // 认不出的视图：可能正是自己在建的那个（应答还没回来）——押后，别急着自己建标签。
     if (deferWhileCreating(e.id, () => applyViewEvent(e))) return;
-    tabs.value.push({ ...blankTab(), viewId: e.id, label: e.label, origin: e.origin });
+    attachTab({ ...blankTab(), viewId: e.id, label: e.label, origin: e.origin });
     return;
   }
   forgetHeldEchoes(e.id);
@@ -321,8 +333,7 @@ function applyNav(e: NavEventDto) {
     // 视图生命周期事件还没到（或面板错过了）→ 就地长一个标签，免得"页面在跑但标签条上没有它"。
     // 自己 create 的回声也走这条路（应答未回、id 未绑）——押后，等绑上了再回放。
     if (deferWhileCreating(e.id, () => applyNav(e))) return;
-    t = { ...blankTab(), viewId: e.id };
-    tabs.value.push(t);
+    t = attachTab({ ...blankTab(), viewId: e.id });
   }
   t.nav = navOfEvent(e);
   t.canGoBack = e.can_go_back;
@@ -340,7 +351,10 @@ function applyPendingFocus() {
   if (!want) return;
   const t = tabs.value.find((x) => x.viewId === want);
   if (!t) return; // 视图还没在标签条上出现：留着 pending，等下一次
-  activeId.value = t.id;
+  if (activeId.value === t.id) {
+    syncAddressFromTab();
+    if (viewAllowed.value) void showActive();
+  } else activeId.value = t.id;
   consumePendingFocus(want);
 }
 
@@ -399,15 +413,17 @@ async function openExternally(url: string) {
   const target = normalizeBrowserUrl(url);
   if (!target) return;
 
-  const t = blankTab();
-  tabs.value.push(t);
+  const t = attachTab(blankTab());
   activeId.value = t.id; // 激活 watcher 负责显隐；这里等布局落到占位洞上
   clearMessage();
 
   if (!(await waitForSurface())) return;
   if (!(await ensureView(t, target))) return;
   t.url = target;
-  if (t.id === activeId.value) syncAddressFromTab();
+  if (t.id === activeId.value) {
+    syncAddressFromTab();
+    if (viewAllowed.value) await showActive();
+  }
 }
 
 /**
@@ -827,7 +843,6 @@ onBeforeUnmount(() => {
       </div>
       <button
         class="bp-bm-import"
-        title="从书签文件导入（浏览器导出的 HTML 或 Chromium 的 JSON）"
         @click="pickerVisible = true"
       >
         导入…

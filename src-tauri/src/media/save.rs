@@ -32,7 +32,7 @@ pub(super) async fn to_local(app: &AppHandle, session: Arc<MediaSession>) -> Res
 
 pub(super) async fn open_external(app: &AppHandle, session: Arc<MediaSession>) -> Result<String, String> {
     session.check(app)?;
-    if is_ssh(&session) { return Err("SSH 主机上的媒体无法由本机程序打开；请先保存到本机后再打开。".into()); }
+    if is_ssh(&session) { return Err("SSH 主机上的媒体无法由本机程序打开；请先通过“另存为…”保存后再打开。".into()); }
     let active = session.current().await;
     ensure_current(app, &session, &active).await?;
     let window = app.get_window(&session.owner).ok_or_else(|| "媒体标签所属窗口已关闭".to_string())?;
@@ -67,12 +67,12 @@ async fn prepare_download(
     ensure_current(app, session, &active).await?;
     let guard = CommitGuard { session: Arc::clone(session), active };
     persist_checked(partial, prepared.target, prepared.stamp, guard).await?;
-    Ok("已保存到本机".into())
+    Ok("已另存为所选文件".into())
 }
 
 async fn choose_target(app: &AppHandle, source_path: &str) -> Result<Option<PathBuf>, String> {
     let (sender, receiver) = oneshot::channel();
-    app.dialog().file().set_title("保存媒体到本机")
+    app.dialog().file().set_title("媒体另存为")
         .set_file_name(suggested_name(source_path))
         .save_file(move |selection| {
             if sender.send(selection).is_err() {

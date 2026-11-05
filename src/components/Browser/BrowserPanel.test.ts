@@ -440,6 +440,32 @@ describe("收藏夹目录", () => {
 // `browser-view` 事件知道它存在——旧实现里"认不出的视图 id 一律忽略"，agent 的 tab 就永远
 // 不会出现在标签条上。
 describe("agent 的 tab", () => {
+  it("无页面时保留空标签，媒体创建后沿用它，关闭最后一页再补空标签", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toEqual(["新标签页"]);
+    const v = useBrowserViews();
+    v.__handleViewForTest({ id: "media-1", kind: "created", label: "媒体预览", origin: "user", displayed: false });
+    await nextTick();
+    v.__handleFocusForTest({ id: "media-1" });
+    await flushPromises();
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toEqual(["媒体预览"]);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: "media-1", displayed: true }]);
+    v.__handleViewForTest({ id: "media-1", kind: "closed", label: "媒体预览", origin: "user", displayed: false });
+    await nextTick();
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toEqual(["新标签页"]);
+  });
+
+  it("地址栏尚未提交的输入不会被外部页面覆盖", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    await w.find(".bp-address").setValue("example.org");
+    useBrowserViews().__handleViewForTest({ id: "media-1", kind: "created", label: "媒体预览", origin: "user", displayed: false });
+    await nextTick();
+    expect(w.findAll(".bp-tab-label").map((n) => n.text())).toEqual(["新标签页", "媒体预览"]);
+    expect((w.find(".bp-address").element as HTMLInputElement).value).toBe("example.org");
+  });
+
   it("收到 created 事件 → 标签条上长出一个带归属标记的标签", async () => {
     const w = mountPanel();
     await flushPromises();
@@ -456,6 +482,7 @@ describe("agent 的 tab", () => {
 
     expect(w.findAll(".bp-tab-label").map((n) => n.text())).toContain("vue-admin dev");
     expect(w.findAll(".bp-tab-agent")).toHaveLength(1);
+    expect(w.findAll(".bp-tab")).toHaveLength(1);
   });
 
   it("挂载时对账：事件早于面板的视图也要补出标签", async () => {
@@ -483,6 +510,7 @@ describe("agent 的 tab", () => {
     await flushPromises();
 
     expect(w.findAll(".bp-tab-label").map((n) => n.text())).toContain("vue-admin dev");
+    expect(w.findAll(".bp-tab")).toHaveLength(1);
   });
 
   it("focus 请求 → 切到那个标签；视图被关掉 → 标签跟着消失", async () => {
@@ -664,7 +692,7 @@ describe("别的模块请求打开一个地址（资料库的网页产物预览�
     );
     // 消费掉：不会被第二个面板实例重复打开
     expect(useRightPanel().pendingBrowserUrl.value).toBeNull();
-    expect(w.findAll(".bp-tab")).toHaveLength(2); // 新开一页，不动原来那页
+    expect(w.findAll(".bp-tab")).toHaveLength(1); // 沿用初始空页，不多留占位标签
   });
 
   it("有浮层盖着时先不消费——等浮层关掉再打开（那时占位洞才量得到尺寸）", async () => {

@@ -520,7 +520,7 @@
     on(ui.point, "click", () => runTask(reference({ kind: "point", atMs: Math.round(mediaTime() * 1000) })));
     on(ui.range, "click", () => runTask(reference({ kind: "range", startMs: Math.round(rangeStart * 1000), endMs: Math.round(rangeEnd * 1000) })));
     on(ui.capture, "click", () => runTask(captureAndReference()));
-    on(ui.save, "click", () => runTask(invokeSimpleAction("save", "已保存到本机。")));
+    on(ui.save, "click", () => runTask(invokeSimpleAction("save", "已另存为所选文件。")));
     on(ui.external, "click", () => runTask(invokeSimpleAction("open_external", "已交给系统程序打开。")));
   }
 
