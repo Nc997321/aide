@@ -15,6 +15,7 @@ use std::path::Path;
 pub mod detect;
 pub mod fs_ops;
 pub mod git;
+pub mod media;
 pub mod search;
 pub mod transcripts;
 pub mod watch;

@@ -70,7 +70,7 @@ import { SCENES } from "./hero/scenes";
 import { useWorkspaces } from "@/composables/useWorkspaces";
 import { __resetUsageTipsForTest } from "@/composables/useUsageTips";
 import { resetInputHistory } from "@/composables/useInputHistory";
-import { __resetComposerDraftsForTest } from "@aide/sdk/composables/useComposerDrafts";
+import { __resetComposerDraftsForTest, blankDraftKey, useComposerDrafts } from "@aide/sdk/composables/useComposerDrafts";
 // 输入框草稿是模块级、按会话 / 空白键自持：每条用例收尾清掉，免得上一条写的字留到下一条
 afterEach(() => __resetComposerDraftsForTest());
 
@@ -451,6 +451,30 @@ describe("ChatInputBox · 欢迎页场景", () => {
     const [, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
     expect(opts.scene).toBeUndefined();
     expect(opts.mentions.sendText).toBe("你好");
+  });
+});
+
+describe("ChatInputBox · media refs", () => {
+  it("refs-only 可发送，截图序号绑定最终 images，并且确认前/期间不丢草稿新内容", async () => {
+    const draft = useComposerDrafts().draftOf(blankDraftKey("default"));
+    const sent = { ref: { source: { path: "clip.mp4", title: "clip", revision: "r1" }, selection: { kind: "point" as const, atMs: 120 } }, frame: { data: "frame-data", mediaType: "image/png", previewUrl: "data:image/png;base64,frame-data" } };
+    const newer = { ref: { source: { path: "next.mp4", title: "next", revision: "r2" }, selection: { kind: "range" as const, startMs: 10, endMs: 20 } } };
+    draft.mediaRefs.push(sent);
+    const w = mountBox();
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    const [, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
+    expect(opts.images).toEqual([{ data: "frame-data", mediaType: "image/png" }]);
+    expect(opts.mediarefs[0].frameIndex).toBe(0);
+    expect(draft.mediaRefs).toHaveLength(1); // 取消确认：nonce 尚未递增，不清理
+
+    draft.mediaRefs.push(newer);
+    await textarea(w).setValue("新写的内容");
+    await w.setProps({ sendConfirmedNonce: 1 });
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("新写的内容");
+    expect(draft.mediaRefs).toEqual([newer]);
+    expect(w.findAll(".media-ref-chip")).toHaveLength(1);
   });
 });
 

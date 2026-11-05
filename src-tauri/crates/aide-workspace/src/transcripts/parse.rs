@@ -100,7 +100,9 @@ pub(super) fn parse_transcript_lines_seeded(
         };
 
         let api_id = v.pointer("/message/id").and_then(Value::as_str);
-        let base_index = api_id.map(|id| *block_indices.entry(id.to_string()).or_default()).unwrap_or(0);
+        let base_index = api_id
+            .map(|id| *block_indices.entry(id.to_string()).or_default())
+            .unwrap_or(0);
         let block_count = content_val.as_array().map_or(0, Vec::len);
         if let Some(id) = api_id {
             block_indices.insert(id.to_string(), base_index + block_count);
@@ -115,48 +117,58 @@ pub(super) fn parse_transcript_lines_seeded(
                 }]
             }
         } else if let Some(arr) = content_val.as_array() {
-            arr.iter().enumerate()
+            arr.iter()
+                .enumerate()
                 .filter_map(|(index, block)| {
-                  let parsed = match block.get("type").and_then(|t| t.as_str()) {
-                    Some("text") => {
-                        block
-                            .get("text")
-                            .and_then(|t| t.as_str())
-                            .map(|t| HistoryBlock::Text {
-                                text: t.to_string(),
-                            })
+                    let parsed =
+                        match block.get("type").and_then(|t| t.as_str()) {
+                            Some("text") => block.get("text").and_then(|t| t.as_str()).map(|t| {
+                                HistoryBlock::Text {
+                                    text: t.to_string(),
+                                }
+                            }),
+                            Some("thinking") => {
+                                block.get("thinking").and_then(|t| t.as_str()).map(|t| {
+                                    HistoryBlock::Thinking {
+                                        text: t.to_string(),
+                                    }
+                                })
+                            }
+                            Some("tool_use") => {
+                                let id = block.get("id").and_then(|t| t.as_str())?.to_string();
+                                let name = block.get("name").and_then(|t| t.as_str())?.to_string();
+                                if SUBAGENT_TOOL_NAMES.contains(&name.as_str()) {
+                                    return None;
+                                }
+                                let input = block.get("input").cloned().unwrap_or(Value::Null);
+                                let (result, is_error) = tool_results
+                                    .get(&id)
+                                    .map(|(c, e)| (Some(c.clone()), Some(*e)))
+                                    .unwrap_or((None, None));
+                                Some(HistoryBlock::ToolCall {
+                                    id,
+                                    name,
+                                    input,
+                                    result,
+                                    is_error,
+                                })
+                            }
+                            Some("image") => {
+                                let source = block.get("source")?;
+                                if source.get("type").and_then(Value::as_str) != Some("base64") {
+                                    return None;
+                                }
+                                let data = source.get("data").and_then(Value::as_str)?.to_string();
+                                let media_type = source.get("media_type").and_then(Value::as_str)?.to_string();
+                                Some(HistoryBlock::Image { data, media_type })
+                            }
+                            // 未知 block 类型不影响同一消息中的其他内容。
+                            _ => None,
+                        };
+                    if parsed.is_some() {
+                        source_ids.push(api_id.map(|id| format!("{id}:{}", base_index + index)));
                     }
-                    Some("thinking") => block.get("thinking").and_then(|t| t.as_str()).map(|t| {
-                        HistoryBlock::Thinking {
-                            text: t.to_string(),
-                        }
-                    }),
-                    Some("tool_use") => {
-                        let id = block.get("id").and_then(|t| t.as_str())?.to_string();
-                        let name = block.get("name").and_then(|t| t.as_str())?.to_string();
-                        if SUBAGENT_TOOL_NAMES.contains(&name.as_str()) {
-                            return None;
-                        }
-                        let input = block.get("input").cloned().unwrap_or(Value::Null);
-                        let (result, is_error) = tool_results
-                            .get(&id)
-                            .map(|(c, e)| (Some(c.clone()), Some(*e)))
-                            .unwrap_or((None, None));
-                        Some(HistoryBlock::ToolCall {
-                            id,
-                            name,
-                            input,
-                            result,
-                            is_error,
-                        })
-                    }
-                    // 图片等其余 block 类型：维持原有降级行为，暂不重建。
-                    _ => None,
-                  };
-                  if parsed.is_some() {
-                      source_ids.push(api_id.map(|id| format!("{id}:{}", base_index + index)));
-                  }
-                  parsed
+                    parsed
                 })
                 .collect()
         } else {
@@ -475,6 +487,27 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn image_blocks_keep_base64_mime_order_and_source_indices() {
+        let lines = vec![line(serde_json::json!({
+            "type": "user",
+            "uuid": "user-1",
+            "message": { "id": "api-1", "content": [
+                { "type": "text", "text": "before" },
+                { "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": "YWJj" } },
+                { "type": "text", "text": "after" }
+            ] }
+        }))];
+        let messages = parse_transcript_lines(&lines);
+        assert_eq!(messages.len(), 1);
+        assert!(matches!(&messages[0].blocks[..], [
+            HistoryBlock::Text { text: before },
+            HistoryBlock::Image { data, media_type },
+            HistoryBlock::Text { text: after }
+        ] if before == "before" && data == "YWJj" && media_type == "image/png" && after == "after"));
+        assert_eq!(messages[0].source_ids, vec![Some("api-1:0".into()), Some("api-1:1".into()), Some("api-1:2".into())]);
+    }
+
     #[test]
     fn parse_first_pass_skips_non_tool_result_blocks() {
         // user 行 content 数组里 text 与 tool_result 混合：第一遍只收 tool_result，

@@ -1,4 +1,6 @@
 import { getTransport } from "./transport";
+export { mediaApi } from "./api/media";
+export type { MediaOpenRequest, MediaFeedback } from "./api/media";
 export interface HandoffTarget {
   provider: string;
   model: string;

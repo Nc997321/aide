@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { itemsToChatMessages } from "./transcriptMapping";
 import type { ToolCallBlock } from "../../types/chat";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
+import { formatMediaRefsForPrompt } from "../../utils/mediaRefs";
 
 function userItem(text: string): ChatMessageItem {
   const blocks: HistoryBlock[] = [{ type: "text", text }];
@@ -15,6 +16,23 @@ function cards(items: ChatMessageItem[]): ToolCallBlock[] {
     (b): b is ToolCallBlock => b.type === "tool_call",
   );
 }
+
+describe("history restores images and media references", () => {
+  it("keeps the image block and mediaref block in message order", () => {
+    const mediaref = { source: { path: "clip.mp4", title: "clip", revision: "rev" }, selection: { kind: "point" as const, atMs: 42 }, frameIndex: 0 };
+    const text = `请看截图\n\n${formatMediaRefsForPrompt([mediaref], 1)}`;
+    const message = itemsToChatMessages([{
+      role: "user", timestamp: 1,
+      blocks: [
+        { type: "image", data: "YWJj", mediaType: "image/png" },
+        { type: "text", text },
+      ],
+    }])[0];
+    expect(message.blocks.map((block) => block.type)).toEqual(["image", "text", "mediaref"]);
+    expect(message.blocks[0]).toMatchObject({ type: "image", data: "YWJj", mediaType: "image/png" });
+    expect(message.blocks[2]).toMatchObject({ type: "mediaref", ...mediaref });
+  });
+});
 
 describe("itemsToChatMessages：@引用段拆回附件卡", () => {
   it("目录段 → 合成 Read 卡带 isDir", () => {

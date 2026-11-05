@@ -10,6 +10,9 @@ import { describe, it, expect, vi } from "vitest";
 // （Bash/Read/Grep）保证变更卡的 diff 视图不进渲染路径，同时 mock 掉 xterm。
 // 变更卡自己那一路（静态 diff：无 CodeMirror、节点数量级）由
 // fileviewer/StaticDiff.test.ts 守。
+const media = vi.hoisted(() => ({ open: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("@aide/sdk/api/media", () => ({ mediaApi: { open: media.open } }));
+
 const t = vi.hoisted(() => {
   class Terminal {
     write = () => {};
@@ -226,6 +229,45 @@ describe("ChatMessage — 过程接线", () => {
       expect(w.find(".tool-item").exists()).toBe(true);
       expect(w.find(".tool-item--line").exists()).toBe(false);
     } finally { w.unmount(); }
+  });
+});
+
+describe("ChatMessage — 媒体成果", () => {
+  const body = "[开场](media/opening.mp4) · [配乐](media/music.wav) · [重复](media/opening.mp4)";
+
+  it("定稿助手正文提取并去重卡片，保留正文，点击统一打开媒体列表", async () => {
+    const message = makeMessage([{ type: "text", text: body }], true);
+    const w = mount(ChatMessage, {
+      props: { message, workspacePath: "C:/project", draftKey: "session-media" },
+    });
+    expect(w.findAll(".media-artifact")).toHaveLength(0);
+    await w.setProps({ message: { ...message, streaming: false } });
+    expect(w.findAll(".media-artifact")).toHaveLength(2);
+    expect(w.find(".msg-text").text()).toContain("开场");
+    expect(w.find(".msg-text").text()).toContain("配乐");
+    media.open.mockClear();
+    await w.findAll(".media-artifact")[1].trigger("click");
+    expect(media.open).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+      files: [
+        { path: "C:/project/media/opening.mp4", title: "开场" },
+        { path: "C:/project/media/music.wav", title: "配乐" },
+      ],
+      selected: 1,
+      target: { draftKey: "session-media" },
+    }));
+    w.unmount();
+  });
+
+  it("用户消息与没有消息工作区的正文不生成媒体成果卡", () => {
+    const assistant = makeMessage([{ type: "text", text: body }], false);
+    const user = mount(ChatMessage, {
+      props: { message: { ...assistant, role: "user" }, workspacePath: "C:/project" },
+    });
+    expect(user.findAll(".media-artifact")).toHaveLength(0);
+    user.unmount();
+    const noWorkspace = mount(ChatMessage, { props: { message: assistant } });
+    expect(noWorkspace.findAll(".media-artifact")).toHaveLength(0);
+    noWorkspace.unmount();
   });
 });
 

@@ -159,6 +159,7 @@ fn snapshot_text(raw: &str) -> Result<String, String> {
                     ));
                 }
                 HistoryBlock::Thinking { .. } => {}
+                HistoryBlock::Image { .. } => text.push_str("（图片内容略）\n"),
             }
         }
     }

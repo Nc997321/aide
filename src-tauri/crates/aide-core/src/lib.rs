@@ -17,6 +17,7 @@ pub mod automation;
 pub mod link;
 pub mod lsp;
 pub mod mirrors;
+pub mod media;
 pub mod commands;
 pub mod host;
 pub mod paths;
@@ -64,6 +65,8 @@ pub struct Core {
     pub settings: Arc<SettingsService>,
     /// 文件树监听（同一时刻只盯一个根：一个窗口一棵树）。
     pub(crate) watch: FileWatchService,
+    /// Descriptor-backed media preview handles owned by this Host.
+    pub media: Arc<media::MediaService>,
     /// 终端 / 运行配置的 PTY 会话。
     pub pty: pty::ShellManager,
     /// 语言服务器（按 工作区 × 语言 各一台）。
@@ -111,6 +114,7 @@ impl Core {
             workspace,
             settings,
             watch: FileWatchService::default(),
+            media: Arc::new(media::MediaService::default()),
             pty: pty::ShellManager::new(),
             link: Arc::new(link::LinkService::new()),
             apps: Arc::new(apps::servers::ServerPool::default()),

@@ -60,6 +60,10 @@ describe("UserMessageBlock 两份定义同形", () => {
     expect(sidecarBlock("pageref")).toEqual(sdkInterface("PageRef"));
   });
 
+  it("mediaref：字段（含可选性）一致", () => {
+    expect(sidecarBlock("mediaref")).toEqual(sdkInterface("MediaRef"));
+  });
+
   it("subsession_report：字段（含可选性）一致", () => {
     expect(sidecarBlock("subsession_report")).toEqual(sdkInterface("SubsessionReport"));
   });

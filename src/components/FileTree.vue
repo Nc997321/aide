@@ -13,9 +13,21 @@ import { planWatchRefresh } from "../utils/fileTreeWatch";
 import { mergeFileEntries } from "../utils/fileTree";
 import WorkspacePicker from "../ui/WorkspacePicker.vue";
 import type { FileEntry, WorkspaceInfo } from "../types";
+import { isMediaFilePath } from "@aide/sdk/utils/mediaArtifacts";
+import { blankDraftKey } from "@aide/sdk/composables/useComposerDrafts";
+import { useFileResolver } from "../composables/useFileResolver";
+import { usePaneLayout } from "../composables/usePaneLayout";
+import { findGroup } from "../composables/paneLayout/tree";
 
 const props = defineProps<{ sessionId: string }>();
 const emit = defineEmits<{ "switch-workspace": [wsKey: string] }>();
+const paneLayout = usePaneLayout();
+const mediaDraftKey = computed(() => {
+  if (props.sessionId) return props.sessionId;
+  const group = findGroup(paneLayout.layout.root, paneLayout.layout.focusedGroupId);
+  const activeTab = group?.tabs.find((tab) => tab.id === group.activeTabId);
+  return blankDraftKey(activeTab?.id ?? `group:${group?.id ?? "default"}`);
+});
 
 const projectInfo = ref({ root: "...", name: "...", branch: "" });
 const treeData = ref<FileEntry[]>([]);
@@ -117,11 +129,16 @@ function selectFile(path: string) {
 }
 
 const fileViewer = useFileViewer();
+const { openResolved } = useFileResolver({ draftKey: () => mediaDraftKey.value });
 const { clipboard, copyWithOs, cutWithOs, clear, executePaste, resolvePasteEntry } = useFileClipboard();
 const modal = useModal();
 
 function openFile(path: string) {
   selectFile(path);
+  if (isMediaFilePath(path)) {
+    void openResolved(path, projectInfo.value.root || undefined);
+    return;
+  }
   fileViewer.open(path);
 }
 

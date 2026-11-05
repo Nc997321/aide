@@ -29,6 +29,8 @@ export function estimateBlockBytes(block: ContentBlock): number {
       return safeJsonBytes(block.input) + (block.result ? block.result.length * 2 : 0);
     case "image":
       return block.data.length * 2;
+    case "mediaref":
+      return safeJsonBytes(block);
     case "subagent": {
       let bytes = (block.prompt?.length ?? 0) * 2 + (block.result?.length ?? 0) * 2;
       for (const e of block.entries) {

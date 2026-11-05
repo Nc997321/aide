@@ -71,6 +71,24 @@ export interface ImageBlock {
   truncated?: TruncatedInfo;
 }
 
+export interface MediaSource {
+  path: string;
+  title: string;
+  revision: string;
+}
+
+export type MediaSelection =
+  | { kind: "point"; atMs: number }
+  | { kind: "range"; startMs: number; endMs: number };
+
+/** 仅描述本地媒体中的时间位置，不授予文件/目录访问权。 */
+export interface MediaRef {
+  source: MediaSource;
+  selection: MediaSelection;
+  /** 对应同一用户消息 images 数组的 0-based 实际序号。 */
+  frameIndex?: number;
+}
+
 /** 子代理内部时间线上的一项——按到达顺序混排文本/thinking 增量累积的段落，以及
  *  一次完整的工具调用（工具调用没有"增量"概念，一次到位）。tool 项的 toolUseId 是该
  *  调用在子代理内部的 id，sidecar 的 subagent_tool_result 据此把产出回填到 result。
@@ -138,6 +156,9 @@ export interface ThinkingBlock {
 /** 用户气泡里的页面选区卡片（由 display 的 `pageref` 块映射而来）。 */
 export type PageRefBlock = { type: "pageref" } & PageRef;
 
+/** 用户气泡里的媒体时间定位卡片；不含文件读取或授权语义。 */
+export type MediaRefBlock = { type: "mediaref" } & MediaRef;
+
 /** 用户气泡里的知识库选区卡片（由 display 的 `kbref` 块映射而来）。 */
 export type KbRefBlock = { type: "kbref" } & KbRef;
 
@@ -149,6 +170,7 @@ export type ContentBlock = (
   | SubagentBlock
   | ActionBlock
   | PageRefBlock
+  | MediaRefBlock
   | KbRefBlock
   | SubsessionReportBlock
   | SubsessionInstructionBlock
@@ -470,6 +492,8 @@ export type UserMessageBlock =
   /** 页面选区：浏览器里点选的元素 + 用户意见。发给模型的是展开文本（utils/pageRefs），
    *  这里只描述「有什么」。不认识该块的客户端跳过它，整条消息不消失。 */
   | ({ type: "pageref" } & PageRef)
+  /** 媒体时间定位；与 sidecar UserMessageBlock 同形，不授予读取权限。 */
+  | ({ type: "mediaref" } & MediaRef)
   /** 知识库选区：用户圈定的一段文档源文 + 意见。语义是授权（只许改这一段）。 */
   | ({ type: "kbref" } & KbRef)
   /** 子会话回报（Host 投给父会话）：渲染成系统卡片，不是用户气泡。 */

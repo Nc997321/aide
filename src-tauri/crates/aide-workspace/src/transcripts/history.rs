@@ -6,8 +6,8 @@ use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use super::parse::{
-    is_synthetic_user_entry, parse_transcript_lines, parse_transcript_lines_with_starts,
-    parse_transcript_lines_seeded, SUBAGENT_TOOL_NAMES,
+    is_synthetic_user_entry, parse_transcript_lines, parse_transcript_lines_seeded,
+    parse_transcript_lines_with_starts, SUBAGENT_TOOL_NAMES,
 };
 use super::{ChatMessageItem, LoadMessagesResult};
 
@@ -16,9 +16,13 @@ pub fn parse_snapshot(text: &str) -> Result<Vec<ChatMessageItem>, String> {
     let mut lines: Vec<String> = Vec::new();
     let source: Vec<&str> = text.lines().collect();
     for (index, line) in source.iter().enumerate() {
-        if line.trim().is_empty() { continue; }
+        if line.trim().is_empty() {
+            continue;
+        }
         if serde_json::from_str::<Value>(line).is_err() {
-            if index + 1 == source.len() && !text.ends_with('\n') { break; }
+            if index + 1 == source.len() && !text.ends_with('\n') {
+                break;
+            }
             return Err(format!("会话快照第 {} 行损坏，无法可靠生成摘要", index + 1));
         }
         lines.push((*line).to_string());
@@ -54,16 +58,23 @@ fn read_all_messages(file: fs::File, file_len: u64) -> Result<LoadMessagesResult
     let mut offset = 0u64;
     loop {
         let mut line = String::new();
-        let bytes = reader.read_line(&mut line).map_err(|e| format!("Read error: {e}"))?;
-        if bytes == 0 { break; }
+        let bytes = reader
+            .read_line(&mut line)
+            .map_err(|e| format!("Read error: {e}"))?;
+        if bytes == 0 {
+            break;
+        }
         starts.push(offset);
         offset += bytes as u64;
         lines.push(line.trim_end_matches(['\r', '\n']).to_string());
     }
-    let messages = parse_transcript_lines_with_starts(&lines).into_iter().map(|(mut message, index)| {
-        message.offset_bytes = starts.get(index).copied();
-        message
-    }).collect();
+    let messages = parse_transcript_lines_with_starts(&lines)
+        .into_iter()
+        .map(|(mut message, index)| {
+            message.offset_bytes = starts.get(index).copied();
+            message
+        })
+        .collect();
     Ok(LoadMessagesResult {
         messages,
         next_offset_bytes: 0,
@@ -125,33 +136,69 @@ fn read_page_backwards(
 /// A byte page can begin between two persisted blocks of the same API response.
 /// Recover only that response's preceding block count, stopping at the previous
 /// response/user boundary; identities must not depend on page size or chunk edges.
-fn source_prefix(file: &fs::File, lines: &[String], starts: &[u64]) -> Result<std::collections::HashMap<String, usize>, String> {
+fn source_prefix(
+    file: &fs::File,
+    lines: &[String],
+    starts: &[u64],
+) -> Result<std::collections::HashMap<String, usize>, String> {
     let mut seed = std::collections::HashMap::new();
     for (index, line) in lines.iter().enumerate() {
-        let Ok(value) = serde_json::from_str::<Value>(line) else { continue };
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
         match value.get("type").and_then(Value::as_str) {
-            Some("user") if !is_synthetic_user_entry(&value)
-                && value.pointer("/message/content").is_some_and(|c| c.is_string() || c.as_array().is_some_and(|a| a.iter().any(|b| b.get("type").and_then(Value::as_str) == Some("text")))) => break,
+            Some("user")
+                if !is_synthetic_user_entry(&value)
+                    && value.pointer("/message/content").is_some_and(|c| {
+                        c.is_string()
+                            || c.as_array().is_some_and(|a| {
+                                a.iter()
+                                    .any(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                            })
+                    }) =>
+            {
+                break
+            }
             Some("assistant") => {
-                let Some(id) = value.pointer("/message/id").and_then(Value::as_str) else { break };
+                let Some(id) = value.pointer("/message/id").and_then(Value::as_str) else {
+                    break;
+                };
                 let mut cursor = starts[index];
                 let mut bytes = Vec::new();
                 loop {
-                    if cursor == 0 { break; }
+                    if cursor == 0 {
+                        break;
+                    }
                     let (chunk, start) = read_chunk_backwards(file, cursor)?;
                     bytes.splice(0..0, chunk);
                     cursor = start;
                     let mut count = 0;
                     let mut boundary = false;
                     for prior in split_lines(&bytes, cursor).0.iter().rev() {
-                        let Ok(prior) = serde_json::from_str::<Value>(prior) else { continue };
+                        let Ok(prior) = serde_json::from_str::<Value>(prior) else {
+                            continue;
+                        };
                         match prior.get("type").and_then(Value::as_str) {
                             Some("assistant") => {
-                                if prior.pointer("/message/id").and_then(Value::as_str) != Some(id) { boundary = true; break; }
-                                count += prior.pointer("/message/content").and_then(Value::as_array).map_or(0, Vec::len);
+                                if prior.pointer("/message/id").and_then(Value::as_str) != Some(id)
+                                {
+                                    boundary = true;
+                                    break;
+                                }
+                                count += prior
+                                    .pointer("/message/content")
+                                    .and_then(Value::as_array)
+                                    .map_or(0, Vec::len);
                             }
-                            Some("user") if !is_synthetic_user_entry(&prior)
-                                && prior.pointer("/message/content").is_some_and(Value::is_string) => { boundary = true; break; }
+                            Some("user")
+                                if !is_synthetic_user_entry(&prior)
+                                    && prior
+                                        .pointer("/message/content")
+                                        .is_some_and(Value::is_string) =>
+                            {
+                                boundary = true;
+                                break;
+                            }
                             _ => {}
                         }
                     }
@@ -311,13 +358,18 @@ fn trim_to_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::HistoryBlock;
+    use super::*;
 
     #[test]
     fn snapshot_rejects_corrupt_middle_but_allows_inflight_tail() {
         let user = r#"{"type":"user","message":{"content":"保留目标"}}"#;
-        assert_eq!(parse_snapshot(&format!("{user}\n{{\"unfinished")).unwrap().len(), 1);
+        assert_eq!(
+            parse_snapshot(&format!("{user}\n{{\"unfinished"))
+                .unwrap()
+                .len(),
+            1
+        );
         assert!(parse_snapshot(&format!("{user}\nBROKEN\n{user}\n")).is_err());
         assert!(parse_snapshot("BROKEN\n").is_err());
     }
@@ -349,15 +401,27 @@ mod tests {
     fn sdk_identities_are_stable_across_split_rows_and_byte_pages() {
         let lines = vec![
             line(serde_json::json!({"type":"user", "uuid":"task", "message":{"content":"任务"}})),
-            line(serde_json::json!({"type":"assistant", "uuid":"text", "message":{"id":"api", "content":[{"type":"text", "text":"x".repeat(CHUNK_SIZE as usize + 100)}]}})),
-            line(serde_json::json!({"type":"assistant", "uuid":"sub", "message":{"id":"api", "content":[{"type":"tool_use", "id":"sub", "name":"Agent", "input":{}}]}})),
-            line(serde_json::json!({"type":"assistant", "uuid":"tool", "message":{"id":"api", "content":[{"type":"tool_use", "id":"tool", "name":"Read", "input":{}}]}})),
+            line(
+                serde_json::json!({"type":"assistant", "uuid":"text", "message":{"id":"api", "content":[{"type":"text", "text":"x".repeat(CHUNK_SIZE as usize + 100)}]}}),
+            ),
+            line(
+                serde_json::json!({"type":"assistant", "uuid":"sub", "message":{"id":"api", "content":[{"type":"tool_use", "id":"sub", "name":"Agent", "input":{}}]}}),
+            ),
+            line(
+                serde_json::json!({"type":"assistant", "uuid":"tool", "message":{"id":"api", "content":[{"type":"tool_use", "id":"tool", "name":"Read", "input":{}}]}}),
+            ),
         ];
         let path = temp_jsonl("source-identities", &(lines.join("\r\n") + "\r\n"));
         let full = load_messages_at(&path, None, None).unwrap();
         assert_eq!(full.messages[0].id.as_deref(), Some("task"));
-        assert_eq!(full.messages[1].offset_bytes, Some(lines[0].len() as u64 + 2));
-        assert_eq!(full.messages[1].source_ids, vec![Some("api:0".into()), Some("api:2".into())]);
+        assert_eq!(
+            full.messages[1].offset_bytes,
+            Some(lines[0].len() as u64 + 2)
+        );
+        assert_eq!(
+            full.messages[1].source_ids,
+            vec![Some("api:0".into()), Some("api:2".into())]
+        );
         let tail = load_messages_at(&path, None, Some(1)).unwrap();
         assert_eq!(tail.messages.len(), 1);
         assert_eq!(tail.messages[0].source_ids, vec![Some("api:2".into())]);
@@ -774,7 +838,8 @@ mod tests {
     #[test]
     fn load_messages_at_paginates_and_full_reads() {
         let p = temp_jsonl("at", &(standard_lines().join("\n") + "\n"));
-        let page = load_messages_at(&p, None, Some(budget_tail_lines(&standard_lines(), 2))).unwrap();
+        let page =
+            load_messages_at(&p, None, Some(budget_tail_lines(&standard_lines(), 2))).unwrap();
         assert_eq!(page.messages.len(), 2);
         assert!(page.next_offset_bytes > 0);
         let full = load_messages_at(&p, None, None).unwrap();

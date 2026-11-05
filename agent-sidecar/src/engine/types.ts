@@ -82,6 +82,13 @@ export interface TaskItem {
 export type UserMessageBlock =
   | { type: "text"; text: string }
   | { type: "image"; data: string; mediaType: string }
+  // 媒体时间定位，只作提示，不授予读取权限；与 SDK `MediaRef` 字段同形。
+  | {
+      type: "mediaref";
+      source: { path: string; title: string; revision: string };
+      selection: { kind: "point"; atMs: number } | { kind: "range"; startMs: number; endMs: number };
+      frameIndex?: number;
+    }
   // 动作胶囊（/compact 等斜杠命令）：显示 label/icon，发给模型的仍是 prompt。
   | { type: "action"; actionId: string; label: string; icon?: string }
   // @引用：path 供展示标题，content 是展开内容（模型收到的那部分）。range 表示

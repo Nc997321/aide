@@ -16,6 +16,7 @@ import type { BgTask, ModelOption } from "@/types/chat";
 defineProps<{
   row: Row;
   workspacePath?: string;
+  draftKey: string;
   models: ModelOption[];
   bgTasks?: BgTask[];
 }>();
@@ -36,6 +37,7 @@ const emit = defineEmits<{
       :key="msg.id"
       :message="msg"
       :workspace-path="workspacePath"
+      :draft-key="draftKey"
       :models="models"
       :bg-tasks="bgTasks"
       @open-bg-dock="(id: string) => emit('open-bg-dock', id)"
@@ -63,6 +65,7 @@ const emit = defineEmits<{
     <ChatMessage
       :message="row.message"
       :workspace-path="workspacePath"
+      :draft-key="draftKey"
       :models="models"
       :bg-tasks="bgTasks"
       @open-bg-dock="(id: string) => emit('open-bg-dock', id)"

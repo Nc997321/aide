@@ -25,7 +25,10 @@ pub fn last_event_at(jsonl_path: &Path) -> Result<LastEventInfo, String> {
                         .and_then(|m| m.get("stop_reason"))
                         .and_then(|s| s.as_str())
                         .map(String::from),
-                    timestamp: v.get("timestamp").and_then(|t| t.as_str()).map(String::from),
+                    timestamp: v
+                        .get("timestamp")
+                        .and_then(|t| t.as_str())
+                        .map(String::from),
                 });
             }
         }

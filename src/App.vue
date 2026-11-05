@@ -78,6 +78,7 @@ import OpenFolderDialog from "./components/OpenFolderDialog.vue";
 import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
 import { useUsageTips } from "./composables/useUsageTips";
+import { installMediaFeedbackBridge } from "./composables/useMediaPreview/feedback";
 
 const leftCollapsed = ref(false);
 // 右侧栏状态的主人是 useRightPanel（模块单例）：折叠态、当前 tab、最大化、两档宽度都在那里，
@@ -900,6 +901,21 @@ onMounted(async () => {
 
   // Initialize notification watcher
   useNotification();
+  void installMediaFeedbackBridge((message) => pushNotification({
+    severity: "warning",
+    source: "media",
+    title: "媒体结果未确认",
+    body: message,
+    timestamp: Date.now(),
+    dedupKey: "media:feedback-error",
+  })).catch((error: unknown) => pushNotification({
+    severity: "warning",
+    source: "media",
+    title: "媒体结果监听失败",
+    body: String(error),
+    timestamp: Date.now(),
+    dedupKey: "media:feedback-listener-error",
+  }));
 
   // Start git fingerprint watcher (auto-refresh on external changes)
   useGitWatcher();

@@ -15,9 +15,8 @@ pub mod parse;
 
 /// 历史消息里的一个内容块——`load_messages` 解析会话 `.jsonl` 时按原始顺序重建，
 /// 跟前端 `src/types/chat.ts` 的 `ContentBlock` 判别式联合镜像（`type` 字段一致）。
-/// 目前只重建 text/tool_call 两种；子代理（Agent/Task）调用和图片维持原有降级
-/// 行为——整段跳过，不出现在历史里（子代理内部的分步进度 Claude CLI 从不落盘，
-/// 做了也补不全，图片重建暂不在这次修复范围）。
+/// 重建 text/thinking/tool_call/image，图片按原始顺序保留 base64 与 MIME；子代理调用
+/// 维持降级行为——整段跳过（子代理内部的分步进度 Claude CLI 从不落盘，做了也补不全）。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
 pub enum HistoryBlock {
@@ -43,6 +42,8 @@ pub enum HistoryBlock {
     /// 才渲染思考区，空的不显示，故空值也照常保留以维持 block 顺序。
     #[serde(rename = "thinking")]
     Thinking { text: String },
+    #[serde(rename = "image", rename_all = "camelCase")]
+    Image { data: String, media_type: String },
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -52,7 +53,11 @@ pub struct ChatMessageItem {
     /// SDK content-block identities, aligned with blocks (including merged assistant rows).
     #[serde(default, rename = "sourceIds", skip_serializing_if = "Vec::is_empty")]
     pub source_ids: Vec<Option<String>>,
-    #[serde(default, rename = "offsetBytes", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        rename = "offsetBytes",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub offset_bytes: Option<u64>,
     pub role: String,
     pub blocks: Vec<HistoryBlock>,
@@ -193,11 +198,17 @@ pub fn list_transcripts(claude_home: &Path, key: &str) -> Vec<TranscriptEntry> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
-            let (cli_name, started_at) = match cli_session_meta(&claude_home.join("sessions"), &id) {
+            let (cli_name, started_at) = match cli_session_meta(&claude_home.join("sessions"), &id)
+            {
                 Some((n, s)) => (Some(n), s),
                 None => (None, 0),
             };
-            out.push(TranscriptEntry { id, mtime_ms, cli_name, started_at });
+            out.push(TranscriptEntry {
+                id,
+                mtime_ms,
+                cli_name,
+                started_at,
+            });
         }
     }
     out
@@ -211,10 +222,18 @@ pub fn cli_session_meta(sessions_dir: &Path, session_id: &str) -> Option<(String
         if !path.extension().map(|e| e == "json").unwrap_or(false) {
             continue;
         }
-        let Ok(content) = fs::read_to_string(&path) else { continue };
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+        let Ok(content) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else {
+            continue;
+        };
         if v.get("sessionId").and_then(|s| s.as_str()) == Some(session_id) {
-            let name = v.get("name").and_then(|n| n.as_str()).unwrap_or("未命名").to_string();
+            let name = v
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("未命名")
+                .to_string();
             let started_at = v.get("startedAt").and_then(|t| t.as_u64()).unwrap_or(0);
             return Some((name, started_at));
         }
@@ -224,7 +243,9 @@ pub fn cli_session_meta(sessions_dir: &Path, session_id: &str) -> Option<(String
 
 /// 在一个 claude home 下按 session id 找转录。
 pub fn find_in_home(claude_home: &Path, session_id: &str) -> Option<PathBuf> {
-    find_jsonl_in(&claude_home.join("projects"), session_id).into_iter().next()
+    find_jsonl_in(&claude_home.join("projects"), session_id)
+        .into_iter()
+        .next()
 }
 
 #[cfg(test)]

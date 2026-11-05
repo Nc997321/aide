@@ -5,6 +5,8 @@
 //! 查表分派；表外命令原样交还 Tauri 命令表。本机零额外跳数：与 Tauri 命令同样是一次
 //! JSON 反序列化 + 一次序列化。
 
+pub(crate) mod target;
+
 use std::sync::Arc;
 
 use aide_core::{Core, EventSink, Reply};

@@ -32,6 +32,14 @@ tauri = { version = "2", features = ["tray-icon", "image-png", "unstable"] }
 tauri-plugin-shell = "2"
 
 tauri-plugin-window-state = "2"
+# 媒体保存选择器只在 GUI 前门；Host/core 不依赖系统对话框。
+tauri-plugin-dialog = "2"
+# 唯一回环资源前门：标准 HTTP/1 解析 + 有背压的媒体响应体。
+bytes = "1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+tempfile = "3"
 
 # 聚合二次启动（资源管理器「打开方式」唤起），把 argv 转发给首个实例
 tauri-plugin-single-instance = "2"

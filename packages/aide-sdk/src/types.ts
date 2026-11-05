@@ -31,11 +31,11 @@ export interface ClipboardFilesRead {
   op: "copy" | "cut";
 }
 
-/** 历史消息里的一个内容块——跟 Rust 侧 `commands/mod.rs` 的 `HistoryBlock` 镜像。
- *  text/thinking/tool_call 三种；子代理调用和图片维持降级行为，不出现在历史里。 */
+/** 历史消息里的一个内容块——跟 Rust 侧 `transcripts::HistoryBlock` 镜像。 */
 export type HistoryBlock =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
+  | { type: "image"; data: string; mediaType: string }
   | { type: "tool_call"; id: string; name: string; input: unknown; result: string | null; isError: boolean | null };
 
 export interface ChatMessageItem {

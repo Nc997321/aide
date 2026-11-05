@@ -11,6 +11,7 @@ pub mod link;
 pub mod kb_links;
 pub mod knowledge;
 pub mod marketplace;
+pub mod media;
 pub mod memory_observatory;
 pub mod migration;
 pub mod notifications;

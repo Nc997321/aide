@@ -83,6 +83,8 @@ function degradeBlock(block: ContentBlock): number {
       block.truncated = { kind: "image_data", originalBytes: before };
       block.data = "";
       break;
+    case "mediaref":
+      return 0;
     case "subagent": {
       if (before <= min) return 0;
       block.truncated = { kind: "subagent_entries", originalBytes: before };

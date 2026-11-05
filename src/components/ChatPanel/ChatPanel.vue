@@ -36,6 +36,7 @@ import { useUsageTips } from "@/composables/useUsageTips";
 import type { BgTask, ChatMessage as ChatMessageType, ContextCompactionState, ContextUsage, ModelOption, ModelSwitchResult, PermissionModeOption, PermissionRequest, RateLimitInfo, SubagentBlock, TaskItem } from "@/types/chat";
 import type { WorkspaceInfo } from "@/types";
 import { api } from "@/api";
+import { blankDraftKey } from "@aide/sdk/composables/useComposerDrafts";
 import { deriveSessionFileRules } from "@/utils/permissionRuleDerivation";
 import type { PermissionRuleDraft, PermissionScope } from "@/types/permissions";
 import {
@@ -111,6 +112,8 @@ const props = defineProps<{
   /** 还没有会话时输入框草稿记在哪（PaneGroup：标签 id，无标签用分屏组 id），见 useComposerDrafts */
   draftBlankKey?: string;
 }>();
+
+const mediaDraftKey = computed(() => props.sessionId ?? blankDraftKey(props.draftBlankKey ?? "default"));
 
 const emit = defineEmits<{
   send: [prompt: string, opts: SendOptions];
@@ -818,6 +821,7 @@ function onOpenBgDock(taskId: string) {
           :key="row.id"
           :row="row"
           :workspace-path="workspacePath"
+          :draft-key="mediaDraftKey"
           :models="displayModels"
           :bg-tasks="bgTasks"
           @open-bg-dock="onOpenBgDock"

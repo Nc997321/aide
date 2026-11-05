@@ -58,6 +58,7 @@ import {
 } from "./state";
 import { maybeEvict } from "./evict";
 import { appendSourceText, sourceMessage } from "./reconcile";
+import { isMediaRef } from "../../utils/mediaRefs";
 import {
   BG_TASKS_CAP,
   BG_TASK_OUTPUT_CAP,
@@ -212,10 +213,12 @@ function blocksFromDisplay(
             // 与回看路径 transcriptMapping 必须同时带，否则重开历史就变回文件卡。
             ...(b.isDir ? { isDir: true } : {}),
           };
-        // 页面选区卡片。字段原样搬运（display 由发送方清洗过一次，这里不重复校验）；
-        // 缺 selector/tag 视为畸形块，跳过——整条消息不因一个坏块消失。
+        // 页面选区卡片。字段原样搬运；缺关键字段只跳过该块。
         case "pageref":
           return b.selector && b.tag ? { ...b } : null;
+        // 媒体引用是纯定位描述，不读取文件，也不授予目录/知识库权限。
+        case "mediaref":
+          return isMediaRef(b) ? { ...b } : null;
         // 知识库选区卡片：缺关键字段的畸形块跳过（整条消息不因一个坏块消失）。
         case "kbref":
           return b.selectionId && b.documentId ? { ...b } : null;

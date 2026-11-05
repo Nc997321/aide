@@ -396,6 +396,27 @@ describe("useChatSession per-session store", () => {
     expect(chat.isBusy.value).toBe(false);
   });
 
+  it("mediarefs 随 prompt 与 display 发送，截图 frameIndex 对齐最终 images 顺序", async () => {
+    const chat = useChatSession(ref<string | null>("uuid-a"));
+    await flush();
+    const mediaRef = { source: { path: "clip.mp4", title: "clip", revision: "r1" }, selection: { kind: "point" as const, atMs: 400 }, frameIndex: 1 };
+    await chat.sendMessage("看这段", {
+      images: [
+        { data: "ordinary", mediaType: "image/png" },
+        { data: "second", mediaType: "image/jpeg" },
+      ],
+      mediarefs: [mediaRef],
+    });
+    const payload = invokeMock.mock.calls.find(([cmd]) => cmd === "send_message")?.[1] as { prompt: string; images: unknown[]; display: Array<Record<string, unknown>> };
+    expect(payload.images).toEqual([
+      { data: "ordinary", mediaType: "image/png" },
+      { data: "second", mediaType: "image/jpeg" },
+    ]);
+    expect(payload.prompt).toContain("<媒体引用 v1：");
+    expect(payload.prompt).toContain("clip.mp4");
+    expect(payload.display).toContainEqual({ type: "mediaref", ...mediaRef });
+  });
+
   it("image_input_rejected 解除 busy，保留会话以发送下一条纯文本", async () => {
     const { state, health } = useSessionState();
     const sid = ref<string | null>("uuid-a");

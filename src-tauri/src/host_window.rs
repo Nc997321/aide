@@ -211,6 +211,7 @@ pub fn gui_path(window: &Window, path: &str) -> Result<String, String> {
 /// 窗口关闭：解绑；该 Host 的最后一扇窗关了就断开连接（serve 退出，Host 上的 agent runtime /
 /// 语言服务器随之收掉）。
 pub fn on_window_destroyed(app: &AppHandle, label: &str) {
+    crate::media::release_window(app, label);
     // 内嵌浏览器的视图属于窗口：窗口没了，名下的视图一并回收（任何窗口，不止 Host 窗口）。
     crate::browser::facade::release_window(app, label);
     let Some((host, last)) = app.state::<HostWindows>().unbind(label) else {
@@ -331,6 +332,7 @@ pub async fn switch_window_host(window: Window, host: String, folder: Option<Str
     if app.state::<HostWindows>().host_of(&label) == target {
         return Err("本窗口已经连着这台 Host".into());
     }
+    crate::media::release_window(&app, &label);
     let old = app.state::<HostWindows>().rebind(&label, target.as_ref());
     if let Some(id) = &target {
         connect_in_background(&app, id);

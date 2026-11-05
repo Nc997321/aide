@@ -2,6 +2,8 @@ import type {
   ChatMessage,
   ContentBlock,
   KbRefBlock,
+  ImageBlock,
+  MediaRefBlock,
   SubsessionInstructionBlock,
   SubsessionReportBlock,
   TextBlock,
@@ -13,6 +15,7 @@ import { parseWatchPrompt } from "../../utils/watchText";
 import type { ChatMessageItem, HistoryBlock } from "../../types";
 import { splitMentionSections } from "../../utils/fileMentions";
 import { splitKbRefSections } from "../../utils/kbRefs";
+import { splitMediaRefSections } from "../../utils/mediaRefs";
 import { annotateReadRelay } from "../../utils/lspRelay";
 
 /**
@@ -24,13 +27,19 @@ import { annotateReadRelay } from "../../utils/lspRelay";
 /** load_messages 返回的 ChatMessageItem[] → 前端 ChatMessage[]（历史 block 转换 +
  *  mention 段拆分 + Read 接力标注）。保留 SDK 身份，旧转录缺身份时才生成展示 id。 */
 export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
-  const messages = items.map((item) => ({
-    id: item.id ?? crypto.randomUUID(),
-    role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
-    blocks: item.blocks.flatMap((b, index): ContentBlock[] => historyBlockToContentBlocks(b, item.role === "user")
-      .map(block => item.sourceIds?.[index] ? { ...block, sourceId: item.sourceIds[index]! } : block)),
-    timestamp: item.timestamp,
-  }));
+  const messages = items.map((item) => {
+    const imageCount = item.blocks.filter((block) => block.type === "image").length;
+    return {
+      id: item.id ?? crypto.randomUUID(),
+      role: (item.role === "claude" ? "assistant" : item.role) as "user" | "assistant",
+      blocks: item.blocks.flatMap((block, index): ContentBlock[] => historyBlockToContentBlocks(
+        block,
+        item.role === "user",
+        imageCount,
+      ).map(mapped => item.sourceIds?.[index] ? { ...mapped, sourceId: item.sourceIds[index]! } : mapped)),
+      timestamp: item.timestamp,
+    };
+  });
   // F 方案（Read 接力显示）：历史消息就地标注 assistant Read 的接力结论，与实时
   // 路径（events.ts tool_use_start）共用同一判定核心。lspRelay 不落盘，每次加载
   // 重新推导——两条路径永不分叉。
@@ -49,7 +58,8 @@ export function itemsToChatMessages(items: ChatMessageItem[]): ChatMessage[] {
 function historyBlockToContentBlocks(
   block: HistoryBlock,
   isUser: boolean,
-): (TextBlock | ThinkingBlock | ToolCallBlock | KbRefBlock | SubsessionReportBlock | SubsessionInstructionBlock | WatchReportBlock)[] {
+  imageCount: number,
+): (TextBlock | ThinkingBlock | ImageBlock | ToolCallBlock | KbRefBlock | MediaRefBlock | SubsessionReportBlock | SubsessionInstructionBlock | WatchReportBlock)[] {
   if (block.type === "tool_call") {
     return [{
       type: "tool_call",
@@ -66,6 +76,7 @@ function historyBlockToContentBlocks(
     // 前端按非空才发——空的不进 blocks，避免空思考区。
     return block.text ? [{ type: "thinking", text: block.text }] : [];
   }
+  if (block.type === "image") return [{ type: "image", data: block.data, mediaType: block.mediaType }];
   if (!isUser) return [{ type: "text", text: block.text }];
   // 子会话回报 / 父会话派来的任务（Host 投递的消息）：按 Host 的固定格式拆回卡片，
   // 与实时路径（display 的 subsession_* 块）同形。
@@ -78,7 +89,8 @@ function historyBlockToContentBlocks(
   if (instruction) return [{ type: "subsession_instruction" as const, ...instruction }];
   // 知识库选区段先拆（它在文本末尾，格式与引用段互不干扰）：拆回「原文 + 选区卡片」，与直发路径
   // （buildUserDisplay 的 kbref 块）同形。`display` 不落盘，重开历史只能靠这份文本还原。
-  const kb = splitKbRefSections(block.text);
+  const media = splitMediaRefSections(block.text, imageCount);
+  const kb = splitKbRefSections(media.displayText);
   const { displayText, sections } = splitMentionSections(kb.displayText);
   return [
     ...(displayText ? [{ type: "text" as const, text: displayText }] : []),
@@ -99,5 +111,6 @@ function historyBlockToContentBlocks(
       ...(s.isDir ? { isDir: true } : {}),
     })),
     ...kb.refs.map((r): KbRefBlock => ({ type: "kbref", ...r })),
+    ...media.refs.map((r): MediaRefBlock => ({ type: "mediaref", ...r })),
   ];
 }

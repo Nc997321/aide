@@ -7,6 +7,7 @@ import type {
   ActionBlock,
   ChatMessage,
   KbRef,
+  MediaRef,
   PageRef,
   UserMessageBlock,
 } from "../types/chat";
@@ -23,6 +24,7 @@ import { useBtwSession } from "./useBtwSession";
 import type { FileMentionResolution } from "../utils/fileMentions";
 import { formatPageRefsForPrompt, sanitizePageRef, MAX_PAGE_REFS } from "../utils/pageRefs";
 import { formatKbRefsForPrompt, MAX_KB_REFS } from "../utils/kbRefs";
+import { formatMediaRefsForPrompt } from "../utils/mediaRefs";
 import { maybeEvict } from "./useChatSession/evict";
 import { handleChatEvent } from "./useChatSession/events";
 import { hydrate, hasMoreOlder, loadOlderPage, resetPaginationForRevert } from "./useChatSession/pagination";
@@ -85,6 +87,8 @@ export interface SendOptions {
    *  edit_selection 改动的范围。发给模型的是 `formatKbRefsForPrompt` 的展开文本，用户气泡里是
    *  独立的 `kbref` 卡片（走 display，同一份数据）。 */
   kbrefs?: KbRef[];
+  /** 媒体文件的时间定位；仅作提示信息，不授予读取/授权语义。 */
+  mediarefs?: MediaRef[];
   /** 当前选中的权限模式（不透明字符串，sidecar 解释语义），随每条消息透传 */
   permissionMode?: string;
   /** 工具栏快捷操作（压缩/清空上下文）：存在时用户气泡渲染成动作胶囊（见
@@ -115,6 +119,7 @@ interface QueuedSend {
   mentions?: FileMentionResolution;
   pagerefs?: PageRef[];
   kbrefs?: KbRef[];
+  mediarefs?: MediaRef[];
   permissionMode?: string;
   /** 发送时的模型（调用环境透传，invoke 时展开为 initialModel）。
    *  显式走数据流（输入区 → sendMessage opts → item → dispatchSend），不再由
@@ -174,7 +179,9 @@ function prepareSend(sid: string, item: QueuedSend): "queued" | "direct" {
         ? "[页面选区]"
         : item.kbrefs?.length
           ? "[知识库选区]"
-          : "");
+          : item.mediarefs?.length
+            ? "[媒体引用]"
+            : "");
   const { setSessionState, setSessionHealth } = useSessionState();
   setSessionState(sid, "running");
   // 新一轮开始：清掉上轮可能残留的 warning（红点）。
@@ -236,6 +243,7 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
           type: "pageref" as const,
           ...sanitizePageRef(r),
         })),
+        ...(item.mediarefs ?? []).map((r) => ({ type: "mediaref" as const, ...r })),
         // 知识库选区：display 里的就是授权的权威来源（sidecar 据此登记范围），所以原样带，不改写。
         ...(item.kbrefs ?? []).slice(0, MAX_KB_REFS).map((r) => ({ type: "kbref" as const, ...r })),
       ];
@@ -262,7 +270,7 @@ function sendQueued(
   // 注册表没有记录（新会话）时传 null，Rust 侧回落当前活动工作区。
   const sessionWs = useSessionWorkspaces().workspaceOf(sid);
   const baseText = item.mentions?.sendText ?? item.prompt;
-  const extra = [formatPageRefsForPrompt(item.pagerefs ?? []), formatKbRefsForPrompt(item.kbrefs ?? [])].filter(Boolean);
+  const extra = [formatPageRefsForPrompt(item.pagerefs ?? []), formatKbRefsForPrompt(item.kbrefs ?? []), formatMediaRefsForPrompt(item.mediarefs ?? [], item.images?.length ?? 0)].filter(Boolean);
   const sendText = extra.length ? [baseText, ...extra].filter(Boolean).join("\n\n") : baseText;
   api.sendMessage({
     sessionId: sid,
@@ -406,6 +414,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
    * 下一轮）。排队期间输入区上方显示「排队」提示条，可点 × 撤回。
    */
   async function sendMessage(prompt: string, opts: SendOptions = {}): Promise<string | undefined> {
+    // 在分配会话/置 busy 前验证，畸形引用不能留下一条幽灵 pending 会话。
+    formatMediaRefsForPrompt(opts.mediarefs ?? [], opts.images?.length ?? 0);
     let sid = sessionId.value;
     if (!sid) {
       sid = crypto.randomUUID();
@@ -453,6 +463,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       mentions: opts.mentions,
       pagerefs: opts.pagerefs,
       kbrefs: opts.kbrefs,
+      mediarefs: opts.mediarefs,
       permissionMode: opts.permissionMode,
       effort: opts.initialEffort,
       action: opts.action,

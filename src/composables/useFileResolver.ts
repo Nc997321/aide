@@ -4,106 +4,101 @@ import { useFileViewer } from "./useFileViewer";
 import { isHtmlFilePath, isHttpUrl, resolveFileLinkPath } from "../utils/fileLink";
 import { useRightPanel } from "./useRightPanel";
 import { openHtmlInBuiltinBrowser } from "./useOpenHtml";
+import { isMediaFilePath } from "@aide/sdk/utils/mediaArtifacts";
+import { useMediaPreview } from "./useMediaPreview";
+import { useNotifications } from "./useNotifications";
 
-/**
- * 聊天文件链接的「智能打开」状态层。
- *
- * 聊天里的路径经常不全（相对某个子目录、或只给文件名），直接拼到工作区根下会
- * 打不开。这里在打开前先探测：命中就直接开；不存在则在工作区内按名搜索
- * （带加载态），0 命中退回原路径让 FileViewer 报"不存在"，1 命中直接开，
- * 多命中交给选择浮层由用户挑。状态做成模块级单例——搜索/选择浮层全局只有一个。
- */
+interface FileOpenContext { draftKey: () => string }
+interface FileTarget { path: string; line?: number; flashCount?: number }
+interface FileLookup { rawPath: string; workspacePath?: string }
 
 const resolving = ref(false);
 const resolvingName = ref("");
 const candidates = ref<string[]>([]);
-const pendingLine = ref<number | undefined>(undefined);
+const pendingTarget = ref<FileTarget | null>(null);
 
-function basenameOf(p: string): string {
-  return p.split(/[\\/]/).filter(Boolean).pop() || p;
+function basenameOf(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() || path;
 }
 
-export function useFileResolver() {
+async function locate(path: string, lookup: FileLookup): Promise<string[]> {
+  try {
+    if (await api.fileExists(path)) return [path];
+  } catch (error) {
+    console.warn("文件路径探测失败，继续工作区搜索", error);
+  }
+  if (!lookup.workspacePath) return [];
+  resolving.value = true;
+  resolvingName.value = basenameOf(lookup.rawPath);
+  try {
+    return await api.findFilesByName(lookup.rawPath, lookup.workspacePath, 50);
+  } catch (error) {
+    console.warn("工作区文件搜索失败，将由查看器报告原路径", error);
+    return [];
+  } finally {
+    resolving.value = false;
+  }
+}
+
+function reportOpenError(error: unknown): void {
+  useNotifications().push({
+    severity: "error", source: "fileviewer", title: "文件打开失败", body: String(error),
+    timestamp: Date.now(), dedupKey: "fileviewer:open-error",
+  });
+}
+
+export function useFileResolver(context?: FileOpenContext) {
   const viewer = useFileViewer();
   const { openInBrowser } = useRightPanel();
+  const mediaPreview = useMediaPreview();
 
-  function doOpen(path: string, line?: number, flashCount?: number) {
-    // 网页链接与本地 HTML 都在内置浏览器里开（不再交给系统默认浏览器）。
-    if (isHttpUrl(path)) {
-      openInBrowser(path);
-      return;
-    }
-    if (isHtmlFilePath(path)) {
-      void openHtmlInBuiltinBrowser(path);
-      return;
-    }
-    if (line !== undefined) void viewer.openAndScrollTo(path, line, flashCount);
-    else void viewer.open(path);
-  }
-
-  async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number, flashCount?: number) {
-    const full = resolveFileLinkPath(rawPath, workspacePath);
-
-    // 纯网页 URL 不需要 fs 探测/工作区搜索，直接在内置浏览器打开。
-    if (isHttpUrl(full)) {
-      doOpen(full, line, flashCount);
-      return;
-    }
-
-    // 1. 直接命中 → 原有行为
+  async function openTarget(target: FileTarget): Promise<void> {
     try {
-      if (await api.fileExists(full)) {
-        doOpen(full, line, flashCount);
-        return;
-      }
-    } catch {
-      /* 探测失败也走搜索兜底 */
-    }
-
-    // 2. 不存在 → 工作区内按名搜索（无工作区根可搜时退回原路径）
-    if (!workspacePath) {
-      doOpen(full, line, flashCount);
-      return;
-    }
-    resolving.value = true;
-    resolvingName.value = basenameOf(rawPath);
-    let matches: string[] = [];
-    try {
-      matches = await api.findFilesByName(rawPath, workspacePath, 50);
-    } catch {
-      matches = [];
-    }
-    resolving.value = false;
-
-    if (matches.length === 0) {
-      doOpen(full, line, flashCount); // 交给 FileViewer 显示"文件不存在"
-    } else if (matches.length === 1) {
-      doOpen(matches[0], line, flashCount);
-    } else {
-      pendingLine.value = line;
-      candidates.value = matches;
+      if (isHttpUrl(target.path)) { openInBrowser(target.path); return; }
+      if (isHtmlFilePath(target.path)) { await openHtmlInBuiltinBrowser(target.path); return; }
+      if (isMediaFilePath(target.path)) { await openMedia(target.path); return; }
+      if (target.line !== undefined) await viewer.openAndScrollTo(target.path, target.line, target.flashCount);
+      else await viewer.open(target.path);
+    } catch (error) {
+      reportOpenError(error);
     }
   }
 
-  function pickCandidate(path: string) {
-    const line = pendingLine.value;
-    candidates.value = [];
-    pendingLine.value = undefined;
-    doOpen(path, line);
+  async function openMedia(path: string): Promise<void> {
+    const draftKey = context?.draftKey();
+    if (!draftKey) throw new Error("媒体预览缺少原会话，请先打开一个会话再试");
+    await mediaPreview.open({ files: [{ path, title: basenameOf(path) }], selected: 0, draftKey });
   }
 
-  function cancelPicker() {
+  function openMatches(matches: string[], target: FileTarget): Promise<void> {
+    if (matches.length <= 1) return openTarget({ ...target, path: matches[0] ?? target.path });
+    pendingTarget.value = target;
+    candidates.value = matches;
+    return Promise.resolve();
+  }
+
+  async function openResolved(rawPath: string, workspacePath: string | undefined, line?: number, flashCount?: number): Promise<void> {
+    const target = { path: resolveFileLinkPath(rawPath, workspacePath), line, flashCount };
+    if (isHttpUrl(target.path) || isMediaFilePath(target.path)) return openTarget(target);
+    const matches = await locate(target.path, { rawPath, workspacePath });
+    return openMatches(matches, target);
+  }
+
+  function pickCandidate(path: string): void {
+    const target = pendingTarget.value;
     candidates.value = [];
-    pendingLine.value = undefined;
+    pendingTarget.value = null;
+    void openTarget({ path, line: target?.line, flashCount: target?.flashCount });
+  }
+
+  function cancelPicker(): void {
+    candidates.value = [];
+    pendingTarget.value = null;
   }
 
   return {
-    resolving: computed(() => resolving.value),
-    resolvingName: computed(() => resolvingName.value),
-    candidates: computed(() => candidates.value),
-    pickerVisible: computed(() => candidates.value.length > 0),
-    openResolved,
-    pickCandidate,
-    cancelPicker,
+    resolving: computed(() => resolving.value), resolvingName: computed(() => resolvingName.value),
+    candidates: computed(() => candidates.value), pickerVisible: computed(() => candidates.value.length > 0),
+    openResolved, pickCandidate, cancelPicker,
   };
 }

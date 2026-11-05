@@ -45,6 +45,11 @@ describe("estimateBlockBytes", () => {
     expect(estimateBlockBytes({ type: "image", data: "abcd", mediaType: "image/png" })).toBe(8);
   });
 
+  it("mediaref metadata counts toward the message budget", () => {
+    const ref = { type: "mediaref" as const, source: { path: "clip.mp4", title: "clip", revision: "r1" }, selection: { kind: "point" as const, atMs: 50 } };
+    expect(estimateBlockBytes(ref)).toBe(JSON.stringify(ref).length * 2);
+  });
+
   it("subagent = prompt + entries + result 合计", () => {
     const toolInput = { c: "ls" };
     const b = estimateBlockBytes({

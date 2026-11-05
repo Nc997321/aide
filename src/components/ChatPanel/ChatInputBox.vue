@@ -11,7 +11,7 @@ import ContextUsagePanel from "./ContextUsagePanel.vue";
 import AToast from "@/ui/AToast.vue";
 import type { ProviderConfig } from "@/types";
 import type {
-  ContextUsage, ModelOption, PermissionModeOption, RateLimitInfo, ModelSwitchResult,
+  ContextUsage, MediaRef, ModelOption, PermissionModeOption, RateLimitInfo, ModelSwitchResult,
 } from "@/types/chat";
 import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/useChatSession";
 import { api } from "@/api";
@@ -36,7 +36,8 @@ import { useModal } from "@/composables/useModal";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { useSessionIdentityView, writeSessionMeta } from "@/composables/sessionIdentity";
 import { isPendingSession, isFinalizedSessionPair } from "@/composables/useChatSession";
-import { blankDraftKey, useComposerDrafts, type ComposerMention } from "@aide/sdk/composables/useComposerDrafts";
+import { blankDraftKey, useComposerDrafts, type ComposerMediaRef, type ComposerMention } from "@aide/sdk/composables/useComposerDrafts";
+import { MAX_MEDIA_FRAME_BASE64_CHARS, MAX_MEDIA_REFS } from "@aide/sdk/utils/mediaRefs";
 import { useToast } from "@/composables/useToast";
 import { pushInputHistory, useInputHistory } from "@/composables/useInputHistory";
 import { EFFORT_OPTIONS, normalizeEffortOption } from "@aide/sdk/utils/effort";
@@ -153,7 +154,7 @@ const hidden = computed(
 );
 function hasDraft(): boolean {
   return !!inputText.value.trim() || pendingImages.value.length > 0
-    || pendingMentions.value.length > 0 || kbChips.value.length > 0;
+    || pendingMediaRefs.value.length > 0 || pendingMentions.value.length > 0 || kbChips.value.length > 0;
 }
 watch(() => props.stow, (stow, prev) => {
   if (stow === "unless-draft" && prev !== "unless-draft") keptForDraft.value = hasDraft();
@@ -595,6 +596,10 @@ const pendingImages = computed({
   get: () => draft.value.images,
   set: (v: Array<ImageAttachment & { previewUrl: string }>) => { draft.value.images = v; },
 });
+const pendingMediaRefs = computed({
+  get: () => draft.value.mediaRefs,
+  set: (v: ComposerMediaRef[]) => { draft.value.mediaRefs = v; },
+});
 const textareaEl = ref<HTMLTextAreaElement>();
 // 空时一行，逐行撑高到上限（12 行 / 会话面板高度 40%）后内滚，发送清空后回落
 useAutoGrow(textareaEl, inputText);
@@ -697,6 +702,28 @@ const kbSel = useKbSelections();
 const kbChips = computed(() => (props.focused ? kbSel.all.value.filter((r) => r.status === "pending") : []));
 /** 本次发送带走的圈选 id；发送坐实（sendConfirmedNonce）时把它们标成「已发出」。 */
 let sentKbIds: string[] = [];
+interface DraftSendSnapshot {
+  key: string;
+  text: string;
+  images: Array<ImageAttachment & { previewUrl: string }>;
+  mentions: ComposerMention[];
+  mediaRefs: ComposerMediaRef[];
+}
+let sendSnapshot: DraftSendSnapshot | null = null;
+function snapshotDraft(overrides: Partial<DraftSendSnapshot> = {}): DraftSendSnapshot {
+  return {
+    key: draftKey.value,
+    text: inputText.value,
+    images: pendingImages.value.slice(),
+    mentions: pendingMentions.value.slice(),
+    mediaRefs: pendingMediaRefs.value.slice(),
+    ...overrides,
+  };
+}
+function removeSnapshotItems<T>(current: T[], sent: T[]): T[] {
+  const consumed = new Set(sent);
+  return current.filter((item) => !consumed.has(item));
+}
 function kbChipLabel(r: { ref: { title: string; lineStart: number; lineEnd: number } }): string {
   const lines = r.ref.lineStart === r.ref.lineEnd ? `第 ${r.ref.lineStart} 行` : `第 ${r.ref.lineStart}–${r.ref.lineEnd} 行`;
   return `${r.ref.title || "未命名文档"} · ${lines}`;
@@ -716,6 +743,12 @@ const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
 
 const mentionName = pathBasename;
 const folderIconPath = FOLDER_ICON_PATH;
+function mediaSelectionLabel(ref: MediaRef): string {
+  const selection = ref.selection;
+  const start = selection.kind === "point" ? selection.atMs : selection.startMs;
+  const end = selection.kind === "range" ? selection.endMs : null;
+  return end === null ? `${(start / 1000).toFixed(3)}s` : `${(start / 1000).toFixed(3)}–${(end / 1000).toFixed(3)}s`;
+}
 
 // ── `@` 补全下拉（与 `/` 菜单并列的第二套补全）──────────────────────────────
 // 取数/排序/缓存/竞态全在 useMentionSuggest 里；这里只管两件事：事件 → 刷新、
@@ -1214,16 +1247,26 @@ async function handleSend() {
 }
 
 async function performSend() {
-  const text = inputText.value.trim();
-  const hasImages = pendingImages.value.length > 0;
+  const captured = snapshotDraft();
+  const text = captured.text.trim();
+  const hasImages = captured.images.length > 0;
+  const hasMediaRefs = captured.mediaRefs.length > 0;
   const kbrefs = kbChips.value.map((r) => ({ ...r.ref }));
   // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
   // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
-  const mentionPrefix = pendingMentions.value.length
-    ? pendingMentions.value.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
+  const mentionPrefix = captured.mentions.length
+    ? captured.mentions.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
     : "";
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
-  if (!text && !hasImages && !mentionPrefix && !kbrefs.length) return;
+  if (!text && !hasImages && !hasMediaRefs && !mentionPrefix && !kbrefs.length) return;
+  if (captured.mediaRefs.length > MAX_MEDIA_REFS) {
+    showToast(`媒体引用最多 ${MAX_MEDIA_REFS} 条，请先移除多余项`, "danger");
+    return;
+  }
+  if (captured.mediaRefs.some((entry) => entry.frame && entry.frame.data.length > MAX_MEDIA_FRAME_BASE64_CHARS)) {
+    showToast("截图太大，当前上限为 8 MB；请重新选取较小截图", "danger");
+    return;
+  }
 
   // 斜杠命令统一分发：/name 命中命令注册表（useQuickActions，/... 的唯一事实源）
   // 就按 kind 执行——prompt 类与点分裂按钮菜单完全同路径（原文发引擎 + 动作胶囊
@@ -1297,13 +1340,20 @@ async function performSend() {
   const newlyAttached = attachedDirsFrom(mentionResolution, props.workspacePath ?? null);
   const allAttached = [...new Set([...attachedDirs.value, ...newlyAttached])];
 
-  const images = pendingImages.value.map(({ data, mediaType }) => ({ data, mediaType }));
+  const images = captured.images.map(({ data, mediaType }) => ({ data, mediaType }));
+  const mediarefs = captured.mediaRefs.map(({ ref, frame }) => {
+    if (!frame) return { source: ref.source, selection: ref.selection };
+    const frameIndex = images.length;
+    images.push({ data: frame.data, mediaType: frame.mediaType });
+    return { ...ref, frameIndex };
+  });
   const scene = activeScene.value;
   sentKbIds = kbrefs.map((r) => r.selectionId);
   if (kbrefs.length) usageTips.markUsed("kb-selection");
   const sendOpts: SendOptions = {
     inputDocuments: inputDocuments.length ? inputDocuments : undefined,
     images: images.length ? images : undefined,
+    mediarefs: mediarefs.length ? mediarefs : undefined,
     kbrefs: kbrefs.length ? kbrefs : undefined,
     // Rust 只在 sidecar 进程还没起来时才会用这个值（见 chat.rs），已有会话时
     // 无害地被忽略，不需要在这里判断"是否已有会话"。
@@ -1323,6 +1373,7 @@ async function performSend() {
   // 发送前确认门控（变体 C）已上移到 ChatPanel（onSendRequest）：这里把本次发送
   // 的 provider/模型并进 opts 上报，由 ChatPanel 判定是否弹确认形态。确认后/直接
   // 发送后经 sendConfirmedNonce 坐实清空输入；取消确认不递增，输入保留。
+  sendSnapshot = captured;
   emit("send-request", mentionPrefix + finalPrompt, {
     ...sendOpts,
     effectiveProvider: identity.effectiveProvider.value,
@@ -1351,6 +1402,7 @@ async function runPromptAction(action: QuickAction, prompt: string): Promise<boo
     permissionMode: selectedPermissionMode.value || undefined,
     action: { id: action.id, label: action.label, icon: action.icon },
   };
+  sendSnapshot = snapshotDraft({ images: [], mentions: [], mediaRefs: [] });
   // 发送前确认门控已上移到 ChatPanel（onSendRequest）：这里把 provider/模型并进 opts。
   emit("send-request", prompt, {
     ...sendOpts,
@@ -1375,12 +1427,16 @@ watch(() => props.sendConfirmedNonce, () => {
   // 圈选：发出去了 → 标成 sent（之后的状态只由聊天事件推进）。无论是不是文档侧发起的都要标。
   if (sentKbIds.length) kbSel.markSent(sentKbIds, props.sessionId ?? undefined);
   sentKbIds = [];
-  pushInputHistory(inputText.value);
+  const sent = sendSnapshot ?? snapshotDraft();
+  sendSnapshot = null;
+  if (sent.key !== draftKey.value) return;
+  pushInputHistory(sent.text);
   inputHistory.reset();
-  keptForDraft.value = false;
-  inputText.value = "";
-  pendingImages.value = [];
-  pendingMentions.value = [];
+  if (inputText.value === sent.text) inputText.value = "";
+  pendingImages.value = removeSnapshotItems(pendingImages.value, sent.images);
+  pendingMentions.value = removeSnapshotItems(pendingMentions.value, sent.mentions);
+  pendingMediaRefs.value = removeSnapshotItems(pendingMediaRefs.value, sent.mediaRefs);
+  keptForDraft.value = hasDraft();
   pickedScene.value = null;
 });
 
@@ -1538,6 +1594,13 @@ const { actions: quickActions } = useQuickActions();
           <button class="mention-chip-remove" @click="pendingMentions.splice(i, 1)">×</button>
         </div>
       </div>
+      <div v-if="pendingMediaRefs.length" class="mention-strip media-ref-strip">
+        <div v-for="(entry, i) in pendingMediaRefs" :key="`${entry.ref.source.path}:${i}`" class="mention-chip media-ref-chip" :title="entry.ref.source.path">
+          <img v-if="entry.frame" :src="entry.frame.previewUrl" class="media-ref-frame" alt="媒体截图" />
+          <span class="mention-chip-name">{{ entry.ref.source.title || mentionName(entry.ref.source.path) }} · {{ mediaSelectionLabel(entry.ref) }}</span>
+          <button class="mention-chip-remove" aria-label="移除媒体引用" @click="pendingMediaRefs.splice(i, 1)">×</button>
+        </div>
+      </div>
       <!-- 已授权的附加目录（@目录，本会话内粘性）：只读——来源是 sidecar 的全量账本事件，
            不做移除按钮（要解除就开新会话）。拒绝/失败同样在这里回声，不许静默。 -->
       <div v-if="attachedDirs.length || rejectedDirs.length || attachError" class="attach-strip">
@@ -1601,7 +1664,7 @@ const { actions: quickActions } = useQuickActions();
         />
         <div class="composer-controls">
           <ChatSendButton
-            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !kbChips.length) || sending"
+            :disabled="(!inputText.trim() && !pendingImages.length && !pendingMentions.length && !pendingMediaRefs.length && !kbChips.length) || sending"
             :busy="isBusy"
             :actions="quickActions"
             :btw-active="btwPanelOpen"
@@ -2318,6 +2381,10 @@ const { actions: quickActions } = useQuickActions();
   background: var(--aide-danger);
   color: var(--aide-text-primary);
 }
+
+.media-ref-strip { padding-top: 8px; }
+.media-ref-chip { max-width: 100%; }
+.media-ref-frame { width: 32px; height: 24px; object-fit: cover; border-radius: 4px; flex: 0 0 auto; }
 
 .image-attachment-strip {
   display: flex;

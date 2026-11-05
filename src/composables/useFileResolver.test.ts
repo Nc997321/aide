@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   fileOpen: vi.fn(),
   openHtml: vi.fn(),
   openInBrowser: vi.fn(),
+  mediaOpen: vi.fn(),
 }));
 
 vi.mock("../api", () => ({
@@ -17,6 +18,7 @@ vi.mock("../api", () => ({
     fileOpen: mocks.fileOpen,
   },
 }));
+vi.mock("@aide/sdk/api/media", () => ({ mediaApi: { open: mocks.mediaOpen } }));
 
 vi.mock("./useRightPanel", () => ({ useRightPanel: () => ({ openInBrowser: mocks.openInBrowser }) }));
 vi.mock("./useOpenHtml", () => ({ openHtmlInBuiltinBrowser: mocks.openHtml }));
@@ -83,6 +85,21 @@ describe("useFileResolver", () => {
 
     expect(mocks.openHtml).toHaveBeenCalledWith("file:///C:/repo/report.html");
     expect(mocks.viewerOpen).not.toHaveBeenCalled();
+  });
+
+  it("本地媒体文件走预览器且不进入文件读取或文本查看", async () => {
+    const r = useFileResolver({ draftKey: () => "session-9" });
+    await r.openResolved("assets/clip.mp4", "C:/repo");
+
+    expect(mocks.mediaOpen).toHaveBeenCalledWith(expect.objectContaining({
+      files: [{ path: "C:/repo/assets/clip.mp4", title: "clip.mp4" }],
+      selected: 0,
+      target: { draftKey: "session-9" },
+    }));
+    expect(mocks.fileExists).not.toHaveBeenCalled();
+    expect(mocks.findFilesByName).not.toHaveBeenCalled();
+    expect(mocks.viewerOpen).not.toHaveBeenCalled();
+    expect(mocks.fileOpen).not.toHaveBeenCalled();
   });
 
   it("http/https 网页链接直接在内置浏览器打开，不做文件探测", async () => {

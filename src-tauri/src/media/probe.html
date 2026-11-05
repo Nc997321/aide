@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><title>Isolated media acceptance probe</title><style>
+:root { --bg:#1a1820;--text:#ece5db;--line:#3d3848;--surface:#292631;--gap:12px; }
+body { margin:0;padding:20px;width:350px;background:var(--bg);color:var(--text);font:13px/1.7 system-ui,sans-serif; }
+button { display:block;margin:var(--gap) 0;padding:8px 12px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:6px; }
+pre { white-space:pre-wrap;overflow-wrap:anywhere; } h1 { font-size:17px; }
+</style></head><body><h1>媒体真机验收 · 隔离宿主</h1><p>使用真实资源服务、Core 和浏览器引擎。不会启动模型、读取用户会话或发送 AI 消息。</p><button id="open">打开样片</button><button id="close">关闭媒体标签</button><pre id="status">准备中…</pre><script>
+const invoke = (command, args) => window.__TAURI_INTERNALS__.invoke(command, args);
+const state = { ready: false, refs: [], frames: 0, error: "", view: null };
+function status() { document.getElementById("status").textContent = JSON.stringify({ ...state, refs: state.refs.length }, null, 2); }
+async function listen(event, callback) {
+  const handler = window.__TAURI_INTERNALS__.transformCallback(callback, false);
+  await invoke("plugin:event|listen", { event, target: { kind: "WebviewWindow", label: "main" }, handler });
+}
+async function acceptFeedback(event) {
+  const feedback = event.payload;
+  if (feedback.draftKey !== "probe-draft") throw new Error("feedback reached the wrong draft");
+  state.refs.push(feedback.ref);
+  if (feedback.frame) state.frames++;
+  await invoke("media_feedback_ack", { id: feedback.id, outcome: {} });
+  status();
+}
+async function open(selected = 0) {
+  await invoke("media_preview_open", { request: { files: window.__probeFiles, selected, target: { draftKey: "probe-draft" } } });
+  const views = await invoke("browser_views_list");
+  const view = views[views.length - 1];
+  if (!view) throw new Error("media view was not created");
+  state.view = view.id;
+  await invoke("browser_set_bounds", { id: view.id, bounds: { x:380,y:20,w:780,h:800 } });
+  await invoke("browser_set_displayed", { id: view.id, displayed:true });
+  status();
+  return view.id;
+}
+async function close() {
+  if (!state.view) return;
+  await invoke("browser_close", { id:state.view });
+  state.view = null;
+  status();
+}
+async function start() {
+  await listen("media-feedback", (event) => { void acceptFeedback(event).catch(fail); });
+  state.ready = true;
+  status();
+}
+function fail(error) { state.error = String(error);status(); }
+document.getElementById("open").onclick = () => { void open().catch(fail); };
+document.getElementById("close").onclick = () => { void close().catch(fail); };
+window.__mediaProbe = { state, open, close, invoke };
+void start().catch(fail);
+</script></body></html>

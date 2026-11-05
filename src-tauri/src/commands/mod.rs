@@ -5,6 +5,7 @@ pub mod browser;
 pub mod clipboard;
 pub mod file_assoc;
 pub mod lsp_guide;
+pub mod media;
 pub mod filesystem;
 /// 代理探测住在 aide-core；保留 `crate::commands::proxy` 路径。
 pub use aide_core::proxy;

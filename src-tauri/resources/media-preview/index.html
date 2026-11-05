@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>媒体预览</title>
+  <link rel="stylesheet" href="./player.css">
+  <script defer src="./player.js"></script>
+</head>
+<body>
+  <main class="player-shell" aria-labelledby="page-title">
+    <header class="topbar">
+      <div class="heading">
+        <h1 id="page-title">媒体预览</h1>
+      </div>
+      <button class="button button-quiet" id="retry-button" type="button" hidden>重试</button>
+    </header>
+
+    <section class="source-row" aria-label="当前媒体来源">
+      <div class="source-copy">
+        <h2 id="media-title">正在读取媒体信息…</h2>
+        <p class="source-details" id="media-details">请稍候</p>
+      </div>
+      <label class="file-picker" id="file-picker-wrap" hidden>
+        <span>版本</span>
+        <select id="file-picker" aria-label="选择媒体版本"></select>
+      </label>
+    </section>
+
+    <section class="media-stage" aria-label="媒体播放器">
+      <video id="video-player" controls playsinline preload="metadata" hidden></video>
+      <audio id="audio-player" controls preload="metadata" hidden></audio>
+      <div class="media-placeholder" id="media-placeholder" role="status">正在连接媒体源…</div>
+    </section>
+
+    <section class="transport" aria-label="播放控制">
+      <div class="seek-row">
+        <label for="time-input">跳转到</label>
+        <input id="time-input" type="text" inputmode="decimal" placeholder="00:00.000" autocomplete="off" aria-label="输入时间，例如 01:23.500">
+        <button class="button" id="seek-button" type="button">跳转</button>
+        <label class="rate-control" for="rate-picker">速度</label>
+        <select id="rate-picker" aria-label="播放速度">
+          <option value="0.25">0.25×</option>
+          <option value="0.5">0.5×</option>
+          <option value="0.75">0.75×</option>
+          <option value="1" selected>1×</option>
+          <option value="1.25">1.25×</option>
+          <option value="1.5">1.5×</option>
+          <option value="1.75">1.75×</option>
+          <option value="2">2×</option>
+        </select>
+      </div>
+      <div class="time-readout" aria-live="off"><span id="current-time">00:00.000</span><span class="time-divider">/</span><span id="duration-time">--:--.---</span></div>
+    </section>
+
+    <section class="clip-panel" aria-labelledby="clip-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="clip-heading">片段范围</h2>
+          <p>设定 A、B 点后循环播放该段</p>
+        </div>
+        <button class="button button-quiet" id="clear-range-button" type="button" disabled>清除</button>
+      </div>
+      <div class="range-row">
+        <div class="range-point"><span class="point-label">A 起点</span><output id="range-start">未设置</output><button class="button button-small" id="set-start-button" type="button" disabled>设为当前</button></div>
+        <div class="range-point"><span class="point-label">B 终点</span><output id="range-end">未设置</output><button class="button button-small" id="set-end-button" type="button" disabled>设为当前</button></div>
+        <label class="loop-toggle"><input id="loop-toggle" type="checkbox" disabled><span>循环片段</span></label>
+      </div>
+    </section>
+
+    <section class="reference-panel" aria-labelledby="reference-heading">
+      <div class="section-heading">
+        <div>
+          <h2 id="reference-heading">引用到原会话</h2>
+          <p>只添加到草稿，不会替你发送</p>
+        </div>
+      </div>
+      <div class="reference-actions">
+        <button class="button" id="reference-point-button" type="button" disabled>引用此时刻</button>
+        <button class="button" id="reference-range-button" type="button" disabled>引用片段</button>
+        <button class="button button-primary" id="capture-button" type="button" disabled>截图并引用当前帧</button>
+      </div>
+      <p class="feedback" id="feedback" role="status" aria-live="polite">正在加载媒体信息…</p>
+    </section>
+
+    <footer class="file-actions">
+      <span class="file-note">媒体文件只读播放；不转码、不修改原文件。</span>
+      <div class="file-action-buttons">
+        <button class="button button-quiet" id="save-button" type="button" disabled>保存到本机</button>
+        <button class="button button-quiet" id="external-button" type="button" disabled hidden>用系统程序打开</button>
+      </div>
+    </footer>
+  </main>
+</body>
+</html>

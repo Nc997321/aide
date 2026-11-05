@@ -1,15 +1,19 @@
 <script setup lang="ts">
-import { computed } from "vue";
-import type { ChatMessage, ModelOption, BgTask } from "@/types/chat";
+import { computed, ref } from "vue";
+import type { ChatMessage, ModelOption, BgTask, MediaRef } from "@/types/chat";
 import { SCENE_ACTION_PREFIX } from "@/composables/useChatSession";
 import { renderMarkdown } from "@/utils/markdown";
 import { truncatedLabel } from "@/utils/messageBytes";
 import StreamingText from "./StreamingText.vue";
 import DocumentArtifactCards from "./DocumentArtifactCards.vue";
 import { collectDocumentArtifacts } from "@aide/sdk/utils/documentArtifacts";
+import { collectMediaArtifacts } from "@aide/sdk/utils/mediaArtifacts";
+import { blankDraftKey } from "@aide/sdk/composables/useComposerDrafts";
 import ToolCallBlock from "./ToolCallBlock.vue";
 import KbRefCard from "./KbRefCard.vue";
 import PageRefCard from "./PageRefCard.vue";
+import MediaRefCard from "./MediaRefCard.vue";
+import MediaArtifactCards from "./MediaArtifactCards.vue";
 import ProcessGroup from "./ProcessGroup.vue";
 import SubagentCallBlock from "./SubagentCallBlock.vue";
 import ThinkingBlock from "./ThinkingBlock.vue";
@@ -19,6 +23,8 @@ import WatchReportCard from "./watch/WatchReportCard.vue";
 import { segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
+import { isMediaFilePath, resolveMediaLink } from "@aide/sdk/utils/mediaArtifacts";
+import { useMediaPreview } from "@/composables/useMediaPreview";
 import { isModelInList } from "@/utils/modelSelect";
 import { effortLabel } from "@aide/sdk/utils/effort";
 import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
@@ -28,6 +34,7 @@ import { useSettings } from "@/composables/useSettings";
 const props = defineProps<{
   message: ChatMessage;
   workspacePath?: string;
+  draftKey?: string;
   /** 当前会话的可选模型列表——模型徽标的别名建议要在列表里才采用，
    *  否则回退 wire 原文（第三方 sidecar 会建议出 Claude 别名，不在真实
    *  id 列表里，采信会显示用户不认识的值）。 */
@@ -95,7 +102,7 @@ const wrapClass = computed(() => {
   return isUser.value ? "msg-bubble msg-bubble--user" : "msg-turn";
 });
 
-const { openResolved } = useFileResolver();
+const { openResolved } = useFileResolver({ draftKey: () => mediaDraftKey.value });
 const { settings } = useSettings();
 
 // 卡片只从广播/历史正文里的显式声明派生。用户消息与流式正文保持原样。
@@ -104,6 +111,38 @@ const documentPresentation = computed(() =>
     ? null
     : collectDocumentArtifacts(props.message.blocks, props.workspacePath),
 );
+const mediaPresentation = computed(() =>
+  isUser.value || props.message.streaming
+    ? []
+    : collectMediaArtifacts(props.message.blocks, props.workspacePath),
+);
+const mediaDraftKey = computed(() => props.draftKey ?? blankDraftKey("default"));
+const mediaOpenError = ref("");
+const mediaPreview = useMediaPreview();
+const frameReferences = computed(() => {
+  const refs = new Map<number, MediaRef>();
+  for (const block of props.message.blocks) {
+    if (block.type === "mediaref" && block.frameIndex !== undefined) refs.set(block.frameIndex, block);
+  }
+  const labels = new Map<number, string>();
+  let imageIndex = 0;
+  props.message.blocks.forEach((block, index) => {
+    if (block.type !== "image") return;
+    const reference = refs.get(imageIndex);
+    if (reference) labels.set(index, `${reference.source.title} · 附图 ${imageIndex + 1}`);
+    imageIndex++;
+  });
+  return labels;
+});
+
+async function openMediaReference(reference: MediaRef): Promise<void> {
+  mediaOpenError.value = "";
+  try {
+    await mediaPreview.openReference({ ref: reference, draftKey: mediaDraftKey.value });
+  } catch (error) {
+    mediaOpenError.value = `媒体引用无法打开：${String(error)}`;
+  }
+}
 
 /** 用户附件保持逐条；assistant 的连续过程共用当前指令入口，正文保留原位。
  *  当前指令只在下一条指令出现或回答结束时交接，不被正文打断。 */
@@ -133,10 +172,10 @@ function handleTextClick(e: MouseEvent) {
 
   const anchorEl = target.closest("a[href]");
   const href = anchorEl?.getAttribute("href")?.trim() ?? "";
-  if (href && shouldOpenExternally(href)) {
+  if (href && (shouldOpenExternally(href) || isMediaFilePath(href))) {
     e.preventDefault();
     e.stopPropagation();
-    void openResolved(href, props.workspacePath);
+    void openResolved(resolveMediaLink(href, props.workspacePath) ?? href, props.workspacePath);
     return;
   }
 
@@ -259,6 +298,10 @@ function handleTextClick(e: MouseEvent) {
           v-else-if="seg.block.type === 'image' && seg.block.truncated"
           class="msg-image-truncated"
         >{{ truncatedLabel(seg.block.truncated.originalBytes) }}</div>
+        <figure v-else-if="seg.block.type === 'image' && frameReferences.has(seg.index)" class="msg-media-frame">
+          <img :src="`data:${seg.block.mediaType};base64,${seg.block.data}`" class="msg-image" alt="引用的视频画面" />
+          <figcaption>{{ frameReferences.get(seg.index) }}</figcaption>
+        </figure>
         <img
           v-else-if="seg.block.type === 'image'"
           :src="`data:${seg.block.mediaType};base64,${seg.block.data}`"
@@ -272,6 +315,7 @@ function handleTextClick(e: MouseEvent) {
         <!-- 用户在知识库文档 / 网页里圈选的一处（+ 意见）：折叠卡片，点开看被圈的原文 -->
         <KbRefCard v-else-if="seg.block.type === 'kbref'" :block="seg.block" />
         <PageRefCard v-else-if="seg.block.type === 'pageref'" :block="seg.block" />
+        <MediaRefCard v-else-if="seg.block.type === 'mediaref'" :media-ref="seg.block" @open="openMediaReference" />
         <!-- 子会话回报（父会话里）/ 父会话派来的任务（子会话里）：Host 投递，不是用户说的话 -->
         <SubsessionReportCard v-else-if="seg.block.type === 'subsession_report'" :block="seg.block" />
         <!-- 值守回报：会话的值守发现变化 / 结束时送来，不是用户说的话 -->
@@ -288,6 +332,12 @@ function handleTextClick(e: MouseEvent) {
         :documents="documentPresentation.documents"
         :workspace-path="workspacePath"
       />
+      <MediaArtifactCards
+        v-if="mediaPresentation.length"
+        :files="mediaPresentation"
+        :draft-key="mediaDraftKey"
+      />
+      <p v-if="mediaOpenError" class="media-open-error" role="status">{{ mediaOpenError }}</p>
       <div v-if="!isUser && (modelBadge || message.turnEffort || message.usage)" class="msg-meta">
         <span
           v-if="modelBadge || message.turnEffort"
@@ -304,6 +354,9 @@ function handleTextClick(e: MouseEvent) {
 </template>
 
 <style scoped>
+.media-open-error { color: var(--aide-danger); font-size: 12px; overflow-wrap: anywhere; }
+.msg-media-frame { margin: 0; min-width: 0; }
+.msg-media-frame figcaption { color: var(--aide-text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .msg-row {
   display: flex;
   padding: 4px 12px;

@@ -9,6 +9,15 @@ mod diagnostics;
 mod host_door;
 mod host_recents;
 mod host_window;
+mod media;
+mod resource_server;
+
+/// 隔离媒体真机验收入口，不进入 release，不启动用户会话或 SDK。
+#[cfg(debug_assertions)]
+#[doc(hidden)]
+pub fn run_media_probe(root: std::path::PathBuf, files: Vec<std::path::PathBuf>) -> Result<(), String> {
+    media::probe::run(root, files)
+}
 // 远程 Host（WSL / SSH 目标机上的整个后端，GUI 留在桌面）。手机连 Host 走 Aide Link（`aide-core` 的 `link/`），
 // 与它无关。
 pub(crate) mod remote_workspace;
@@ -97,6 +106,7 @@ pub fn run() {
 
     builder
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(
@@ -182,6 +192,7 @@ pub fn run() {
 
             // 远程 Host 连接：manage 需要 AppHandle，只能在 setup 内注册。
             remote_workspace::manage(app);
+            media::manage(app.handle());
 
             // 电脑操作执行器（aide-computer）：本机与远程 Host 的 agent 都由它操作这台电脑。
             runtime::computer_agent::manage(app.handle());
@@ -292,6 +303,8 @@ pub fn run() {
             commands::app::set_close_behavior,
             // 侧栏应用：本窗口里某个应用的资源根地址（GUI 能力，资源本身向窗口所连的 Host 取）。
             commands::app_assets::app_frame_base,
+            commands::media::media_preview_open,
+            commands::media::media_feedback_ack,
             // 侧栏应用 P0 隔离实验（仅 AIDE_APP_PROBE=1 生效）。金丝雀不进 Link 暴露目录。
             commands::app_probe::app_probe_start,
             commands::app_probe::app_probe_canary,
