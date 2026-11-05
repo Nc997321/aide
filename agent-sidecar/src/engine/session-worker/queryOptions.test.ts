@@ -1,6 +1,6 @@
 // buildSpawnQueryOptions 直测：条件展开臂逐条钉住。dispatchPlugins/claudeExe 打桩
 //（真实现摸 ~/.aide/claude 与 exe 探测——测试不许有盘上副作用）。
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -136,7 +136,9 @@ describe("buildSpawnQueryOptions", () => {
   /// 只测退了，会漏掉能力缺口（替代品不在场却把内置工具拿掉）。
   describe("C3：内置 LSP 通道退役", () => {
     let lspDir: string;
+    beforeEach(() => vi.stubEnv("AIDE_LSP_TOOLS", "on"));
     afterEach(() => {
+      vi.unstubAllEnvs();
       market.dirs = [{ type: "local", path: "/plugins/market" }];
       if (lspDir) rmSync(lspDir, { recursive: true, force: true });
       vi.restoreAllMocks();

@@ -69,6 +69,8 @@ vi.mock("../../composables/useChatPaneWidth", () => ({ setChatPaneRect: vi.fn() 
 vi.mock("../../composables/useFileClipboard", () => ({ peekFileClipboard: () => null, clearFileClipboard: vi.fn() }));
 // AppLogo 导入 /icon.png（vite 公共资源）在 jsdom 下会崩，stub 掉。
 vi.mock("../AppLogo.vue", () => ({ default: { name: "AppLogo", template: "<div class='app-logo-stub' />" } }));
+// 同样隔离思考标记的公共 PNG 资源，面板测试不验证图像绘制。
+vi.mock("../activity/ThinkingMark.vue", () => ({ default: { template: "<span />" } }));
 
 // 结算卡在本文件里换成薄壳：接线要验的是"注入了 feed 才渲染、且喂进去的是这份 feed"，
 // 卡片内部的形态归 TurnChangeCard.test.ts。壳也顺带挡住卡片那串 composable 依赖。

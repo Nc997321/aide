@@ -145,7 +145,7 @@ fn revision(metadata: &Metadata) -> Result<String, String> {
     {
         use std::os::unix::fs::MetadataExt;
         Ok(format!(
-            "v1:{}:{modified_ns}:{}:{}:{}:{}",
+            "v1:{}:{modified_ns}:{}:{}:{}:{}:{}",
             metadata.len(),
             metadata.dev(),
             metadata.ino(),

@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
+import { resolve, join } from "node:path";
 import { LspNav, columnOf, findDeclaration, identifierAt, reasonOf, symbolName } from "./lspNav.js";
 import type { LspQueryResponse, LspTool } from "./lspClient.js";
 import type { OutlineNode } from "./lspFormat.js";
 
-const ROOT = "/proj";
-const MOD = "/proj/src/lsp/mod.rs";
-const CALLER = "/proj/src/runtime/pump.rs";
+const ROOT = resolve("/proj");
+const MOD = join(ROOT, "src", "lsp", "mod.rs");
+const CALLER = join(ROOT, "src", "runtime", "pump.rs");
 
 const FILES: Record<string, string> = {
   [MOD]: [

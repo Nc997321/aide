@@ -25,6 +25,7 @@ export interface ConnectorOption {
 const UNAVAILABLE = new Set(["aide-lsp", "aide-sessions", "aide-watch"]);
 
 const NOTES: Record<string, { note: string; caution?: boolean }> = {
+  "aide-search": { note: "在工作区内按文件名查找文件，限制搜索范围与结果数量" },
   "aide-docs": { note: "读写 docx / pdf 文档" },
   "aide-knowledge": {
     note: "知识库读写：含新建、覆盖、移动、删除文档，任务内不再逐次确认",
