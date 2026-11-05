@@ -16,6 +16,8 @@ import { buildBuiltinHooks, type HookBuildContext, type BuiltinHookManifest } fr
 import { loadUserMcpServers, loadAppMcp, loadUserHooks, assembleMcpServers, assembleHooks } from "../userExtensions.js";
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
+import { EXECUTION_GUIDANCE } from "../../extensions/executionPolicy.js";
+import { fileSearchRegistration } from "../../extensions/fileSearch.js";
 import { CHAT_DISPLAY_HINT } from "../displayHint.js";
 import { DOCUMENT_ARTIFACT_HINT } from "../../desktop/documentArtifacts.js";
 import { loadLspHint } from "../lspHint.js";
@@ -25,6 +27,7 @@ import { subsessionMcpRegistration, type SubsessionContext } from "../../extensi
 import { resolveSessionProfile, type SessionProfile } from "../sessionProfile.js";
 
 export interface QueryContextDeps {
+  computerDenial?: () => string | undefined;
   sessionProfile?: SessionProfile;
   /** effectiveCwd（worker 已解析：cwd ?? this.cwd ?? ""）。 */
   cwd: string;
@@ -94,7 +97,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   const browserMcp = browserMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
   // 操作用户的电脑（读窗口控件 / 真实鼠标键盘）：注册条件=!trusted 跳过、AIDE_COMPUTER_TOOLS=off 跳过。
   // 带 emit，同浏览器走 request_id 桥回桌面进程（aide-computer）。
-  const computerMcp = computerMcpRegistration(deps.emit, deps.processEnv, deps.trusted);
+  const computerMcp = computerMcpRegistration(deps.emit, deps.processEnv, deps.trusted, deps.computerDenial);
   // 值守（定时看窗口 / 命令输出，有变化时自己汇报）：受信任、非自动化运行（无人值守的运行不留定时器）。
   const watchMcp = watchMcpRegistration(deps.watches, {
     trusted: deps.trusted,
@@ -133,7 +136,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
     trusted: deps.trusted,
     attached: deps.attachedDirs,
     // 宿主展示提示 + 内置 LSP 提示（按闸门）；展示协议实现留在 desktop。
-    builtinHint: [CHAT_DISPLAY_HINT, DOCUMENT_ARTIFACT_HINT, await loadLspHint(configDir, lspGate)].filter(Boolean).join("\n\n"),
+    builtinHint: [EXECUTION_GUIDANCE, CHAT_DISPLAY_HINT, DOCUMENT_ARTIFACT_HINT, await loadLspHint(configDir, lspGate)].filter(Boolean).join("\n\n"),
   });
   // 内建 hooks 统一走 builtinHooks 注册表：policy 恒为 PreToolUse[0]
   // （权威前置层，用户 hook 不可越过），subagentModel/skillGuard
@@ -161,6 +164,7 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 白名单裁决是第二层）。
   const assembledMcp = assembleMcpServers(
     {
+      ...(deps.trusted && !deps.automationConfig ? fileSearchRegistration(deps.cwd) : {}),
       ...(docsMcp ?? {}),
       ...(knowledgeMcp ?? {}),
       ...(memoryMcp ?? {}),

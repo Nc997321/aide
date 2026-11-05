@@ -3,6 +3,7 @@
 // （tools 白名单 + 护栏）——改动别乱序。parts 按 M2 分组（runtime/workspace/branch/model/fork），
 // 对象化沿 mapper.ts MapperDeps 先例（宽装配函数的注入形状）。
 import type { Options, PermissionMode, EffortLevel, CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import { FILE_SEARCH_TOOL } from "../../extensions/fileSearch.js";
 import { LSP_ALLOW_RULE } from "../../extensions/lspTools.js";
 import { SUBSESSION_ALLOW_RULES } from "../../extensions/subsessions.js";
 import { DOCS_ALLOW_RULE } from "../../extensions/docsMcp.js";
@@ -83,6 +84,7 @@ function pluginDirs(p: QuerySpawnParts): SdkPluginConfig[] {
 
 export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
   const profile = resolveSessionProfile(p.branch.sessionProfile);
+  const boundedSearch = profile.toolsEnabled && !p.branch.automationConfig && !!p.runtime.ctx.mcpServers["aide-search"];
   return {
     abortController: p.runtime.abortController,
     permissionMode: p.runtime.permissionMode,
@@ -103,6 +105,7 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // 工具挂闸门就是装饰性的（见 browserMcp.ts 的论证）。唯一真控制 = AIDE_BROWSER_TOOLS=off。
     // 两组都必须是**工具级**规则（server 级前缀会把同 server 的其余工具一起放行）。
     allowedTools: [
+      ...(boundedSearch ? [FILE_SEARCH_TOOL] : []),
       "Agent",
       "Task",
       DOCS_ALLOW_RULE,
@@ -127,7 +130,8 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // disallowedTools 把工具从模型上下文里整个摘掉（不依赖权限模式，auto/bypass 下也拦得住）。
     // 只拦会话级切换；Agent 工具的 isolation:"worktree" 只动子代理 cwd，不在此列。
     // 要放开须先把 worktree 做成一等工作区概念（新会话 + wsPath 指向它），别在这里删。
-    disallowedTools: ["EnterWorktree", "ExitWorktree"],
+    disallowedTools: ["EnterWorktree", "ExitWorktree", ...(boundedSearch ? ["Glob"] : [])],
+    ...(boundedSearch ? { toolAliases: { Glob: FILE_SEARCH_TOOL } } : {}),
     // 自动化运行全关：每次都是全新会话，精简基座 = 省钱 + 行为确定。
     // 主对话/侧问保持 "all"/全量：侧问走主会话存活的 query，根本不重建这些选项。
     skills: !profile.toolsEnabled || p.branch.automationConfig ? [] : "all",

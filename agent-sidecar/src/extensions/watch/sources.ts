@@ -9,9 +9,11 @@ import type { ReadResult, WatchSource } from "./manager.js";
 
 const MAX_OUTPUT_BYTES = 64 * 1024;
 
-export function makeReader(emit: (e: ChatEvent) => void, cwd: () => string | undefined) {
+export function makeReader(emit: (e: ChatEvent) => void, cwd: () => string | undefined, denied?: () => string | undefined) {
   return async (source: WatchSource, hint: { label: string; everyMs: number }): Promise<ReadResult> => {
     if (source.kind === "window") {
+      const error = denied?.();
+      if (error) return { ok: false, error, gone: true };
       const r = await queryComputer(
         {
           op: "read",

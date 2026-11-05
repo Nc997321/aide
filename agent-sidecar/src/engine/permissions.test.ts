@@ -1,9 +1,28 @@
 import { describe, it, expect } from "vitest";
-import { PermissionManager, unansweredDenyMessage, userDenyMessage } from "./permissions.js";
+import { PermissionManager, makeGuardedCanUseTool, unansweredDenyMessage, userDenyMessage } from "./permissions.js";
 import { SubagentTracker } from "./subagents.js";
 import type { ChatEvent } from "./types.js";
 
 describe("PermissionManager — AskUserQuestion answers 重组", () => {
+  it("能力未授权不触发审批；等待动作审批时撤权也不能执行", async () => {
+    let allowed = false;
+    let asked = 0;
+    const callback = makeGuardedCanUseTool({
+      isAutomation: () => false,
+      toolGuard: () => allowed ? undefined : "未授权",
+      permissionCallback: async () => {
+        asked++;
+        allowed = false;
+        return { behavior: "allow", updatedInput: {} };
+      },
+    });
+    const opts = { signal: new AbortController().signal, suggestions: [], toolUseID: "t", requestId: "r" };
+    expect((await callback("mcp__aide-computer__computer_act", {}, opts))?.behavior).toBe("deny");
+    expect(asked).toBe(0);
+    allowed = true;
+    expect((await callback("mcp__aide-computer__computer_act", {}, opts))?.behavior).toBe("deny");
+    expect(asked).toBe(1);
+  });
   it("approving AskUserQuestion rebuilds updatedInput as {questions, answers} instead of echoing input", async () => {
     const events: ChatEvent[] = [];
     const mgr = new PermissionManager();

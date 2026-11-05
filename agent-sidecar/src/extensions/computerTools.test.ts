@@ -21,6 +21,25 @@ function toolsWith(reply: (e: Record<string, unknown>) => { ok: boolean; data?: 
 }
 
 describe("computer tools", () => {
+  it("未授权的调用不发桥事件；授权及撤销在执行时实时生效", async () => {
+    let allowed = false;
+    const sent: ChatEvent[] = [];
+    const emit = (event: ChatEvent) => {
+      sent.push(event);
+      if (event.type === "computer_query") queueMicrotask(() => resolveComputerResult({ request_id: event.request_id, ok: true, data: [] }));
+    };
+    const tools = buildComputerTools(emit, () => allowed ? undefined : "未授权电脑操作") as unknown as { name: string; handler: Handler }[];
+    const read = tools.find((entry) => entry.name === "computer_windows");
+    if (!read) throw new Error("missing computer_windows");
+    expect((await read.handler({}, {})).content[0]?.text).toContain("未授权");
+    expect(sent).toHaveLength(0);
+    allowed = true;
+    await read.handler({}, {});
+    expect(sent).toHaveLength(1);
+    allowed = false;
+    await read.handler({}, {});
+    expect(sent).toHaveLength(1);
+  });
   it("exposes five tools; only the read-only ones are auto-allowed", () => {
     const { byName } = toolsWith(() => ({ ok: true }));
     for (const n of ["computer_windows", "computer_read", "computer_act", "computer_wait", "computer_window"]) {

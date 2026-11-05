@@ -92,14 +92,18 @@ const conditionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("focus_changes") }),
 ]);
 
-export function buildComputerTools(emit: Emit) {
+export function buildComputerTools(emit: Emit, denied?: () => string | undefined) {
+  const execute = (c: ComputerCall, render: (data: unknown) => ToolResult): Promise<ToolResult> => {
+    const error = denied?.();
+    return error ? Promise.resolve(textResult(error)) : call(emit, c, render);
+  };
   return [
     tool(
       "computer_windows",
       "List the windows open on the user's computer: id, title, process, and whether each is in the " +
         "foreground, minimized, or runs as administrator (those cannot be operated). Start here.",
       {},
-      () => call(emit, { op: "windows" }, text(formatWindows)),
+      () => execute({ op: "windows" }, text(formatWindows)),
     ),
     tool(
       "computer_read",
@@ -126,7 +130,7 @@ export function buildComputerTools(emit: Emit) {
           .describe("For documents/terminals: return the last N lines of the whole buffer instead of only the visible part."),
       },
       (args) =>
-        call(emit, { op: "read", ...args }, (data) => {
+        execute({ op: "read", ...args }, (data) => {
           const res = textResult(formatRead(data));
           const png = screenshotOf(data);
           if (png) res.content.push({ type: "image", data: png, mimeType: "image/png" });
@@ -145,7 +149,7 @@ export function buildComputerTools(emit: Emit) {
         intent: z.string().describe("One sentence on what these steps are meant to achieve (shown to the user for approval)."),
         steps: z.array(stepSchema).min(1).max(8),
       },
-      (args) => call(emit, { op: "act", ...args }, text(formatAct)),
+      (args) => execute({ op: "act", ...args }, text(formatAct)),
     ),
     tool(
       "computer_wait",
@@ -158,7 +162,7 @@ export function buildComputerTools(emit: Emit) {
         condition: conditionSchema,
         timeout_ms: z.number().int().min(100).max(60_000).optional(),
       },
-      (args) => call(emit, { op: "wait", ...args }, text(formatWait)),
+      (args) => execute({ op: "wait", ...args }, text(formatWait)),
     ),
     tool(
       "computer_window",
@@ -169,7 +173,7 @@ export function buildComputerTools(emit: Emit) {
         app: z.string().optional().describe("For launch: the application's name."),
         window_id: windowIdArg.optional().describe("For every action except launch."),
       },
-      (args) => call(emit, { op: "window", ...args }, text(formatWindowAction)),
+      (args) => execute({ op: "window", ...args }, text(formatWindowAction)),
     ),
   ];
 }

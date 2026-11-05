@@ -296,8 +296,11 @@ export class PermissionManager {
 export function makeGuardedCanUseTool(deps: {
   permissionCallback: CanUseTool;
   isAutomation: () => boolean;
+  toolGuard?: (tool: string, input: unknown, agentId?: string) => string | undefined;
 }): CanUseTool {
   return async (toolName, input, opts) => {
+    const blocked = deps.toolGuard?.(toolName, input, opts.agentID);
+    if (blocked) return { behavior: "deny", message: policyDenyMessage(blocked) };
     // 注：allowDangerouslySkipPermissions 只让 CLI 跳过**规则层**的询问——
     // hook 不表态（{} 或 defer）时工具被静默放行、这里确实不会被调用。但 hook
     // 显式返回 permissionDecision:"ask" 时,该决策会作为预置决策绕过规则层直接进
@@ -310,6 +313,8 @@ export function makeGuardedCanUseTool(deps: {
         message: "自动化运行无人值守(仅白名单内工具可用)",
       };
     }
-    return deps.permissionCallback(toolName, input, opts);
+    const result = await deps.permissionCallback(toolName, input, opts);
+    const revoked = deps.toolGuard?.(toolName, input, opts.agentID);
+    return revoked ? { behavior: "deny", message: policyDenyMessage(revoked) } : result;
   };
 }

@@ -56,6 +56,7 @@ export interface BuiltinHookManifest {
 export const builtinHooks = ref<BuiltinHookManifest[]>([
   { id: "policy", event: "PreToolUse", matcher: ".*", purpose: "工具权限门控（权威前置层，不可越过）" },
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$", purpose: "子代理模型选择兜底（条件挂）" },
+  { id: "boundedEdits", event: "PreToolUse", matcher: "^Bash$", purpose: "直接 rustfmt 默认只格式化显式文件，不递归扩散到其他模块" },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$", purpose: "子代理重型 skill 名单拦截（条件挂）" },
   { id: "kbMemoryGuard", event: "PreToolUse", matcher: "^(Write|Edit|MultiEdit|NotebookEdit)$", purpose: "知识库圈选改写那一轮不写记忆（拦 Write/Edit 落在 memory 目录；本轮用户消息不带圈选即恢复；条件挂）" },
   { id: "memoryEvents", event: "PostToolUse", matcher: "^(Read|Write|Edit|MultiEdit)$", purpose: "记忆观测台事件台账（memory 目录读写埋点，只记录不干预）" },
@@ -74,6 +75,7 @@ export interface BuiltinMcpServer {
   purpose: string;
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
+  { id: "aide-search", transport: "in-process", purpose: "有界文件搜索：默认排除依赖和构建目录；显式指定目录仍可查。单次扫描限时 1.5 秒，返回最多 200 项/16KiB，截断如实提示。替代内置 Glob，原 Glob 权限规则仍生效。" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
   { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / create_folder / move_document / append_document / update_document / ingest_file / delete_document / edit_selection（只改你在文档里圈选的那一段，圈选生效期间其余写工具一律被拒）每次要你确认 —— 其中 move_document 会改变目录结构、delete_document 连带子文件夹与子文档且界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
   { id: "aide-memory", transport: "in-process", purpose: "内置跨工作区记忆（read_memory：只读地参考其他工作区的记忆——你用 @ 附加的目录，以及知识库文档关联的项目；不带 id 看索引与条目名，带 id 读一条正文；不授予那些工作区的任何文件访问），自动放行；受信任工作区挂载" },

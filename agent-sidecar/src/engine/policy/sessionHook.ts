@@ -27,6 +27,9 @@ export interface PolicyBranchState {
 }
 
 export interface SessionPolicyDeps {
+  canonicalTools?: Readonly<Record<string, string>>;
+  /** Host-owned capability policy. A denial precedes normal permission modes. */
+  toolGuard?: (toolName: string, input: unknown, agentId?: string) => string | undefined;
   branchState: () => PolicyBranchState;
   /** 自动化运行三值裁决（desktop/automation.ts 的 automationHookVerdict）。 */
   automationVerdict: (toolName: string, toolInput: unknown, cfg: AutomationConfig) => AutomationVerdict;
@@ -108,6 +111,9 @@ export class SessionPolicy {
       const toolName = input.tool_name;
       const toolInput = input.tool_input;
       if (!toolName) return {};
+      const blocked = this.deps.toolGuard?.(toolName, toolInput, input.agent_id);
+      if (blocked) return { hookSpecificOutput: { hookEventName: "PreToolUse",
+        permissionDecision: "deny", permissionDecisionReason: policyDenyMessage(blocked) } };
       const state = this.deps.branchState();
       // 自动化运行：三值裁决。MCP 工具按连接器白名单（与预设无关）；内建工具
       // full 预设 allow、auto 预设返回 {} 不表态——交还 CLI auto 模式（安全自动
@@ -132,11 +138,17 @@ export class SessionPolicy {
         this.sessionRules.length > 0
           ? { ...this.snapshot, rules: [...this.sessionRules, ...this.snapshot.rules] }
           : this.snapshot;
-      const decision = await evaluatePolicy(snapshot, {
+      let decision = await evaluatePolicy(snapshot, {
         tool: toolName,
         input: (toolInput ?? {}) as Record<string, unknown>,
         cwd: cwd ?? state.cwd,
       });
+      const canonical = this.deps.canonicalTools?.[toolName];
+      if (canonical) {
+        const original = await evaluatePolicy(snapshot, { tool: canonical,
+          input: (toolInput ?? {}) as Record<string, unknown>, cwd: cwd ?? state.cwd });
+        if (original.disposition === "deny" || decision.disposition === "defer") decision = original;
+      }
       switch (decision.disposition) {
         case "allow":
           return {

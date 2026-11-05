@@ -41,6 +41,27 @@ function preToolUse(tool: string): HookInput {
 type HookOut = { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
 
 describe("SessionPolicy.applySnapshot", () => {
+  it("搜索适配器不能绕过原 Glob 或新工具自身的 deny 规则", async () => {
+    for (const denied of ["Glob", "mcp__aide-search__glob"]) {
+      const policy = new SessionPolicy({ branchState, automationVerdict: () => "defer",
+        canonicalTools: { "mcp__aide-search__glob": "Glob" } });
+      policy.applySnapshot({ revision: 1, rules: [rule("deny", denied)] });
+      const result = await policy.makeHook("/proj")(preToolUse("mcp__aide-search__glob"), undefined,
+        { signal: new AbortController().signal }) as HookOut;
+      expect(result.hookSpecificOutput?.permissionDecision).toBe("deny");
+    }
+  });
+
+  it("宿主能力未授权时直接拒绝，不交给 canUseTool 弹窗，automation full 也不能覆盖", async () => {
+    const policy = new SessionPolicy({ branchState: () => branchState({ automationConfig:
+      { taskId: "t", runId: "r", preset: "full", tools: ["*"], mcpAllowlist: [], taskDir: "", sessionDir: "" } }),
+      automationVerdict: () => "allow", toolGuard: () => "未授权" });
+    policy.applySnapshot({ revision: 1, rules: [rule("allow", "mcp__aide-computer__computer_act")] });
+    const result = await policy.makeHook("/proj")(preToolUse("mcp__aide-computer__computer_act"), undefined,
+      { signal: new AbortController().signal }) as HookOut;
+    expect(result.hookSpecificOutput?.permissionDecision).toBe("deny");
+    expect(result.hookSpecificOutput?.permissionDecisionReason).toContain("未授权");
+  });
   it("revision 单调：旧快照被忽略（无回滚）", async () => {
     const { policy } = makePolicy();
     policy.applySnapshot({ revision: 2, rules: [rule("deny", "Bash")] });

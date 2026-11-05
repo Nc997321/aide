@@ -1,6 +1,7 @@
 import type { HookCallback } from "@anthropic-ai/claude-agent-sdk";
 import { makeSubagentModelHook } from "../../engine/subagentModelDefault";
 import { makeSkillGuardHook } from "../skillGuard";
+import { makeBoundedEditsHook } from "../boundedEdits.js";
 import { makeMemoryEventsHook } from "./memoryEvents";
 import { makeKbMemoryGuardHook } from "../knowledge/memoryGuard";
 import type { KbScopeStore } from "../knowledge/scope";
@@ -44,6 +45,9 @@ export const BUILTIN_HOOKS: BuiltinHookEntry[] = [
   { id: "subagentModel", event: "PreToolUse", matcher: "^(Agent|Task)$",
     purpose: "子代理模型选择兜底", alwaysMounted: false,
     build: (ctx) => makeSubagentModelHook(ctx.sessionEnv) },
+  { id: "boundedEdits", event: "PreToolUse", matcher: "^Bash$",
+    purpose: "直接 rustfmt 默认只格式化显式文件，不递归扩散到其他模块", alwaysMounted: true,
+    build: () => makeBoundedEditsHook() },
   { id: "skillGuard", event: "PreToolUse", matcher: "^Skill$",
     purpose: "子代理重型 skill 名单拦截", alwaysMounted: false,
     build: (ctx) => makeSkillGuardHook(ctx.env) },

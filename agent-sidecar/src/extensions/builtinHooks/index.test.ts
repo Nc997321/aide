@@ -25,7 +25,7 @@ describe("builtinHooks registry", () => {
 
   it("顺序固定：policy → subagentModel → skillGuard → kbMemoryGuard(PreToolUse)，stopEffort(Stop)，switchGuard 一对", () => {
     const pre = BUILTIN_HOOKS.filter((h) => h.event === "PreToolUse").map((h) => h.id);
-    expect(pre).toEqual(["policy", "subagentModel", "skillGuard", "kbMemoryGuard"]);
+    expect(pre).toEqual(["policy", "subagentModel", "boundedEdits", "skillGuard", "kbMemoryGuard"]);
     const stop = BUILTIN_HOOKS.filter((h) => h.event === "Stop").map((h) => h.id);
     expect(stop).toEqual(["stopEffort"]);
   });

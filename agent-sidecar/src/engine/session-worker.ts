@@ -43,6 +43,8 @@ import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./sess
 import { buildCliEnv, sessionEnvOf } from "./cliEnv.js";
 import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
+import { ExecutionPolicy } from "../extensions/executionPolicy.js";
+import { FILE_SEARCH_TOOL } from "../extensions/fileSearch.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { cancelAllLspQueries, syncLspWarmth } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
@@ -135,9 +137,12 @@ export class SessionWorker {
   routingKey: string;
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
+  private readonly executionPolicy = new ExecutionPolicy();
   /** 会话策略状态（快照 + 会话级规则 + 权威 PreToolUse hook，见 policy/sessionHook.ts）。
    *  自动化状态不归它所有——注入活值 getter，hook 每次调用时读。 */
   private readonly policy = new SessionPolicy({
+    canonicalTools: { [FILE_SEARCH_TOOL]: "Glob" },
+    toolGuard: (tool, input, agentId) => this.executionPolicy.denyReason(tool, !!this.subsessionParent, input, !!agentId),
     branchState: () => ({
       automationConfig: this.automationConfig,
       cwd: this.cwd,
@@ -147,7 +152,7 @@ export class SessionWorker {
   /** 值守（extensions/watch）：定时看窗口 / 命令输出，有变化时把增量作为一条消息投进本会话。
    *  定时器随 worker 存活（跨回合），会话停止时全部结束。 */
   readonly watches = new WatchManager({
-    read: makeReader((e) => this.emit(e), () => this.cwd),
+    read: makeReader((e) => this.emit(e), () => this.cwd, () => this.executionPolicy.computerDenial()),
     deliver: (r) => this.deliverWatchReport(r),
     notify: (message) => this.emit({ type: "notification", message, notification_type: "watch" }),
     now: () => Date.now(),
@@ -452,6 +457,9 @@ export class SessionWorker {
     };
     // 圈选登记（知识库扩展语义，worker 只是转手）：每条用户消息整表替换，见 knowledge/scope.ts。
     this.kbScopes.replaceFromDisplay(display);
+    if (this.automationConfig) this.executionPolicy.clear();
+    const capabilityNotice = this.automationConfig ? undefined : this.executionPolicy.receive(prompt, display);
+    if (capabilityNotice) this.emit({ type: "notification", message: capabilityNotice, notification_type: "info" });
     this.btwLedger.recordUser(text);
     if (target === "nextQuery") this.nextQueryInjections.push(msg);
     else this.queue.push(msg);
@@ -543,6 +551,9 @@ export class SessionWorker {
     const item = this.queuedSends.take(id);
     if (!item || this.stopped) return;
     this.kbScopes.replaceFromDisplay(item.display);
+    if (this.automationConfig) this.executionPolicy.clear();
+    const capabilityNotice = this.automationConfig ? undefined : this.executionPolicy.receive(item.text, item.display);
+    if (capabilityNotice) this.emit({ type: "notification", message: capabilityNotice, notification_type: "info" });
     this.btwLedger.recordUser(item.text);
     if (this.turnActive) {
       // 并进了正在跑的回合：这一轮不再只是开头那条消息，不能整条撤回
@@ -773,6 +784,7 @@ export class SessionWorker {
         this.subagentTracker,
       ),
       isAutomation: () => !!this.automationConfig,
+      toolGuard: (tool, input, agentId) => this.executionPolicy.denyReason(tool, !!this.subsessionParent, input, !!agentId),
     });
   }
 
@@ -873,6 +885,9 @@ export class SessionWorker {
 
   handleCommand(cmd: SidecarCommand): void {
     if (cmd.cmd === "send") {
+      if (this.executionPolicy.revoke(cmd.prompt, cmd.display)) {
+        this.emit({ type: "notification", message: "电脑操作授权已撤销。", notification_type: "info" });
+      }
       this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
@@ -917,6 +932,7 @@ export class SessionWorker {
       this.applyPermissionPolicy(cmd.policy);
 
     } else if (cmd.cmd === "interrupt") {
+      this.executionPolicy.clear();
       // 打断：排队消息撤回（退回输入框，见 interruptAndWithdrawQueue）；挂起的权限确认
       // 也一并撤销（policy hook 的 ask 路径没有 SDK signal，靠 cancelAll 兜底）。
       this.permMgr.cancelAll();
@@ -1145,6 +1161,7 @@ export class SessionWorker {
             watches: this.watches,
             automationConfig: this.automationConfig,
             isSubsession: !!this.subsessionParent,
+            computerDenial: () => this.executionPolicy.computerDenial(),
             subsessionContext: () => ({
               permissionMode: this.permModes.current,
               model: this.currentModel,
