@@ -14,7 +14,8 @@
 import { ref } from "vue";
 
 import { useRightPanel } from "../useRightPanel";
-import { onBrowserFocus, onBrowserView, type ViewEventDto } from "./useEmbeddedBrowser";
+import { onBrowserFocus, onBrowserNav, onBrowserView, type ViewEventDto } from "./useEmbeddedBrowser";
+import { useBrowserHistory } from "./useBrowserHistory";
 
 /** 面板挂载后要切过去的视图（focus 先到、面板后到）。 */
 const pendingFocusViewId = ref<string | null>(null);
@@ -41,8 +42,11 @@ function handleFocus(e: { id: string }): void {
 export function useBrowserViews() {
   if (!installed) {
     installed = true;
-    void onBrowserView(handleView);
-    void onBrowserFocus(handleFocus);
+    void onBrowserView(handleView).catch((error) => console.warn("浏览器标签订阅失败", error));
+    void onBrowserFocus(handleFocus).catch((error) => console.warn("浏览器聚焦订阅失败", error));
+    // 导航历史也须常驻：面板首次挂载之前，agent 可能已经打开并关闭了网页。
+    void onBrowserNav((nav) => useBrowserHistory().recordNavigation(nav))
+      .catch((error) => console.warn("浏览器历史订阅失败", error));
   }
   return {
     /** 待切视图（面板 watch 它）。 */

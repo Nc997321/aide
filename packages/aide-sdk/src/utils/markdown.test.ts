@@ -67,6 +67,16 @@ describe("裸 HTML 一律转义成可见原文（XSS 收口）", () => {
     expect(localImagePath("out/a%20b.png")).toBe("out/a b.png");
   });
 
+  it.each([
+    ["/C:/preview/a.png", "C:/preview/a.png"],
+    ["/d:/preview/a.png", "d:/preview/a.png"],
+    ["/C:\\preview\\a.png", "C:\\preview\\a.png"],
+    ["/C:/preview/a%20b.png", "C:/preview/a b.png"],
+    ["/tmp/a.png", "/tmp/a.png"],
+  ])("本地图片：规范化盘符前的斜杠，保留 POSIX 路径 %s", (raw, expected) => {
+    expect(localImagePath(raw)).toBe(expected);
+  });
+
   it("本地图片：网络图 / 其它协议 / 非图片扩展名不算", () => {
     expect(localImagePath("https://x.test/a.png")).toBeNull();
     expect(localImagePath("//cdn.test/a.png")).toBeNull();

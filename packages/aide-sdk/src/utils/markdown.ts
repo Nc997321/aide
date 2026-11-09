@@ -121,7 +121,6 @@ export function localImagePath(raw: string): string | null {
   if (v === "" || v.startsWith("//")) return null; // 协议相对 URL 不是本地文件
   if (/^file:\/\//i.test(v)) {
     v = v.replace(/^file:\/\/(?:localhost)?/i, "");
-    if (/^\/[A-Za-z]:[\\/]/.test(v)) v = v.slice(1); // file:///C:/x.png
   } else if (/^[A-Za-z][A-Za-z0-9+.-]*:/.test(v) && !/^[A-Za-z]:[\\/]/.test(v)) {
     return null; // http / data / javascript … 一切带协议的
   }
@@ -132,6 +131,8 @@ export function localImagePath(raw: string): string | null {
       /* 非法转义按原文 */
     }
   }
+  // 回复可能直接写 /C:/x.png；与 file:///C:/x.png 一样去掉盘符前的 URL 斜杠。
+  if (/^\/[A-Za-z]:[\\/]/.test(v)) v = v.slice(1);
   return LOCAL_IMAGE_EXT_RE.test(v) ? v : null;
 }
 

@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Aide · 浏览器开始页原型</title>
+<style>
+/* 布局：紧凑浏览器工具栏 + 创作入口 + 最近使用；收藏与历史按需展开，窄栏改为单列。主题取自 Aide。 */
+:root {
+  color-scheme: light;
+  --aide-bg-deep: rgb(250,250,252); --aide-bg-base: rgb(243,241,242); --aide-bg-raised: rgb(255,255,255);
+  --aide-surface-default: rgba(255,255,255,.48); --aide-surface-hover: rgba(255,255,255,.72); --aide-surface-active: rgba(207,166,160,.18);
+  --aide-text-primary: #23262d; --aide-text-secondary: #5c6470; --aide-text-muted: #7b8492;
+  --aide-accent: #CFA6A0; --aide-accent-subtle: rgba(207,166,160,.18); --aide-border: rgba(124,137,154,.18);
+  --aide-shadow-md: 0 8px 24px rgba(87,101,120,.1); --aide-radius-sm: 8px; --aide-radius-md: 12px; --aide-space-unit: 4px;
+  --font-body: -apple-system,"Segoe UI","PingFang SC","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  --font-mono: "Cascadia Code","SF Mono",Consolas,"Noto Sans Mono CJK SC",monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --aide-bg-deep: #141218; --aide-bg-base: #1a1820; --aide-bg-raised: #221f29;
+    --aide-surface-default: #292631; --aide-surface-hover: #322e3c; --aide-surface-active: #3d3848;
+    --aide-text-primary: #ece5db; --aide-text-secondary: #b3aa9c; --aide-text-muted: #7d7568;
+    --aide-accent: #d9ab78; --aide-accent-subtle: rgba(217,171,120,.13); --aide-border: rgba(255,214,160,.09);
+    --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --aide-bg-deep: #141218; --aide-bg-base: #1a1820; --aide-bg-raised: #221f29;
+  --aide-surface-default: #292631; --aide-surface-hover: #322e3c; --aide-surface-active: #3d3848;
+  --aide-text-primary: #ece5db; --aide-text-secondary: #b3aa9c; --aide-text-muted: #7d7568;
+  --aide-accent: #d9ab78; --aide-accent-subtle: rgba(217,171,120,.13); --aide-border: rgba(255,214,160,.09);
+  --aide-shadow-md: 0 6px 20px rgba(0,0,0,.34);
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body { margin: 0; background: var(--aide-bg-deep); color: var(--aide-text-primary); font: 13px/1.6 var(--font-body); }
+button,input,textarea { font: inherit; color: inherit; }
+button { cursor: pointer; border: 0; background: transparent; }
+button:disabled { cursor: default; opacity: .35; }
+button:hover:not(:disabled) { background: var(--aide-surface-hover); }
+button:focus-visible,input:focus-visible,textarea:focus-visible { outline: 2px solid var(--aide-text-secondary); outline-offset: 3px; }
+button, input, textarea { border-radius: var(--aide-radius-sm); }
+input,textarea { min-width: 0; background: var(--aide-bg-raised); border: 1px solid var(--aide-border); padding: 9px 12px; }
+input::placeholder,textarea::placeholder { color: var(--aide-text-muted); }
+svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; flex-shrink: 0; }
+h2,p { margin: 0; }
+h2 { font-size: 13px; font-weight: 600; }
+.small { font-size: 12px; color: var(--aide-text-secondary); }
+.icon-button { display: inline-grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; padding: 0; color: var(--aide-text-secondary); }
+.text-button { padding: 5px 8px; color: var(--aide-text-secondary); text-align: left; }
+.primary { border: 1px solid var(--aide-border); background: var(--aide-surface-active); padding: 8px 13px; font-weight: 600; }
+.prototype-bar { display: flex; flex-wrap: wrap; gap: 8px 20px; align-items: center; justify-content: space-between; padding: 9px 20px; border-bottom: 1px solid var(--aide-border); }
+.prototype-label { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.prototype-label strong { font-weight: 600; }
+.prototype-controls { display: flex; flex-wrap: wrap; gap: 4px; }
+.prototype-controls button { padding: 4px 9px; color: var(--aide-text-secondary); font-size: 12px; }
+.prototype-controls [aria-pressed="true"] { background: var(--aide-surface-active); color: var(--aide-text-primary); }
+.browser { width: 100%; max-width: 1180px; margin: 0 auto; min-height: calc(100dvh - 50px); background: var(--aide-bg-base); border-inline: 1px solid var(--aide-border); }
+.browser.narrow { max-width: 380px; }
+.tabs { padding: 7px 12px 0; display: flex; align-items: center; gap: 5px; background: var(--aide-bg-deep); border-bottom: 1px solid var(--aide-border); }
+.tab { display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 12px; min-width: 0; width: 210px; border: 1px solid var(--aide-border); border-bottom: 0; border-radius: var(--aide-radius-sm) var(--aide-radius-sm) 0 0; background: var(--aide-bg-base); }
+.tab > span { flex: 1; }
+.tab .icon-button { width: 24px; height: 24px; }
+.tab svg { width: 15px; height: 15px; }
+.tab .icon-button svg { width: 12px; height: 12px; }
+.tabs > .icon-button { width: 28px; height: 28px; }
+.toolbar { display: flex; align-items: center; gap: 3px; padding: 7px 10px; border-bottom: 1px solid var(--aide-border); }
+.address-form { position: relative; display: flex; align-items: center; flex: 1; min-width: 0; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm); padding: 0 9px; background: var(--aide-bg-raised); }
+.address-form > svg { position: absolute; left: 9px; width: 14px; height: 14px; color: var(--aide-text-muted); }
+.address-form input { border: 0; background: transparent; width: 100%; padding: 7px 22px; font-size: 12px; outline-offset: 0; }
+.address-form:has(input:placeholder-shown) > svg { visibility: hidden; }
+.address-form input:placeholder-shown { text-align: center; }
+.menu-anchor { position: relative; }
+.browser-menu { position: absolute; top: calc(100% + 9px); right: 0; z-index: 5; width: min(250px,calc(100vw - 30px)); padding: 6px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-md); }
+.browser-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; text-align: left; }
+.browser-menu button span:first-of-type { flex: 1; }
+.browser-menu button svg { width: 16px; height: 16px; color: var(--aide-text-secondary); }
+.browser-menu hr { margin: 5px 4px; border: 0; border-top: 1px solid var(--aide-border); }
+.bookmark-bar { display: flex; gap: 5px; padding: 5px 13px; flex-wrap: wrap; border-bottom: 1px solid var(--aide-border); }
+.bookmark-bar button { display: flex; align-items: center; gap: 6px; padding: 3px 8px; font-size: 12px; color: var(--aide-text-secondary); }
+.bookmark-bar svg { width: 13px; height: 13px; }
+.start { max-width: 870px; padding: 42px 32px 30px; margin: 0 auto; display: flex; flex-direction: column; gap: 32px; }
+.tools-section { display: flex; flex-direction: column; gap: 12px; }
+.tools { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 10px; }
+.tool { display: flex; align-items: flex-start; gap: 12px; padding: 16px 13px; text-align: left; background: var(--aide-bg-raised); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); min-width: 0; }
+.tool > svg { width: 21px; height: 21px; margin-top: 2px; color: var(--aide-text-secondary); }
+.tool-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.tool strong { font-size: 13px; font-weight: 600; }
+.tool small { font-size: 12px; line-height: 1.6; color: var(--aide-text-secondary); }
+.recent-section { display: flex; flex-direction: column; gap: 14px; }
+.section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.section-heading .text-button { font-size: 12px; }
+.recent-filters { display: flex; gap: 5px; flex-wrap: wrap; }
+.recent-filters button { padding: 4px 12px; color: var(--aide-text-secondary); font-size: 12px; }
+.recent-filters [aria-pressed="true"] { color: var(--aide-text-primary); background: var(--aide-surface-active); }
+.recent-list { display: flex; flex-direction: column; }
+.recent-row { display: flex; align-items: center; gap: 6px; border-bottom: 1px solid var(--aide-border); }
+.recent-open { display: flex; align-items: center; gap: 13px; flex: 1; min-width: 0; text-align: left; padding: 13px 4px; }
+.item-icon { display: grid; place-items: center; width: 38px; height: 40px; background: var(--aide-surface-default); border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm); color: var(--aide-text-secondary); flex-shrink: 0; }
+.item-icon.creation { color: var(--aide-text-primary); background: var(--aide-accent-subtle); }
+.item-copy { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.item-title { font-weight: 500; overflow-wrap: anywhere; }
+.item-subtitle { font-size: 12px; color: var(--aide-text-secondary); overflow-wrap: anywhere; }
+.item-time { color: var(--aide-text-muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.remove-recent { opacity: 0; width: 25px; height: 28px; }
+.remove-recent svg { width: 13px; height: 13px; }
+.recent-row:hover .remove-recent,.recent-row:focus-within .remove-recent { opacity: 1; }
+.empty { display: flex; flex-direction: column; align-items: flex-start; gap: 7px; padding: 24px 4px; }
+.empty > svg { color: var(--aide-text-muted); width: 25px; height: 25px; margin-bottom: 3px; }
+.empty p { color: var(--aide-text-secondary); max-width: 34em; }
+.page-note { color: var(--aide-text-muted); font-size: 12px; }
+dialog { width: min(520px,calc(100vw - 28px)); max-height: calc(100dvh - 40px); overflow-y: auto; padding: 22px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-md); background: var(--aide-bg-raised); color: var(--aide-text-primary); box-shadow: var(--aide-shadow-md); }
+dialog::backdrop { background: color-mix(in srgb,var(--aide-bg-deep) 68%,transparent); }
+.dialog-head { display: flex; gap: 14px; align-items: center; justify-content: space-between; margin-bottom: 15px; }
+.dialog-head h2 { font-size: 15px; }
+.dialog-body { display: flex; flex-direction: column; gap: 15px; }
+.dialog-body p { color: var(--aide-text-secondary); }
+.dialog-body textarea { width: 100%; min-height: 130px; resize: vertical; line-height: 1.7; }
+.dialog-body label { display: flex; flex-direction: column; gap: 7px; }
+.dialog-body .bookmark-setting { flex-direction: row; align-items: center; gap: 8px; }
+.bookmark-setting input { margin: 0; accent-color: var(--aide-accent); }
+.dialog-body .primary { align-self: flex-start; }
+.dialog-body .recent-open { width: 100%; padding: 9px 4px; }
+.dialog-body input[type="search"] { width: 100%; }
+.draft-preview { background: var(--aide-bg-base); padding: 12px; border-radius: var(--aide-radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.draft-note { padding-top: 8px; font-size: 12px; color: var(--aide-text-secondary); }
+.toast { display: flex; align-items: center; gap: 14px; position: fixed; z-index: 10; bottom: 22px; left: 50%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 28px); padding: 10px 14px; border: 1px solid var(--aide-border); border-radius: var(--aide-radius-sm); background: var(--aide-bg-raised); box-shadow: var(--aide-shadow-md); }
+.toast span { flex: 1; overflow-wrap: anywhere; }
+.toast button { padding: 3px 7px; color: var(--aide-text-secondary); }
+.browser.narrow .start { padding: 25px 18px; gap: 26px; }
+.browser.narrow .tools { grid-template-columns: 1fr; }
+.browser.narrow .tool { padding: 12px; }
+.browser.narrow .tool-copy { gap: 1px; }
+.browser.narrow .toolbar { gap: 0; padding-inline: 5px; }
+.browser.narrow .toolbar > .icon-button { width: 26px; }
+.browser.narrow .address-form { gap: 5px; }
+.browser.narrow .remove-recent { opacity: 1; }
+@media (max-width: 620px) {
+  .start { padding: 25px 18px; gap: 26px; }
+  .tools { grid-template-columns: 1fr; }
+  .tool { padding: 12px; }
+  .tool-copy { gap: 1px; }
+  .prototype-bar { padding-inline: 14px; }
+  .toolbar { gap: 0; padding-inline: 5px; }
+  .toolbar > .icon-button { width: 26px; }
+  .address-form { gap: 5px; }
+  .remove-recent { opacity: 1; }
+}
+</style>
+</head>
+<body>
+<svg aria-hidden="true" style="display:none">
+  <symbol id="i-globe" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18Z"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="m14 6-6 6 6 6"/></symbol>
+  <symbol id="i-forward" viewBox="0 0 24 24"><path d="m10 6 6 6-6 6"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M20 10a8 8 0 1 0-1 7M20 4v6h-6"/></symbol>
+  <symbol id="i-star" viewBox="0 0 24 24"><path d="m12 3 2.8 5.7 6.2.9-4.5 4.4 1.1 6.2-5.6-2.9-5.6 2.9 1.1-6.2L3 9.6l6.2-.9Z"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-film" viewBox="0 0 24 24"><rect x="4" y="3" width="16" height="18" rx="2"/><path d="M4 8h16M4 16h16M8 3v18M16 3v18"/></symbol>
+  <symbol id="i-cut" viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="m8.2 8.2 12 12M8.2 15.8 20 4"/></symbol>
+  <symbol id="i-play" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="m10 9 5 3-5 3Z"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 5v5h5M3 10a9 9 0 1 1 1.2 7M12 7v5l3 2"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7V5h7l2 3h9v12H3Z"/></symbol>
+  <symbol id="i-import" viewBox="0 0 24 24"><path d="M12 3v12m-4-4 4 4 4-4M4 15v6h16v-6"/></symbol>
+</svg>
+<header class="prototype-bar">
+  <div class="prototype-label"><strong>浏览器开始页</strong><span class="small">交互原型 · 示例数据，不连接实际记录</span></div>
+  <div class="prototype-controls" aria-label="原型演示控制">
+    <button id="theme-toggle" aria-pressed="false">深色预览</button>
+    <button id="width-toggle" aria-pressed="false">窄栏预览</button>
+    <button id="empty-toggle" aria-pressed="false">空记录预览</button>
+  </div>
+</header>
+<section class="browser" id="browser" aria-label="浏览器界面原型">
+  <div class="tabs">
+    <div class="tab"><svg><use href="#i-globe"/></svg><span>新标签页</span><button class="icon-button" data-action="close-tab" aria-label="关闭标签页"><svg><use href="#i-close"/></svg></button></div>
+    <button class="icon-button" data-action="new-tab" aria-label="新建标签页"><svg><use href="#i-plus"/></svg></button>
+  </div>
+  <div class="toolbar">
+    <button class="icon-button" disabled aria-label="后退"><svg><use href="#i-back"/></svg></button>
+    <button class="icon-button" disabled aria-label="前进"><svg><use href="#i-forward"/></svg></button>
+    <button class="icon-button" data-action="refresh" aria-label="刷新"><svg><use href="#i-refresh"/></svg></button>
+    <form class="address-form" id="address-form"><svg><use href="#i-globe"/></svg><input id="address" aria-label="网址" placeholder="输入网址" autocomplete="off"></form>
+    <button class="icon-button" disabled aria-label="收藏当前页面"><svg><use href="#i-star"/></svg></button>
+    <div class="menu-anchor" id="menu-anchor">
+      <button class="icon-button" id="menu-toggle" aria-label="更多浏览器操作" aria-expanded="false" aria-controls="browser-menu"><svg><use href="#i-more"/></svg></button>
+      <div class="browser-menu" id="browser-menu" hidden aria-label="浏览器操作">
+        <button data-action="new-tab"><svg><use href="#i-plus"/></svg><span>新标签页</span></button>
+        <hr>
+        <button data-action="bookmarks"><svg><use href="#i-star"/></svg><span>收藏夹</span></button>
+        <button data-action="history"><svg><use href="#i-history"/></svg><span>历史记录</span></button>
+        <button data-action="import"><svg><use href="#i-import"/></svg><span>导入收藏…</span></button>
+      </div>
+    </div>
+  </div>
+  <nav class="bookmark-bar" id="bookmark-bar" hidden aria-label="收藏栏">
+    <button data-action="bookmarks"><svg><use href="#i-folder"/></svg>工作资料</button>
+    <button data-demo-url="https://github.com/"><svg><use href="#i-globe"/></svg>GitHub</button>
+    <button data-demo-url="https://www.fao.org/"><svg><use href="#i-globe"/></svg>FAO</button>
+  </nav>
+  <main class="start">
+    <section class="tools-section" aria-labelledby="tools-heading">
+      <h2 id="tools-heading">创作与预览</h2>
+      <div class="tools">
+        <button class="tool" data-action="create"><svg><use href="#i-film"/></svg><span class="tool-copy"><strong>制作短视频</strong><small>从想法、分镜到成片</small></span></button>
+        <button class="tool" data-action="edit"><svg><use href="#i-cut"/></svg><span class="tool-copy"><strong>剪辑已有视频</strong><small>剪片段、加字幕、调整节奏</small></span></button>
+        <button class="tool" data-action="media"><svg><use href="#i-play"/></svg><span class="tool-copy"><strong>打开媒体</strong><small>看视频、选片段、提修改</small></span></button>
+      </div>
+    </section>
+    <section class="recent-section" aria-labelledby="recent-heading">
+      <div class="section-heading"><h2 id="recent-heading">最近使用</h2><button class="text-button" data-action="history">查看历史记录</button></div>
+      <div class="recent-filters" aria-label="最近使用类型">
+        <button data-filter="all" aria-pressed="true">全部</button>
+        <button data-filter="web" aria-pressed="false">网页</button>
+        <button data-filter="creation" aria-pressed="false">创作</button>
+        <button data-filter="media" aria-pressed="false">媒体</button>
+      </div>
+      <div class="recent-list" id="recent-list"></div>
+      <div class="empty" id="recent-empty" hidden><svg><use href="#i-history"/></svg><strong id="empty-title">还没有最近使用</strong><p id="empty-copy">访问过的网页、创作会话和打开的媒体会出现在这里。可以先输入网址，或从上方开始创作。</p></div>
+    </section>
+    <p class="page-note">原型中的条目均为示例。正式版不把媒体临时播放地址当作历史链接。</p>
+  </main>
+</section>
+<dialog id="detail-dialog" aria-labelledby="dialog-title">
+  <div class="dialog-head"><h2 id="dialog-title"></h2><button class="icon-button" id="dialog-close" aria-label="关闭弹窗"><svg><use href="#i-close"/></svg></button></div>
+  <div class="dialog-body" id="dialog-body"></div>
+</dialog>
+<div class="toast" id="toast" role="status" hidden><span id="toast-copy"></span><button id="toast-undo" hidden>撤销移除</button><button id="toast-close" aria-label="关闭提示">关闭</button></div>
+<script>
+const examples = [
+  { id: 'intro', kind: 'creation', title: 'Aide 功能介绍短片', detail: '制作会话 · 分镜、预览与修改意见', time: '10:24', icon: 'film' },
+  { id: 'dssat', kind: 'web', title: 'DSSAT · 农业系统模型', detail: 'dssat.net', url: 'https://dssat.net/', time: '10:12', icon: 'globe' },
+  { id: 'recording', kind: 'media', title: '产品演示录屏.mp4', detail: '媒体预览 · 回到原会话打开文件', time: '09:56', icon: 'play' },
+  { id: 'cut', kind: 'creation', title: '产品录屏 · 节奏与字幕', detail: '剪辑会话 · 继续讨论与修改', time: '09:31', icon: 'cut' },
+  { id: 'fao', kind: 'web', title: 'FAO · Training materials', detail: 'fao.org', url: 'https://www.fao.org/', time: '昨天', icon: 'globe' },
+  { id: 'github', kind: 'web', title: 'GitHub · DSSAT', detail: 'github.com/DSSAT', url: 'https://github.com/DSSAT', time: '昨天', icon: 'globe' },
+];
+const bookmarks = [
+  { title: 'DSSAT · 农业系统模型', detail: '工作资料 · dssat.net', url: 'https://dssat.net/' },
+  { title: 'GitHub', detail: 'github.com', url: 'https://github.com/' },
+  { title: 'FAO · Training materials', detail: '工作资料 · fao.org', url: 'https://www.fao.org/' },
+];
+const state = { filter: 'all', records: [...examples], empty: false, removed: null };
+const $ = (id) => document.getElementById(id);
+let toastTimer;
+
+function init() {
+  bindPreviewControls();
+  bindBrowserControls();
+  bindRecentControls();
+  bindDialogControls();
+  renderRecents();
+}
+function icon(name) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+  use.setAttribute('href', `#i-${name}`);
+  svg.append(use);
+  svg.setAttribute('aria-hidden', 'true');
+  return svg;
+}
+function text(tag, value, className) {
+  const node = document.createElement(tag);
+  node.textContent = value;
+  if (className) node.className = className;
+  return node;
+}
+function rowButton(item) {
+  const button = document.createElement('button');
+  button.className = 'recent-open';
+  const mark = text('span', '', `item-icon ${item.kind === 'creation' ? 'creation' : ''}`);
+  mark.append(icon(item.icon || 'globe'));
+  const copy = text('span', '', 'item-copy');
+  copy.append(text('span', item.title, 'item-title'), text('span', item.detail, 'item-subtitle'));
+  button.append(mark, copy);
+  if (item.time) button.append(text('span', item.time, 'item-time'));
+  return button;
+}
+function visibleRecords() {
+  if (state.empty) return [];
+  return state.records.filter((item) => state.filter === 'all' || item.kind === state.filter);
+}
+function renderRecents() {
+  const records = visibleRecords();
+  $('recent-list').replaceChildren(...records.map(recentRow));
+  $('recent-empty').hidden = records.length > 0;
+  const noRecords = state.empty || state.records.length === 0;
+  $('empty-title').textContent = noRecords ? '还没有最近使用' : '这一类还没有记录';
+  $('empty-copy').textContent = noRecords
+    ? '访问过的网页、创作会话和打开的媒体会出现在这里。可以先输入网址，或从上方开始创作。'
+    : '试试切回「全部」，或从上方开始一次新的创作。';
+}
+function recentRow(item) {
+  const row = text('div', '', 'recent-row');
+  const open = rowButton(item);
+  open.addEventListener('click', () => openRecord(item));
+  const remove = text('button', '', 'icon-button remove-recent');
+  remove.setAttribute('aria-label', `从最近使用移除：${item.title}`);
+  remove.title = '从最近使用移除';
+  remove.append(icon('close'));
+  remove.addEventListener('click', () => removeRecent(item));
+  row.append(open, remove);
+  return row;
+}
+function removeRecent(item) {
+  state.removed = { item, index: state.records.findIndex((record) => record.id === item.id) };
+  state.records = state.records.filter((record) => record.id !== item.id);
+  renderRecents();
+  notify('已从最近使用移除；不会删除文件或会话。', 'undo');
+}
+function notify(message, action = 'none') {
+  clearTimeout(toastTimer);
+  $('toast-copy').textContent = message;
+  $('toast-undo').hidden = action !== 'undo';
+  $('toast').hidden = false;
+  toastTimer = setTimeout(() => { $('toast').hidden = true; }, 6500);
+}
+function setMenu(open) {
+  $('browser-menu').hidden = !open;
+  $('menu-toggle').setAttribute('aria-expanded', String(open));
+}
+function showDialog(title) {
+  setMenu(false);
+  $('dialog-title').textContent = title;
+  $('dialog-body').replaceChildren();
+  if (!$('detail-dialog').open) $('detail-dialog').showModal();
+  return $('dialog-body');
+}
+function showDestination(item) {
+  const body = showDialog(item.title);
+  body.append(text('p', '原型演示：正式版将在浏览器标签页里打开以下网址。这里不访问外网。'));
+  body.append(text('div', item.url || '', 'draft-preview'));
+}
+function openRecord(item) {
+  if (item.kind === 'web') { showDestination(item); return; }
+  const body = showDialog(item.title);
+  body.append(text('p', item.kind === 'media'
+    ? '正式版先定位原会话和源文件，再重新打开媒体预览。不会重用已经失效的临时播放地址。'
+    : '正式版回到原来的创作会话，保留上下文，接着讨论和修改，不会新建一份工程。'));
+  body.append(text('p', '这是示例记录，原型不切换你的真实会话。', 'small'));
+}
+function openCreator(mode) {
+  const editing = mode === 'edit';
+  const body = showDialog(editing ? '剪辑已有视频' : '制作短视频');
+  body.append(text('p', editing ? '说说要剪哪段、字幕怎么加。正式版可在原会话中附上素材。' : '先说主题、观众和大致时长。已有的制作能力会先和你确认分镜，再开始制作。'));
+  const label = text('label', editing ? '剪辑要求' : '视频想法');
+  const input = document.createElement('textarea');
+  input.id = 'creative-brief';
+  input.placeholder = editing ? '例如：把产品录屏剪到 60 秒，保留演示操作，加中文字幕。' : '例如：做一支 30 秒的产品介绍短片，用文字和录屏讲清三个功能。';
+  label.append(input);
+  const button = text('button', '预览对话草稿', 'primary');
+  button.addEventListener('click', () => previewDraft(mode));
+  body.append(label, button, text('p', '正式版只填入对话草稿，由你确认发送；不会在后台直接启动制作或渲染。', 'small'));
+}
+function previewDraft(mode) {
+  const brief = $('creative-brief').value.trim();
+  if (!brief) { $('creative-brief').focus(); notify('先写一句想法或剪辑要求。'); return; }
+  const body = showDialog('对话草稿预览');
+  const prefix = mode === 'edit' ? '请帮我剪辑已有视频。先确认素材和剪辑方案。' : '请帮我制作短视频。先和我确认分镜、时长与素材。';
+  body.append(text('div', `${prefix}\n\n${brief}`, 'draft-preview'));
+  body.append(text('p', '原型到这里为止，没有发送消息，没有创建工程。正式版会把这些内容带入对话输入框。', 'draft-note'));
+}
+function openMediaEntry() {
+  const body = showDialog('打开媒体');
+  body.append(text('p', '正式版选择当前 Host 上的视频或音频，在现有媒体标签页中预览。选片段、截帧和修改意见仍回到所属会话的草稿里。'));
+  body.append(text('p', '没有可用会话时，先选择或新建会话，避免修改意见发到错误的地方。原型不读取文件。', 'small'));
+}
+function openCollection(kind) {
+  const favorites = kind === 'bookmarks';
+  const body = showDialog(favorites ? '收藏夹' : '网页历史记录');
+  if (favorites) appendBookmarkSettings(body);
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = favorites ? '搜索收藏夹' : '搜索网页历史';
+  search.setAttribute('aria-label', search.placeholder);
+  const list = text('div', '', 'recent-list');
+  const records = favorites ? bookmarks : (state.empty ? [] : state.records.filter((item) => item.kind === 'web'));
+  const render = () => renderCollection({ records, list, query: search.value.trim() });
+  search.addEventListener('input', render);
+  body.append(search, list, text('p', '示例数据；不会读取或清除实际收藏与历史。', 'small'));
+  render();
+}
+function renderCollection(options) {
+  const query = options.query.toLocaleLowerCase();
+  const matches = options.records.filter((item) => `${item.title} ${item.detail}`.toLocaleLowerCase().includes(query));
+  const rows = matches.map((item) => {
+    const button = rowButton(item);
+    button.addEventListener('click', () => showDestination(item));
+    return button;
+  });
+  options.list.replaceChildren(...rows);
+  if (!rows.length) options.list.append(text('p', query ? '没有匹配记录。' : '还没有网页历史记录。'));
+}
+function appendBookmarkSettings(body) {
+  const label = text('label', '', 'bookmark-setting');
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.id = 'bookmark-visibility';
+  toggle.checked = !$('bookmark-bar').hidden;
+  toggle.addEventListener('change', () => { $('bookmark-bar').hidden = !toggle.checked; });
+  label.append(toggle, text('span', '显示收藏栏'));
+  body.append(label);
+}
+function resetStart() {
+  $('address').value = '';
+  state.filter = 'all';
+  document.querySelectorAll('[data-filter]').forEach((button) => button.setAttribute('aria-pressed', String(button.dataset.filter === 'all')));
+  renderRecents();
+  setMenu(false);
+  $('address').focus();
+}
+function runAction(action) {
+  setMenu(false);
+  const actions = {
+    'new-tab': resetStart,
+    'close-tab': () => { resetStart(); notify('最后一个标签页关闭后，保留一个开始页。'); },
+    refresh: () => notify('开始页已刷新（示例数据保持不变）。'),
+    create: () => openCreator('create'), edit: () => openCreator('edit'), media: openMediaEntry,
+    bookmarks: () => openCollection('bookmarks'), history: () => openCollection('history'),
+    import: () => notify('正式版复用现有的 HTML / JSON 收藏导入；原型不读取文件。'),
+  };
+  const handler = actions[action];
+  if (handler) handler();
+}
+function bindBrowserControls() {
+  $('menu-toggle').addEventListener('click', () => setMenu($('browser-menu').hidden));
+  document.addEventListener('click', (event) => {
+    if (!(event.target instanceof Element)) return;
+    if (!$('menu-anchor').contains(event.target)) setMenu(false);
+    const action = event.target.closest('[data-action]');
+    const destination = event.target.closest('[data-demo-url]');
+    if (action) runAction(action.dataset.action);
+    if (destination) showDestination({ title: destination.textContent.trim(), url: destination.dataset.demoUrl });
+  });
+  $('address-form').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const url = $('address').value.trim();
+    if (url) showDestination({ title: '打开网页', url });
+  });
+}
+function bindPreviewControls() {
+  const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+  document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+  $('theme-toggle').setAttribute('aria-pressed', String(dark));
+  $('theme-toggle').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme !== 'dark';
+    document.documentElement.dataset.theme = next ? 'dark' : 'light';
+    $('theme-toggle').setAttribute('aria-pressed', String(next));
+  });
+  $('width-toggle').addEventListener('click', () => {
+    const narrow = $('browser').classList.toggle('narrow');
+    $('width-toggle').setAttribute('aria-pressed', String(narrow));
+  });
+  $('empty-toggle').addEventListener('click', () => {
+    state.empty = !state.empty;
+    $('empty-toggle').setAttribute('aria-pressed', String(state.empty));
+    renderRecents();
+  });
+}
+function bindRecentControls() {
+  document.querySelectorAll('[data-filter]').forEach((button) => button.addEventListener('click', () => {
+    state.filter = button.dataset.filter;
+    document.querySelectorAll('[data-filter]').forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+    renderRecents();
+  }));
+  $('toast-close').addEventListener('click', () => { $('toast').hidden = true; });
+  $('toast-undo').addEventListener('click', () => {
+    if (!state.removed) return;
+    state.records.splice(state.removed.index, 0, state.removed.item);
+    state.removed = null;
+    renderRecents();
+    notify('已恢复到最近使用。');
+  });
+}
+function bindDialogControls() {
+  $('dialog-close').addEventListener('click', () => $('detail-dialog').close());
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || $('browser-menu').hidden) return;
+    event.preventDefault();
+    setMenu(false);
+    $('menu-toggle').focus();
+  });
+}
+init();
+</script>
+</body>
+</html>

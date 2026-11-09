@@ -16,6 +16,7 @@ const { invokeMock, listenMock } = vi.hoisted(() => ({
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: invokeMock }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: listenMock }));
+vi.mock("@aide/sdk/api/host", () => ({ hostApi: { identity: async () => ({ key: "local", label: "本机" }) } }));
 
 /** 事件通道的订阅者（按事件名）。收起 `listen` 的回调，测试才能自己投递**导航事件**
  *  ——它和视图生命周期事件是两条独立的真相通道，驱逐重复标签的路径也因此有两条。 */
@@ -23,6 +24,8 @@ const listeners = new Map<string, (ev: { payload: unknown }) => void>();
 
 import BrowserPanel from "./BrowserPanel.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
+import { __resetBrowserHistoryForTest, useBrowserHistory } from "../../composables/browser/useBrowserHistory";
+import { useBrowserBookmarks } from "../../composables/browser/useBrowserBookmarks";
 import { useRightPanel, __resetRightPanelForTest } from "../../composables/useRightPanel";
 import {
   __resetBrowserViewsForTest,
@@ -86,6 +89,11 @@ async function openView(w: VueWrapper) {
   await flushPromises();
 }
 
+async function openImport(w: VueWrapper): Promise<void> {
+  await w.find(".bp-more").trigger("click");
+  await w.find('[data-action="import"]').trigger("click");
+}
+
 /** 闭包里的调用实参（`toHaveBeenCalledWith` 对同一命令的多次调用会互相干扰，取最后一条判定）。 */
 function lastArgsOf(cmd: string): unknown[] | null {
   const hit = invokeMock.mock.calls.filter((c) => c[0] === cmd).pop();
@@ -93,11 +101,16 @@ function lastArgsOf(cmd: string): unknown[] | null {
 }
 
 beforeEach(() => {
+  __resetBrowserHistoryForTest();
+  useBrowserBookmarks().bookmarks.value = [];
+  useBrowserBookmarks().favicons.value = {};
+  localStorage.clear();
   invokeMock.mockReset();
   listenMock.mockReset();
   listeners.clear();
   listenMock.mockImplementation(async (name: string, cb: (ev: { payload: unknown }) => void) => {
-    listeners.set(name, cb);
+    const previous = listeners.get(name);
+    listeners.set(name, (event) => { previous?.(event); cb(event); });
     return () => {};
   });
   // jsdom 不做布局：不打桩的话 rectOf() 恒为 0×0，BrowserPanel 会拒绝建视图（"占位区未就绪"）。
@@ -146,10 +159,64 @@ afterEach(() => {
   __resetBrowserViewsForTest();
 });
 
+describe("BrowserPanel 开始页与菜单", () => {
+  it("空标签直接展示创作与最近使用，收藏栏默认隐藏", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    expect(w.find(".browser-start-tools").text()).toContain("制作短视频");
+    expect(w.find(".browser-start-section").find("h2").text()).toBe("创作与预览");
+    expect(w.find(".bp-hint").exists()).toBe(false);
+    expect(w.find(".bp-bookmarks").exists()).toBe(false);
+    expect(w.find(".bp-star").attributes("disabled")).toBeDefined();
+    await w.find(".bp-address").trigger("keydown.enter");
+    expect(invokeMock.mock.calls.some((call) => call[0] === "browser_create")).toBe(false);
+  });
+
+  it("显示收藏栏只在收藏夹内部，开关结果落盘", async () => {
+    const w = mountPanel();
+    await flushPromises();
+    await w.find(".bp-more").trigger("click");
+    expect(w.find(".browser-menu").text()).not.toContain("显示收藏栏");
+    await w.find('[data-action="bookmarks"]').trigger("click");
+    await flushPromises();
+    expect(w.find(".browser-bookmark-setting").text()).toBe("显示收藏栏");
+    await w.find('.browser-bookmark-setting input').setValue(true);
+    await flushPromises();
+    expect(w.find(".bp-bookmarks").exists()).toBe(true);
+    expect(JSON.parse(localStorage.getItem("aide:browser-history:v1:local") || "{}").showBookmarkBar).toBe(true);
+  });
+
+  it("菜单也通过浮层总闸让原生视图让位，Esc 被消费", async () => {
+    const w = mountPanel();
+    await openView(w);
+    await w.find(".bp-more").trigger("click");
+    await flushPromises();
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
+    const event = new KeyboardEvent("keydown", { key: "Escape", cancelable: true });
+    window.dispatchEvent(event);
+    await flushPromises();
+    expect(event.defaultPrevented).toBe(true);
+    expect(w.find(".browser-menu").exists()).toBe(false);
+    expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: true }]);
+  });
+
+  it("面板首次挂载前成功访问的网页也出现在最近使用", async () => {
+    useBrowserViews();
+    listeners.get("browser-nav")?.({ payload: { id: "old-view", state: "ready", url: "https://recent.test/", title: "最近网页", can_go_back: false, can_go_forward: false } });
+    await flushPromises();
+    const w = mountPanel();
+    await flushPromises();
+    expect(w.find(".browser-recent-title").text()).toBe("最近网页");
+    await w.find(".browser-recent-open").trigger("click");
+    await flushPromises();
+    expect(lastArgsOf("browser_create")).toEqual([expect.objectContaining({ dto: expect.objectContaining({ url: "https://recent.test/" }) })]);
+  });
+});
+
 describe("BrowserPanel 地址栏", () => {
   it("只显示精简提示、不显示打开按钮，并保留回车导航", async () => {
     const w = mountPanel();
-    expect(w.find(".bp-address").attributes("placeholder")).toBe("输入网址，回车打开");
+    expect(w.find(".bp-address").attributes("placeholder")).toBe("输入网址");
     expect(w.find(".bp-go").exists()).toBe(false);
     expect(w.find(".bp-toolbar").findAll("button").map((button) => button.text())).not.toContain("打开");
 
@@ -171,7 +238,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
       expect.objectContaining({ dto: expect.objectContaining({ url: expect.any(String) }) }),
     );
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
 
     expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
@@ -181,7 +248,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
     w.findComponent(FilePickerStub).vm.$emit("update:visible", false);
     await flushPromises();
@@ -196,7 +263,7 @@ describe("BrowserPanel 浮层与原生视图的让位", () => {
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
     useRightPanel().select("browser"); // 再点已激活的 tab = 折叠（浮层还开着）
     await flushPromises();
@@ -230,7 +297,7 @@ describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）"
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
 
     expect(lastArgsOf("browser_snapshot")).toEqual([{ id: VIEW_ID }]);
@@ -251,7 +318,7 @@ describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）"
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
 
     expect(lastArgsOf("browser_set_displayed")).toEqual([{ id: VIEW_ID, displayed: false }]);
@@ -266,7 +333,7 @@ describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）"
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
 
     expect(w.find(".bp-snapshot").exists()).toBe(false);
@@ -279,7 +346,7 @@ describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）"
     const w = mountPanel();
     await openView(w);
 
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
     w.findComponent(FilePickerStub).vm.$emit("update:visible", false); // 快照尚未回来
     await flushPromises();
@@ -306,6 +373,7 @@ describe("浮层盖上来时的定格画面（让位后洞里不能是灰的）"
 });
 
 describe("收藏夹目录", () => {
+  beforeEach(() => useBrowserHistory().setBookmarkBar(true));
   // 真机形状：顶层目录 → 二级目录，外加一条根级散条。
   const ROWS = [
     { id: "b1", title: "A 站", url: "https://a.com/", folders: ["工具"], added_at: 1 },
@@ -699,7 +767,7 @@ describe("别的模块请求打开一个地址（资料库的网页产物预览�
     const w = mountPanel();
     await flushPromises();
     // 面板内的浮层（导入书签的文件选择器）：原生视图此时必须让位，占位洞不可量
-    await w.find(".bp-bm-import").trigger("click");
+    await openImport(w);
     await flushPromises();
 
     useRightPanel().openInBrowser("http://127.0.0.1:18788/p/later");

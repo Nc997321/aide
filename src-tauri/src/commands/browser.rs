@@ -162,9 +162,14 @@ pub async fn browser_bookmarks_import(path: String) -> CmdResult<ImportReportDto
 /// `browser::favicons` 里实现，命令层不复制规则——跟书签一样是**薄壳**。
 #[tauri::command]
 pub async fn browser_favicons(urls: Vec<String>) -> CmdResult<HashMap<String, String>> {
+    tauri::async_runtime::spawn_blocking(move || cached_favicons(urls))
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn cached_favicons(urls: Vec<String>) -> HashMap<String, String> {
     let store = FaviconStore::at_default_location();
-    Ok(urls
-        .into_iter()
+    urls.into_iter()
         .filter_map(|url| store.get(&url).map(|icon| (url, icon)))
-        .collect())
+        .collect()
 }

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<title>Browser operation contract fixture</title>
+<main id="form">
+  <h1>浏览器操作收口夹具</h1>
+  <label for="name">设备名称</label><input id="name" name="name">
+  <label for="note">备注</label><input id="note" name="note">
+  <label for="code">设备编号</label><input id="code" name="code">
+  <label for="category">设备大类</label>
+  <select id="category"><option value="">请选择</option><option value="pump">泵</option></select>
+  <label for="device">具体设备</label><select id="device" disabled><option value="">先选大类</option></select>
+  <label for="controlled">回退字段</label><input id="controlled">
+  <label for="secret">密码</label><input id="secret" type="password" value="fixture-only-secret">
+  <input class="ambiguous" aria-label="重复字段一"><input class="ambiguous" aria-label="重复字段二">
+  <button id="open" type="button">打开弹窗</button>
+  <button id="update" type="button">更新说明</button>
+  <button id="hover" type="button">悬停提示</button>
+  <button id="remove" type="button">移除备注</button>
+  <button id="no-op" type="button">不导航</button>
+  <button id="send" type="button">夹具提交</button>
+  <a id="next" href="/next">下一页</a>
+  <p id="status">尚未更新</p>
+  <section id="dialog" hidden><h2>设备详情</h2><label for="dialog-name">弹窗设备名</label><input id="dialog-name"></section>
+</main>
+<script>
+  const state = { clicks: [], trusted: [], keys: [], changes: [], commits: 0, events: [] };
+  function byId(id) { return document.getElementById(id); }
+  document.addEventListener('click', (event) => {
+    const id = event.target.id;
+    state.clicks.push(id);
+    state.trusted.push(event.isTrusted);
+  });
+  document.addEventListener('keydown', (event) => {
+    state.keys.push({ key: event.key, trusted: event.isTrusted });
+    if (event.key === 'Enter' && event.target.id === 'name') state.commits += 1;
+  });
+  document.addEventListener('input', (event) => state.events.push({ id: event.target.id, type: event.type }));
+  document.addEventListener('change', (event) => state.changes.push(event.target.id));
+  byId('category').addEventListener('change', () => {
+    byId('device').disabled = true;
+    byId('device').innerHTML = '<option value="">加载中</option>';
+    setTimeout(() => {
+      byId('device').innerHTML = '<option value="">请选择</option><option value="pump-01">泵-01</option>';
+      byId('device').disabled = false;
+    }, 140);
+  });
+  byId('controlled').addEventListener('input', () => { byId('controlled').value = ''; });
+  byId('open').addEventListener('click', () => { byId('dialog').hidden = false; });
+  byId('update').addEventListener('click', () => { byId('status').textContent = '说明已更新'; });
+  byId('hover').addEventListener('mouseenter', () => { byId('status').textContent = '悬停已确认'; });
+  byId('remove').addEventListener('click', () => { byId('note').remove(); });
+  byId('send').addEventListener('click', () => { state.commits += 1; });
+  window.__operationState = () => ({
+    ...state,
+    name: byId('name').value,
+    note: byId('note')?.value ?? null,
+    code: byId('code').value,
+    category: byId('category').value,
+    device: byId('device').value,
+    controlled: byId('controlled').value,
+    dialog: !byId('dialog').hidden,
+    dialogName: byId('dialog-name').value,
+    status: byId('status').textContent,
+    active: document.activeElement.id,
+    url: location.href,
+  });
+</script>
+</html>

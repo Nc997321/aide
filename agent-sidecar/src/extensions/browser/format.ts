@@ -23,6 +23,7 @@ export function formatBridgeFailure(resp: {
 }): string {
   if (resp.cancelled) return `Browser call cancelled: ${resp.error ?? "the session was interrupted"}`;
   if (resp.timedOut) {
+    if (resp.error) return `Browser call timed out: ${resp.error}`;
     return (
       "Browser call timed out — the desktop host did not reply. " +
       "This usually means the browser view was closed while the call was in flight."

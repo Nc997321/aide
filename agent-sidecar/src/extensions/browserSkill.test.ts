@@ -40,6 +40,15 @@ describe("browserSkill", () => {
     expect(content).toContain("browser_act");
   });
 
+  it("操作契约不再要求每步 ritual wait/read，批次仍保留授权与部分成功边界", () => {
+    expect(SKILL_CONTENT).toContain('action:"batch"');
+    expect(SKILL_CONTENT).toContain("wait_for");
+    expect(SKILL_CONTENT).toContain("do not add a ritual wait/read");
+    expect(SKILL_CONTENT).toContain("never blindly replay a partially executed batch");
+    expect(SKILL_CONTENT).toContain("only when the user authorized that consequence");
+    expect(SKILL_CONTENT).not.toContain("After an action, wait with");
+  });
+
   it("落地 references/page-extraction.md（通用抽取指南）", () => {
     ensureBrowserSkill(env);
     const ref = browserReferencePath(env, "page-extraction");

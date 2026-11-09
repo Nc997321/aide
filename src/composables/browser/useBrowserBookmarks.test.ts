@@ -17,6 +17,8 @@ const bm = (id: string, title: string, url: string, folders: string[] = []): Boo
 describe("useBrowserBookmarks", () => {
   beforeEach(() => {
     tauri.invoke.mockReset();
+    useBrowserBookmarks().bookmarks.value = [];
+    useBrowserBookmarks().favicons.value = {};
     // 模块级单例：清空列表，避免用例间串味。
     // 默认**按命令分派**：列表回空数组、图标回空表——图标回成数组的话下标访问照样是 undefined，
     // 一路静默成"所有图标都没有"，测试还全绿。
@@ -109,6 +111,20 @@ describe("useBrowserBookmarks", () => {
     await loaded([]);
     const cmds = tauri.invoke.mock.calls.map((c) => c[0]);
     expect(cmds).not.toContain("browser_favicons");
+  });
+
+  it("未收藏的最近网页也能批量查缓存，且不覆盖其他页面图标", async () => {
+    const b = useBrowserBookmarks();
+    b.favicons.value = { "https://bookmarked.test/": "data:image/png;base64,OLD" };
+    tauri.invoke.mockResolvedValueOnce({ "https://recent.test/": "data:image/png;base64,NEW" });
+    await b.loadFavicons(["https://recent.test/", "https://recent.test/"]);
+    expect(tauri.invoke).toHaveBeenCalledExactlyOnceWith("browser_favicons", { urls: ["https://recent.test/"] });
+    expect(b.favicons.value).toEqual({
+      "https://bookmarked.test/": "data:image/png;base64,OLD",
+      "https://recent.test/": "data:image/png;base64,NEW",
+    });
+    await b.refresh();
+    expect(b.favicons.value["https://recent.test/"]).toBe("data:image/png;base64,NEW");
   });
 
   it("importFromFile 回传如实报告（新增/补目录/图标/跳过/丢弃分开）", async () => {

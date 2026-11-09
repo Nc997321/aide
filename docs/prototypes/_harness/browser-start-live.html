@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>浏览器开始页 · 实际组件夹具</title>
+<style>
+/* 布局：说明条下挂真实 BrowserPanel；query 的 width / theme 控制窄栏与主题。 */
+:root { --fixture-width: 1100px; }
+body { margin: 0; background: var(--aide-bg-deep); color: var(--aide-text-primary); font-family: var(--aide-font-ui); }
+.fixture-note { padding: calc(var(--aide-space-unit) * 3); font-size: 12px; color: var(--aide-text-secondary); border-bottom: 1px solid var(--aide-border); }
+body #app { width: min(var(--fixture-width),100%); height: calc(100dvh - 45px); min-height: 600px; margin-inline: auto; border-inline: 1px solid var(--aide-border); }
+</style>
+</head>
+<body>
+<div class="fixture-note">实际 BrowserPanel 组件 · 示例记录 · 不连接 Host、不发送消息、不使用实际历史</div>
+<div id="app"></div>
+<script type="module" src="./browser-start-live.ts"></script>
+</body>
+</html>

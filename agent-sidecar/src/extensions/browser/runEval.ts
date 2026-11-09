@@ -230,7 +230,7 @@ async function viaCdp(
     // CDP 自己拒绝了这条方法（Evergreen 运行时差异）——**唯一**该降级的情形。
     return {
       ok: false,
-      kind: "unavailable",
+      kind: methodError["code"] === -32601 ? "unavailable" : "bridge",
       error: `Runtime.evaluate was rejected by the runtime: ${String(methodError["message"] ?? methodError["code"] ?? "unknown")}`,
     };
   }

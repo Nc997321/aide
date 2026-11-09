@@ -70,10 +70,15 @@ export function useBrowserBookmarks() {
    * （见 Rust `browser::favicons` 模块头）。
    */
   async function refreshFavicons(): Promise<void> {
-    const urls = [...new Set(bookmarks.value.map((b) => b.url))];
-    favicons.value = urls.length
-      ? await invoke<Record<string, string>>("browser_favicons", { urls })
-      : {};
+    await loadFavicons(bookmarks.value.map((bookmark) => bookmark.url));
+  }
+
+  /** 图标属于页面，不属于收藏：最近使用与历史记录也查同一份缓存。 */
+  async function loadFavicons(requested: readonly string[]): Promise<void> {
+    const urls = [...new Set(requested)];
+    if (!urls.length) return;
+    const loaded = await invoke<Record<string, string>>("browser_favicons", { urls });
+    favicons.value = { ...favicons.value, ...loaded };
   }
 
 
@@ -114,7 +119,6 @@ export function useBrowserBookmarks() {
     return bookmarks.value.find((b) => looseKey(b.url) === key)?.id ?? null;
   }
 
-  // `favicons` 直接出表而不是包成 `faviconOf(url)`：两个消费方（收藏条、文件夹下拉）都要按 url 查，
-  // 下拉那边要的是**表本身**（当 prop 传下去）；包一层只会多一个消费方还得再拆开。
-  return { bookmarks, favicons, error, refresh, add, remove, move, importFromFile, has, idOf };
+  // 收藏条、文件夹下拉与最近网页共用这张 URL 表；图标不随着某个列表的刷新被清空。
+  return { bookmarks, favicons, error, refresh, loadFavicons, add, remove, move, importFromFile, has, idOf };
 }

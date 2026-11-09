@@ -32,6 +32,16 @@ async function answerEval(events: ChatEvent[], index: number, cdpBody: unknown):
 afterEach(() => cancelAllBrowserQueries("test cleanup"));
 
 describe("runEval 主路径（CDP）", () => {
+  it("执行上下文错误不是方法不存在，不降级重放可能有副作用的脚本", async () => {
+    const { events, emit } = emitCollector();
+    const pending = runEval("window.sideEffect()", {}, emit);
+    const query = events[0];
+    if (!query || query.type !== "browser_query") throw new Error("missing browser query");
+    cdpOk(query.request_id, { error: { code: -32000, message: "Execution context was destroyed" } });
+    const result = await pending;
+    expect(result.ok).toBe(false);
+    expect(events).toHaveLength(1);
+  });
   /**
    * **不许加包装器**（踩过两次：多语句被弄坏、语法错误检测兜不住）。脚本必须原样送进去——
    * 裸通道回的是脚本的**完成值**，`var x = 1; x + 2` 回 `3`（本机实测），包装就没了。

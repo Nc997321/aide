@@ -79,6 +79,7 @@ import RemoveWorkspaceDialog from "./components/RemoveWorkspaceDialog.vue";
 import type { WorkspaceInfo } from "./types";
 import { useUsageTips } from "./composables/useUsageTips";
 import { installMediaFeedbackBridge } from "./composables/useMediaPreview/feedback";
+import { useBrowserHistory } from "./composables/browser/useBrowserHistory";
 
 const leftCollapsed = ref(false);
 // 右侧栏状态的主人是 useRightPanel（模块单例）：折叠态、当前 tab、最大化、两档宽度都在那里，
@@ -271,6 +272,7 @@ onSessionCreated((tempId, realId) => {
   const name =
     useSessionNames().takePendingTitle(realId) || pendingName || realId.substring(0, 8);
   useSessionNames().setName(realId, name);
+  useBrowserHistory().finalizeSession(realId);
   void api.createSession(realId, name).then((session) => {
     sidebarRef.value?.addSession({ id: session.id, name: session.name, timestamp: session.timestamp });
     // 归属读注册表（首发时 seed 的创建时绑定），不用「当前」工作区——

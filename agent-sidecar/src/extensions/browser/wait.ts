@@ -23,6 +23,13 @@
 import type { ChatEvent } from "../../engine/types.js";
 import { queryBrowser } from "../browserClient.js";
 import { runEval } from "./runEval.js";
+import { browserOperationInterruption, remainingBrowserOperationMs } from "../browserClient/operation.js";
+
+export type WaitOutcome = { status: "met" | "not-met" | "failed"; text: string };
+
+function waitResult(status: WaitOutcome["status"], text: string): WaitOutcome {
+  return { status, text };
+}
 
 function asRecord(v: unknown): Record<string, unknown> | null {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -73,7 +80,9 @@ export interface WaitInput {
  */
 function conditionScript(condition: string): string {
   return `(function () {
-  try { var __v = (${condition}); return { met: !!__v, value: __v, to: (window.performance && performance.timeOrigin) || 0 }; }
+  try { var __v = (${condition});
+    if (__v && typeof __v.then === 'function') return { met: false, threw: 'condition returned a Promise; use a synchronous expression' };
+    return { met: !!__v, value: __v, to: (window.performance && performance.timeOrigin) || 0 }; }
   catch (e) { return { met: false, threw: String((e && e.message) || e), to: (window.performance && performance.timeOrigin) || 0 }; }
 })()`;
 }
@@ -221,28 +230,28 @@ async function waitForCondition(
   viewId: string | undefined,
   input: WaitInput,
   emit: (e: ChatEvent) => void,
-): Promise<string> {
+): Promise<WaitOutcome> {
   const startedAt = Date.now();
-  const deadline = startedAt + input.timeoutMs;
+  const deadline = startedAt + Math.min(input.timeoutMs, remainingBrowserOperationMs());
   const doc = trackDocument();
   let attempts = 0;
   let last: ConditionTick = { met: false, detail: "(never evaluated)", timeOrigin: null };
 
   while (Date.now() < deadline) {
     attempts += 1;
+    const interruption = browserOperationInterruption();
+    if (interruption) return waitResult("failed", interruption.error);
     const r = await conditionTick(viewId, input.condition ?? "", emit);
-    if (!r.ok) return r.text;
+    if (!r.ok) return waitResult("failed", r.text);
     last = r.tick;
     doc.observe(last.timeOrigin, attempts);
-
-    if (last.met) return metReport(last.detail, pollStats(attempts, startedAt, input), doc.note());
-    await sleep(input.intervalMs);
+    if (last.met) return waitResult("met", metReport(last.detail, pollStats(attempts, startedAt, input), doc.note()));
+    await sleep(Math.min(input.intervalMs, Math.max(0, deadline - Date.now())));
   }
-
-  return withNote(
+  return waitResult("not-met", withNote(
     timeoutReport("Timed out — the condition never became true.", last.detail, pollStats(attempts, startedAt, input)),
     doc.note(),
-  );
+  ));
 }
 
 /** 视图的导航快照（宿主侧，来自 `list_views`）。 */
@@ -313,36 +322,46 @@ function loadVerdict(nav: NavSnapshot, sawLoading: boolean): string | null {
 
 /** 加载模式：轮询宿主侧的 `nav.state`，直到 `loadVerdict` 给出终局。 */
 async function waitForLoad(
-  viewId: string | undefined,
   input: WaitInput,
   emit: (e: ChatEvent) => void,
-): Promise<string> {
+  afterDocument?: number,
+): Promise<WaitOutcome> {
   const startedAt = Date.now();
-  const deadline = startedAt + input.timeoutMs;
+  const deadline = startedAt + Math.min(input.timeoutMs, remainingBrowserOperationMs());
   let attempts = 0;
   let sawLoading = false;
   let last: NavSnapshot = { state: "(never polled)", url: "", title: "" };
-
   while (Date.now() < deadline) {
+    const interruption = browserOperationInterruption();
+    if (interruption) return waitResult("failed", interruption.error);
     attempts += 1;
-    const r = await navTick(viewId, emit);
-    if (!r.ok) return r.text;
-    last = r.nav;
+    const tick = await navTick(input.viewId, emit);
+    if (!tick.ok) return waitResult("failed", tick.text);
+    last = tick.nav;
     if (last.state === "loading") sawLoading = true;
-
+    if (last.state === "ready" && afterDocument !== undefined) {
+      const changed = await changedDocument(input.viewId, afterDocument, emit);
+      if (changed.status === "failed") return changed;
+      if (changed.status === "met") sawLoading = true;
+      else { await sleep(Math.min(input.intervalMs, Math.max(0, deadline - Date.now()))); continue; }
+    }
     const verdict = loadVerdict(last, sawLoading);
-    if (verdict) return verdict;
-    await sleep(input.intervalMs);
+    if (verdict) return waitResult(last.state === "ready" && sawLoading ? "met" : "not-met", verdict);
+    await sleep(Math.min(input.intervalMs, Math.max(0, deadline - Date.now())));
   }
-
-  // 这里没有 `withNote`，**是如实，不是漏了**：`load` 模式一个条件都没求值，拿不到
-  // `performance.timeOrigin`，这份等待的"文档身份"由宿主侧的 `nav.state` 承担。
-  // 别为了对称去发明一个指纹。
-  return timeoutReport(
+  return waitResult("not-met", timeoutReport(
     "Timed out — the view never finished loading.",
     `nav.state = ${last.state} at ${last.url || "(no url)"}`,
     pollStats(attempts, startedAt, input),
-  );
+  ));
+}
+
+/** 批次在动作前取锚点；即使 loading 太快没被轮询到，也不把旧页面 ready 当完成。 */
+async function changedDocument(viewId: string | undefined, before: number, emit: (e: ChatEvent) => void): Promise<WaitOutcome> {
+  const result = await runEval("performance.timeOrigin", { viewId }, emit);
+  if (!result.ok) return waitResult("failed", result.error);
+  const changed = typeof result.value === "number" && result.value > 0 && result.value !== before;
+  return waitResult(changed ? "met" : "not-met", "document identity checked");
 }
 
 /**
@@ -351,9 +370,18 @@ async function waitForLoad(
  * 本函数只做编排：解析视图 → 按模式分发。两个模式的差别大到值得各自成篇，见它们各自的注释。
  */
 export async function waitForBrowser(input: WaitInput, emit: (e: ChatEvent) => void): Promise<string> {
+  return (await waitForBrowserOutcome(input, emit)).text;
+}
+
+export async function waitForBrowserOutcome(
+  input: WaitInput,
+  emit: (e: ChatEvent) => void,
+  afterDocument?: number,
+): Promise<WaitOutcome> {
   const resolved = await resolveView(input.viewId, emit);
-  if (!resolved.ok) return resolved.text;
+  if (!resolved.ok) return waitResult("failed", resolved.text);
+  const pinned = { ...input, viewId: resolved.viewId };
   return input.mode === "load"
-    ? waitForLoad(resolved.viewId, input, emit)
-    : waitForCondition(resolved.viewId, input, emit);
+    ? waitForLoad(pinned, emit, afterDocument)
+    : waitForCondition(resolved.viewId, pinned, emit);
 }

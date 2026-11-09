@@ -49,8 +49,8 @@ export const BROWSER_INSTRUCTIONS = `This environment has built-in tools for the
 1. WHEN TO USE. When the user points you at a web page and asks you to read, extract, or operate it — or asks about "the page I'm looking at". Other browser tools in the session (a Playwright MCP, for example) drive a SEPARATE browser that is not what the user is looking at — never use them for "the page in my panel". And do NOT fetch the page with Bash/curl instead: that misses the user's session and the page's live state.
 2. START WITH browser_tabs to learn the view ids, and pass one as \`view_id\` to the other tools. For a tab of your own call browser_tab with action=open and keep the id it returns — with more than one view open the tools fail instead of guessing. Close it when you are done.
 3. TO READ A PAGE use browser_read before anything else: one call replaces a long series of script probes.
-4. TO OPERATE THE PAGE use browser_act (click / fill / hover / press), targeting by visible \`text\`. It never submits on its own.
-5. AFTER AN ACTION, WAIT WITH browser_wait — never hand-roll a polling loop.
+4. TO OPERATE THE PAGE use browser_act, targeting visible \`text\` or a selector. For known steps use action=batch (1–8 actions); put \`wait_for\` on async dependencies. It stops on the first failure/unmet wait/uncertain input, without rollback or replay. Do not guess an unknown business sequence.
+5. USE THE RETURNED EVIDENCE: browser_act includes bounded page changes and declared wait results. Do not automatically add wait/read when that already answers the question. For an unconfirmed async effect use browser_wait or a scoped browser_read; never hand-roll a polling loop.
 6. TO DO ANYTHING ELSE use browser_eval; pass \`frame\` to run inside a frame the top document cannot reach.
 7. TO SEE THE PAGE use browser_screenshot — SPARINGLY: it is the visual fallback, and an image costs far more context than text.
 8. A VIEW YOU CANNOT SEE KEEPS WORKING. A parked view (panel closed, another tab selected, or one you opened) still renders, runs timers and takes input — never ask the user to bring it to the front just to make it work.

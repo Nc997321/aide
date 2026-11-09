@@ -1,13 +1,15 @@
 /**
  * 供应商品牌商标（桌面 providerLogos.ts 的 ohos 渲染端）。
  *
- * 数据：resources/base/media/pv_<kind>.svg，脚本从桌面 simple-icons 单 path
- * 生成，勿手改——以 packages/aide-sdk/src/utils/providerLogos.ts 为单一权威源。
+ * 数据：resources/base/media/pv_<kind>.svg，脚本从桌面权威源生成，勿手改——
+ * 以 packages/aide-sdk/src/utils/providerLogos.ts 为单一权威源。
  * 渲染约定与桌面/remote-pwa 一致：
- *   · 品牌色商标（system_default/deepseek/zhipu/qwen）固定官方色，浅深主题均可辨；
- *   · mono 商标（ollama/kimi，官方纯黑 mark）SVG 不烧 fill，由 tint 随上下文
- *     前景色着色——忠于品牌同时保证深浅主题可见性；
- *   · 无条目（cpa_gpt/custom/未知 kind）→ 桌面侧配置的 icon 字符 → 名称首字母。
+ *   · 品牌色商标（system_default/deepseek/zhipu/qwen/volcengine，火山引擎为
+ *     多 path 双色商标）固定官方色，浅深主题均可辨；
+ *   · mono 商标（ollama/kimi/cpa_gpt，官方纯黑 mark；CPA 用 OpenAI mark 标识
+ *     模型来源，仍为第三方中转）SVG 不烧 fill，由 tint 随上下文前景色着色——
+ *     忠于品牌同时保证深浅主题可见性；
+ *   · 无条目（custom/未知 kind）→ 桌面侧配置的 icon 字符 → 名称首字母。
  */
 import { ProviderConfigView } from '../sdk/types';
 
@@ -24,6 +26,10 @@ function logoRes(kind: string): Resource | null {
       return $r('app.media.pv_deepseek');
     case 'zhipu':
       return $r('app.media.pv_zhipu');
+    case 'volcengine':
+      return $r('app.media.pv_volcengine');
+    case 'cpa_gpt':
+      return $r('app.media.pv_cpa_gpt');
     case 'qwen':
       return $r('app.media.pv_qwen');
     default:
@@ -33,7 +39,7 @@ function logoRes(kind: string): Resource | null {
 
 /** mono 商标（官方纯黑 mark）：SVG 不烧色，渲染时以 tint 着色。 */
 function isMonoKind(kind: string): boolean {
-  return kind === 'ollama' || kind === 'kimi';
+  return kind === 'ollama' || kind === 'kimi' || kind === 'cpa_gpt';
 }
 
 /** 供应商商标三态渲染：品牌色 → mono(tint) → icon 字符 → 首字母（null → ?）。 */

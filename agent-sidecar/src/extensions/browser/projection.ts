@@ -53,6 +53,8 @@ export interface ProjectionOptions {
    * （退回会让调用方以为拿到的是那一块）。只作用于顶层文档，帧内不套用。
    */
   scope?: string;
+  /** 操作回报只列帧摘要；browser_read 保持完整读取。不是模型侧新增旋钮。 */
+  frames?: "contents" | "summary";
 }
 
 /** 一次投影的产出上限（保护模型上下文；触顶时 `truncated: true`）。 */
@@ -81,6 +83,7 @@ export function buildProjectionScript(opts: ProjectionOptions = {}): string {
   var LIMITS = ${JSON.stringify(LIMITS)};
   var INCLUDE_HIDDEN = ${opts.includeHidden ? "true" : "false"};
   var SCOPE = ${JSON.stringify(opts.scope ?? null)};
+  var FRAME_CONTENT = ${opts.frames === "summary" ? "false" : "true"};
   var budget = LIMITS.nodes;
   var truncated = false;
 
@@ -318,7 +321,7 @@ ${FIELD_LABEL_JS}
         var inner = f.contentDocument;
         if (inner && inner.body) {
           entry.sameOrigin = true;
-          if (!truncated) entry.content = project(inner, null);
+          if (FRAME_CONTENT && !truncated) entry.content = project(inner, null);
         }
       } catch (e) {
         // 跨域：保持 sameOrigin=false

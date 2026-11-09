@@ -37,6 +37,12 @@ import FilePickerDialog from "../FilePickerDialog.vue";
 import Icon from "../Icon.vue";
 import BookmarkActions from "./BookmarkActions.vue";
 import BookmarkFolderMenu from "./BookmarkFolderMenu.vue";
+import BrowserStartPage from "./BrowserPanel/BrowserStartPage.vue";
+import BrowserMenu, { type BrowserMenuAction } from "./BrowserPanel/BrowserMenu.vue";
+import BrowserLibraryDialog from "./BrowserPanel/BrowserLibraryDialog.vue";
+import BrowserCreationDialog from "./BrowserPanel/BrowserCreationDialog.vue";
+import { useBrowserHistory, type BrowserRecent, type CreationMode } from "../../composables/browser/useBrowserHistory";
+import { useBrowserStartActions } from "../../composables/browser/useBrowserStartActions";
 import {
   buildBookmarkBar,
   formatImportReport,
@@ -387,7 +393,7 @@ async function ensureView(t: Tab, url: string): Promise<boolean> {
 async function go() {
   const t = active.value;
   if (!t) return;
-  const target = normalizeBrowserUrl(address.value);
+  const target = address.value.trim() ? normalizeBrowserUrl(address.value) : "";
   if (!target) return;
   clearMessage();
   try {
@@ -574,7 +580,7 @@ async function onFolderPick(url: string) {
 }
 
 /** ★ 的目标 URL：活动标签的当前 URL；空标签时用地址栏里已输入的内容。 */
-const starTarget = computed(() => active.value?.url || normalizeBrowserUrl(address.value));
+const starTarget = computed(() => active.value?.url || (address.value.trim() ? normalizeBrowserUrl(address.value) : ""));
 const starred = computed(() => !!starTarget.value && bookmarkIdOf(starTarget.value) !== null);
 
 /** ★：已收藏 = 取消收藏；未收藏 = 收藏（标题先用标签标题=主机名，真标题待 webview2-com）。 */
@@ -617,6 +623,55 @@ async function onImportFile(path: string) {
   } catch (e) {
     setError(e);
   }
+}
+
+// ── 开始页与按需菜单 ──
+
+const history = useBrowserHistory();
+const startActions = useBrowserStartActions();
+const menuButton = ref<HTMLButtonElement | null>(null);
+const menuAnchor = ref<{ right: number; top: number } | null>(null);
+const library = ref<"bookmarks" | "history" | null>(null);
+const creation = ref<CreationMode | null>(null);
+const mediaPickerVisible = ref(false);
+
+function toggleMenu(event: MouseEvent): void {
+  if (menuAnchor.value) { closeMenu(); return; }
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  menuAnchor.value = { right: rect.right, top: rect.bottom + 6 };
+}
+function closeMenu(): void {
+  menuAnchor.value = null;
+  menuButton.value?.focus();
+}
+function onMenuAction(action: BrowserMenuAction): void {
+  menuAnchor.value = null;
+  if (action === "new-tab") addTab();
+  else if (action === "import") pickerVisible.value = true;
+  else library.value = action;
+}
+async function openLibraryUrl(url: string): Promise<void> {
+  library.value = null;
+  await nextTick();
+  await openBookmark(url);
+}
+async function openRecent(entry: BrowserRecent): Promise<void> {
+  library.value = null;
+  await nextTick();
+  try {
+    if (entry.kind === "web") await openBookmark(entry.url);
+    else await startActions.resume(entry);
+  } catch (cause) { setError(cause); }
+}
+async function onMediaFile(path: string): Promise<void> {
+  mediaPickerVisible.value = false;
+  await nextTick();
+  try { await startActions.openMedia(path); }
+  catch (cause) { setError(cause); }
+}
+function onCreationPrepared(): void {
+  creation.value = null;
+  setInfo("已填入会话草稿，请在输入框确认后发送");
 }
 
 // ── 生命周期与事件 ──
@@ -704,6 +759,7 @@ onMounted(() => {
 
   // 收藏条数据（模块级单例状态，挂载时拉一次；之后每次写操作各自刷新）。
   void refreshBookmarks();
+  void history.initialize().catch(setError);
 
   // **对账**：视图可能先于面板被创建（agent 先开 tab、用户还没点开面板），那条 `browser-view`
   // 事件就没人接。所以挂载时先拉一次快照补齐，再吃增量——快照是权威、事件是增量。
@@ -732,7 +788,7 @@ onMounted(() => {
   // 导航事件订阅（应用逻辑见 `applyNav`）。
   void onBrowserNav(applyNav).then((fn) => {
     unlistenNav = fn;
-  });
+  }).catch((cause) => fault("navigation subscription", cause));
 });
 
 onBeforeUnmount(() => {
@@ -800,9 +856,10 @@ onBeforeUnmount(() => {
         ref="addressEl"
         v-model="address"
         class="bp-address"
-        placeholder="输入网址，回车打开"
+        placeholder="输入网址"
+        aria-label="网址"
         spellcheck="false"
-        @keydown.enter="go"
+        @keydown.enter.prevent="go"
       />
       <button
         class="bp-btn bp-star"
@@ -813,10 +870,15 @@ onBeforeUnmount(() => {
       >
         {{ starred ? "★" : "☆" }}
       </button>
+      <button ref="menuButton" class="bp-btn bp-more" type="button" aria-label="更多浏览器操作" aria-haspopup="menu" :aria-expanded="menuAnchor !== null" @click="toggleMenu"><Icon name="more" :size="17" /></button>
     </div>
 
+    <BrowserMenu v-if="menuAnchor" :anchor="menuAnchor" @select="onMenuAction" @close="closeMenu" />
+    <BrowserLibraryDialog v-if="library" :kind="library" @close="library = null" @open="openLibraryUrl" @recent="openRecent" />
+    <BrowserCreationDialog v-if="creation" :mode="creation" @close="creation = null" @prepared="onCreationPrepared" />
+
     <!-- 收藏条：顶层文件夹点开下拉、根级散条点标题直达、✕ 删除；右端是导入入口 -->
-    <div class="bp-bookmarks">
+    <div v-if="history.showBookmarkBar.value" class="bp-bookmarks">
       <div class="bp-bm-list" @dragover.prevent @drop.prevent.self="dropBookmark([])">
         <template v-for="e in bookmarkBar" :key="entryKey(e)">
           <button
@@ -875,9 +937,8 @@ onBeforeUnmount(() => {
     <div ref="surfaceEl" class="bp-surface">
       <!-- 浮层盖上来期间的定格画面（原生视图已让位）：见脚本里「定格画面」 -->
       <img v-if="snapshotSrc" class="bp-snapshot" :src="snapshotSrc" alt="" draggable="false" />
-      <div v-if="!active?.viewId" class="bp-hint">
-        <span class="bp-hint-title">新标签页</span>
-        <span class="bp-hint-sub">在地址栏输入网址回车打开</span>
+      <div v-if="!active?.viewId" class="bp-start-scroll">
+        <BrowserStartPage @create="creation = $event" @media="mediaPickerVisible = true" @history="library = 'history'" @open="openRecent" />
       </div>
     </div>
 
@@ -890,6 +951,7 @@ onBeforeUnmount(() => {
       empty-error="请选择书签文件（HTML 或 JSON）"
       @confirm="onImportFile"
     />
+    <FilePickerDialog v-model:visible="mediaPickerVisible" title="打开视频或音频" empty-error="请选择视频或音频文件" @confirm="onMediaFile" />
   </div>
 </template>
 
@@ -1092,6 +1154,12 @@ onBeforeUnmount(() => {
 .bp-address:focus {
   border-color: var(--aide-focus-border);
 }
+.bp-address:placeholder-shown {
+  text-align: center;
+  font-family: inherit;
+}
+.bp-more { display: grid; place-items: center; padding-inline: var(--aide-space-unit); }
+.bp-more:focus-visible { outline: 2px solid var(--aide-text-secondary); outline-offset: 2px; }
 
 /* ★ 已收藏 = accent（与侧栏导航行的选中语言一致） */
 .bp-star {
@@ -1229,7 +1297,10 @@ onBeforeUnmount(() => {
   position: relative;
   min-height: 0;
   background: var(--aide-surface-default);
+  container: browser-surface / inline-size;
 }
+
+.bp-start-scroll { position: absolute; inset: 0; overflow-y: auto; }
 
 .bp-snapshot {
   position: absolute;
@@ -1241,22 +1312,4 @@ onBeforeUnmount(() => {
   user-select: none;
 }
 
-.bp-hint {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  pointer-events: none;
-}
-.bp-hint-title {
-  font-size: 14px;
-  color: var(--aide-text-secondary);
-}
-.bp-hint-sub {
-  font-size: 12px;
-  color: var(--aide-text-muted);
-}
 </style>

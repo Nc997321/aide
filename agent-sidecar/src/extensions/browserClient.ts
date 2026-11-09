@@ -1,5 +1,10 @@
 import { randomUUID } from "crypto";
 import type { ChatEvent } from "../engine/types.js";
+import {
+  browserOperationInterruption,
+  cancelBrowserOperations,
+  remainingBrowserOperationMs,
+} from "./browserClient/operation.js";
 
 /**
  * 内嵌浏览器桥的客户端（sidecar 侧）。
@@ -55,6 +60,8 @@ export interface BrowserQueryResponse {
   error?: string;
   timedOut?: boolean;
   cancelled?: boolean;
+  /** false = 在派发前被截止时间/取消拦住；不能把已派发的超时说成「没有执行」。 */
+  dispatched?: boolean;
 }
 
 interface Pending {
@@ -78,21 +85,23 @@ export function queryBrowser(
   call: BrowserCall,
   emit: (e: ChatEvent) => void,
 ): Promise<BrowserQueryResponse> {
+  const interruption = browserOperationInterruption();
+  if (interruption) return Promise.resolve({ ok: false, dispatched: false, ...interruption });
   const request_id = randomUUID();
-  // 必须走 worker 的 emit（→ DeltaCoalescer → stdout），禁止直写 process.stdout。
-  emit({ type: "browser_query", request_id, ...call });
+  const timeout = Math.min(BROWSER_QUERY_TIMEOUT_MS, remainingBrowserOperationMs());
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(request_id);
       resolve({
         ok: false,
+        dispatched: true,
         timedOut: true,
-        error:
-          "browser bridge timed out — the desktop host did not reply " +
-          "(is the embedded browser available in this environment?)",
+        error: "browser bridge timed out — the desktop host did not reply; an already sent action may still execute",
       });
-    }, BROWSER_QUERY_TIMEOUT_MS);
+    }, timeout);
     pending.set(request_id, { resolve, timer });
+    // 先登记再发出，立即回包也能结算；必须走 worker emit，不直写 stdout。
+    emit({ type: "browser_query", request_id, ...call });
   });
 }
 
@@ -107,14 +116,15 @@ export function resolveBrowserResult(cmd: {
   if (!p) return; // 未知/已超时/已取消——静默丢弃
   pending.delete(cmd.request_id);
   clearTimeout(p.timer);
-  p.resolve({ ok: cmd.ok, data: cmd.data, error: cmd.error });
+  p.resolve({ ok: cmd.ok, dispatched: true, data: cmd.data, error: cmd.error });
 }
 
 /** 会话停止/中断时清掉该进程内所有挂起查询（request_id 全局唯一，无需按会话分）。 */
 export function cancelAllBrowserQueries(reason: string): void {
+  cancelBrowserOperations();
   for (const [, p] of pending) {
     clearTimeout(p.timer);
-    p.resolve({ ok: false, cancelled: true, error: reason });
+    p.resolve({ ok: false, dispatched: true, cancelled: true, error: reason });
   }
   pending.clear();
 }

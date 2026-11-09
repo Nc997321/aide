@@ -2,6 +2,8 @@ import { mediaApi, type MediaOpenRequest } from "@aide/sdk/api/media";
 import { useComposerDrafts } from "@aide/sdk/composables/useComposerDrafts";
 import type { MediaRef } from "@aide/sdk/types/chat";
 import type { MediaArtifact } from "@aide/sdk/utils/mediaArtifacts";
+import { useBrowserHistory } from "./browser/useBrowserHistory";
+import { browserRecordTarget } from "./browser/useBrowserHistory/target";
 
 export interface OpenMediaOptions {
   files: MediaArtifact[];
@@ -29,6 +31,11 @@ async function openRequest(request: MediaOpenRequest): Promise<void> {
   request.target.draftKey = drafts.resolveDraftKey(request.target.draftKey);
   drafts.draftOf(request.target.draftKey);
   await mediaApi.open(request);
+  const file = request.files[request.selected];
+  if (file) useBrowserHistory().record({
+    kind: "media", path: file.path, title: file.title || file.path,
+    target: browserRecordTarget(request.target.draftKey),
+  });
 }
 
 async function open(options: OpenMediaOptions): Promise<void> {

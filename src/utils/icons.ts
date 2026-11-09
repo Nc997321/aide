@@ -91,6 +91,11 @@ export const GLYPHS: Record<string, string> = {
   /** 引用：几行文字 + 一个指向输入框的小箭头 */
   quote: '<path d="M2.5 4.5h11M2.5 8h7M2.5 11.5h4.5"/><path d="M11 10l2.5 1.5L11 13"/>',
   more: '<circle cx="4" cy="8" r="0.9" class="f"/><circle cx="8" cy="8" r="0.9" class="f"/><circle cx="12" cy="8" r="0.9" class="f"/>',
+  star: '<path d="m8 2 1.8 3.7 4.1.6-3 2.9.7 4.1L8 11.4l-3.6 1.9.7-4.1-3-2.9 4.1-.6Z"/>',
+  history: '<path d="M2.5 3.5v3h3M2.5 6.5a5.5 5.5 0 1 1 .8 5M8 4.8v3.5l2 1.2"/>',
+  film: '<rect x="2.5" y="2" width="11" height="12" rx="1.5"/><path d="M5.3 2v12M10.7 2v12M2.5 5.3h11M2.5 10.7h11"/>',
+  cut: '<circle cx="4" cy="4" r="2"/><circle cx="4" cy="12" r="2"/><path d="m5.4 5.4 8 8M5.4 10.6 13.4 2.6"/>',
+  play: '<rect x="2" y="3.5" width="12" height="9" rx="1.8"/><path d="m6.5 5.5 4 2.5-4 2.5Z"/>',
   // 折叠箭头。默认朝右（折叠态），展开时用 CSS 转 90° 指向下——
   // 一个字形两种状态，省掉两个几乎一样的路径
   caret: '<path d="M6.5 4L10.5 8L6.5 12"/>',

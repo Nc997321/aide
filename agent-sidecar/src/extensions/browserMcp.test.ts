@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import type { ChatEvent } from "../engine/types.js";
 import { browserMcpRegistration, BROWSER_ALLOW_RULES, BROWSER_INSTRUCTIONS } from "./browserMcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { asRecord } from "./browser/format.js";
 
 const noopEmit = (_e: ChatEvent): void => {};
 
@@ -70,6 +74,29 @@ function serializedSpec(): string {
 }
 
 describe("instructions 是 MCP 采纳率的必需品", () => {
+  it("真正的 MCP listTools 暴露 batch/wait_for，不只测 SDK 内部序列化", async () => {
+    const config = browserMcpRegistration(noopEmit, {})?.["aide-browser"] as { instance: McpServer } | undefined;
+    if (!config) throw new Error("browser MCP not registered");
+    const client = new Client({ name: "browser-contract-test", version: "1" });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    try {
+      await Promise.all([config.instance.connect(serverTransport), client.connect(clientTransport)]);
+      const tools = await client.listTools();
+      const act = tools.tools.find((entry) => entry.name === "browser_act");
+      if (!act) throw new Error("browser_act missing on wire");
+      const properties = asRecord(act.inputSchema["properties"]);
+      expect(asRecord(properties?.["action"])?.["enum"]).toContain("batch");
+      const steps = asRecord(properties?.["steps"]);
+      expect(steps?.["maxItems"]).toBe(8);
+      const fields = asRecord(asRecord(steps?.["items"])?.["properties"]);
+      expect(asRecord(fields?.["action"])?.["enum"]).toEqual(["click", "fill", "hover", "press"]);
+      expect(fields?.["wait_for"]).toBeDefined();
+      expect(act.inputSchema["required"]).toEqual(["action"]);
+    } finally {
+      await client.close();
+      await config.instance.close();
+    }
+  });
   it("工具描述快照 + instructions 关键句（防静默消失）", () => {
     const json = serializedSpec();
     expect(json).toMatchSnapshot();
@@ -78,7 +105,9 @@ describe("instructions 是 MCP 采纳率的必需品", () => {
     // 多行 instructions 常量永远不是序列化结果的子串——整串断言必假（假绿）。
     expect(json).toContain("START WITH browser_tabs");
     expect(json).toContain("TO READ A PAGE use browser_read");
-    expect(json).toContain("AFTER AN ACTION, WAIT WITH browser_wait");
+    expect(json).toContain("USE THE RETURNED EVIDENCE");
+    expect(json).toContain("action=batch");
+    expect(json).not.toContain("AFTER AN ACTION, WAIT WITH browser_wait");
     expect(json).toContain("TO DO ANYTHING ELSE use browser_eval");
     // parking 之后"没显示"不再等于"没渲染"——这条反向说明是给模型的**行为许可**：
     // 不必为了"让页面动起来"去要求用户把 tab 切到前台。删了它会退回旧的世界观。

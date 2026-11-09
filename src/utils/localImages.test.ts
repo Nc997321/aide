@@ -35,6 +35,16 @@ describe("hydrateLocalImages", () => {
     expect(img.dataset.aideState).toBe("ok");
   });
 
+  it("回复中的 /C:/ 图片路径去掉多余斜杠后交给 Host", async () => {
+    readFileBinary.mockResolvedValue(new ArrayBuffer(4));
+    const el = mount("![浏览器预览](/C:/Temp/preview/browser-start-light.png)");
+    hydrateLocalImages(el, "D:/workspace");
+    await flush();
+    expect(readFileBinary).toHaveBeenCalledWith("C:/Temp/preview/browser-start-light.png");
+    expect(el.querySelector("img")?.getAttribute("src")).toBe("blob:test-1");
+    expect(el.querySelector("img")?.dataset.aideState).toBe("ok");
+  });
+
   it("重复调用不重复读；短时间内同一路径只读一次", async () => {
     readFileBinary.mockResolvedValue(new ArrayBuffer(4));
     const a = mount("![a](/x/a.png)");
