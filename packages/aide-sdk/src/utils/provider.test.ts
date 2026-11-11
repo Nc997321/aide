@@ -42,6 +42,14 @@ describe("providerModelList", () => {
     expect(providerModelList(p)).toEqual(["k3[1m]", "kimi-k2", "kimi-k3"]);
   });
 
+  it("包含 Fable 映射，与其他映射和已知模型去重", () => {
+    const p = makeProvider("p", {
+      mappings: { defaultOpusModel: "main", defaultFableModel: "deep", defaultSonnetModel: "main" },
+      knownModels: ["deep", "fast"],
+    });
+    expect(providerModelList(p)).toEqual(["main", "deep", "fast"]);
+  });
+
   it("全部空 → 空列表（系统默认常态）", () => {
     expect(providerModelList(makeProvider(SYSTEM_DEFAULT_ID))).toEqual([]);
   });

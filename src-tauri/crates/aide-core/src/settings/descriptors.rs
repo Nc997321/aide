@@ -103,6 +103,7 @@ static DESCRIPTORS: Lazy<Vec<SettingDescriptor>> = Lazy::new(|| {
         user("providers[].modelMappings", json!({}), SettingValueKind::Object, "provider"),
         user("providers[].modelMappings.anthropicModel", json!(""), SettingValueKind::String, "provider"),
         user("providers[].modelMappings.defaultOpusModel", json!(""), SettingValueKind::String, "provider"),
+        user("providers[].modelMappings.defaultFableModel", json!(""), SettingValueKind::String, "provider"),
         user("providers[].modelMappings.defaultSonnetModel", json!(""), SettingValueKind::String, "provider"),
         user("providers[].modelMappings.defaultHaikuModel", json!(""), SettingValueKind::String, "provider"),
         user("providers[].modelMappings.subagent", json!(""), SettingValueKind::String, "provider"),

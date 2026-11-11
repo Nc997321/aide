@@ -677,8 +677,8 @@ export const api = {
   createSession(id: string, name: string): Promise<Session> {
     return getTransport().invoke("create_session", { id, name });
   },
-  prepareSessionHandoff(sourceId: string, focus: string, target: HandoffTarget): Promise<SessionHandoff> {
-    return getTransport().invoke("prepare_session_handoff", { sourceId, focus, target });
+  prepareSessionHandoff(sourceId: string, focus: string, target: HandoffTarget, manualSummary?: string): Promise<SessionHandoff> {
+    return getTransport().invoke("prepare_session_handoff", { sourceId, focus, target, manualSummary });
   },
   continueSessionHandoff(handoffId: string, summary: string, target: HandoffTarget): Promise<SessionContinued> {
     return getTransport().invoke("continue_session_handoff", { handoffId, summary, target });

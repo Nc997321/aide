@@ -24,6 +24,8 @@ pub struct CatalogDefaults {
     #[serde(default)]
     pub default_opus_model: String,
     #[serde(default)]
+    pub default_fable_model: String,
+    #[serde(default)]
     pub default_sonnet_model: String,
     #[serde(default)]
     pub default_haiku_model: String,
@@ -113,6 +115,9 @@ mod tests {
         assert_eq!(d.default_opus_model, "deepseek-v4-pro[1m]");
         assert_eq!(d.default_sonnet_model, "deepseek-v4-pro[1m]");
         assert_eq!(d.default_haiku_model, "deepseek-v4-flash");
+        assert!(d.default_fable_model.is_empty());
+        let defaults = serde_json::to_value(d).unwrap();
+        assert_eq!(defaults["default_fable_model"], "");
         assert_eq!(d.subagent, "deepseek-v4-flash");
         assert_eq!(d.effort_level, "max");
         assert_eq!(d.auto_compact_window, "786432");

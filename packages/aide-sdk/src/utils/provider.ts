@@ -12,6 +12,7 @@ export function providerModelList(p: ProviderConfig): string[] {
     p.model,
     m?.anthropicModel,
     m?.defaultOpusModel,
+    m?.defaultFableModel,
     m?.defaultSonnetModel,
     m?.defaultHaikuModel,
     m?.subagent,

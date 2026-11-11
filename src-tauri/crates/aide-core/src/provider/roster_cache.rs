@@ -30,6 +30,7 @@ const ALIAS_OVERRIDE_KEYS: &[&str] = &[
     "ANTHROPIC_BASE_URL",
     "ANTHROPIC_MODEL",
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
 ];
@@ -171,6 +172,7 @@ mod tests {
         assert!(speaks_catalog_aliases(ProviderKind::SystemDefault, &env(&["HTTPS_PROXY"])));
         // 配了映射 / 改了地址：别名已不指向 CLI 默认模型
         assert!(!speaks_catalog_aliases(ProviderKind::SystemDefault, &env(&["ANTHROPIC_DEFAULT_OPUS_MODEL"])));
+        assert!(!speaks_catalog_aliases(ProviderKind::SystemDefault, &env(&["ANTHROPIC_DEFAULT_FABLE_MODEL"])));
         assert!(!speaks_catalog_aliases(ProviderKind::SystemDefault, &env(&["ANTHROPIC_BASE_URL"])));
         // 第三方供应商：opus 行报的是它家的模型
         assert!(!speaks_catalog_aliases(ProviderKind::Custom, &env(&[])));

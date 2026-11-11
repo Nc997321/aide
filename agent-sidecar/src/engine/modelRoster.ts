@@ -55,8 +55,20 @@ function isPinnedModelRow(row: SdkModelRow): boolean {
   return row.resolvedModel !== undefined && row.resolvedModel === row.value;
 }
 
-function offeredRows(rows: SdkModelRow[], currentModel: string): SdkModelRow[] {
-  return rows.filter((row) => !isPinnedModelRow(row) || realModelOf(row) === currentModel);
+function isAllowedRow(row: SdkModelRow, allowedModels: readonly string[]): boolean {
+  const real = realModelOf(row);
+  if (allowedModels.includes(row.value) || allowedModels.includes(real)) return true;
+  // CLI 的默认槽会自行附加上下文后缀；只认这个槽的变体，不放宽其他模型 id。
+  return row.value === "default" && allowedModels.some((model) =>
+    real === `${model}[1m]` || real === `${model}[200k]`,
+  );
+}
+
+function offeredRows(rows: SdkModelRow[], currentModel: string, allowedModels?: readonly string[]): SdkModelRow[] {
+  return rows.filter((row) => {
+    if (realModelOf(row) === currentModel) return true;
+    return allowedModels === undefined ? !isPinnedModelRow(row) : isAllowedRow(row, allowedModels);
+  });
 }
 
 /** SDK 条目 → 下拉选项（真名命名空间）。 */
@@ -102,6 +114,8 @@ async function readInitModels(q: Query): Promise<ModelInfo[] | null> {
 export class ModelRoster {
   /** 可选模型列表（真名命名空间）——models_available 事件与切换守卫的展示反查读它。 */
   models: ModelOption[] = [];
+  /** SDK 支持模型清单，但宿主筛选后可能为空；与尚未拿到清单区分。 */
+  private hasModelList = false;
   /** 列表里的真实模型 id（models 的 value 集合），用于把 SDK 回报的 wire id
    *  归一成列表里的那一个（wire id 可能带变体后缀）。 */
   private realModels: string[] = [];
@@ -115,12 +129,13 @@ export class ModelRoster {
   lastConcreteModel = "";
 
   /** SDK init 回报 → 采纳列表并重建双命名空间账本；返回 models。
-   *  currentModel（真名）：钉死型号行里只有它留下，见 isPinnedModelRow。
+   *  缺省沿用槽位清单；宿主给了名单时只保留匹配项，当前实际型号始终可见。
    *  失败（SDK 版本不支持）返回 null，调用方静默跳过。 */
-  async adoptFromInit(q: Query, currentModel: string): Promise<ModelOption[] | null> {
+  async adoptFromInit(q: Query, currentModel: string, allowedModels?: readonly string[]): Promise<ModelOption[] | null> {
     const sdkModels = await readInitModels(q);
     if (sdkModels === null) return null;
-    const selectable = offeredRows(filterSelectableModels<SdkModelRow>(sdkModels), currentModel);
+    this.hasModelList = true;
+    const selectable = offeredRows(filterSelectableModels<SdkModelRow>(sdkModels), currentModel, allowedModels);
     this.sdkRoster = selectable.map((row) => ({ value: row.value, displayName: versionedLabel(row) }));
     this.adopt(dedupeByRealModel(selectable));
     return this.models;
@@ -170,7 +185,7 @@ export class ModelRoster {
   /** 主线程已实际回报的型号必须可见；未知型号不能让 UI 回落列表首项。 */
   adoptConcreteModel(concreteModel: string): string {
     const value = this.resolveDropdownValue(concreteModel);
-    if (this.models.length > 0 && !this.realModels.includes(value)) {
+    if (this.hasModelList && !this.realModels.includes(value)) {
       this.models = [...this.models, { value, displayName: value }];
       this.realModels = [...this.realModels, value];
     }

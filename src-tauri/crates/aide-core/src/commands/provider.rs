@@ -393,6 +393,7 @@ mod tests {
 
         let mappings = ProviderModelMappings {
             anthropic_model: "gpt-new".to_string(),
+            default_fable_model: "gpt-deep".to_string(),
             ..Default::default()
         };
         service
@@ -401,6 +402,7 @@ mod tests {
 
         let cpa = service.resolve_runtime_provider("cpa").unwrap();
         assert_eq!(cpa.model_mappings.anthropic_model, "gpt-new");
+        assert_eq!(cpa.model_mappings.default_fable_model, "gpt-deep");
 
         let other = service.resolve_runtime_provider("other").unwrap();
         assert_eq!(

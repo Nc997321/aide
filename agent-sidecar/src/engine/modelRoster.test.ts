@@ -102,6 +102,14 @@ describe("ModelRoster.resolveDropdownValue", () => {
     expect(r.resolveDropdownValue("glm-5.3-flash")).toBe("glm-5.3-flash");
   });
 
+  it("宿主筛空名册后，实际回报的当前型号仍会加入选项", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery(INIT_MODELS), "", []);
+    expect(r.models).toEqual([]);
+    r.adoptConcreteModel("actual-model");
+    expect(r.models).toEqual([{ value: "actual-model", displayName: "actual-model" }]);
+  });
+
   it("空名册：wire id 原样返回", () => {
     expect(new ModelRoster().resolveDropdownValue("any")).toBe("any");
   });
@@ -191,5 +199,61 @@ describe("ModelRoster：钉死型号行只留当前在用的", () => {
       { value: "sonnet", displayName: "deepseek-v4.1-flash:cloud", resolvedModel: "deepseek-v4.1-flash:cloud", description: "Custom Sonnet model" },
     ]), "glm-5.3:cloud");
     expect(models!.map((m) => m.displayName)).toEqual(["glm-5.3:cloud[1m]（默认）", "glm-5.3:cloud", "deepseek-v4.1-flash:cloud"]);
+  });
+
+  const THIRD_PARTY = [
+    { value: "default", displayName: "Default (recommended)", resolvedModel: "gpt-6.1-sol[1m]", description: "Use the default model (currently gpt-6.1-sol[1m])" },
+    { value: "opus", displayName: "gpt-6.1-sol", resolvedModel: "gpt-6.1-sol" },
+    { value: "fable", displayName: "Fable 5.1", resolvedModel: "claude-fable-5-1" },
+    { value: "sonnet", displayName: "gpt-6-luna", resolvedModel: "gpt-6-luna" },
+    { value: "haiku", displayName: "gpt-6-luna", resolvedModel: "gpt-6-luna" },
+    { value: "claude-fable-5-1[1m]", displayName: "Fable 5.1", resolvedModel: "claude-fable-5-1[1m]" },
+    { value: "future", displayName: "Future model", resolvedModel: "claude-future-1" },
+  ];
+
+  it("宿主名单挡住新版 Fable 别名、旧完整型号和未来未配置槽位", async () => {
+    const r = new ModelRoster();
+    const models = await r.adoptFromInit(fakeQuery(THIRD_PARTY), "gpt-6.1-sol", ["gpt-6.1-sol", "gpt-6-luna"]);
+    expect(models).toEqual([
+      { value: "gpt-6.1-sol[1m]", displayName: "gpt-6.1-sol[1m]（默认）" },
+      { value: "gpt-6.1-sol", displayName: "gpt-6.1-sol" },
+      { value: "gpt-6-luna", displayName: "gpt-6-luna" },
+    ]);
+    expect(r.sdkRoster.map((m) => m.value)).toEqual(["default", "opus", "sonnet", "haiku"]);
+    expect(r.toSdkModel("gpt-6.1-sol")).toBe("opus");
+    expect(r.toSdkModel("gpt-6-luna")).toBe("sonnet");
+    expect(r.toSdkModel("claude-fable-5-1")).toBe("claude-fable-5-1");
+  });
+
+  it("Fable 映射到已配置模型时可选，反查仍用 fable 别名", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery([
+      { value: "fable", displayName: "deep-model", resolvedModel: "deep-model" },
+    ]), "", ["deep-model"]);
+    expect(r.models).toEqual([{ value: "deep-model", displayName: "deep-model" }]);
+    expect(r.toSdkModel("deep-model")).toBe("fable");
+  });
+
+  it("显式配置的别名或完整型号允许出现，不把 Fable 本身拉黑", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery(OFFICIAL), "", ["fable", "claude-opus-4-8"]);
+    expect(r.models.map((m) => m.value)).toEqual(["claude-fable-5-1", "claude-opus-4-8"]);
+  });
+
+  it("空名单不等于不限制，仅保留当前实际型号", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery(THIRD_PARTY), "gpt-6.1-sol", []);
+    expect(r.models).toEqual([{ value: "gpt-6.1-sol", displayName: "gpt-6.1-sol" }]);
+    await r.adoptFromInit(fakeQuery(THIRD_PARTY), "", []);
+    expect(r.models).toEqual([]);
+  });
+
+  it("默认槽的上下文后缀兼容不会放宽到其他未配置候选", async () => {
+    const r = new ModelRoster();
+    await r.adoptFromInit(fakeQuery([
+      { value: "default", displayName: "Default", resolvedModel: "main[200k]" },
+      { value: "other", displayName: "Other", resolvedModel: "main[1m]" },
+    ]), "", ["main"]);
+    expect(r.models.map((m) => m.value)).toEqual(["main[200k]"]);
   });
 });

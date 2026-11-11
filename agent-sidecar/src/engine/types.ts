@@ -620,6 +620,8 @@ export type SidecarCommand =
       // per-session provider 连接参数覆盖（ANTHROPIC_BASE_URL / API_KEY 等）。
       // Runtime 启动后进程 env 不变，不同会话用不同 provider 靠此字段传递。
       env?: Record<string, string>;
+      /** 宿主允许展示的模型 id/别名；缺省不限，空数组仅保留当前实际型号。 */
+      model_allowlist?: string[];
       // 会话自动命名开关（来自设置面板）：false 时首轮后不生成会话标题。
       // 省略 = 开启。provider-agnostic：标题生成是通用能力。
       auto_title?: boolean;

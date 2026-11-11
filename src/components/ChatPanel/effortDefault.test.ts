@@ -15,11 +15,13 @@ describe("defaultEffortFor", () => {
   it("工程沿用 provider 默认（现状不变）", () => {
     expect(defaultEffortFor({ remembered: null, daily: false, providerDefault: "max" })).toBe("max");
     expect(defaultEffortFor({ remembered: null, daily: false, providerDefault: "high" })).toBe("high");
+    expect(defaultEffortFor({ remembered: null, daily: false, providerDefault: "medium" })).toBe("medium");
   });
 
-  it("记住的值走归一（历史 medium/xhigh 迁移到三档）", () => {
+  it("记住的 medium 原样恢复，历史 xhigh 仍归一到 max", () => {
     expect(defaultEffortFor({ remembered: "xhigh", daily: true, providerDefault: "high" })).toBe("max");
-    expect(defaultEffortFor({ remembered: "medium", daily: false, providerDefault: "high" })).toBe("high");
+    expect(defaultEffortFor({ remembered: "medium", daily: false, providerDefault: "high" })).toBe("medium");
+    expect(defaultEffortFor({ remembered: "medium", daily: true, providerDefault: "max" })).toBe("medium");
   });
 
   it("日常默认就是「快速」这一档（low），不是别的", () => {

@@ -252,7 +252,7 @@ watch(
 );
 
 // ── Effort 选择器 ──
-// 会话级思考深度：三档制（快速/进阶/极致，@aide/sdk/utils/effort）。默认解析顺序：
+// 会话级思考深度：四档制（快速/均衡/进阶/极致，@aide/sdk/utils/effort）。默认解析顺序：
 // 会话记忆（sessionEffort 元数据）→ **日常会话的快速** → provider 配置的 effortLevel
 // → "high"（见 effortDefault.ts）。切换经
 // set-effort 走 sidecar applyFlagSettings 即时生效（SDK 官方中途通道，不重启进程、

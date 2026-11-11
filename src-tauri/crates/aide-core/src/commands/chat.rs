@@ -481,6 +481,10 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         },
     );
 
+    if let Some(models) = active.model_allowlist() {
+        cmd["model_allowlist"] = json!(models);
+    }
+
     // 工作区信任标志下发给 sidecar：不信任时 startLoop 据此跳过项目 CLAUDE.md /
     // 项目 .aide/claude/skills/ / 项目 .mcp.json（见 session-worker.ts startLoop）。
     let profile = crate::session_store::our_session_profile(&session_id)

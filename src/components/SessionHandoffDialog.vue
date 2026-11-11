@@ -13,6 +13,7 @@ const emit = defineEmits<{ submit: [value: SessionContinued]; cancel: [] }>();
 const focus = ref("");
 const draft = ref<SessionHandoff | null>(null);
 const summary = ref("");
+const manual = ref(false);
 const busy = ref(false);
 const error = ref("");
 const { activeProvider, activeProviderId } = useProviders();
@@ -35,10 +36,16 @@ async function generate() {
   finally { busy.value = false; }
 }
 async function continueSession() {
-  if (!draft.value || busy.value || !summary.value.trim()) return;
+  if ((!manual.value && !draft.value) || busy.value || !summary.value.trim()) return;
   busy.value = true;
   error.value = "";
-  try { emit("submit", await api.continueSessionHandoff(draft.value.id, summary.value, { ...target.value })); }
+  try {
+    const selected = { ...target.value };
+    // Reuse a prepared draft on retry, including any edits made after a failed launch.
+    const prepared = draft.value ?? await api.prepareSessionHandoff(props.sourceId, focus.value, selected, summary.value);
+    draft.value = prepared;
+    emit("submit", await api.continueSessionHandoff(prepared.id, summary.value, selected));
+  }
   catch (e) { error.value = String(e); }
   finally { busy.value = false; }
 }
@@ -51,18 +58,19 @@ async function continueSession() {
     <template v-if="!draft">
       <label for="handoff-focus">下一阶段主要做什么（可选）</label>
       <textarea id="handoff-focus" v-model="focus" rows="3" maxlength="2000" :disabled="busy" placeholder="例如：继续完成测试，重点保留之前的设计约束" />
-      <p class="hint">生成摘要会将文字记录交给当前选定的供应商，产生一次或多次模型调用费用。图片和子代理内部过程不在交接范围内，旧会话保持原样。</p>
+      <p v-if="!manual" class="hint">生成摘要会将文字记录交给当前选定的供应商，产生一次或多次模型调用费用。图片和子代理内部过程不在交接范围内，旧会话保持原样。</p>
     </template>
-    <template v-else>
+    <template v-if="draft || manual">
       <label for="handoff-summary">交接摘要（可编辑）</label>
       <textarea id="handoff-summary" v-model="summary" rows="16" maxlength="12000" :disabled="busy" />
-      <p class="hint">{{ summary.length }} / 12000 字 · 摘要基于生成开始时的记录，之后的新消息不包含在内。沿用源工作区；供应商、模型和档位按普通新会话选择，临时授权不继承。新会话先确认交接，等待你的下一条指示。</p>
+      <p class="hint">{{ summary.length }} / 12000 字 · {{ manual ? '手填摘要会直接带入新会话，省去模型整理历史的步骤。' : '摘要基于生成开始时的记录，之后的新消息不包含在内。' }}沿用源工作区；供应商、模型和档位按普通新会话选择，临时授权不继承。新会话先确认交接，等待你的下一条指示。</p>
     </template>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
-    <p v-if="busy" role="status">{{ draft ? '正在创建新会话…' : '正在整理完整文字快照，长会话可能需要几分钟…' }}</p>
+    <p v-if="busy" role="status">{{ draft || manual ? '正在创建新会话…' : '正在整理完整文字快照，长会话可能需要几分钟…' }}</p>
     <footer>
       <button type="button" :disabled="busy" @click="emit('cancel')">取消</button>
-      <button v-if="!draft" type="button" :disabled="busy" @click="generate">生成交接摘要</button>
+      <button v-if="!draft && !manual" type="button" :disabled="busy" @click="manual = true; error = ''">手填交接摘要</button>
+      <button v-if="!draft && !manual" type="button" :disabled="busy" @click="generate">生成交接摘要</button>
       <button v-else type="button" :disabled="busy || !summary.trim()" @click="continueSession">接续到新会话</button>
     </footer>
   </div>

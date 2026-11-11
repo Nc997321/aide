@@ -363,7 +363,7 @@ impl AutomationService {
         }
     }
 
-    /// 外壳的供应商读：任务自持的 `provider_id` → 连接参数 env（与普通会话 send 同一个
+    /// 外壳的供应商读：任务自持的 `provider_id` → 连接参数 env 与模型候选范围（与普通会话 send 同一个
     /// `build_runtime_env_vars`）。空 id = 存量任务，取**运行这一刻**的激活供应商。
     ///
     /// 不下发的话 worker 只能回落 sidecar 进程 env——那是 Host 启动那一刻的激活供应商，
@@ -371,7 +371,10 @@ impl AutomationService {
     ///
     /// 供应商已被删除 → 如实失败：`resolve_runtime_provider` 对未知 id 回落系统默认，
     /// 拿第三方模型名去打官方端点属于「跑错供应商」，不许无声。
-    async fn provider_env(core: &Arc<Core>, provider_id: &str) -> Result<HashMap<String, String>, String> {
+    async fn provider_context(
+        core: &Arc<Core>,
+        provider_id: &str,
+    ) -> Result<(HashMap<String, String>, Option<Vec<String>>), String> {
         let settings = core.settings.clone();
         let id = provider_id.to_string();
         crate::registry::blocking(move || {
@@ -385,7 +388,10 @@ impl AutomationService {
                 return Err("任务指定的供应商已不存在，请编辑任务重新选择模型".to_string());
             }
             let proxy = crate::app_settings::public_settings(&settings)?.proxy;
-            Ok(crate::runtime::env::build_runtime_env_vars(&provider, &proxy))
+            Ok((
+                crate::runtime::env::build_runtime_env_vars(&provider, &proxy),
+                provider.model_allowlist(),
+            ))
         })
         .await
     }
@@ -632,10 +638,13 @@ impl AutomationService {
         let core = self.core().ok_or("AutomationService 未启动（无所属 Host）")?;
         let runtime = &core.runtime;
         // 供应商解析失败与发送失败同一条收尾路径：运行从未开始，但失败要落进运行记录
-        let sent = match Self::provider_env(&core, &task.provider_id).await {
-            Ok(provider_env) => {
-                let cmd =
+        let sent = match Self::provider_context(&core, &task.provider_id).await {
+            Ok((provider_env, model_allowlist)) => {
+                let mut cmd =
                     Self::build_send_command(&task, &run_id, &prompt, &policy, &provider_env);
+                if let Some(models) = model_allowlist {
+                    cmd["model_allowlist"] = serde_json::json!(models);
+                }
                 runtime
                     .send_to_runtime(&cmd)
                     .await
@@ -1127,9 +1136,12 @@ impl AutomationService {
         let distill_sid = Self::distill_session_id(&run.run_id);
         let cwd = Self::run_cwd(&task);
         let core = self.core().ok_or("AutomationService 未启动")?;
-        let provider_env = Self::provider_env(&core, &task.provider_id).await?;
-        let cmd =
+        let (provider_env, model_allowlist) = Self::provider_context(&core, &task.provider_id).await?;
+        let mut cmd =
             Self::build_distill_command(&task, &run, &Self::path_policy(&cwd), &provider_env);
+        if let Some(models) = model_allowlist {
+            cmd["model_allowlist"] = serde_json::json!(models);
+        }
         let runtime = &core.runtime;
         // 先注册路由再发（send 返回后事件才可能到达，顺序安全）
         self.by_session

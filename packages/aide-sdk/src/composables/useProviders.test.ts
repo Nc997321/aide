@@ -98,6 +98,24 @@ describe("useProviders — SystemDefault 统一", () => {
     expect(api.refreshModels).toHaveBeenCalledWith("__system_default__");
   });
 
+  it("Fable 映射随供应商更新完整落盘", async () => {
+    vi.mocked(api.getProviders).mockResolvedValue([sd(), cpa()]);
+    vi.mocked(api.getActiveProviderId).mockResolvedValue("cpa-local");
+    await load();
+    const provider = allProviders.value.find((p) => p.id === "cpa-local");
+    expect(provider).toBeDefined();
+    if (!provider) throw new Error("missing provider fixture");
+    await updateProvider(provider.id, {
+      modelMappings: { ...provider.modelMappings, defaultFableModel: "deep-model" },
+    });
+    expect(api.setProviders).toHaveBeenCalledWith(expect.arrayContaining([
+      expect.objectContaining({
+        id: "cpa-local",
+        modelMappings: expect.objectContaining({ defaultFableModel: "deep-model" }),
+      }),
+    ]));
+  });
+
   it("updateProvider 合并并落盘 setProviders", async () => {
     (api.getProviders as any).mockResolvedValue([sd(), cpa()]);
     (api.getActiveProviderId as any).mockResolvedValue("cpa-local");

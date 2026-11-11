@@ -7,6 +7,7 @@ import { SYSTEM_DEFAULT_ID } from "../utils/provider";
 const emptyMappings = (): ProviderModelMappings => ({
   anthropicModel: "",
   defaultOpusModel: "",
+  defaultFableModel: "",
   defaultSonnetModel: "",
   defaultHaikuModel: "",
   subagent: "",

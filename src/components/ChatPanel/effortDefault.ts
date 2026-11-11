@@ -18,7 +18,7 @@ export interface EffortDefaultInput {
   readonly remembered: string | null;
   /** 这个 tab 是不是日常 */
   readonly daily: boolean;
-  /** provider 配置的默认档位（已归一的三档值） */
+  /** provider 配置的默认档位（已归一到选择器值域） */
   readonly providerDefault: string;
 }
 

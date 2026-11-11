@@ -203,6 +203,7 @@ fn parse_models_response(body: &serde_json::Value) -> Result<ProviderModelMappin
     Ok(ProviderModelMappings {
         anthropic_model: latest_sonnet.clone(),
         default_opus_model: latest_opus,
+        default_fable_model: String::new(),
         default_sonnet_model: latest_sonnet,
         default_haiku_model: latest_haiku.clone(),
         subagent: latest_haiku,

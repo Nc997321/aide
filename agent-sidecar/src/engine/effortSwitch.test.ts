@@ -58,6 +58,15 @@ describe("applyEffortSwitch", () => {
     expect(events).toEqual([{ type: "effort_changed", effort: "low" }]);
   });
 
+  it("切均衡(medium)：原样传给 SDK，并广播同一档位", async () => {
+    const applyFlagSettings = vi.fn(() => Promise.resolve());
+    const { events, committed } = setup("high", { applyFlagSettings }, "medium");
+    expect(applyFlagSettings).toHaveBeenCalledWith({ effortLevel: "medium" });
+    await flush();
+    expect(committed).toEqual(["medium"]);
+    expect(events).toEqual([{ type: "effort_changed", effort: "medium" }]);
+  });
+
   it("切换失败（CLI 驳回）：不坐实、effort_changed(旧值 + error) 回滚", async () => {
     const applyFlagSettings = vi.fn(() => Promise.reject(new Error("invalid effortLevel")));
     const { events, committed } = setup("high", { applyFlagSettings });

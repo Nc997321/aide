@@ -36,7 +36,7 @@ impl ProviderKind {
     }
 }
 
-/// Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写，
+/// Claude 专属的模型 env 变量映射，换 provider 时整块重写，
 /// 不污染调用方（chat.rs 调 runtime::env::build_runtime_env_vars；本模块只暴露
 /// provider_to_env_vars / mappings_to_env / load_* 给 runtime/env.rs 和 commands 层用）。
 ///
@@ -47,6 +47,7 @@ impl ProviderKind {
 ///
 /// - anthropicModel      → ANTHROPIC_MODEL（spawn 时默认模型）
 /// - defaultOpusModel    → ANTHROPIC_DEFAULT_OPUS_MODEL（opus 别名→具体模型）
+/// - defaultFableModel   → ANTHROPIC_DEFAULT_FABLE_MODEL（fable 别名→具体模型）
 /// - defaultSonnetModel  → ANTHROPIC_DEFAULT_SONNET_MODEL（sonnet 别名→具体模型）
 /// - defaultHaikuModel   → ANTHROPIC_DEFAULT_HAIKU_MODEL（haiku 别名→具体模型）
 /// - subagent            → CLAUDE_CODE_SUBAGENT_MODEL（子代理默认模型——只是配置载体）
@@ -67,6 +68,8 @@ pub struct ProviderModelMappings {
     pub anthropic_model: String,
     #[serde(default)]
     pub default_opus_model: String,
+    #[serde(default)]
+    pub default_fable_model: String,
     #[serde(default)]
     pub default_sonnet_model: String,
     #[serde(default)]
@@ -185,6 +188,30 @@ enum AuthStatus {
 }
 
 impl ProviderConfig {
+    /// Host 决定候选范围，sidecar 只执行通用名单筛选；官方不设限制。
+    pub fn model_allowlist(&self) -> Option<Vec<String>> {
+        if self.kind == ProviderKind::SystemDefault {
+            return None;
+        }
+        let m = &self.model_mappings;
+        let configured = [
+            &self.model,
+            &m.anthropic_model,
+            &m.default_opus_model,
+            &m.default_fable_model,
+            &m.default_sonnet_model,
+            &m.default_haiku_model,
+            &m.subagent,
+        ];
+        let mut models = Vec::new();
+        for model in configured.into_iter().chain(self.known_models.iter()) {
+            if !model.is_empty() && !models.contains(model) {
+                models.push(model.clone());
+            }
+        }
+        Some(models)
+    }
+
     fn view(self, auth: AuthStatus) -> ProviderConfigView {
         // SystemDefault 没有"用户自配的 known_models"——它的模型列表唯一来源是
         // 编译进 catalog 的预设（Anthropic 官方 4 个别名：opus/sonnet/haiku/fable）。
@@ -225,13 +252,14 @@ impl ProviderConfig {
     }
 }
 
-/// 把模型变量映射注入 env（5 个变量，非空才注入）。Claude 专属——自定义 provider
+/// 把模型变量映射注入 env（非空才注入）。Claude 专属——自定义 provider
 /// 和系统默认两条 spawn 路径共用本函数，注入逻辑单一入口。
 pub fn mappings_to_env(m: &ProviderModelMappings) -> HashMap<String, String> {
     let mut env = HashMap::new();
     let pairs: &[(&str, &str)] = &[
         ("ANTHROPIC_MODEL", &m.anthropic_model),
         ("ANTHROPIC_DEFAULT_OPUS_MODEL", &m.default_opus_model),
+        ("ANTHROPIC_DEFAULT_FABLE_MODEL", &m.default_fable_model),
         ("ANTHROPIC_DEFAULT_SONNET_MODEL", &m.default_sonnet_model),
         ("ANTHROPIC_DEFAULT_HAIKU_MODEL", &m.default_haiku_model),
         ("CLAUDE_CODE_SUBAGENT_MODEL", &m.subagent),
@@ -647,6 +675,40 @@ mod tests {
             max_context_tokens: String::new(),
             known_models: Vec::new(),
         }
+    }
+
+    #[test]
+    fn fable_mapping_roundtrips_and_injects_its_env_key() {
+        let old: ProviderModelMappings = serde_json::from_value(serde_json::json!({
+            "anthropicModel": "main", "defaultOpusModel": "main"
+        })).unwrap();
+        assert!(old.default_fable_model.is_empty());
+        let mappings = ProviderModelMappings {
+            default_fable_model: "deep-model".into(),
+            ..old
+        };
+        let value = serde_json::to_value(&mappings).unwrap();
+        assert_eq!(value["defaultFableModel"], "deep-model");
+        assert!(value.get("default_fable_model").is_none());
+        assert_eq!(mappings_to_env(&mappings)["ANTHROPIC_DEFAULT_FABLE_MODEL"], "deep-model");
+        let restored: ProviderModelMappings = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.default_fable_model, "deep-model");
+    }
+
+    #[test]
+    fn configured_model_allowlist_dedupes_and_includes_fable() {
+        let mut p = provider_with("legacy".into(), "main".into());
+        p.model_mappings.default_opus_model = "main".into();
+        p.model_mappings.default_fable_model = "deep".into();
+        p.known_models = vec!["deep".into(), "fast".into()];
+        assert_eq!(p.model_allowlist(), Some(vec!["legacy".into(), "main".into(), "deep".into(), "fast".into()]));
+        p.kind = ProviderKind::SystemDefault;
+        assert_eq!(p.model_allowlist(), None);
+    }
+
+    #[test]
+    fn empty_third_party_configuration_does_not_allow_sdk_defaults() {
+        assert_eq!(provider_with(String::new(), String::new()).model_allowlist(), Some(vec![]));
     }
 
     /// 旧配置把默认模型放在顶层 model，新结构统一到 model_mappings.anthropic_model。

@@ -34,14 +34,13 @@ import ClaudeAccountLogin from "./ClaudeAccountLogin.vue";
 import { PROVIDER_GLYPHS } from "@/utils/icons";
 import type { ProviderConfig, ProviderKind, ProviderModelMappings, SecretMutation } from "../types";
 import { hostApi } from "@aide/sdk";
+import { EFFORT_OPTIONS } from "@aide/sdk/utils/effort";
+import { defaultModelOptions } from "./provider/modelOptions";
 
-// 三档制：快速(low) / 进阶(high) / 极致(max)，只管思考深度，三档都思考。
-// 历史档位 MEDIUM/XHIGH 由 normalizeEffortOption 迁移到相邻档位，不再出现在选择器。
+// 与会话选择器共用档位表；供应商配置沿用大写值，空值保留默认行为。
 const effortOptions = [
   { value: "", label: "默认" },
-  { value: "LOW", label: "快速" },
-  { value: "HIGH", label: "进阶" },
-  { value: "MAX", label: "极致" },
+  ...EFFORT_OPTIONS.map(({ value, label }) => ({ value: value.toUpperCase(), label })),
 ];
 
 const {
@@ -80,6 +79,7 @@ function buildDraft(kind: ProviderKind): ProviderConfig {
     modelMappings: {
       anthropicModel: "",
       defaultOpusModel: "",
+      defaultFableModel: "",
       defaultSonnetModel: "",
       defaultHaikuModel: "",
       subagent: "",
@@ -99,6 +99,7 @@ function buildDraft(kind: ProviderKind): ProviderConfig {
     enriched.modelMappings = {
       anthropicModel: d.anthropic_model,
       defaultOpusModel: d.default_opus_model,
+      defaultFableModel: d.default_fable_model ?? "",
       defaultSonnetModel: d.default_sonnet_model,
       defaultHaikuModel: d.default_haiku_model,
       subagent: d.subagent,
@@ -134,6 +135,7 @@ const authMode = computed(() => preset.value?.auth_mode);
 // 编辑态：深拷贝 selectedProvider，避免直接改 store。
 // modelMappings / knownModels 单独浅拷贝，防止编辑时 mutate store 引用。
 const form = ref<ProviderConfig | null>(null);
+const defaultOptions = computed(() => form.value ? defaultModelOptions(form.value) : []);
 // 凭据框显隐切换——必须在下面的 watch(..., {immediate: true}) 之前声明：
 // immediate 回调在 setup 同步阶段就跑，会重置这俩 ref；若声明在后面会触发 TDZ
 // （ReferenceError: Cannot access 'showApiKey' before initialization），导致整个
@@ -464,18 +466,32 @@ async function handleDelete() {
           </span>
         </div>
 
-        <!-- 模型变量：5 个 Claude env 变量统一块。所有 provider 都可编辑。 -->
+        <!-- 模型映射供各槽位使用；默认模型从已填的模型中选。 -->
         <div class="form-section">
           <label>模型变量</label>
           <span class="form-hint">Claude 专属模型 env 变量，换 provider 时整块重写</span>
 
           <div class="form-field model-var-field">
             <label>默认模型</label>
-            <AInput unstyled
+            <ThemedSelect
               v-model="form.modelMappings.anthropicModel"
-              class="text-input"
-              placeholder="留空用 provider 默认"
+              :options="defaultOptions"
+              title="默认模型"
+              block
             />
+            <span class="form-hint">{{ defaultOptions.length > 1
+              ? '从已配置的模型中选择，不必重复填写模型名'
+              : '先填写下方的模型映射，再选择默认模型' }}</span>
+          </div>
+
+          <div class="form-field model-var-field">
+            <label>最强模型（Fable）</label>
+            <AInput unstyled
+              v-model="form.modelMappings.defaultFableModel"
+              class="text-input"
+              placeholder="留空不映射"
+            />
+            <span class="form-hint">第三方供应商留空时，不提供 SDK 内置的 Fable 候选</span>
           </div>
 
           <div class="form-field model-var-field">

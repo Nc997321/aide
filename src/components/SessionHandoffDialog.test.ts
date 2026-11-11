@@ -24,6 +24,24 @@ beforeEach(() => {
 });
 const props = { sourceId: "source", sourceTitle: "原任务" };
 describe("交接预览", () => {
+  it("手填摘要直接创建会话，启动失败后复用草稿", async () => {
+    prepare.mockResolvedValue({ id: "draft", summary: "发布核验" });
+    start.mockRejectedValueOnce("启动失败").mockResolvedValueOnce({ childId: "new" });
+    const w = mount(Dialog, { props });
+    const manual = w.findAll("button").find(button => button.text() === "手填交接摘要")!;
+    await manual.trigger("click");
+    expect(prepare).not.toHaveBeenCalled();
+    await w.get("#handoff-summary").setValue("发布核验");
+    await w.get("footer button:last-child").trigger("click");
+    await flushPromises();
+    expect(prepare).toHaveBeenCalledWith("source", "", target, "发布核验");
+    await w.get("#handoff-summary").setValue("补充安装包核验");
+    await w.get("footer button:last-child").trigger("click");
+    await flushPromises();
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(start).toHaveBeenLastCalledWith("draft", "补充安装包核验", target);
+    expect(w.emitted("submit")?.[0]).toEqual([{ childId: "new" }]);
+  });
   it("生成后先预览，用户修改的版本才交给新会话", async () => {
     prepare.mockResolvedValue({ id: "draft", summary: "原摘要" });
     start.mockResolvedValue({ childId: "new" });

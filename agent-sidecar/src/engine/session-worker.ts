@@ -195,6 +195,7 @@ export class SessionWorker {
   private additionalDirs: string[] = [];
   /** 可选模型名册（列表 + 真名/别名互译，见 modelRoster.ts）；currentModel 账面留 worker。 */
   private readonly modelRoster = new ModelRoster();
+  private modelAllowlist: string[] | undefined;
   /** 权限模式账本（清单常量与切换语义见 permissionModes.ts）。 */
   private readonly permModes = new PermissionModeController((e) => this.emit(e));
   /** 订阅额度/速率上报（15s 节流，见 queryTelemetry.ts）。 */
@@ -382,6 +383,7 @@ export class SessionWorker {
    * 执行时更新，防止等待前一条图片 probe 时提前覆盖其连接身份。 */
   private applySendRuntimeConfig(cmd: Extract<SidecarCommand, { cmd: "send" }>): void {
     this.envOverrides = cmd.env ?? {};
+    this.modelAllowlist = cmd.model_allowlist;
     const selectedModel = this.envOverrides.ANTHROPIC_MODEL;
     if (selectedModel) this.currentModel = selectedModel;
     // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
@@ -810,7 +812,7 @@ export class SessionWorker {
   // ---- 模型相关 ----
 
   private async emitModelsAvailable(q: Awaited<ReturnType<typeof query>>): Promise<void> {
-    const models = await this.modelRoster.adoptFromInit(q, this.currentModel);
+    const models = await this.modelRoster.adoptFromInit(q, this.currentModel, this.modelAllowlist);
     // adoptFromInit 失败（SDK 版本不支持）返回 null——静默跳过（原语义）
     if (models) {
       this.emit({

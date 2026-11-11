@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 模型 · 档位合一的选择器（单行输入框，2026-10-16）：一个 chip「Opus 5.5 · 进阶 ▾」，
- * 点开一个弹层，上半模型列表、下半三档思考深度。
+ * 点开一个弹层，上半模型列表、下半思考深度档位。
  *
  * 只是外观合一：选模型与选档位仍各走各的处理函数（ChatInputBox 的 handleModelChange /
  * handleEffortChange），本组件不持有选择状态。btw 期间整体禁用（支线跟随主会话）。

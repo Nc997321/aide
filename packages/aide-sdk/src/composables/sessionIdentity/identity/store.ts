@@ -69,8 +69,8 @@ function activeProviderModels(): ModelOption[] {
   return providerModelsOf(activeProviderId.value);
 }
 
-/** 会话口径的模型选项。第三方走用户配置；系统默认走 SDK 动态列表（无 sdk
- *  列表时由 view() 注入的 known_models——即 catalog 预设兜底）填充。 */
+/** 会话口径的模型选项优先用宿主策略筛选后的 SDK 动态列表；未起进程时
+ *  回落供应商配置（官方 known_models 由 Host 从 catalog 注入）。 */
 function displayModelsOf(sid: string): ModelOption[] {
   const pid = resolveEffectiveProvider(providerOf(sid), activeProviderId.value);
   const sdk = bindings[sid]?.sdkModels ?? [];

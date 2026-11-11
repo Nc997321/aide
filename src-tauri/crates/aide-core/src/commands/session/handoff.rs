@@ -226,6 +226,7 @@ pub struct PrepareArgs {
     source_id: String,
     #[serde(default)]
     focus: String,
+    manual_summary: Option<String>,
     target: HandoffTarget,
 }
 
@@ -250,9 +251,7 @@ async fn resolve_target(
             return Err("当前选定的供应商已被删除，请重新选择".into());
         }
         let chosen = target;
-        if !chosen.effort.is_empty() && !matches!(chosen.effort.as_str(), "low" | "high" | "max") {
-            return Err("新会话档位无效，请重新选择".into());
-        }
+        validate_effort(&chosen.effort)?;
         let mut env = crate::runtime::env::build_runtime_env_vars(
             &provider,
             &crate::app_settings::public_settings(&settings)?.proxy,
@@ -265,15 +264,34 @@ async fn resolve_target(
     .await
 }
 
+fn validate_effort(effort: &str) -> Result<(), String> {
+    if matches!(effort, "" | "low" | "medium" | "high" | "max") {
+        Ok(())
+    } else {
+        Err("新会话档位无效，请重新选择".into())
+    }
+}
+
 fn apply_target(draft: &mut Draft, target: HandoffTarget) {
     draft.provider = target.provider;
     draft.model = (!target.model.is_empty()).then_some(target.model);
     draft.effort = (!target.effort.is_empty()).then_some(target.effort);
 }
 async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<Draft, String> {
-    let _guard = GENERATING
-        .try_lock()
-        .map_err(|_| "已有交接摘要正在生成，请稍后重试")?;
+    let manual_summary = args
+        .manual_summary
+        .as_deref()
+        .map(validate_summary)
+        .transpose()?;
+    let _guard = if manual_summary.is_none() {
+        Some(
+            GENERATING
+                .try_lock()
+                .map_err(|_| "已有交接摘要正在生成，请稍后重试")?,
+        )
+    } else {
+        None
+    };
     if args.focus.chars().count() > 2000 {
         return Err("接续目标过长".into());
     }
@@ -281,26 +299,10 @@ async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<D
     let (mut draft, transcript) = blocking(move || snapshot(&args.source_id)).await?;
     draft.focus = args.focus;
     apply_target(&mut draft, chosen);
-    if !core.runtime.is_running() {
-        crate::runtime::start(&core).await?;
-    }
-    let (_sub, mut rx) = subscribe(&core, &draft.source_id, Some(draft.id.clone()));
-    core.runtime.send_to_runtime(&json!({ "cmd": "summarize_handoff", "session_id": draft.source_id,
-        "request_id": draft.id, "transcript": transcript, "focus": draft.focus, "cwd": draft.ws_path, "env": env, "effort": draft.effort })).await?;
-    let event = tokio::time::timeout(Duration::from_secs(660), rx.recv())
-        .await
-        .map_err(|_| "交接摘要生成超时，旧会话未修改")?
-        .ok_or("摘要通道已关闭")?;
-    draft.summary = event["summary"]
-        .as_str()
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| {
-            event["error"]
-                .as_str()
-                .unwrap_or("摘要生成进程已退出")
-                .to_string()
-        })?
-        .to_string();
+    draft.summary = match manual_summary {
+        Some(summary) => summary.to_owned(),
+        None => generate_summary(&core, &draft, &transcript, env).await?,
+    };
     let saved = draft.clone();
     blocking(move || {
         let path = draft_path(&saved.id)?;
@@ -316,6 +318,34 @@ async fn prepare_session_handoff(core: Arc<Core>, args: PrepareArgs) -> Result<D
     Ok(draft)
 }
 
+async fn generate_summary(
+    core: &Arc<Core>,
+    draft: &Draft,
+    transcript: &str,
+    env: std::collections::HashMap<String, String>,
+) -> Result<String, String> {
+    if !core.runtime.is_running() {
+        crate::runtime::start(core).await?;
+    }
+    let (_sub, mut rx) = subscribe(core, &draft.source_id, Some(draft.id.clone()));
+    core.runtime.send_to_runtime(&json!({ "cmd": "summarize_handoff", "session_id": draft.source_id,
+        "request_id": draft.id, "transcript": transcript, "focus": draft.focus, "cwd": draft.ws_path, "env": env, "effort": draft.effort })).await?;
+    let event = tokio::time::timeout(Duration::from_secs(660), rx.recv())
+        .await
+        .map_err(|_| "交接摘要生成超时，旧会话未修改")?
+        .ok_or("摘要通道已关闭")?;
+    event["summary"]
+        .as_str()
+        .filter(|s| !s.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            event["error"]
+                .as_str()
+                .unwrap_or("摘要生成进程已退出")
+                .to_string()
+        })
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ContinueArgs {
@@ -323,18 +353,23 @@ pub struct ContinueArgs {
     summary: String,
     target: HandoffTarget,
 }
-async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result<Value, String> {
-    let _guard = CONTINUING.lock().await;
-    if args.summary.trim().is_empty() || args.summary.chars().count() > 12000 {
+fn validate_summary(summary: &str) -> Result<&str, String> {
+    if summary.trim().is_empty() || summary.chars().count() > 12000 {
         return Err("交接摘要需为 1～12000 字".into());
     }
+    Ok(summary.trim())
+}
+
+async fn continue_session_handoff(core: Arc<Core>, args: ContinueArgs) -> Result<Value, String> {
+    let _guard = CONTINUING.lock().await;
+    let summary = validate_summary(&args.summary)?;
     let mut draft = blocking(move || load_draft(&args.handoff_id)).await?;
     if let Some(id) = &draft.continued_session {
         return Ok(continued_event(&draft, id));
     }
     let (chosen, _) = resolve_target(&core, args.target).await?;
     apply_target(&mut draft, chosen);
-    draft.summary = args.summary.trim().to_string();
+    draft.summary = summary.to_owned();
     let cwd = draft.ws_path.clone();
     blocking(move || {
         if crate::workspace::present(std::path::Path::new(&cwd)) {
@@ -457,6 +492,14 @@ async fn session_handoff(_core: Arc<Core>, args: SessionArgs) -> Result<Option<D
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn handoff_accepts_all_selectable_efforts_including_medium() {
+        for effort in ["", "low", "medium", "high", "max"] {
+            assert!(validate_effort(effort).is_ok(), "{effort}");
+        }
+        assert!(validate_effort("turbo").is_err());
+    }
+
     #[test]
     fn new_target_replaces_all_old_provider_fields_including_legacy_drafts() {
         let mut draft = Draft {

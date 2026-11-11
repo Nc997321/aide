@@ -292,6 +292,8 @@ export type AuthMode = "api_key" | "auth_token";
 export interface CatalogDefaults {
   anthropic_model: string;
   default_opus_model: string;
+  /** 旧 Host 未提供此新增字段时按未配置处理。 */
+  default_fable_model?: string;
   default_sonnet_model: string;
   default_haiku_model: string;
   subagent: string;
@@ -311,7 +313,7 @@ export interface CatalogPreset {
   defaults?: CatalogDefaults;
 }
 
-/** Claude 专属的模型 env 变量映射——5 个变量统一在此，换 provider 时整块重写。
+/** Claude 专属的模型 env 变量映射，换 provider 时整块重写。
  *  与会话面板模型下拉（真实模型 id + 运行时 set_model 切换）互补：本块是 spawn 时
  *  env 变量层的默认值 + 别名→具体模型映射。Rust 端 provider.rs 注入逻辑单一入口。 */
 export interface ProviderModelMappings {
@@ -319,6 +321,8 @@ export interface ProviderModelMappings {
   anthropicModel: string;
   /** opus 别名→具体模型 → ANTHROPIC_DEFAULT_OPUS_MODEL */
   defaultOpusModel: string;
+  /** fable 别名→具体模型 → ANTHROPIC_DEFAULT_FABLE_MODEL；旧 Host 缺省视为未配置。 */
+  defaultFableModel?: string;
   /** sonnet 别名→具体模型 → ANTHROPIC_DEFAULT_SONNET_MODEL */
   defaultSonnetModel: string;
   /** haiku 别名→具体模型 → ANTHROPIC_DEFAULT_HAIKU_MODEL */

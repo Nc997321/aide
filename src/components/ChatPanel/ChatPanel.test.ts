@@ -213,6 +213,23 @@ describe("ChatPanel 跨会话串修复", () => {
     wrapper.unmount();
   });
 
+  it("effort：均衡档可选，切换与 sidecar 回显都保留 medium", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", currentEffort: "high" }) });
+    await flush();
+    const picker = pickerOf(wrapper);
+    expect(picker.props("efforts")).toContainEqual({ value: "medium", label: "均衡" });
+
+    picker.vm.$emit("update:effort", "medium");
+    await nextTick();
+    expect(wrapper.emitted("set-effort")?.at(-1)).toEqual(["medium"]);
+    expect(effortValueOf(wrapper)).toBe("medium");
+
+    await wrapper.setProps({ currentEffort: "medium" });
+    await flush();
+    expect(effortValueOf(wrapper)).toBe("medium");
+    wrapper.unmount();
+  });
+
   it("发送门控改为供应商+模型两维：同会话切换模型后发送会弹确认（2026-09-08 修订；模型维度的「上次发送基线对比」现仅用于发送门控）", async () => {
     // drift mock 反映「基线 kimi，用户切换 deepseek」：供应商维度无漂移（都 p_test），
     // 模型维度漂移。基线侧 last=null/lastModel="kimi"——盘上只记了模型没记供应商的
