@@ -48,6 +48,7 @@ import {
   sharedModels,
   sharedPermissionModes,
   sharedRateLimit,
+  providerRateLimits,
   stopSessionById,
   toggleBgDock,
   toggleSubagentDock,
@@ -717,6 +718,8 @@ export function useChatSession(sessionId: Ref<string | null>) {
     slashCommands: computed(() => current.value?.slashCommands ?? null),
     /** 账号级订阅额度/速率——跨会话共享，null 时 UI 隐藏。 */
     rateLimit: computed(() => sharedRateLimit.value),
+    /** 按供应商 kind 分栏的周期用量；ChatPanel 按当前会话 provider 选其中一路。 */
+    providerRateLimits,
     pendingJumps: computed(() => current.value?.pendingJumps ?? []),
     bgTasks: computed(() => current.value?.bgTasks ?? []),
     bgDockOpen: computed(() => current.value?.bgDockOpen ?? false),

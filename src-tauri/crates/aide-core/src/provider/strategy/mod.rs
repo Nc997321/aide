@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use crate::provider::{
-    mappings_to_env, ProviderConfig, ProviderKind, ProviderModelMappings,
+    mappings_to_env,
+    usage::{self, ProviderUsage},
+    ProviderConfig, ProviderKind, ProviderModelMappings,
 };
 
 // Task 8-10 脚手架：ActionDef / actions() 届时会被 UI 动作面板使用，当前保留类型契约。
@@ -14,16 +16,14 @@ pub struct ActionDef {
     pub label: String,
 }
 
-// Task 8-10 脚手架：Quota / Ok 等变体用于后续 provider 动作面板，当前保留类型契约。
-#[allow(dead_code)]
 #[derive(Debug, serde::Serialize)]
 pub enum ActionResult {
     PortProbe { alive: bool, detail: String },
     OpenUrl(String),
     LoginStatus { logged_in: bool, detail: String },
     RefreshedModels(ProviderModelMappings),
-    Quota(serde_json::Value),
-    Ok(String),
+    /// 周期用量查询结果（只含已用百分比与重置时间，不含金额/余额）。
+    Usage(Box<ProviderUsage>),
 }
 
 #[derive(serde::Serialize)]
@@ -109,10 +109,27 @@ impl ProviderStrategy for PresetStrategy {
         SMALL_FALLBACK
     }
     fn actions(&self) -> Vec<ActionDef> {
-        vec![ActionDef {
+        let mut out = vec![ActionDef {
             name: "test_connection".into(),
             label: "测试连接".into(),
-        }]
+        }];
+        if usage::supports(self.kind) {
+            out.push(ActionDef {
+                name: "view_usage".into(),
+                label: "查看用量".into(),
+            });
+        }
+        out
+    }
+    fn run_action(&self, cfg: &ProviderConfig, action: &str) -> Result<ActionResult, String> {
+        match action {
+            "view_usage" if usage::supports(self.kind) => usage::fetch_usage(self.kind, cfg)
+                .map(|u| ActionResult::Usage(Box::new(u))),
+            other => Err(format!(
+                "action '{other}' not supported by {:?} kind",
+                self.kind()
+            )),
+        }
     }
     fn test_connection(&self, cfg: &ProviderConfig) -> Result<ConnectionStatus, String> {
         common_test_connection(cfg, Some(&self.base_url))

@@ -313,6 +313,23 @@ export interface CatalogPreset {
   defaults?: CatalogDefaults;
 }
 
+/** 一个用量窗口，与 Rust `provider::usage::UsageWindow` 对齐（camelCase）。
+ *  只报「已用百分比 + 重置时间」，不含任何金额/余额字段。 */
+export interface UsageWindow {
+  key: string;
+  label: string;
+  /** 0–100，已用百分比 */
+  utilization: number;
+  /** unix 毫秒；接口没给则为 null */
+  resetsAt: number | null;
+}
+
+/** `view_provider_usage` 的返回。windows 为空表示该供应商不报用量，UI 隐藏。 */
+export interface ProviderUsage {
+  kind: ProviderKind;
+  windows: UsageWindow[];
+}
+
 /** Claude 专属的模型 env 变量映射，换 provider 时整块重写。
  *  与会话面板模型下拉（真实模型 id + 运行时 set_model 切换）互补：本块是 spawn 时
  *  env 变量层的默认值 + 别名→具体模型映射。Rust 端 provider.rs 注入逻辑单一入口。 */

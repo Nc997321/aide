@@ -52,9 +52,9 @@ mod tests {
     }
 
     #[test]
-    fn kimi_actions_only_test_connection() {
-        let a = strategy().actions();
-        assert_eq!(a.len(), 1);
-        assert_eq!(a[0].name, "test_connection");
+    fn kimi_actions_include_view_usage() {
+        let actions = strategy().actions();
+        let names: Vec<&str> = actions.iter().map(|a| a.name.as_str()).collect();
+        assert_eq!(names, vec!["test_connection", "view_usage"]);
     }
 }

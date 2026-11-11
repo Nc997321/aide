@@ -66,6 +66,7 @@ const {
   slashCommands,
   contextCompaction,
   rateLimit,
+  providerRateLimits,
   tasks,
   permissionModes,
   currentPermissionMode,
@@ -263,6 +264,7 @@ async function onPickMode(mode: ChatMode) {
       :slash-commands="slashCommands"
       :context-compaction="contextCompaction"
       :rate-limit="rateLimit"
+      :provider-rate-limits="providerRateLimits"
       :tasks="tasks"
       :permission-modes="permissionModes"
       :current-permission-mode="currentPermissionMode"

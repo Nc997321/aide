@@ -1,18 +1,20 @@
 import { ref } from "vue";
 import { api, openExternal } from "../api";
-import type { ConnectionStatus, PortProbeResult, LoginStatusResult, ProviderModelMappings } from "../types";
+import type {
+  ConnectionStatus, PortProbeResult, LoginStatusResult, ProviderModelMappings, ProviderUsage,
+} from "../types";
 
 const lastError = ref<string | null>(null);
 const probing = ref(false);
 const testing = ref(false);
 const refreshing = ref(false);
 const loginChecking = ref(false);
-const quotaLoading = ref(false);
+const usageLoading = ref(false);
 
 const probeResult = ref<PortProbeResult | null>(null);
 const connectionResult = ref<ConnectionStatus | null>(null);
 const loginResult = ref<LoginStatusResult | null>(null);
-const quotaResult = ref<unknown>(null);
+const usageResult = ref<ProviderUsage | null>(null);
 
 async function run<T>(flag: { value: boolean }, fn: () => Promise<T>): Promise<T | null> {
   flag.value = true;
@@ -56,9 +58,9 @@ async function cpaLoginStatus(): Promise<LoginStatusResult | null> {
   return r;
 }
 
-async function viewQuota(): Promise<unknown | null> {
-  const r = await run(quotaLoading, () => api.viewAnthropicQuota());
-  if (r) quotaResult.value = r;
+async function viewUsage(providerId: string): Promise<ProviderUsage | null> {
+  const r = await run(usageLoading, () => api.viewProviderUsage(providerId));
+  if (r) usageResult.value = r;
   return r;
 }
 
@@ -68,16 +70,16 @@ async function refreshModels(providerId: string): Promise<ProviderModelMappings 
 
 function __resetForTest(): void {
   lastError.value = null;
-  probing.value = testing.value = refreshing.value = loginChecking.value = quotaLoading.value = false;
+  probing.value = testing.value = refreshing.value = loginChecking.value = usageLoading.value = false;
   probeResult.value = connectionResult.value = loginResult.value = null;
-  quotaResult.value = null;
+  usageResult.value = null;
 }
 
 export function useProviderActions() {
   return {
-    lastError, probing, testing, refreshing, loginChecking, quotaLoading,
-    probeResult, connectionResult, loginResult, quotaResult,
-    testConnection, cpaProbe, cpaOpenManagement, cpaLoginStatus, viewQuota, refreshModels,
+    lastError, probing, testing, refreshing, loginChecking, usageLoading,
+    probeResult, connectionResult, loginResult, usageResult,
+    testConnection, cpaProbe, cpaOpenManagement, cpaLoginStatus, viewUsage, refreshModels,
     __resetForTest,
   };
 }

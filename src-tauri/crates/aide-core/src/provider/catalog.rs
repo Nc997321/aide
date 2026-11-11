@@ -203,4 +203,35 @@ mod tests {
     fn embedded_catalog_parses() {
         assert!(!catalog().is_empty(), "embedded provider-catalog.json must parse");
     }
+
+    /// 用量能力三处对账：catalog 的 `view_usage` 声明 / usage::supports() /
+    /// strategy 的 actions()。少一处就会让设置页出现点了没反应的按钮。
+    #[test]
+    fn view_usage_declaration_is_in_sync_everywhere() {
+        for p in catalog() {
+            let declared = p.actions.iter().any(|a| a == "view_usage");
+            let supported = crate::provider::usage::supports(p.kind);
+            assert_eq!(
+                declared, supported,
+                "catalog.actions 与 usage::supports 漂移: {:?}",
+                p.kind
+            );
+            let names: Vec<String> = crate::provider::strategy::strategy_for(p.kind)
+                .actions()
+                .into_iter()
+                .map(|a| a.name)
+                .collect();
+            assert_eq!(
+                names.contains(&"view_usage".to_string()),
+                declared,
+                "strategy.actions 与 catalog 漂移: {:?}",
+                p.kind
+            );
+            assert!(
+                !p.actions.iter().any(|a| a == "view_quota"),
+                "旧的 view_quota 额度动作必须移除: {:?}",
+                p.kind
+            );
+        }
+    }
 }

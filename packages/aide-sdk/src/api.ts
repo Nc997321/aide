@@ -34,7 +34,7 @@ import type {
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
   SkillMeta, QueryResult, LspJumpResult,
   AppNotification, NotificationRecord,
-  CatalogPreset, PortProbeResult, LoginStatusResult, ConnectionStatus,
+  CatalogPreset, ProviderUsage, PortProbeResult, LoginStatusResult, ConnectionStatus,
   MigrationStatus, MigrationSummary,
   CmCompletion,
   DocumentSymbolItem, LspCapabilities, SignatureHelpResult, SemanticToken,
@@ -802,8 +802,9 @@ export const api = {
   cpaLoginStatus(): Promise<LoginStatusResult> {
     return getTransport().invoke("cpa_login_status");
   },
-  viewAnthropicQuota(): Promise<unknown> {
-    return getTransport().invoke("view_anthropic_quota");
+  /** 查供应商周期用量（只返回已用百分比 + 重置时间；不支持的 kind 由 Host 报错）。 */
+  viewProviderUsage(providerId: string): Promise<ProviderUsage> {
+    return getTransport().invoke("view_provider_usage", { providerId });
   },
   refreshModels(providerId: string): Promise<ProviderModelMappings> {
     return getTransport().invoke("refresh_models", { providerId });

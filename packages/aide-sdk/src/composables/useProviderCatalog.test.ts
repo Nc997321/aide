@@ -11,7 +11,7 @@ import { useProviderCatalog } from "./useProviderCatalog";
 import type { CatalogPreset, ProviderConfig, ProviderKind } from "../types";
 
 const FIXTURE: CatalogPreset[] = [
-  { kind: "system_default", name: "Anthropic", icon: "A", base_url: "", auth_mode: "api_key", actions: ["refresh_models", "view_quota", "test_connection"] },
+  { kind: "system_default", name: "Anthropic", icon: "A", base_url: "", auth_mode: "api_key", actions: ["refresh_models", "test_connection"] },
   { kind: "cpa_gpt", name: "CPA 中转", icon: "C", base_url: "http://127.0.0.1:8317", auth_mode: "auth_token", actions: ["probe_port", "open_management", "codex_login_status", "test_connection"] },
   { kind: "ollama", name: "Ollama", icon: "O", base_url: "https://ollama.com", auth_mode: "api_key", actions: ["test_connection"] },
 ];

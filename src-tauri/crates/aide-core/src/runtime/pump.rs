@@ -4,9 +4,9 @@
 //! 那台 Host 自己的泵里，见 docs/host-model.md）。
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -24,6 +24,53 @@ pub struct Pump {
     pub stdin: Arc<TokioMutex<ChildStdin>>,
     pub child: Arc<TokioMutex<Child>>,
     pub killed: Arc<AtomicBool>,
+}
+
+/// 账号级供应商用量的自动刷新节流（秒）。与 sidecar 的 RateLimitReporter 15s 节流
+/// 同理，但这里是 HTTP 查外部接口，放宽到 60s；设置页主动点「查看用量」不受此限。
+const USAGE_REFRESH_SECS: u64 = 60;
+static LAST_USAGE_REFRESH: AtomicU64 = AtomicU64::new(0);
+
+/// 借事件泵的活跃度做 tick：有会话在跑才刷，60s 全局节流（多泵共享一个 CAS），
+/// 查询和广播都 spawn 出去，绝不堵 sidecar stdout 的事件循环。
+fn maybe_refresh_provider_usage(core: &Arc<Core>) {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_USAGE_REFRESH.load(Ordering::Relaxed);
+    if now.saturating_sub(last) < USAGE_REFRESH_SECS {
+        return;
+    }
+    if LAST_USAGE_REFRESH
+        .compare_exchange(last, now, Ordering::Relaxed, Ordering::Relaxed)
+        .is_err()
+    {
+        return;
+    }
+    let core = Arc::clone(core);
+    tokio::spawn(async move {
+        let query_core = Arc::clone(&core);
+        let result: Result<Option<crate::provider::usage::ProviderUsage>, String> =
+            tokio::task::spawn_blocking(move || {
+                let cfg = query_core
+                    .settings
+                    .resolve_active_runtime_provider()
+                    .map_err(|e| e.to_string())?;
+                if !crate::provider::usage::supports(cfg.kind) {
+                    return Ok(None); // Anthropic 订阅用量由 sidecar 自己广播，不在这里查
+                }
+                Ok(Some(crate::provider::usage::fetch_usage(cfg.kind, &cfg)?))
+            })
+            .await
+            .unwrap_or_else(|e| Err(e.to_string()));
+        if let Ok(Some(usage)) = result {
+            core.emit(
+                "chat-event",
+                crate::provider::usage::to_chat_event(&usage),
+            );
+        }
+    });
 }
 
 pub fn start(p: Pump) {
@@ -146,6 +193,8 @@ pub fn start(p: Pump) {
                             }
                         }
                     }
+                    // 账号级用量刷新（内部 60s 节流 + spawn，不阻塞本循环）。
+                    maybe_refresh_provider_usage(&core);
                     core.emit("chat-event", event);
                 }
                 Ok(Ok(None)) | Ok(Err(_)) => break "exit",

@@ -5,6 +5,7 @@
 pub mod catalog;
 pub mod roster_cache;
 pub mod strategy;
+pub mod usage;
 
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};

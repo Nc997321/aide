@@ -5,7 +5,7 @@
     "icon": "A",
     "base_url": "",
     "auth_mode": "api_key",
-    "actions": ["refresh_models", "view_quota", "test_connection"],
+    "actions": ["refresh_models", "test_connection"],
     "models": ["opus", "sonnet", "haiku", "fable"]
   },
   {
@@ -30,7 +30,7 @@
     "icon": "K",
     "base_url": "https://api.kimi.com/coding/",
     "auth_mode": "auth_token",
-    "actions": ["test_connection"],
+    "actions": ["test_connection", "view_usage"],
     "defaults": {
       "anthropic_model": "k3[1m]",
       "default_opus_model": "k3[1m]",
@@ -65,7 +65,7 @@
     "icon": "Z",
     "base_url": "https://open.bigmodel.cn/api/anthropic",
     "auth_mode": "auth_token",
-    "actions": ["test_connection"],
+    "actions": ["test_connection", "view_usage"],
     "defaults": {
       "anthropic_model": "glm-5.3-flash",
       "default_opus_model": "glm-5.3",

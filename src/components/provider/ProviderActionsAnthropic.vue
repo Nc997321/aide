@@ -4,7 +4,7 @@ import { useToast } from "@/composables/useToast";
 import { useProviders } from "@/composables/useProviders";
 
 const props = defineProps<{ providerId: string }>();
-const { testConnection, testing, connectionResult, viewQuota, quotaLoading, quotaResult, refreshModels, refreshing } = useProviderActions();
+const { testConnection, testing, connectionResult, refreshModels, refreshing } = useProviderActions();
 const { load } = useProviders();
 const toast = useToast();
 
@@ -19,16 +19,11 @@ async function onRefresh() {
     toast.showToast("已更新模型映射", "success");
   }
 }
-async function onQuota() {
-  const r = await viewQuota();
-  if (r) toast.showToast(JSON.stringify(r), "info");
-}
 </script>
 
 <template>
   <div class="actions-area">
     <button class="action-btn" :disabled="refreshing" @click="onRefresh">{{ refreshing ? "刷新中…" : "刷新模型列表" }}</button>
-    <button class="action-btn" :disabled="quotaLoading" @click="onQuota">{{ quotaLoading ? "查询中…" : "查看额度" }}</button>
     <button class="action-btn" :disabled="testing" @click="onTest">{{ testing ? "测试中…" : "测试连接" }}</button>
     <span v-if="connectionResult" class="status-badge" :class="connectionResult.ok ? 'ok' : 'fail'">{{ connectionResult.ok ? "可连接" : "不可连接" }}</span>
   </div>

@@ -133,6 +133,11 @@ export const sharedPermissionModes = ref<PermissionModeOption[]>([]);
 /** 订阅额度/速率是账号级别的事实，跨会话共享——任意会话收到的最新一条即当前状态。
  *  null 表示还没收到过（非订阅计费或 provider 不报配额时永远为 null，UI 隐藏）。 */
 export const sharedRateLimit = ref<RateLimitInfo | null>(null);
+/** 按供应商 kind 分栏的周期用量（key = ProviderKind 字符串）。
+ *  与 Anthropic 订阅的 sharedRateLimit 分存：sidecar 在第三方端点下会回一条 windows 为空的
+ *  rate_limit，若共用单值会把 Host 查到的用量直接顶掉。UI 按当前会话 provider 选来源。
+ *  同样是账号级事实，跨会话共享；Host 经 chat-event(rate_limit, kind) 广播。 */
+export const providerRateLimits = ref<Record<string, RateLimitInfo>>({});
 /** 诊断仪表盘句柄——必须模块级声明：handleChatEvent 是模块级函数，rate_limit /
  *  health / message_stop 三个 case 都用它累计用量/健康/速率。原先声明在
  *  useChatSession 函数内部，handleChatEvent 作用域看不到，运行时 ReferenceError

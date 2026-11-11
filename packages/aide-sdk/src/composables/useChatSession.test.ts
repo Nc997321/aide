@@ -18,7 +18,7 @@ vi.mock("@tauri-apps/api/core", () => ({
 }));
 
 import { useChatSession, __resetForTest, stopSessionById, disposeSession, __pendingEmptyForTest, toggleSubagentDock, toggleBgDock } from "./useChatSession";
-import { SUBAGENTS_CAP } from "./useChatSession/state";
+import { SUBAGENTS_CAP, sharedRateLimit, providerRateLimits } from "./useChatSession/state";
 import { useBtwSession } from "./useBtwSession";
 import { useSessionState } from "./useSessionState";
 import { useSessionProviders } from "./useSessionProviders";
@@ -2493,5 +2493,49 @@ describe("子会话事件（2026-10-16）", () => {
     emit({ type: "subsession_resumed", session_id: "parent" });
     await flush();
     expect(useSubsessions().paused["parent"]).toBeUndefined();
+  });
+});
+
+describe("rate_limit 两路来源分栏（Anthropic 订阅 / 供应商周期用量）", () => {
+  beforeEach(() => {
+    __resetForTest();
+    sharedRateLimit.value = null;
+    providerRateLimits.value = {};
+  });
+
+  async function listening() {
+    useChatSession(ref<string | null>(null));
+    await flush();
+  }
+
+  it("Host 的供应商用量不带 session_id 也收得到，按 kind 分栏且不污染 Anthropic 那份", async () => {
+    await listening();
+    emit({
+      type: "rate_limit",
+      kind: "kimi",
+      subscription: null,
+      windows: [{ key: "five_hour", label: "5 小时", utilization: 65, resets_at: 1769776934422 }],
+    });
+    await flush();
+    expect(providerRateLimits.value["kimi"].windows[0]).toMatchObject({
+      key: "five_hour", label: "5 小时", utilization: 65, resetsAt: 1769776934422,
+    });
+    expect(sharedRateLimit.value).toBeNull();
+  });
+
+  it("sidecar 的订阅额度仍写 sharedRateLimit；第三方端点回的空 windows 不会顶掉分栏用量", async () => {
+    await listening();
+    emit({
+      type: "rate_limit", kind: "zhipu", subscription: null,
+      windows: [{ key: "five_hour", label: "5 小时", utilization: 42, resets_at: 1 }],
+    });
+    emit({
+      type: "rate_limit", subscription: "max", session_id: "s1",
+      windows: [{ key: "seven_day", label: "7 天", utilization: 76, resets_at: 2 }],
+    });
+    emit({ type: "rate_limit", subscription: null, session_id: "s1", windows: [] });
+    await flush();
+    expect(providerRateLimits.value["zhipu"].windows[0].utilization).toBe(42);
+    expect(sharedRateLimit.value?.windows).toEqual([]);
   });
 });

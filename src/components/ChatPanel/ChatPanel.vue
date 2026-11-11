@@ -84,8 +84,10 @@ const props = defineProps<{
   slashCommands?: string[] | null;
   /** 当前会话的短生命周期压缩状态；不属于消息历史。 */
   contextCompaction?: ContextCompactionState | null;
-  /** 账号级订阅额度/速率；null 时不显示 */
+  /** 账号级订阅额度/速率（Anthropic 订阅）；null 时不显示 */
   rateLimit?: RateLimitInfo | null;
+  /** 按供应商 kind 分栏的周期用量（Kimi / 智谱 …）；与 rateLimit 分存避免互顶 */
+  providerRateLimits?: Record<string, RateLimitInfo>;
   tasks?: TaskItem[];
   permissionModes?: PermissionModeOption[];
   currentPermissionMode?: string;
@@ -176,6 +178,15 @@ const sessionProvider = computed<ProviderConfig>(() => {
   const id = identity.effectiveProvider.value;
   if (id === SYSTEM_DEFAULT_ID) return systemDefault.value;
   return allProviders.value.find((p) => p.id === id) ?? systemDefault.value;
+});
+
+// 徽标 / 额度环只认当前会话用的那一路额度：Anthropic 订阅读 sidecar 广播的
+// sharedRateLimit，第三方 Coding Plan 读 Host 按 kind 分栏广播的用量。
+// 两路分存，切换供应商立即切数据源，不会残留上一家的额度、也不会互顶。
+const effectiveRateLimit = computed<RateLimitInfo | null>(() => {
+  const kind = sessionProvider.value.kind;
+  if (kind === "system_default" || kind === "custom") return props.rateLimit ?? null;
+  return props.providerRateLimits?.[kind] ?? null;
 });
 
 // 会话身份（L2 SSOT）+ 发送前确认门控（L3 gate）。identity 持 provider/model 绑定、
@@ -961,7 +972,7 @@ function onOpenBgDock(taskId: string) {
         :current-permission-mode="props.currentPermissionMode"
         :context-usage="props.contextUsage"
         :slash-commands="props.slashCommands"
-        :rate-limit="props.rateLimit"
+        :rate-limit="effectiveRateLimit"
         :pending-jumps="props.pendingJumps"
         :rollback-text="props.rollbackText"
         :focused="props.focused"

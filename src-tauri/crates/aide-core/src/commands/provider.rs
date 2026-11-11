@@ -9,7 +9,9 @@ use crate::{command, Core};
 use crate::provider::strategy::{
     strategy_for, ActionResult, ConnectionStatus, ProviderStrategy,
 };
-use crate::provider::{ProviderConfig, ProviderKind, ProviderModelMappings};
+use crate::provider::{
+    usage::ProviderUsage, ProviderConfig, ProviderKind, ProviderModelMappings,
+};
 
 pub static COMMANDS: &[Command] = &[
     command!("get_providers", get_providers),
@@ -20,7 +22,7 @@ pub static COMMANDS: &[Command] = &[
     command!("cpa_probe_port", cpa_probe_port),
     command!("cpa_open_management", cpa_open_management),
     command!("cpa_login_status", cpa_login_status),
-    command!("view_anthropic_quota", view_anthropic_quota),
+    command!("view_provider_usage", view_provider_usage),
     command!("refresh_models", refresh_models),
     command!("refresh_system_default_models", refresh_system_default_models),
     command!("get_provider_catalog", get_provider_catalog),
@@ -235,24 +237,36 @@ async fn cpa_login_status(core: Arc<Core>, a: CpaLoginStatusArgs) -> Result<Logi
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct ViewAnthropicQuotaArgs {
+pub struct ViewProviderUsageArgs {
+    provider_id: String,
 }
 
-async fn view_anthropic_quota(core: Arc<Core>, a: ViewAnthropicQuotaArgs) -> Result<serde_json::Value, String> {
-    let _ = a;
+/// 按供应商查询周期用量（只返回已用百分比 + 重置时间，不含金额/余额）。
+/// 能力范围由 usage::supports() 决定；不支持的 kind 由 strategy 明确报错。
+async fn view_provider_usage(
+    core: Arc<Core>,
+    a: ViewProviderUsageArgs,
+) -> Result<ProviderUsage, String> {
+    let ViewProviderUsageArgs { provider_id } = a;
     let service = core.settings.clone();
-    tokio::task::spawn_blocking(move || {
-        let cfg = service
-            .resolve_active_runtime_provider()
-            .map_err(|e| e.to_string())?;
-        match strategy_for(ProviderKind::SystemDefault).run_action(&cfg, "view_quota") {
-            Ok(ActionResult::Quota(v)) => Ok(v),
-            Ok(_) => Ok(serde_json::json!({"note": "v1 未实现"})),
+    let usage = tokio::task::spawn_blocking(move || {
+        let cfg = find_provider(&service, &provider_id)?;
+        let strat = strategy_for(cfg.kind);
+        match strat.run_action(&cfg, "view_usage") {
+            Ok(ActionResult::Usage(u)) => Ok(*u),
+            Ok(other) => Err(format!("unexpected: {other:?}")),
             Err(e) => Err(e),
         }
     })
     .await
-    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())??;
+    // 账号级用量同时广播给聊天页徽标/额度环（无会话号 → 所有窗口 + 手机网关）。
+    // 走事件通道而不是让前端拿命令返回值本地赋值，符合「UI 状态只认事件通道」。
+    core.emit(
+        "chat-event",
+        crate::provider::usage::to_chat_event(&usage),
+    );
+    Ok(usage)
 }
 
 #[derive(Deserialize)]

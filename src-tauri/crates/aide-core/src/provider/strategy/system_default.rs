@@ -74,10 +74,6 @@ impl ProviderStrategy for SystemDefaultStrategy {
                 label: "刷新模型列表".into(),
             },
             ActionDef {
-                name: "view_quota".into(),
-                label: "查看额度".into(),
-            },
-            ActionDef {
                 name: "test_connection".into(),
                 label: "测试连接".into(),
             },
@@ -90,7 +86,8 @@ impl ProviderStrategy for SystemDefaultStrategy {
                 let m = refresh_models_blocking(cfg)?;
                 Ok(ActionResult::RefreshedModels(m))
             }
-            "view_quota" => Err("view_quota 尚未实现（v1）".to_string()),
+            // Anthropic 订阅的 5h/7d 用量由 sidecar 的 SDK /usage 广播 rate_limit 事件，
+            // 设置页不重复提供查询入口（SDK 那条通道不需要云账号凭证）。
             other => Err(format!("action '{other}' not supported by SystemDefault")),
         }
     }
@@ -295,10 +292,13 @@ mod tests {
     }
 
     #[test]
-    fn system_default_actions_lists_three() {
-        let a = SystemDefaultStrategy.actions();
-        assert_eq!(a.len(), 3);
-        assert!(a.iter().any(|x| x.name == "refresh_models"));
+    fn system_default_actions_exclude_usage_lookup() {
+        let actions = SystemDefaultStrategy.actions();
+        let names: Vec<&str> = actions.iter().map(|x| x.name.as_str()).collect();
+        // Anthropic 订阅的用量由 sidecar 广播，设置页不再提供查询入口。
+        assert_eq!(names, vec!["refresh_models", "test_connection"]);
+        assert!(!names.contains(&"view_quota"));
+        assert!(!names.contains(&"view_usage"));
     }
 
     // ── refresh_system_default_models 的映射逻辑单测 ──

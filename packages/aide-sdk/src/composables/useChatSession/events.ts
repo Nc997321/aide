@@ -21,6 +21,7 @@ import type {
   LspGlanceItem,
   ModelOption,
   PermissionModeOption,
+  RateLimitInfo,
   SubagentBlock,
   SubagentEntry,
   TaskItem,
@@ -85,6 +86,7 @@ import {
   sharedModels,
   sharedPermissionModes,
   sharedRateLimit,
+  providerRateLimits,
   stampMessageModel,
   unregisterSubagent,
   unregisterToolCall,
@@ -279,6 +281,21 @@ function handleRuntimeDead(e: Record<string, unknown>): void {
 /** 在途的 edit_selection 调用：toolId → selectionId（tool_result 只带 id，要靠它认回是哪个选区）。 */
 const editSelectionCalls = new Map<string, string>();
 
+/** `rate_limit` 事件负载 → RateLimitInfo。两路来源（sidecar 的 Anthropic 订阅 /
+ *  Host 的第三方供应商用量）共用同一套 wire 形状：`resets_at` 是 snake_case。 */
+function rateLimitInfoFrom(e: Record<string, unknown>): RateLimitInfo {
+  const rawWindows = (e["windows"] as Array<Record<string, unknown>> | undefined) ?? [];
+  return {
+    subscription: (e["subscription"] as string | null) ?? null,
+    windows: rawWindows.map((w) => ({
+      key: w["key"] as string,
+      label: w["label"] as string,
+      utilization: w["utilization"] as number,
+      resetsAt: (w["resets_at"] as number | null) ?? null,
+    })),
+  };
+}
+
 export function handleChatEvent(e: Record<string, unknown>): void {
   if (e["type"] === "handoff_summary") return;
   if (e["type"] === "session_continued") {
@@ -296,6 +313,15 @@ export function handleChatEvent(e: Record<string, unknown>): void {
   // 内置 hook 清单：sidecar 会话启动时 emit 的全局元数据（无 session_id），路由到扩展管理。
   if (e["type"] === "builtin_hooks_manifest") {
     builtinHooks.value = (e["manifest"] as BuiltinHookManifest[]) ?? [];
+    return;
+  }
+  // 供应商周期用量：Host 查询后经 chat-event 广播的**账号级**事实，刻意不带 session_id
+  // （bus 对无会话号的事件全送，桌面所有窗口 + 手机网关都收得到）。必须在下面的
+  // session_id 守卫之前接住；按 kind 分栏存，不与 sidecar 的 Anthropic 订阅额度互顶。
+  if (e["type"] === "rate_limit" && typeof e["kind"] === "string") {
+    const info = rateLimitInfoFrom(e);
+    providerRateLimits.value = { ...providerRateLimits.value, [e["kind"] as string]: info };
+    diag.handleRateLimitEvent(info);
     return;
   }
   const raw = e["session_id"] as string | undefined;
@@ -706,17 +732,9 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "rate_limit": {
-      // 账号级配额，跨会话共享——最新一条即当前状态；windows 空表示非订阅/不报配额。
-      const rawWindows = (e["windows"] as Array<Record<string, unknown>> | undefined) ?? [];
-      sharedRateLimit.value = {
-        subscription: (e["subscription"] as string | null) ?? null,
-        windows: rawWindows.map((w) => ({
-          key: w["key"] as string,
-          label: w["label"] as string,
-          utilization: w["utilization"] as number,
-          resetsAt: (w["resets_at"] as number | null) ?? null,
-        })),
-      };
+      // Anthropic 订阅额度（无 kind）：账号级、跨会话共享——最新一条即当前状态；
+      // windows 空表示非订阅/不报配额。带 kind 的那路已在上面按供应商分栏处理。
+      sharedRateLimit.value = rateLimitInfoFrom(e);
       diag.handleRateLimitEvent(sharedRateLimit.value);
       break;
     }

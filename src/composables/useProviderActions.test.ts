@@ -6,7 +6,7 @@ vi.mock("../api", () => ({
     cpaProbePort: vi.fn(),
     cpaOpenManagement: vi.fn(),
     cpaLoginStatus: vi.fn(),
-    viewAnthropicQuota: vi.fn(),
+    viewProviderUsage: vi.fn(),
     refreshModels: vi.fn(),
   },
   openExternal: vi.fn(),
@@ -17,7 +17,7 @@ import { useProviderActions } from "./useProviderActions";
 
 describe("useProviderActions", () => {
   const A = useProviderActions();
-  const { testConnection, cpaProbe, cpaOpenManagement, cpaLoginStatus, viewQuota, refreshModels, __resetForTest } = A;
+  const { testConnection, cpaProbe, cpaOpenManagement, cpaLoginStatus, viewUsage, refreshModels, __resetForTest } = A;
 
   beforeEach(() => {
     __resetForTest();
@@ -25,7 +25,7 @@ describe("useProviderActions", () => {
     (api.cpaProbePort as any).mockReset();
     (api.cpaOpenManagement as any).mockReset();
     (api.cpaLoginStatus as any).mockReset();
-    (api.viewAnthropicQuota as any).mockReset();
+    (api.viewProviderUsage as any).mockReset();
     (api.refreshModels as any).mockReset();
     (openExternal as any).mockReset();
   });
@@ -55,10 +55,15 @@ describe("useProviderActions", () => {
     expect(r?.logged_in).toBe(true);
   });
 
-  it("viewQuota 存任意 JSON", async () => {
-    (api.viewAnthropicQuota as any).mockResolvedValue({ usage: 50 });
-    const r = await viewQuota();
-    expect((r as any).usage).toBe(50);
+  it("viewUsage(id) 调 api.viewProviderUsage 并存结构化用量", async () => {
+    (api.viewProviderUsage as any).mockResolvedValue({
+      kind: "kimi",
+      windows: [{ key: "five_hour", label: "5 小时", utilization: 65, resetsAt: 1769776934422 }],
+    });
+    const r = await viewUsage("kimi-1");
+    expect(api.viewProviderUsage).toHaveBeenCalledWith("kimi-1");
+    expect(r?.windows[0].utilization).toBe(65);
+    expect(A.usageResult.value?.windows[0].label).toBe("5 小时");
   });
 
   it("refreshModels(id) 调 api.refreshModels", async () => {

@@ -43,10 +43,10 @@ describe("api provider wrappers — 新增 IPC", () => {
     expect(invoke).toHaveBeenCalledWith("cpa_login_status");
   });
 
-  it("viewAnthropicQuota 无参", async () => {
-    (invoke as any).mockResolvedValue({});
-    await api.viewAnthropicQuota();
-    expect(invoke).toHaveBeenCalledWith("view_anthropic_quota");
+  it("viewProviderUsage 传 providerId", async () => {
+    (invoke as any).mockResolvedValue({ kind: "kimi", windows: [] });
+    await api.viewProviderUsage("kimi-1");
+    expect(invoke).toHaveBeenCalledWith("view_provider_usage", { providerId: "kimi-1" });
   });
 
   it("refreshModels 传 providerId", async () => {
