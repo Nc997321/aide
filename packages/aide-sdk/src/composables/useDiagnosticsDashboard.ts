@@ -11,9 +11,10 @@ export interface HealthSnapshot {
 
 const runtimeHealth = ref<HealthSnapshot | null>(null);
 
-// ---- 累计费用 ----
+// ---- 累计用量 ----
+// 只累计 token。不再累计 costUsd：它是 Claude Agent SDK 按 Anthropic 内置价目表
+// 折算的金额，第三方供应商计费口径不同，任何界面都不再展示这个数字。
 
-const cumulativeCost = ref(0);
 const cumulativeInputTokens = ref(0);
 const cumulativeOutputTokens = ref(0);
 // 累计用量里"来自触发了子代理的轮次"的子集——与 cumulativeXxx 配对，前端据此拆成
@@ -21,7 +22,6 @@ const cumulativeOutputTokens = ref(0);
 // 在轮级归因（usage.subagentTurn 标记本轮是否派了子代理），不声称知道子代理内部精确 token。
 const subagentTurnInputTokens = ref(0);
 const subagentTurnOutputTokens = ref(0);
-const subagentTurnCost = ref(0);
 // 按模型分桶的累计用量——多模型会话（如子代理用了别的模型）能看到每个模型各烧多少。
 // key 是 wire model id（provider 专属字符串，前端只展示不解释）。
 const byModelCumulative = ref<Record<string, TurnUsage>>({});
@@ -53,13 +53,11 @@ export function useDiagnosticsDashboard() {
 
   function accumulateUsage(usage: TurnUsage | null | undefined) {
     if (!usage) return;
-    cumulativeCost.value += usage.costUsd || 0;
     cumulativeInputTokens.value += usage.inputTokens || 0;
     cumulativeOutputTokens.value += usage.outputTokens || 0;
     if (usage.subagentTurn) {
       subagentTurnInputTokens.value += usage.inputTokens || 0;
       subagentTurnOutputTokens.value += usage.outputTokens || 0;
-      subagentTurnCost.value += usage.costUsd || 0;
     }
     if (usage.byModel) {
       const merged = { ...byModelCumulative.value };
@@ -67,12 +65,13 @@ export function useDiagnosticsDashboard() {
         const prev = merged[modelId] ?? {
           inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0, costUsd: 0,
         };
+        // costUsd 仅为维持 TurnUsage 的 wire 形状而透传，面板只展示 inputTokens。
         merged[modelId] = {
           inputTokens: prev.inputTokens + (u.inputTokens || 0),
           outputTokens: prev.outputTokens + (u.outputTokens || 0),
           cacheReadInputTokens: prev.cacheReadInputTokens + (u.cacheReadInputTokens || 0),
           cacheCreationInputTokens: prev.cacheCreationInputTokens + (u.cacheCreationInputTokens || 0),
-          costUsd: prev.costUsd + (u.costUsd || 0),
+          costUsd: 0,
         };
       }
       byModelCumulative.value = merged;
@@ -92,12 +91,10 @@ export function useDiagnosticsDashboard() {
 
   return {
     runtimeHealth,
-    cumulativeCost,
     cumulativeInputTokens,
     cumulativeOutputTokens,
     subagentTurnInputTokens,
     subagentTurnOutputTokens,
-    subagentTurnCost,
     byModelCumulative,
     nestingWarning,
     rateLimit,

@@ -21,7 +21,8 @@
       </div>
     </div>
 
-    <!-- 累计费用 -->
+    <!-- 累计用量：不展示费用。costUsd 是 Claude Agent SDK 按 Anthropic 价目表折算的，
+         第三方供应商计费口径不同，累计金额同样会误导。 -->
     <div class="card">
       <div class="card-header">累计用量</div>
       <div class="stats-row">
@@ -32,10 +33,6 @@
         <div class="stat">
           <span class="stat-value">{{ fmtTokens(cumulativeOutputTokens) }}</span>
           <span class="stat-label">输出 tokens</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value">${{ cumulativeCost.toFixed(4) }}</span>
-          <span class="stat-label">费用 (USD)</span>
         </div>
       </div>
 
@@ -95,7 +92,6 @@ import { useDiagnosticsDashboard } from "@/composables/useDiagnosticsDashboard";
 
 const {
   runtimeHealth: health,
-  cumulativeCost,
   cumulativeInputTokens,
   cumulativeOutputTokens,
   subagentTurnInputTokens,

@@ -188,6 +188,8 @@ export interface TurnUsage {
   outputTokens: number;
   cacheReadInputTokens: number;
   cacheCreationInputTokens: number;
+  /** Claude Agent SDK 按 Anthropic 内置价目表折算的金额，第三方供应商计费口径不同，
+   *  因此任何 UI 都不展示它。保留仅为跨端事件协议的 wire 兼容，勿用于展示或计费。 */
   costUsd: number;
   /** 本轮是否派发了子代理——前端据此把累计用量拆成"含子代理轮次" vs "纯主会话轮次"。可选，旧 sidecar 不带。 */
   subagentTurn?: boolean;

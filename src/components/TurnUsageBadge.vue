@@ -1,12 +1,16 @@
 <script setup lang="ts">
 /**
- * 一轮 assistant 消息的 token/费用小徽章——用 ↓/↑ 方向图标代替之前的
+ * 一轮 assistant 消息的 token 小徽章——用 ↓/↑ 方向图标代替之前的
  * "36108→150170 tokens" 文字箭头。之前的箭头写法容易被误读成"从 A 涨到 B"，
  * 其实左右是两个独立的量（喂给模型的输入 / 模型吐出来的输出），跟网络监控里
  * 下载/上传箭头是同一套视觉语言，不需要额外解释就能看懂方向。
  *
- * 精确数字、cache 命中明细、费用放进 tooltip，徽章本身只给"量级感"
+ * 精确数字、cache 命中明细放进 tooltip，徽章本身只给"量级感"
  * （36.1k 而不是 36108），细节留给想深究的人去悬停查看。
+ *
+ * 不展示花费：`usage.costUsd` 是 Claude Agent SDK 按 Anthropic 内置价目表折算的，
+ * 第三方供应商（Kimi / 智谱 / DeepSeek 等）计费口径不同，显示这个金额会误导。
+ * wire 字段仍保留（跨端事件协议），只是任何 UI 都不再读它。
  */
 import { computed } from "vue";
 import type { TurnUsage } from "@/types/chat";
@@ -33,7 +37,6 @@ const tooltip = computed(() => {
       `缓存命中 ${u.cacheReadInputTokens.toLocaleString()} · 新写入缓存 ${u.cacheCreationInputTokens.toLocaleString()}`,
     );
   }
-  lines.push(`这一轮花费 $${u.costUsd.toFixed(4)}`);
   if (typeof u.finishedAt === "number") lines.push(`完成于 ${new Date(u.finishedAt).toLocaleString()}`);
   return lines.join("\n");
 });
@@ -43,7 +46,6 @@ const tooltip = computed(() => {
   <div class="turn-usage" v-tooltip="tooltip">
     <span class="tu-item tu-in">↓ {{ formatCompactNumber(usage.inputTokens) }}</span>
     <span class="tu-item tu-out">↑ {{ formatCompactNumber(usage.outputTokens) }}</span>
-    <span class="tu-cost">${{ usage.costUsd.toFixed(4) }}</span>
     <span v-if="typeof usage.finishedAt === 'number'" class="tu-time">{{ formatClockTime(usage.finishedAt) }}</span>
   </div>
 </template>
@@ -65,6 +67,6 @@ const tooltip = computed(() => {
   gap: 1px;
 }
 
-/* 输入 / 输出 / 费用一律灰（2026-10-17）：用量是元数据，与模型标注同为一条消息里
+/* 输入 / 输出 / 完成时间一律灰（2026-10-17）：用量是元数据，与模型标注同为一条消息里
    最安静的一层；方向靠 ↓/↑ 图标区分，不靠颜色。 */
 </style>
