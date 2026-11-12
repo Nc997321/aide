@@ -66,7 +66,7 @@ dependencies = [
 
 [[package]]
 name = "aide"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "aide-computer",
  "aide-core",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "aide-computer"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "base64 0.22.1",
  "png 0.17.16",
@@ -138,7 +138,7 @@ dependencies = [
 
 [[package]]
 name = "aide-core"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "aide-link",
  "aide-workspace",
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "aide-host"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "aide-core",
  "aide-link",
@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "aide-link"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "aide-link",
  "aide-relay",
@@ -217,7 +217,7 @@ dependencies = [
 
 [[package]]
 name = "aide-workspace"
-version = "2.5.0"
+version = "2.5.1"
 dependencies = [
  "base64 0.22.1",
  "encoding_rs",
