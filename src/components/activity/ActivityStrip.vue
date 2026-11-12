@@ -16,11 +16,8 @@ import type { ActivityChip, ActivityChipTarget } from "./activityChips";
  * 取代原来竖着堆的三条（思考行、子代理状态条、后台任务条）。没有任何内容时整条不渲染、
  * 不占高度。「有待确认卡片时不显示正在思考」由调用方算进 thinking（会话在等用户，不是在想）。
  *
- * 「正在思考」主体已搬到消息流末尾（ThinkingLine，跟着回答走）；这里在忙时照样占位（中断要够得着），
- * 只在那一行被翻出可视区时（thinkingLabel）亮出精简的「思考中 12s」（淡入）。
- * 那一行看得见时这里**整块不渲染**（2026-10-17）：原先只调透明度、隐身的「思考中」仍占宽度，
- * 把后台 chip 挤到右边、还留一条孤立分隔线。整条高度由 min-height 兜，不跳；
- * 字样出现时 chip 横移一次，代价可接受。
+ * 没有任务 chip 时，思考状态与中断共用这一行。有任务时，调用方可以把状态放到消息流末尾，
+ * 这时用 thinkingLabel 隐藏本行的状态字样，给 chip 留空间。
  */
 const props = defineProps<{
   compaction: ContextCompactionState | null;
@@ -42,7 +39,6 @@ const emit = defineEmits<{
 const compacting = computed(() => props.compaction?.stage === "compacting");
 const showInterrupt = computed(() => compacting.value || (!props.compaction && props.thinking));
 const visible = computed(() => !!props.compaction || props.thinking || props.chips.length > 0);
-/** 「思考中」字样此刻要不要占位：只有消息流末尾那行看不见时才要 */
 const showThinking = computed(() => props.thinking && props.thinkingLabel !== false);
 </script>
 

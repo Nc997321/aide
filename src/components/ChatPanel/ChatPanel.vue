@@ -550,6 +550,7 @@ const activityChips = computed<ActivityChip[]>(() =>
     bgTaskChip(props.bgTasks ?? [], props.bgDockOpen),
   ].filter((c): c is ActivityChip => c !== null),
 );
+const showThinkingInMessages = computed(() => activityChips.value.length > 0 && props.messages.length > 0);
 
 /** chip 点击：开对应 tab；已开着就收起（三个 tab 互斥，见 openActivityTab）。
  *  btw 不是活动抽屉的 tab：点它 = 打开会话右侧的 btw 侧栏。 */
@@ -846,9 +847,9 @@ function onOpenBgDock(taskId: string) {
           :feed="turnChanges"
           :session-id="props.sessionId"
         />
-        <!-- 「正在思考」跟着会话走：消息流最末一格，常驻固定高度、只淡入淡出（防闪，见 ThinkingLine 文件头） -->
+        <!-- 有任务 chip 时，思考状态留在消息末尾，给活动带腾出横向空间。 -->
         <ThinkingLine
-          v-if="props.messages.length > 0"
+          v-if="showThinkingInMessages"
           :active="thinkingNow"
           :label="workingVerb"
           :elapsed-seconds="activityElapsed"
@@ -930,11 +931,11 @@ function onOpenBgDock(taskId: string) {
            不随消息滚动——上滚读历史时状态可见、中断按钮仍触手可及。 -->
       <ActivityStrip
         :compaction="contextCompactionVal"
-        :thinking="props.isBusy && !displayedPermission"
-        :thinking-label="!thinkingLineInView"
+        :thinking="thinkingNow"
+        :thinking-label="!showThinkingInMessages || !thinkingLineInView"
         :label="workingVerb"
         :elapsed-seconds="activityElapsed"
-        :tip="null"
+        :tip="showThinkingInMessages ? null : thinkingTip"
         :chips="activityChips"
         @interrupt="emit('interrupt')"
         @toggle="onToggleActivity"
