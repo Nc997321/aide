@@ -27,7 +27,6 @@ export interface PolicyBranchState {
 }
 
 export interface SessionPolicyDeps {
-  canonicalTools?: Readonly<Record<string, string>>;
   /** Host-owned capability policy. A denial precedes normal permission modes. */
   toolGuard?: (toolName: string, input: unknown, agentId?: string) => string | undefined;
   branchState: () => PolicyBranchState;
@@ -138,17 +137,11 @@ export class SessionPolicy {
         this.sessionRules.length > 0
           ? { ...this.snapshot, rules: [...this.sessionRules, ...this.snapshot.rules] }
           : this.snapshot;
-      let decision = await evaluatePolicy(snapshot, {
+      const decision = await evaluatePolicy(snapshot, {
         tool: toolName,
         input: (toolInput ?? {}) as Record<string, unknown>,
         cwd: cwd ?? state.cwd,
       });
-      const canonical = this.deps.canonicalTools?.[toolName];
-      if (canonical) {
-        const original = await evaluatePolicy(snapshot, { tool: canonical,
-          input: (toolInput ?? {}) as Record<string, unknown>, cwd: cwd ?? state.cwd });
-        if (original.disposition === "deny" || decision.disposition === "defer") decision = original;
-      }
       switch (decision.disposition) {
         case "allow":
           return {

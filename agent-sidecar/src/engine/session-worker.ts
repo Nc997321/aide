@@ -44,7 +44,6 @@ import { buildCliEnv, sessionEnvOf } from "./cliEnv.js";
 import { KbScopeStore } from "../extensions/knowledge/scope.js";
 import { prepareQueryContext } from "./session-worker/queryContext.js";
 import { ExecutionPolicy } from "../extensions/executionPolicy.js";
-import { FILE_SEARCH_TOOL } from "../extensions/fileSearch.js";
 import { buildSpawnQueryOptions } from "./session-worker/queryOptions.js";
 import { cancelAllLspQueries, syncLspWarmth } from "../extensions/lspClient.js";
 import { cancelAllBrowserQueries } from "../extensions/browserClient.js";
@@ -141,7 +140,6 @@ export class SessionWorker {
   /** 会话策略状态（快照 + 会话级规则 + 权威 PreToolUse hook，见 policy/sessionHook.ts）。
    *  自动化状态不归它所有——注入活值 getter，hook 每次调用时读。 */
   private readonly policy = new SessionPolicy({
-    canonicalTools: { [FILE_SEARCH_TOOL]: "Glob" },
     toolGuard: (tool, input, agentId) => this.executionPolicy.denyReason(tool, !!this.subsessionParent, input, !!agentId),
     branchState: () => ({
       automationConfig: this.automationConfig,

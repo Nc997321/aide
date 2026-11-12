@@ -17,7 +17,6 @@ import { loadUserMcpServers, loadAppMcp, loadUserHooks, assembleMcpServers, asse
 import { filterMcpServers, type AutomationConfig } from "../../desktop/automation.js";
 import { loadAideInstructions } from "../instructions.js";
 import { EXECUTION_GUIDANCE } from "../../extensions/executionPolicy.js";
-import { fileSearchRegistration } from "../../extensions/fileSearch.js";
 import { CHAT_DISPLAY_HINT } from "../displayHint.js";
 import { DOCUMENT_ARTIFACT_HINT } from "../../desktop/documentArtifacts.js";
 import { loadLspHint } from "../lspHint.js";
@@ -164,7 +163,6 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   // 白名单裁决是第二层）。
   const assembledMcp = assembleMcpServers(
     {
-      ...(deps.trusted && !deps.automationConfig ? fileSearchRegistration(deps.cwd) : {}),
       ...(docsMcp ?? {}),
       ...(knowledgeMcp ?? {}),
       ...(memoryMcp ?? {}),

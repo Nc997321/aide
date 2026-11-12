@@ -41,14 +41,17 @@ function preToolUse(tool: string): HookInput {
 type HookOut = { hookSpecificOutput?: { permissionDecision?: string; permissionDecisionReason?: string } };
 
 describe("SessionPolicy.applySnapshot", () => {
-  it("搜索适配器不能绕过原 Glob 或新工具自身的 deny 规则", async () => {
-    for (const denied of ["Glob", "mcp__aide-search__glob"]) {
-      const policy = new SessionPolicy({ branchState, automationVerdict: () => "defer",
-        canonicalTools: { "mcp__aide-search__glob": "Glob" } });
-      policy.applySnapshot({ revision: 1, rules: [rule("deny", denied)] });
-      const result = await policy.makeHook("/proj")(preToolUse("mcp__aide-search__glob"), undefined,
-        { signal: new AbortController().signal }) as HookOut;
-      expect(result.hookSpecificOutput?.permissionDecision).toBe("deny");
+  it("原生 Glob 默认由 CLI 判定，显式规则仍生效", async () => {
+    const { policy } = makePolicy();
+    const hook = policy.makeHook("/proj");
+    const opts = { signal: new AbortController().signal };
+    expect(await hook(preToolUse("Glob"), undefined, opts)).toEqual({});
+
+    let revision = 0;
+    for (const effect of ["deny", "ask"] as const) {
+      policy.applySnapshot({ revision: ++revision, rules: [rule(effect, "Glob")] });
+      const result = await hook(preToolUse("Glob"), undefined, opts) as HookOut;
+      expect(result.hookSpecificOutput?.permissionDecision).toBe(effect);
     }
   });
 

@@ -75,7 +75,6 @@ export interface BuiltinMcpServer {
   purpose: string;
 }
 export const builtinMcpServers = ref<BuiltinMcpServer[]>([
-  { id: "aide-search", transport: "in-process", purpose: "有界文件搜索：默认排除依赖和构建目录；显式指定目录仍可查。单次扫描限时 1.5 秒，返回最多 200 项/16KiB，截断如实提示。替代内置 Glob，原 Glob 权限规则仍生效。" },
   { id: "aide-docs", transport: "in-process", purpose: "内置文档工具（read_docx / write_docx / read_pdf，docx↔markdown、pdf→markdown），受信任工作区时挂载" },
   { id: "aide-knowledge", transport: "in-process", purpose: "内置知识库读写（读 search / read_document / list_spaces / list_documents 自动放行；写 create_document / create_folder / move_document / append_document / update_document / ingest_file / delete_document / edit_selection（只改你在文档里圈选的那一段，圈选生效期间其余写工具一律被拒）每次要你确认 —— 其中 move_document 会改变目录结构、delete_document 连带子文件夹与子文档且界面无恢复入口），受信任工作区挂载；未登录时工具返回登录引导" },
   { id: "aide-memory", transport: "in-process", purpose: "内置跨工作区记忆（read_memory：只读地参考其他工作区的记忆——你用 @ 附加的目录，以及知识库文档关联的项目；不带 id 看索引与条目名，带 id 读一条正文；不授予那些工作区的任何文件访问），自动放行；受信任工作区挂载" },

@@ -1,6 +1,6 @@
 // Offline native SDK/CLI regression: no provider credentials or model calls.
 import { createServer } from 'node:http';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -11,15 +11,14 @@ import assert from 'node:assert/strict';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(join(root, 'agent-sidecar/package.json'));
 const { query, createSdkMcpServer, tool } = await import(pathToFileURL(require.resolve('@anthropic-ai/claude-agent-sdk')).href);
-const { z } = require('zod');
 const sdkDir = dirname(require.resolve('@anthropic-ai/claude-agent-sdk'));
 const exe = process.env.AIDE_CLAUDE_EXE || join(sdkDir, '..', '..', '@anthropic-ai',
   `claude-agent-sdk-${process.platform}-${process.arch}`, process.platform === 'win32' ? 'claude.exe' : 'claude');
 assert(existsSync(exe), 'Native CLI unavailable; set AIDE_CLAUDE_EXE to the installed CLI path.');
 const temp = await mkdtemp(join(tmpdir(), 'aide-routing-'));
-let calls = 0;
 let requests = 0;
 let advertised = [];
+let toolResult;
 let requestedTool = 'Glob';
 let requestedInput = { pattern: '**/*.ts' };
 
@@ -45,25 +44,22 @@ const server = createServer(async (req, res) => {
   if (!req.url?.includes('/messages')) { res.end('{}'); return; }
   const input = JSON.parse(body);
   advertised = input.tools?.map((entry) => entry.name) ?? [];
+  toolResult = input.messages?.flatMap((message) => message.content ?? [])
+    .find((block) => block.type === 'tool_result' && block.tool_use_id === 'test-glob');
   answer(res, requests++ === 0);
 });
 await new Promise((resolveListen) => server.listen(0, '127.0.0.1', resolveListen));
 const port = server.address().port;
-const target = 'mcp__aide-search__glob';
-const mcp = createSdkMcpServer({ name: 'aide-search', version: '1', tools: [
-  tool('glob', 'Offline fixture', { pattern: z.string(), path: z.string().optional() }, async () => {
-    calls++;
-    return { content: [{ type: 'text', text: 'fixture.ts' }] };
-  }),
-] });
 const controller = new AbortController();
 const timer = setTimeout(() => controller.abort(), 30000);
 try {
+  await writeFile(join(temp, 'fixture.ts'), '');
+  let prompts = 0;
   const baseOptions = {
     cwd: temp, pathToClaudeCodeExecutable: exe, abortController: controller,
-    settingSources: [], plugins: [], skills: [], systemPrompt: 'Offline fixture. Only use the fixture tool.',
-    tools: [], disallowedTools: ['Glob'], toolAliases: { Glob: target },
-    allowedTools: [target], mcpServers: { 'aide-search': mcp }, maxTurns: 3,
+    settingSources: [], plugins: [], skills: [], systemPrompt: 'Offline fixture.',
+    permissionMode: 'plan', maxTurns: 3,
+    canUseTool: async () => { prompts++; return { behavior: 'deny', message: 'Unexpected approval request' }; },
     env: { ANTHROPIC_BASE_URL: `http://127.0.0.1:${port}`, ANTHROPIC_API_KEY: 'offline-fixture', ANTHROPIC_AUTH_TOKEN: '',
       CLAUDE_CONFIG_DIR: join(temp, 'config'), CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1', NO_PROXY: '127.0.0.1,localhost' },
   };
@@ -71,9 +67,9 @@ try {
   for await (const message of q) {
     if (message.type === 'result' && message.is_error) throw new Error(JSON.stringify(message.errors ?? message.result));
   }
-  assert.equal(calls, 1, 'legacy Glob must reach the bounded MCP implementation exactly once');
-  assert(advertised.includes(target), 'bounded search must be advertised');
-  assert(!advertised.includes('Glob'), 'native Glob must not be advertised');
+  assert(advertised.includes('Glob'), 'native Glob must be advertised');
+  assert(!toolResult?.is_error && JSON.stringify(toolResult ?? {}).includes('fixture.ts'), 'native Glob must find the fixture');
+  assert.equal(prompts, 0, 'workspace Glob must not prompt in plan mode');
   await checkDesktopGate(baseOptions);
   console.log('PASS: native Glob routing and desktop deny/grant behavior, with no unsolicited approval or external model call.');
 } finally {
@@ -109,7 +105,7 @@ async function checkDesktopGate(baseOptions) {
     requests = 0;
     if (authorized) capability.receive('允许你操作电脑');
     const q = query({ prompt: 'offline desktop admission fixture', options: { ...baseOptions,
-      toolAliases: {}, disallowedTools: [], allowedTools: [requestedTool],
+      tools: [], allowedTools: [requestedTool],
       permissionMode: 'bypassPermissions', allowDangerouslySkipPermissions: true,
       canUseTool: async () => { prompts++; return { behavior: 'allow', updatedInput: {} }; },
       mcpServers: { 'aide-computer': desktop }, hooks: { PreToolUse: [{ matcher: '.*', hooks: [policy.makeHook(temp)] }] },

@@ -42,14 +42,11 @@ function parts(over: {
 type Opts = Record<string, any>;
 
 describe("buildSpawnQueryOptions", () => {
-  it("有界搜索挂载后，旧 Glob 调用重定向；不挂载时保持兼容", () => {
-    const p = parts();
-    p.runtime.ctx.mcpServers["aide-search"] = {};
-    const result = buildSpawnQueryOptions(p);
-    expect(result.toolAliases).toEqual({ Glob: "mcp__aide-search__glob" });
-    expect(result.disallowedTools).toContain("Glob");
-    expect(result.allowedTools).toContain("mcp__aide-search__glob");
-    expect(buildSpawnQueryOptions(parts()).toolAliases).toBeUndefined();
+  it("原生 Glob 保持可用，读取权限交给 CLI", () => {
+    const result = buildSpawnQueryOptions(parts());
+    expect(result.toolAliases).toBeUndefined();
+    expect(result.disallowedTools).not.toContain("Glob");
+    expect(result.allowedTools).not.toContain("Glob");
   });
   it("纯聊天不暴露任何工具/插件/技能/hooks，即使已有上下文或自动化覆盖", () => {
     const o = buildSpawnQueryOptions(parts({ branch: {
