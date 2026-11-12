@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderMarkdown, headingSlug, renderStreaming, localImagePath, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
+import { renderMarkdown, headingSlug, renderStreaming, localImagePath, normalizeStrongDelimiters, __renderCacheSizeForTest, __renderCacheBytesForTest } from "./markdown";
 
 /** 卡死修复的回归护栏：流式尾块渲染必须绕开 hljs（O(n²) 放大器），
  *  语法高亮只在定稿态出现。见 utils/markdown.ts 的注释与
@@ -409,5 +409,119 @@ describe("标题锚点：手写目录 [x](#slug) 要能对上标题 id（GitHub 
 
   it("slug 用标题可见文字，不带内联标记", () => {
     expect(renderMarkdown("# 用 `foo` 和 **bar**")).toContain('id="md-用-foo-和-bar"');
+  });
+});
+
+/** 模型把加粗写成 `**文字 **后文`（空格落在收尾 `**` 前）或 `**文字：**后文`
+ *  （收尾 `**` 前是标点、后紧跟中文）时，CommonMark §6.2 的 right-flanking
+ *  判定不成立，marked 会把整对 `**` 当字面星号输出。规整只动这对定界符附近的
+ *  空白，闭合仍由 marked 自己完成；代码块 / 行内 code / 转义一律不碰。
+ *  见 markdown.ts 的 normalizeStrongDelimiters。 */
+describe("模型输出的加粗定界符规整", () => {
+  describe("截图里的两种失败形态", () => {
+    it("尾随空格落在收尾 ** 前 → 空格挪到 ** 后，加粗生效", () => {
+      expect(normalizeStrongDelimiters("**文字 **后文")).toBe("**文字** 后文");
+      const html = renderMarkdown("**文字 **后文");
+      expect(html).toContain("<strong>文字</strong> 后文");
+      expect(html).not.toContain("**");
+    });
+
+    it("全角冒号结尾 + 后紧跟中文 → 补一个空白，加粗生效", () => {
+      expect(normalizeStrongDelimiters("**文字：**后文")).toBe("**文字：** 后文");
+      const html = renderMarkdown("- **是否要重启整个应用：**取决于你平时的启动方式");
+      expect(html).toContain("<strong>是否要重启整个应用：</strong> 取决于你平时的启动方式");
+      expect(html).not.toContain("**");
+    });
+
+    it("半角冒号结尾同样成立", () => {
+      expect(renderMarkdown("**文字:**后文")).toContain("<strong>文字:</strong> 后文");
+    });
+
+    it("后面本来就是空白 → 丢掉尾随空白，不叠出两个空格", () => {
+      expect(normalizeStrongDelimiters("**文字 ** 后文")).toBe("**文字** 后文");
+    });
+
+    it("截图原样的三条 bullet 全部加粗，列表结构不丢", () => {
+      const text = [
+        "具体来说：",
+        "",
+        "- **只改了 AI 服务代码或替换了模型产物： **重启 AI 服务即可",
+        "- **AI 服务已经在修改完成后重新启动： **不需要再重启。",
+        "- **是否要重启整个应用： **取决于你平时的启动方式",
+      ].join("\n");
+      const html = renderMarkdown(text);
+      expect(html.match(/<strong>/g)).toHaveLength(3);
+      expect(html.match(/<li>/g)).toHaveLength(3);
+      expect(html).not.toContain("**");
+      expect(html).toContain("具体来说：");
+    });
+  });
+
+  describe("不该动的形态（零改动）", () => {
+    it.each([
+      ["本来合规、后跟中文", "**粗体**段落"],
+      ["后面是空白", "**粗体** 段落"],
+      ["标点结尾但后面也是标点", "**文字：**，后文"],
+      ["标点结尾但在行尾", "**文字：**"],
+      ["没有成对星号", "普通文本 ** 落单"],
+      ["三连星号（em + strong）", "***粗斜***后"],
+    ])("%s → 原串不变", (_label, text) => {
+      expect(normalizeStrongDelimiters(text)).toBe(text);
+    });
+
+    it("三连星号仍渲染成 em + strong", () => {
+      expect(renderMarkdown("***粗斜***后")).toContain("<strong>粗斜</strong>");
+    });
+
+    it("无 ** 的文本走快路径，内容与引用都不变", () => {
+      const text = "一段普通中文，没有强调。\n第二行。";
+      expect(normalizeStrongDelimiters(text)).toBe(text);
+    });
+  });
+
+  describe("保护区：代码块 / 行内 code / 转义一个字都不改", () => {
+    it("围栏代码块内的字面 ** 不动，围栏外照常修", () => {
+      const text = "```\n**文字 **后文\n```\n\n**正文 **后文";
+      expect(normalizeStrongDelimiters(text)).toBe("```\n**文字 **后文\n```\n\n**正文** 后文");
+      expect(renderMarkdown("```\n**文字 **后文\n```")).not.toContain("<strong>");
+    });
+
+    it("~~~ 围栏同样生效", () => {
+      const text = "~~~\n**文字 **后文\n~~~\n";
+      expect(normalizeStrongDelimiters(text)).toBe(text);
+    });
+
+    it("缩进代码块整行跳过", () => {
+      const text = "    **文字 **后文";
+      expect(normalizeStrongDelimiters(text)).toBe(text);
+    });
+
+    it("行内 code 里的 ** 是字面量，code 外的照常修", () => {
+      const text = "`**文字 **后文` 和 **外 **后";
+      expect(normalizeStrongDelimiters(text)).toBe("`**文字 **后文` 和 **外** 后");
+      const html = renderMarkdown("`**文字 **后文`");
+      expect(html).toContain("**文字 **后文");
+      expect(html).not.toContain("<strong>");
+    });
+
+    it("转义的 \\* 不参与配对", () => {
+      const text = "\\*\\*文字\\*\\*后文";
+      expect(normalizeStrongDelimiters(text)).toBe(text);
+    });
+  });
+
+  it("流式尾块走同一个 preprocess（renderStreaming 同样生效）", () => {
+    expect(renderStreaming("**文字：**后文")).toContain("<strong>文字：</strong>");
+  });
+
+  it("定稿渲染按原文缓存，重复渲染结果一致", () => {
+    const text = "- **是否要重启整个应用：**取决于启动方式";
+    expect(renderMarkdown(text)).toBe(renderMarkdown(text));
+  });
+
+  it("规整不新增 XSS 面：粗体内的裸 HTML 依旧被转义", () => {
+    const html = renderMarkdown("**<img src=x onerror=alert(1)>：**后文");
+    expect(html).not.toContain("<img");
+    expect(html).toContain("&lt;img");
   });
 });

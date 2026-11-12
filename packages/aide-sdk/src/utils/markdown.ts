@@ -326,6 +326,128 @@ export function createHeadingIds(): { idFor(innerHtml: string): string; reset():
   };
 }
 
+/** ── 模型输出的加粗定界符规整 ──
+ *
+ *  模型常把加粗写成 `**文字 **后文` 或 `**文字：**后文`。按 CommonMark §6.2，
+ *  收尾 `**` 必须构成 right-flanking delimiter run 才能闭合：**前一个字符不能是
+ *  Unicode 空白**；若前一个是 Unicode 标点，**后一个字符必须是空白或标点**。
+ *  上面两种写法都违规，marked 按规范把整对 `**` 当字面星号输出。
+ *
+ *  这里在 parse 前只调整「成对 `**` 附近的空白」：把收尾 `**` 前的尾随空白挪到
+ *  `**` 之后；没有可挪的空白（前是标点、后紧跟正文）时补一个空格。输出仍是标准
+ *  Markdown，闭合仍交给 marked 自己做——**不引入第二份 strong 解析**。
+ *
+ *  约束（都是为了不误伤）：
+ *  - 围栏 / 缩进代码块、行内 code、转义 `\*` 一律跳过；
+ *  - 只认内容不含 `*` 与换行的 `**...**`；`***...***`（em+strong）不碰；
+ *  - 链接 URL 里的 `**` 不做保护（模型不会往 URL 里写星号），最坏只是多一个空格；
+ *  - 单趟线性：preprocess 在流式尾块**每个增量**都会跑，绝不能 O(n²)。
+ *    没有 `**` 的文本直接返回原串（快路径）。
+ */
+const FENCE_RE = /^[ \t]{0,3}(`{3,}|~{3,})/;
+const INDENTED_CODE_RE = /^(?: {4}|\t)/;
+/** 成对 `**`，内容不含 `*` 与换行：三连星号、跨行配对一律不碰（保守降级）。 */
+const STRONG_PAIR_RE = /\*\*([^*\n]*?)\*\*/g;
+/** 与 marked 的标点/空白判定同口径（marked.esm.js 的 `\p{P}\p{S}`）。 */
+const UNICODE_PUNCT = /[\p{P}\p{S}]/u;
+const UNICODE_SPACE = /\s/u;
+const TRAILING_SPACE_RE = /[ \t]+$/;
+
+/** 行内保护区：行内 code（含多反引号）与转义序列。没有反引号/反斜杠时返回 null。 */
+function protectedMask(line: string): Uint8Array | null {
+  if (line.indexOf("`") === -1 && line.indexOf("\\") === -1) return null;
+  const mask = new Uint8Array(line.length);
+  for (let i = 0; i < line.length; ) {
+    const ch = line[i] ?? "";
+    if (ch === "\\") {
+      mask[i] = 1;
+      if (i + 1 < line.length) mask[i + 1] = 1;
+      i += 2;
+      continue;
+    }
+    if (ch === "`") {
+      let n = 1;
+      while (line[i + n] === "`") n++;
+      const close = line.indexOf("`".repeat(n), i + n);
+      // 未闭合的行内 code：保守保护到行尾（跨行 code 的下一段由各自行再判一次）。
+      const end = close === -1 ? line.length : close + n;
+      for (let j = i; j < end; j++) mask[j] = 1;
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return mask;
+}
+
+/** 单行内的规整；只改成对 `**` 附近的空白，其余字符原样。 */
+function fixStrongLine(line: string): string {
+  const mask = protectedMask(line);
+  return line.replace(STRONG_PAIR_RE, (whole: string, content: string, offset: number) => {
+    const end = offset + whole.length;
+    // 匹配落在行内 code / 转义序列里 → 那是字面星号，原样保留。
+    if (mask) {
+      for (let j = offset; j < end; j++) {
+        if (mask[j]) return whole;
+      }
+    }
+    const next = line[end] ?? "";
+    const trailing = TRAILING_SPACE_RE.exec(content);
+    if (trailing) {
+      // 收尾 `**` 前是空白 → 一定不能闭合。把这段空白挪到 `**` 后；
+      // 后面本来就是空白时直接丢掉，避免叠出两个空格。
+      const spaces = trailing[0] ?? "";
+      const body = content.slice(0, -spaces.length);
+      return `**${body}**${UNICODE_SPACE.test(next) ? "" : spaces}`;
+    }
+    const last = content[content.length - 1];
+    if (
+      last &&
+      UNICODE_PUNCT.test(last) &&
+      next !== "" &&
+      !UNICODE_SPACE.test(next) &&
+      !UNICODE_PUNCT.test(next)
+    ) {
+      // 前是标点、后紧跟正文 → 补一个空白，让 right-flanking 成立。
+      return `**${content}** `;
+    }
+    return whole;
+  });
+}
+
+/** 解析前的全文规整。导出是为了让知识库等其它 marked 实例能复用同一份规则，
+ *  也是回归测试的直接对账点。 */
+export function normalizeStrongDelimiters(src: string): string {
+  if (src.indexOf("**") === -1) return src;
+  const lines = src.split("\n");
+  let fenceChar = "";
+  let fenceLen = 0;
+  let changed = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? "";
+    const fence = FENCE_RE.exec(line);
+    if (fence) {
+      const mark = fence[1] ?? "";
+      const ch = mark[0] ?? "";
+      if (fenceChar === "") {
+        fenceChar = ch;
+        fenceLen = mark.length;
+      } else if (ch === fenceChar && mark.length >= fenceLen) {
+        fenceChar = "";
+        fenceLen = 0;
+      }
+      continue; // 围栏行本身不参与
+    }
+    if (fenceChar !== "" || INDENTED_CODE_RE.test(line)) continue;
+    const fixed = fixStrongLine(line);
+    if (fixed !== line) {
+      lines[i] = fixed;
+      changed = true;
+    }
+  }
+  return changed ? lines.join("\n") : src;
+}
+
 function makeMarked(code: (token: CodeToken) => string): Marked {
   const instance = new Marked({ gfm: true, breaks: false });
   // 计数器每次 parse 开头清零（实例是同步共享的）。
@@ -339,7 +461,7 @@ function makeMarked(code: (token: CodeToken) => string): Marked {
     hooks: {
       preprocess(src: string) {
         ids.reset();
-        return src;
+        return normalizeStrongDelimiters(src);
       },
     },
     renderer: { code, codespan, html: escapedHtml, link: safeLink, image: safeImage, heading },

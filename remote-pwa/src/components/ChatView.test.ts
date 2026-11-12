@@ -93,7 +93,7 @@ describe("ChatView（共享闭包适配）", () => {
         load_messages: () => ({
           messages: [
             { role: "user", blocks: [{ type: "text", text: "你好" }], timestamp: 1 },
-            { role: "assistant", blocks: [{ type: "text", text: "**你好！**" }], timestamp: 2 },
+            { role: "assistant", blocks: [{ type: "text", text: "**你好！** 和 **说明：**后文" }], timestamp: 2 },
           ],
           nextOffsetBytes: 0,
           endOffsetBytes: 10,
@@ -105,6 +105,9 @@ describe("ChatView（共享闭包适配）", () => {
     });
     // markdown 渲染落地（**加粗** → <strong>）
     expect(wrapper.html()).toContain("<strong>你好！</strong>");
+    // 模型把加粗写成 `**说明：**后文`（不合 CommonMark）时，SDK 的规整同样在
+    // 手机端生效——见 @aide/sdk utils/markdown.ts 的 normalizeStrongDelimiters。
+    expect(wrapper.html()).toContain("<strong>说明：</strong>");
   });
 
   it("发送：send_message 带工作区路径与 initialEffort；user_message 广播回灌后气泡上屏", async () => {
