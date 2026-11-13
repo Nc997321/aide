@@ -1,0 +1,9 @@
+if [[ -v __aide_user_zdotdir ]]; then
+    ZDOTDIR="$__aide_user_zdotdir"
+else
+    unset ZDOTDIR
+fi
+unset __aide_user_zdotdir
+if [[ -r "${ZDOTDIR:-$HOME}/.zshrc" ]]; then
+    source "${ZDOTDIR:-$HOME}/.zshrc"
+fi

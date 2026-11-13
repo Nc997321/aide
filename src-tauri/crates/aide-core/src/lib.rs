@@ -25,6 +25,7 @@ pub mod policy;
 pub mod provider;
 pub mod proxy;
 pub mod pty;
+mod terminal_input;
 pub mod registry;
 pub mod resources;
 pub mod runtime;

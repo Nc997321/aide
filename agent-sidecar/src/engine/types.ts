@@ -220,6 +220,7 @@ export type ChatEvent = ChatEventBody & { sourceId?: string; sourceOffset?: numb
 type ChatEventBody =
   | { type: "block_snapshot"; kind: "text" | "thinking"; text: string }
   | { type: "handoff_summary"; request_id: string; summary?: string; error?: string }
+  | { type: "terminal_command_suggestion"; command?: string; error?: string }
   | { type: "session_init"; session_id: string; session_profile?: "assistant" | "chat" }
   // model/modelLabel：本条 assistant 消息的真实 wire model（API 实际调用标识）——
   // 只盖在每条消息的首个块事件上（后续块事件不带）。modelLabel 是 sidecar 按
@@ -553,6 +554,8 @@ export type PermissionResponseWire =
 // 所有命令都带 session_id：SessionManager 按它路由到对应 SessionWorker。
 export type SidecarCommand =
   | import("../desktop/handoff.js").HandoffCommand
+  | import("../desktop/terminalSuggestion.js").TerminalSuggestionCommand
+  | { cmd: "close_terminal_suggestions"; conversation: string }
   | {
       cmd: "send";
       session_profile?: "assistant" | "chat";

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
+import { computed } from "vue";
 import {
   resetWorkbenchState,
   setActiveWorkspace,
@@ -17,6 +18,18 @@ import {
 
 describe("workbenchTerminalState", () => {
   beforeEach(() => resetWorkbenchState());
+
+  it("notifies derived UI when the current shell finishes starting", () => {
+    setActiveWorkspace("WS_A");
+    const id = genSessionId("WS_A");
+    addTab("WS_A", { id, label: "", shellName: "", exited: false, kind: "shell" });
+    const activeTab = computed(() => tabs.value.find(tab => tab.id === activeId.value));
+    const ready = computed(() => !!activeTab.value?.shellName);
+    expect(ready.value).toBe(false);
+    setShellName(id, "PowerShell");
+    expect(ready.value).toBe(true);
+    expect(activeTab.value?.shellName).toBe("PowerShell");
+  });
 
   it("genSessionId 带工作空间归属且全局自增不复用", () => {
     const a1 = genSessionId("WS_A");

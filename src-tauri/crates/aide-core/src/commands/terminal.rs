@@ -12,8 +12,14 @@ use crate::registry::{blocking, Command as HostCommand};
 use crate::skills::{SkillMeta, SkillRegistry};
 use crate::{command, Core};
 
+#[path = "terminal_suggestion.rs"]
+mod suggestion;
+
 pub static COMMANDS: &[HostCommand] = &[
     command!("pty_write", pty_write),
+    command!("pty_suggest_command", suggestion::suggest),
+    command!("pty_close_suggestions", suggestion::close),
+    command!("pty_execute_suggestion", pty_execute_suggestion),
     command!("pty_resize", pty_resize),
     command!("pty_kill", pty_kill),
     command!("poll_pty_output", poll_pty_output),
@@ -32,6 +38,35 @@ pub struct PtyWriteArgs {
 
 async fn pty_write(core: Arc<Core>, a: PtyWriteArgs) -> Result<(), String> {
     core.pty.write(&a.session_id, &a.data)
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PtyExecuteSuggestionArgs {
+    session_id: String,
+    command: String,
+    bracketed_paste: bool,
+    ssh_token: Option<String>,
+}
+
+async fn pty_execute_suggestion(core: Arc<Core>, a: PtyExecuteSuggestionArgs) -> Result<(), String> {
+    let data = if let Some(token) = a.ssh_token {
+        use base64::Engine;
+        if token.len() != 32 || !token.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err("SSH 会话标识无效".into());
+        }
+        let command = suggestion::validate_command(&a.command)?;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(command);
+        let guarded = format!("__aide_ssh_execute {token} {encoded}");
+        if a.bracketed_paste {
+            format!("\x1b[200~{guarded}\x1b[201~\r")
+        } else {
+            format!("{guarded}\r")
+        }
+    } else {
+        suggestion::execution_input(&a.command, a.bracketed_paste)?
+    };
+    core.pty.write_checked(&a.session_id, data)
 }
 
 #[derive(Deserialize)]
@@ -102,28 +137,6 @@ fn resolve_shell(shell: &str) -> Result<String, String> {
     }
 }
 
-/// Windows 终端 UTF-8 启动参数（与 sidecar winBashEnv 同一思路：chcp 65001）。
-/// ConPTY 按控制台代码页解释子进程写出的原始字节——中文机器默认 GBK(936)，
-/// 输出 UTF-8 的工具（git/node 等）会被误解码成全角乱码；启动时把代码页切到
-/// 65001 后 ConPTY 按 UTF-8 解释，乱码消失。按 shell 类型给对应启动参数；
-/// 不认识的 shell（如用户自配的 bash）返回空、不干预。
-#[cfg(target_os = "windows")]
-fn utf8_console_args(program: &str) -> Vec<String> {
-    let name = std::path::Path::new(program)
-        .file_name()
-        .map(|n| n.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
-    match name.as_str() {
-        "powershell.exe" | "pwsh.exe" => vec![
-            "-NoExit".into(),
-            "-Command".into(),
-            "chcp 65001 >$null".into(),
-        ],
-        "cmd.exe" => vec!["/k".into(), "chcp 65001 >nul".into()],
-        _ => Vec::new(),
-    }
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PtySpawnShellArgs {
@@ -132,28 +145,29 @@ pub struct PtySpawnShellArgs {
     cols: u16,
     cwd: String,
     shell: String,
+    input_token: Option<String>,
 }
 
 /// Spawn a general-purpose shell in a PTY (workbench terminal).
 /// `shell` empty → OS default shell.
-async fn pty_spawn_shell(core: Arc<Core>, a: PtySpawnShellArgs) -> Result<(), String> {
+async fn pty_spawn_shell(core: Arc<Core>, a: PtySpawnShellArgs) -> Result<String, String> {
     blocking(move || {
         let events = core.events();
         let program = resolve_shell(&a.shell)?;
-        #[cfg(target_os = "windows")]
-        let args = utf8_console_args(&program);
-        #[cfg(not(target_os = "windows"))]
-        let args: Vec<String> = Vec::new();
-        let arg_refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         core.pty.spawn_shell(
             &a.session_id,
             &program,
-            &arg_refs,
+            a.input_token.as_deref(),
             &PathBuf::from(&a.cwd),
             a.rows,
             a.cols,
             events,
-        )
+        )?;
+        Ok(std::path::Path::new(&program)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(&program)
+            .to_owned())
     })
     .await
 }
@@ -217,34 +231,4 @@ pub struct ScanPluginSkillsArgs {
 
 async fn scan_plugin_skills(_core: Arc<Core>, a: ScanPluginSkillsArgs) -> Result<Vec<SkillMeta>, String> {
     blocking(move || Ok(SkillRegistry::new().list(a.provider.as_deref(), std::path::Path::new(&a.cwd)))).await
-}
-
-#[cfg(all(test, target_os = "windows"))]
-mod tests {
-    use super::utf8_console_args;
-
-    #[test]
-    fn powershell_gets_noexit_chcp() {
-        for p in [
-            "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
-            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
-        ] {
-            let args = utf8_console_args(p);
-            assert_eq!(args.len(), 3);
-            assert_eq!(args[0], "-NoExit");
-            assert_eq!(args[1], "-Command");
-            assert!(args[2].contains("chcp 65001"));
-        }
-    }
-
-    #[test]
-    fn cmd_gets_k_chcp() {
-        let args = utf8_console_args("C:\\Windows\\System32\\cmd.exe");
-        assert_eq!(args, vec!["/k".to_string(), "chcp 65001 >nul".to_string()]);
-    }
-
-    #[test]
-    fn unknown_shell_untouched() {
-        assert!(utf8_console_args("C:\\Program Files\\Git\\bin\\bash.exe").is_empty());
-    }
 }

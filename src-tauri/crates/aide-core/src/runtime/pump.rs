@@ -97,6 +97,9 @@ pub fn start(p: Pump) {
                     let Ok(mut event) = serde_json::from_str::<Value>(&line) else {
                         continue;
                     };
+                    if core.runtime.receive_terminal_suggestion(&event) {
+                        continue;
+                    }
                     // agent LSP 查询：Rust ↔ Runtime 的内部 request/response，**不转发 Vue**。
                     // LspManager 就在本进程，直接就地派发。执行体在 `runtime/lsp_agent.rs`——这里只做
                     // 「拦截 + 派发」，业务不内联（同 browser 的理由：本文件有 1000 行拆分线）。

@@ -152,7 +152,10 @@ export function isRunRestarting(sessionId: string): boolean { return restartingS
 
 // 派生（给 UI）：只反映当前激活工作空间
 // 读 _wbVersion 让 computed 在 groups Map 变更时重新求值
-export const tabs = computed<WbTabInfo[]>(() => { void _wbVersion.value; return groups.get(activeWorkspaceKeyRef.value)?.tabs ?? []; });
+export const tabs = computed<WbTabInfo[]>(() => {
+  void _wbVersion.value;
+  return groups.get(activeWorkspaceKeyRef.value)?.tabs.map(tab => ({ ...tab })) ?? [];
+});
 export const activeId = computed<string>(() => { void _wbVersion.value; return groups.get(activeWorkspaceKeyRef.value)?.activeId ?? ""; });
 export const activeExited = computed<boolean>(() => {
   void _wbVersion.value;

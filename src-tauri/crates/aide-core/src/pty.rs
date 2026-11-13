@@ -35,6 +35,7 @@ struct LaunchParams<'a> {
     size: PtySize,
     events: Arc<dyn EventSink>,
     payload_kind: ExitPayload,
+    startup_dir: Option<tempfile::TempDir>,
 }
 
 /// `open_pty` 的产物：PTY 句柄 + 子进程 + 共享输出缓冲。
@@ -54,6 +55,7 @@ struct WaiterJob {
     sid: String,
     events: Arc<dyn EventSink>,
     payload_kind: ExitPayload,
+    startup_dir: Option<tempfile::TempDir>,
 }
 
 struct ShellSession {
@@ -117,6 +119,7 @@ impl ShellManager {
             sid: params.session_id.to_string(),
             events: params.events,
             payload_kind: params.payload_kind,
+            startup_dir: params.startup_dir,
         });
         Ok(())
     }
@@ -127,14 +130,14 @@ impl ShellManager {
         &self,
         session_id: &str,
         program: &str,
-        args: &[&str],
+        input_token: Option<&str>,
         cwd: &PathBuf,
         rows: u16,
         cols: u16,
         events: Arc<dyn EventSink>,
     ) -> Result<(), String> {
         let mut cmd = CommandBuilder::new(program);
-        cmd.args(args);
+        let startup_dir = crate::terminal_input::configure(&mut cmd, program, input_token);
         cmd.cwd(cwd);
 
         self.launch(LaunchParams {
@@ -149,6 +152,7 @@ impl ShellManager {
             },
             events,
             payload_kind: ExitPayload::Plain,
+            startup_dir,
         })
     }
 
@@ -210,6 +214,7 @@ impl ShellManager {
             },
             events,
             payload_kind: ExitPayload::Run,
+            startup_dir: None,
         })
     }
 
@@ -241,6 +246,16 @@ impl ShellManager {
         };
         let _ = tx.try_send(data.to_string());
         Ok(())
+    }
+
+    /// Confirmed command insertion reports a closed terminal or full input queue.
+    pub(crate) fn write_checked(&self, session_id: &str, data: String) -> Result<(), String> {
+        let sessions = self.sessions.lock().map_err(|e| e.to_string())?;
+        let session = sessions.get(session_id).ok_or("终端已关闭")?;
+        session.writer_tx.try_send(data).map_err(|error| match error {
+            mpsc::TrySendError::Full(_) => "终端输入队列已满，请稍后重试".into(),
+            mpsc::TrySendError::Disconnected(_) => "终端已关闭".into(),
+        })
     }
 
     /// Kill a specific session's PTY.
@@ -344,8 +359,10 @@ fn spawn_waiter(job: WaiterJob) {
             sid,
             events,
             payload_kind,
+            startup_dir,
         } = job;
         let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
+        drop(startup_dir);
 
         if let Ok(mut map) = sessions.lock() {
             map.remove(&sid);

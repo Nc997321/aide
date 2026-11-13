@@ -1,0 +1,18 @@
+# Run the user's startup files with their own ZDOTDIR.
+typeset __aide_zdotdir="$ZDOTDIR"
+if [[ -v AIDE_TERMINAL_ZDOTDIR ]]; then
+    export ZDOTDIR="$AIDE_TERMINAL_ZDOTDIR"
+else
+    unset ZDOTDIR
+fi
+unset AIDE_TERMINAL_ZDOTDIR
+if [[ -r "${ZDOTDIR:-$HOME}/.zshenv" ]]; then
+    source "${ZDOTDIR:-$HOME}/.zshenv"
+fi
+if [[ -o rcs ]]; then
+    if [[ -v ZDOTDIR ]]; then
+        typeset __aide_user_zdotdir="$ZDOTDIR"
+    fi
+    ZDOTDIR="$__aide_zdotdir"
+fi
+unset __aide_zdotdir

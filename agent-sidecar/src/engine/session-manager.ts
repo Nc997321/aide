@@ -7,6 +7,7 @@ import type {
 } from "./types.js";
 import { SessionWorker } from "./session-worker.js";
 import { summarizeHandoff } from "../desktop/handoff.js";
+import { closeTerminalSuggestions, suggestTerminalCommand } from "../desktop/terminalSuggestion.js";
 import { resolveLspResult } from "../extensions/lspClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { resolveComputerResult } from "../extensions/computer/client.js";
@@ -81,6 +82,20 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
+    if (cmd.cmd === "close_terminal_suggestions") {
+      closeTerminalSuggestions(cmd.conversation);
+      return;
+    }
+    if (cmd.cmd === "suggest_terminal_command") {
+      void suggestTerminalCommand(cmd).then(
+        (command) => this.emitToStdout(cmd.session_id, { type: "terminal_command_suggestion", command }),
+        (error: unknown) => this.emitToStdout(cmd.session_id, {
+          type: "terminal_command_suggestion",
+          error: error instanceof Error ? error.message : "终端命令生成失败",
+        }),
+      );
+      return;
+    }
     if (cmd.cmd === "summarize_handoff") {
       void summarizeHandoff(cmd).then(
         (summary) => this.emitToStdout(cmd.session_id, { type: "handoff_summary", request_id: cmd.request_id, summary }),

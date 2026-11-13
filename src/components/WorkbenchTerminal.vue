@@ -4,6 +4,7 @@ import { useWorkbenchTerminal } from "../composables/useWorkbenchTerminal";
 import { useTerminalSearch } from "../composables/useTerminalSearch";
 import { useChatPaneWidth } from "../composables/useChatPaneWidth";
 import TerminalSearchBar from "./workbenchterminal/SearchBar.vue";
+import TerminalCommandBar from "./workbenchterminal/CommandBar.vue";
 import "xterm/css/xterm.css";
 
 const props = defineProps<{ workspaceKey: string; cwd: string; height: number }>();
@@ -37,7 +38,9 @@ const { chatPaneWidth, chatPaneLeft } = useChatPaneWidth();
 // 水平方向对齐聚焦聊天窗（chatPaneLeft/Width）；未测得时兜底整窗 10px 边距。
 const WORKBENCH_TOP = "50px";
 const pillStyle = computed(() => {
-  const base = { height: props.height + "px", top: WORKBENCH_TOP };
+  const hasPendingCommand = wb.inlineRequest.value?.sessionId === wb.activeId.value;
+  const height = hasPendingCommand ? Math.max(props.height, 180) : props.height;
+  const base = { height: height + "px", top: WORKBENCH_TOP };
   if (chatPaneWidth.value > 0) {
     return { ...base, left: `${chatPaneLeft.value}px`, width: `${chatPaneWidth.value}px` };
   }
@@ -80,10 +83,7 @@ watch(() => wb.activeId.value, (id) => {
   nextTick(() => wb.switchTo(id));
 });
 
-const activeTabKind = computed<"shell" | "run" | undefined>(() => {
-  const t = wb.tabs.value.find(t => t.id === wb.activeId.value);
-  return t?.kind;
-});
+const activeTab = computed(() => wb.tabs.value.find(t => t.id === wb.activeId.value));
 
 function addTerminal() {
   wb.createSession(props.workspaceKey, props.cwd);
@@ -133,7 +133,7 @@ function onResizeStart(e: MouseEvent) {
       <div ref="containerRef" class="wb-container">
         <TerminalSearchBar v-if="search.visible.value" ref="searchBarRef" />
         <div
-          v-if="wb.activeExited.value && activeTabKind === 'shell'"
+          v-if="wb.activeExited.value && activeTab?.kind === 'shell'"
           class="workbench-exited"
           tabindex="0"
           @keydown.enter.prevent="wb.restart(wb.activeId.value, props.cwd)"
@@ -143,6 +143,16 @@ function onResizeStart(e: MouseEvent) {
           <div class="workbench-exited__hint">按 Enter 或点击重启</div>
         </div>
       </div>
+      <template v-for="block in wb.inlineBlocks" :key="block.id">
+        <Teleport v-if="block.target" :to="block.target">
+          <TerminalCommandBar
+            :session-id="block.sessionId"
+            :block-id="block.id"
+            :initial-request="block.text"
+            :actionable="wb.visible.value && wb.activeId.value === block.sessionId && !wb.activeExited.value && wb.inlineRequest.value === block"
+          />
+        </Teleport>
+      </template>
       <div class="workbench-resize-handle" @mousedown="onResizeStart" v-tooltip="'拖动调整高度'"></div>
     </div>
   </div>
@@ -286,6 +296,7 @@ function onResizeStart(e: MouseEvent) {
   transition: color 0.12s, background 0.12s;
 }
 .wb-btn:hover { background: var(--aide-surface-default); color: var(--aide-text-secondary); }
+.wb-btn:disabled { opacity: 0.5; cursor: default; }
 .wb-btn--minimize { font-size: 13px; font-weight: 700; }
 
 /* ── Terminal container ── */

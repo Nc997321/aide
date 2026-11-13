@@ -1,11 +1,13 @@
-import { ref, watch, nextTick } from "vue";
+import { ref, shallowReactive, shallowRef, watch, nextTick } from "vue";
 import { listen } from "../api";
 import { Terminal } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { api } from "../api";
+import type { TerminalSuggestionTurn } from "@aide/sdk/api";
 import { useSettings } from "./useSettings";
 import { registerSearch, unregisterSearch, useTerminalSearch } from "./useTerminalSearch";
 import { buildXtermTheme } from "../utils/xterm";
+import { isTerminalReply } from "../utils/terminalReply";
 import { MONO_FONT_STACK } from "../utils/fonts";
 import { windowsPtyConfig } from "../utils/platform";
 import {
@@ -28,16 +30,6 @@ import {
   resetWorkbenchState,
   type WbTabKind,
 } from "./workbenchTerminalState";
-import { hostApi } from "@aide/sdk";
-
-/** 本窗口 Host 的系统（`windows` / `linux` / `macos`）；拿不到时回落 GUI 所在系统。 */
-async function hostOs(): Promise<string> {
-  try {
-    return (await hostApi.current()).os.toLowerCase();
-  } catch {
-    return navigator.platform.toLowerCase();
-  }
-}
 
 // 仅保留 xterm/div 物理对象；tab 元数据/分组/激活全在核心
 interface WbSession {
@@ -50,10 +42,65 @@ interface WbSession {
   div: HTMLDivElement;
   observer: ResizeObserver;
   spawned: boolean;
+  inputToken?: string;
+  awaitingInlineRequest?: boolean;
+  suggestionHistory?: Map<number, TerminalSuggestionTurn>;
+  ssh?: { os: string; shell: string; guard: string; history: Map<number, TerminalSuggestionTurn> };
 }
 
 const sessions = new Map<string, WbSession>();   // sessionId -> xterm/div
+function closeSuggestions(conversation?: string) {
+  if (conversation) {
+    void api.ptyCloseSuggestions(conversation).catch(error => {
+      console.warn("[terminal] closing suggestion CLI failed:", error);
+    });
+  }
+}
+
+function closeSessionSuggestions(session: WbSession) {
+  closeSuggestions(session.inputToken);
+  closeSuggestions(session.ssh?.guard);
+}
+
 const visible = ref(false);
+interface InlineCommandBlock {
+  id: number;
+  sessionId: string;
+  text: string;
+  ssh?: WbSession["ssh"];
+  target?: HTMLElement;
+}
+const inlineBlocks = shallowReactive<InlineCommandBlock[]>([]);
+const inlineRequest = shallowRef<InlineCommandBlock>();
+let nextInlineBlockId = 0;
+
+function addInlineCommandBlock(session: WbSession, text: string) {
+  const marker = session.terminal.registerMarker();
+  if (!marker) return;
+  const decoration = session.terminal.registerDecoration({ marker, height: 4, layer: "top" });
+  if (!decoration) {
+    marker.dispose();
+    return;
+  }
+  const block = shallowReactive<InlineCommandBlock>({
+    id: ++nextInlineBlockId,
+    sessionId: session.id,
+    text,
+    ssh: session.ssh,
+  });
+  inlineBlocks.push(block);
+  inlineRequest.value = block;
+  decoration.onRender((element) => {
+    if (block.target) return;
+    element.style.width = "100%";
+    block.target = element;
+  });
+  decoration.onDispose(() => {
+    const index = inlineBlocks.indexOf(block);
+    if (index >= 0) inlineBlocks.splice(index, 1);
+    if (inlineRequest.value === block) inlineRequest.value = undefined;
+  });
+}
 let containerEl: HTMLDivElement | null = null;
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 let pollTimerInterval = 0;
@@ -143,6 +190,7 @@ function ensureExitListener() {
         // 进程轮询）、不 markExited。新进程的退出会另发一条 pty-exit。
         if (s.kind === "run" && isRunRestarting(s.id)) return;
         s.spawned = false;
+        closeSessionSuggestions(s);
         // run tab：不套 shell 的退出覆盖层（覆盖层会盖住程序输出且要交互重启），
         // 改为在 xterm 末尾直接写一行退出提示——程序自己的 BUILD SUCCESS/FAILURE
         // 已说明成败，这里只标「进程到此结束」的边界，让用户一眼看出已退出而非卡死。
@@ -195,7 +243,48 @@ export function useWorkbenchTerminal() {
     terminal.open(div);
     fitAddon.fit();
 
+    terminal.parser.registerOscHandler(633, (data) => {
+      const s = sessions.get(id);
+      if (s?.inputToken) {
+        const [kind, token, os, shell, guard] = data.split(";");
+        if (token === s.inputToken && (kind === "AideSshStart" || kind === "AideSshEnd")) {
+          closeSuggestions(s.ssh?.guard);
+          if (kind === "AideSshStart" && (os === "linux" || os === "macos")
+            && (shell === "bash" || shell === "zsh") && /^[0-9a-f]{32}$/.test(guard ?? "")) {
+            s.ssh = { os, shell, guard, history: new Map() };
+          } else {
+            s.ssh = undefined;
+          }
+          if (inlineRequest.value?.sessionId === id) inlineRequest.value = undefined;
+          return true;
+        }
+      }
+      const prefix = "AideInputBlock;";
+      if (!data.startsWith(prefix)) return false;
+      if (!s?.inputToken || !s.spawned || !s.awaitingInlineRequest || !visible.value || coreActiveId.value !== id) return true;
+      const marker = prefix + s.inputToken + ";";
+      if (!data.startsWith(marker)) return true;
+      const payload = data.slice(marker.length);
+      if (payload.length > 5500) return true;
+      try {
+        const bytes = Uint8Array.from(atob(payload), (char) => char.charCodeAt(0));
+        const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+        if (text && text.length <= 1000 && !/[\x00-\x1f\x7f]/.test(text)) {
+          s.awaitingInlineRequest = false;
+          addInlineCommandBlock(s, text);
+        }
+      } catch {
+        // Ignore malformed terminal output.
+      }
+      return true;
+    });
+
     terminal.onData((data) => {
+      if (!isTerminalReply(data)) {
+        const session = sessions.get(id);
+        if (session) session.awaitingInlineRequest = data === "\r";
+        if (inlineRequest.value?.sessionId === id) inlineRequest.value = undefined;
+      }
       api.ptyWrite(id, data).catch((e) => {
         // 高频路径静默 = 键击无声丢失，用户以为 shell 还活着。失败且 shell
         // 未被标记退出时，warn + 在 xterm 写一行可见反馈。
@@ -237,6 +326,7 @@ export function useWorkbenchTerminal() {
   function closeSession(id: string) {
     const s = sessions.get(id);
     if (!s) return;
+    closeSessionSuggestions(s);
     const wk = s.workspaceKey;            // 先存，removeTab 后 workspaceKeyOf 查不到
     api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
     s.observer.disconnect();
@@ -260,15 +350,18 @@ export function useWorkbenchTerminal() {
     // 同 createSession：入口 ensureSettingsWatchers 已保证非空
     const stg = settingsRef!;
     try {
-      await api.ptySpawnShell(id, s.terminal.rows, s.terminal.cols, cwd, stg.shellPath ?? "");
-      // shell 跑在本窗口连着的 Host 上：默认 shell 名跟 Host 的系统走，不跟 GUI 所在系统走
-      // （Windows 上的 WSL 窗口开的是 Linux 登录 shell）。
-      const plat = await hostOs();
-      s.shellName = stg.shellPath
-        ? deriveShellName(stg.shellPath)
-        : (plat.includes("win") ? "PowerShell" : plat.includes("mac") ? "zsh" : "bash");
-      setShellName(id, s.shellName);
+      closeSessionSuggestions(s);
+      s.inputToken = Array.from(crypto.getRandomValues(new Uint8Array(16)),
+        (byte) => byte.toString(16).padStart(2, "0")).join("");
+      s.awaitingInlineRequest = false;
+      s.suggestionHistory = new Map();
+      s.ssh = undefined;
+      if (inlineRequest.value?.sessionId === id) inlineRequest.value = undefined;
+      s.shellName = await api.ptySpawnShell(
+        id, s.terminal.rows, s.terminal.cols, cwd, stg.shellPath ?? "", s.inputToken,
+      );
       s.spawned = true;
+      setShellName(id, deriveShellName(s.shellName));
       if (initialCommand) {
         // Give the shell a moment to print its prompt before we send input
         await new Promise<void>(r => setTimeout(r, 400));
@@ -382,11 +475,89 @@ export function useWorkbenchTerminal() {
     s.terminal.focus();
   }
 
+  async function suggestCommand(id: string, request: string, blockId: number): Promise<string> {
+    const s = sessions.get(id);
+    if (!s?.spawned || !s.inputToken || s.kind !== "shell" || id !== coreActiveId.value) {
+      throw new Error("当前终端尚未就绪");
+    }
+    const block = inlineRequest.value;
+    if (block?.id !== blockId || block.sessionId !== id || block.ssh !== s.ssh) {
+      throw new Error("终端输入已变化，请重新提交自然语言请求");
+    }
+    const history = block.ssh?.history ?? (s.suggestionHistory ??= new Map());
+    const previous = [...history.entries()]
+      .filter(([key, turn]) => key < blockId && (turn.command || turn.outcome !== "suggested"))
+      .sort(([left], [right]) => left - right)
+      .map(([, turn]) => turn);
+    const turn: TerminalSuggestionTurn = { id: blockId, request, outcome: "suggested" };
+    const conversation = block.ssh?.guard ?? s.inputToken;
+    history.set(blockId, turn);
+    try {
+      const command = await api.ptySuggestCommand(
+        conversation, blockId, block.ssh?.shell ?? s.shellName, request, previous, block.ssh?.os,
+      );
+      if (sessions.get(id) !== s || !s.spawned || conversation !== (s.ssh?.guard ?? s.inputToken)) {
+        // The close request may have reached the Host before generation started.
+        if (sessions.get(id) !== s || !s.spawned || block.ssh || s.inputToken !== conversation) {
+          closeSuggestions(conversation);
+        }
+        throw new Error("终端会话已切换或关闭");
+      }
+      if (command) turn.command = command;
+      else if (turn.outcome === "suggested") turn.outcome = "needs_details";
+      return command;
+    } catch (error) {
+      if (turn.outcome === "suggested") history.delete(blockId);
+      throw error;
+    }
+  }
+
+  async function executeSuggestion(id: string, command: string, blockId: number) {
+    const s = sessions.get(id);
+    if (!visible.value || !s?.spawned || s.kind !== "shell" || id !== coreActiveId.value) {
+      throw new Error("当前终端已切换或关闭");
+    }
+    if (s.terminal.buffer.active.type === "alternate") {
+      throw new Error("请先返回 shell 提示符");
+    }
+    if (inlineRequest.value?.sessionId !== id || inlineRequest.value.id !== blockId || inlineRequest.value.ssh !== s.ssh) {
+      throw new Error("终端输入已变化，请重新提交自然语言请求");
+    }
+    const approvedBlock = inlineRequest.value;
+    s.terminal.options.disableStdin = true;
+    try {
+      await api.ptyExecuteSuggestion(id, command, s.terminal.modes.bracketedPasteMode,
+        approvedBlock.ssh?.guard);
+      const turn = (approvedBlock.ssh?.history ?? s.suggestionHistory)?.get(blockId);
+      if (turn) {
+        turn.outcome = "submitted";
+        turn.submittedCommand = command;
+      }
+      if (inlineRequest.value === approvedBlock) inlineRequest.value = undefined;
+    } finally {
+      if (sessions.get(id) === s) s.terminal.options.disableStdin = false;
+    }
+    if (visible.value && id === coreActiveId.value && sessions.get(id) === s) {
+      s.terminal.focus();
+    }
+  }
+
+  function rejectSuggestion(id: string, blockId: number) {
+    if (inlineRequest.value?.sessionId === id && inlineRequest.value.id === blockId) {
+      const turn = (inlineRequest.value.ssh?.history ?? sessions.get(id)?.suggestionHistory)?.get(blockId);
+      inlineRequest.value = undefined;
+      if (turn) turn.outcome = "rejected";
+      sessions.get(id)?.terminal.focus();
+    }
+  }
+
   function dispose() {
     stopPolling();
+    inlineRequest.value = undefined;
     unlistenExit?.();
     unlistenExit = null;
     for (const [id, s] of sessions) {
+      closeSessionSuggestions(s);
       api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
       s.observer.disconnect();
       s.terminal.dispose();
@@ -403,6 +574,7 @@ export function useWorkbenchTerminal() {
     for (const id of ids) {
       const s = sessions.get(id);
       if (s) {
+        closeSessionSuggestions(s);
         api.ptyKill(id).catch((e) => console.warn("[terminal] ptyKill failed:", id, e));
         s.observer.disconnect();
         s.terminal.dispose();
@@ -415,6 +587,8 @@ export function useWorkbenchTerminal() {
 
   return {
     visible,
+    inlineRequest,
+    inlineBlocks,
     tabs: coreTabs,
     activeId: coreActiveId,
     activeExited: coreActiveExited,
@@ -429,6 +603,9 @@ export function useWorkbenchTerminal() {
     toggle,
     clear,
     restart,
+    suggestCommand,
+    executeSuggestion,
+    rejectSuggestion,
     dispose,
     killWorkspaceTerminals,
     setActiveWorkspace: coreSetActiveWorkspace,

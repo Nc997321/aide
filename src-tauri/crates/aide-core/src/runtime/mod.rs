@@ -16,6 +16,7 @@ pub mod lsp_agent;
 pub mod permission_registry;
 pub mod ports;
 pub mod pump;
+mod terminal_suggestion;
 use crate::provider::connection_fingerprint;
 use crate::settings::{SettingsScope, SettingsService};
 use crate::Core;
@@ -75,6 +76,7 @@ pub struct AgentRuntimeManager {
     pub bg_tasks: bg_registry::BgTaskRegistry,
     /// 实时请求的快照投影：晚加入的客户端恢复未决交互。
     pub pending_permissions: permission_registry::PermissionRegistry,
+    terminal_suggestions: terminal_suggestion::PendingSuggestions,
     /// GUI 侧能力（浏览器查询 / 诊断 / 自动化观测），挂 GUI 的前门注入。见 [`ports`]。
     hooks: OnceLock<Box<dyn AgentHooks>>,
 }
@@ -96,6 +98,7 @@ impl AgentRuntimeManager {
             job: Mutex::new(None),
             bg_tasks: bg_registry::BgTaskRegistry::default(),
             pending_permissions: permission_registry::PermissionRegistry::default(),
+            terminal_suggestions: terminal_suggestion::PendingSuggestions::default(),
             hooks: OnceLock::new(),
         }
     }

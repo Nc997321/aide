@@ -161,6 +161,14 @@ export interface DiagGauges {
   panels: number;
 }
 
+export interface TerminalSuggestionTurn {
+  id: number;
+  request: string;
+  command?: string;
+  submittedCommand?: string;
+  outcome: "suggested" | "submitted" | "rejected" | "needs_details";
+}
+
 export const api = {
   // Shell (workbench terminal)
   ptyWrite(sessionId: string, data: string): Promise<void> {
@@ -175,8 +183,17 @@ export const api = {
   pollPtyOutput(sessionId: string): Promise<string> {
     return getTransport().invoke("poll_pty_output", { sessionId });
   },
-  ptySpawnShell(sessionId: string, rows: number, cols: number, cwd: string, shell: string): Promise<void> {
-    return getTransport().invoke("pty_spawn_shell", { sessionId, rows, cols, cwd, shell });
+  ptySpawnShell(sessionId: string, rows: number, cols: number, cwd: string, shell: string, inputToken?: string): Promise<string> {
+    return getTransport().invoke("pty_spawn_shell", { sessionId, rows, cols, cwd, shell, inputToken });
+  },
+  ptySuggestCommand(conversation: string, turnId: number, shell: string, request: string, history: TerminalSuggestionTurn[], remoteOs?: string): Promise<string> {
+    return getTransport().invoke("pty_suggest_command", { conversation, turnId, shell, request, history, remoteOs });
+  },
+  ptyCloseSuggestions(conversation: string): Promise<void> {
+    return getTransport().invoke("pty_close_suggestions", { conversation });
+  },
+  ptyExecuteSuggestion(sessionId: string, command: string, bracketedPaste: boolean, sshToken?: string): Promise<void> {
+    return getTransport().invoke("pty_execute_suggestion", { sessionId, command, bracketedPaste, sshToken });
   },
 
   // Chat (Agent SDK)
