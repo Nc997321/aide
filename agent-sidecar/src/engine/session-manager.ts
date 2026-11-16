@@ -8,6 +8,7 @@ import type {
 import { SessionWorker } from "./session-worker.js";
 import { summarizeHandoff } from "../desktop/handoff.js";
 import { closeTerminalSuggestions, suggestTerminalCommand } from "../desktop/terminalSuggestion.js";
+import { analyzeProjectTasks } from "../desktop/projectTasks.js";
 import { resolveLspResult } from "../extensions/lspClient.js";
 import { resolveBrowserResult } from "../extensions/browserClient.js";
 import { resolveComputerResult } from "../extensions/computer/client.js";
@@ -82,6 +83,16 @@ export class SessionManager {
    * - session_stop：停止并移除 worker
    */
   handleCommand(cmd: SidecarCommand): void {
+    if (cmd.cmd === "analyze_project_tasks") {
+      void analyzeProjectTasks(cmd).then(
+        (command) => this.emitToStdout(cmd.session_id, { type: "terminal_command_suggestion", command }),
+        (error: unknown) => this.emitToStdout(cmd.session_id, {
+          type: "terminal_command_suggestion",
+          error: error instanceof Error ? error.message : "Haiku 项目分析失败",
+        }),
+      );
+      return;
+    }
     if (cmd.cmd === "close_terminal_suggestions") {
       closeTerminalSuggestions(cmd.conversation);
       return;

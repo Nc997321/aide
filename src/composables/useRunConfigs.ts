@@ -1,6 +1,6 @@
 import { ref, computed } from "vue";
 import { api } from "../api";
-import type { RunConfig, RunTarget } from "../types";
+import type { ProjectTaskCandidate, RunConfig } from "../types";
 
 // Module-level singleton — shared across all callers.
 const configs = ref<RunConfig[]>([]);
@@ -15,41 +15,30 @@ function generateId(): string {
   return `rc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
 }
 
-async function persist() {
-  if (!currentWsKey.value) return;
-  // 落盘失败降级提示：配置仍在内存中生效，但切工作区/重启后丢失
-  await api.saveRunConfigs(currentWsKey.value, configs.value).catch((e) => {
-    console.warn("[run-configs] persist failed, changes lost on workspace switch/restart:", e);
-  });
+async function persist(next: RunConfig[]) {
+  const wsKey = currentWsKey.value;
+  if (!wsKey) throw new Error("请先打开工作区");
+  await api.saveRunConfigs(wsKey, next);
+  if (currentWsKey.value === wsKey) configs.value = next;
 }
 
 export function useRunConfigs() {
-  // Load configs for a workspace. Auto-detects and saves on first open.
-  async function load(wsKey: string, cwd: string) {
+  async function load(wsKey: string) {
     currentWsKey.value = wsKey;
-    const saved = await api.listRunConfigs(wsKey).catch(() => [] as RunConfig[]);
+    const saved = await api.listRunConfigs(wsKey).catch((error) => {
+      console.warn("[run-configs] load failed:", error);
+      return null;
+    });
     if (currentWsKey.value !== wsKey) return;  // stale: workspace switched mid-flight
-    configs.value = saved;
+    configs.value = saved ?? [];
+    if (!saved) {
+      activeId.value = "";
+      return;
+    }
 
     // Restore activeId if still valid; otherwise default to first config.
     if (!configs.value.find(c => c.id === activeId.value)) {
       activeId.value = configs.value[0]?.id ?? "";
-    }
-
-    // First time for this workspace: auto-detect and silently populate.
-    if (configs.value.length === 0 && cwd) {
-      const targets = await api.detectRunTargets(cwd).catch(() => [] as RunTarget[]);
-      if (currentWsKey.value !== wsKey) return;  // stale: workspace switched mid-flight
-      if (targets.length > 0) {
-        configs.value = targets.map(t => ({
-          id: generateId(),
-          name: t.name,
-          cwd: t.cwd,
-          command: t.command,
-        }));
-        activeId.value = configs.value[0]?.id ?? "";
-        await persist();
-      }
     }
   }
 
@@ -59,43 +48,44 @@ export function useRunConfigs() {
 
   async function add(partial: Omit<RunConfig, "id">): Promise<RunConfig> {
     const config: RunConfig = { id: generateId(), ...partial };
-    configs.value = [...configs.value, config];
+    await persist([...configs.value, config]);
     if (!activeId.value) activeId.value = config.id;
-    await persist();
     return config;
   }
 
   async function update(updated: RunConfig): Promise<void> {
-    configs.value = configs.value.map(c => c.id === updated.id ? updated : c);
-    await persist();
+    await persist(configs.value.map(c => c.id === updated.id ? updated : c));
   }
 
   async function remove(id: string): Promise<void> {
-    configs.value = configs.value.filter(c => c.id !== id);
+    await persist(configs.value.filter(c => c.id !== id));
     if (activeId.value === id) {
       activeId.value = configs.value[0]?.id ?? "";
     }
-    await persist();
   }
 
-  // Returns detected targets without saving (used by dialog for user review).
-  async function detectAndAdd(cwd: string): Promise<RunTarget[]> {
-    return api.detectRunTargets(cwd).catch(() => [] as RunTarget[]);
-  }
-
-  // Adds a list of RunTargets as new RunConfigs and persists.
-  async function addTargets(targets: RunTarget[]): Promise<void> {
-    const newConfigs: RunConfig[] = targets.map(t => ({
-      id: generateId(),
-      name: t.name,
-      cwd: t.cwd,
-      command: t.command,
-    }));
-    configs.value = [...configs.value, ...newConfigs];
-    if (!activeId.value && configs.value.length > 0) {
-      activeId.value = configs.value[0].id;
+  async function applyCandidates(targets: ProjectTaskCandidate[], wsKey: string) {
+    if (currentWsKey.value !== wsKey) throw new Error("工作区已切换，请重新识别");
+    const next = [...configs.value];
+    for (const target of targets) {
+      const index = next.findIndex(config => taskDirectoryKey(config.cwd) === taskDirectoryKey(target.cwd));
+      if (index < 0) {
+        next.push({ ...target, id: generateId() });
+        continue;
+      }
+      const previous = next[index];
+      next[index] = {
+        ...previous,
+        command: target.command || previous.command,
+        packageCommand: target.packageCommand || previous.packageCommand,
+        cleanCommand: target.cleanCommand || previous.cleanCommand,
+        requiredEnv: target.sources?.length ? target.requiredEnv : previous.requiredEnv,
+        sources: target.sources?.length ? target.sources : previous.sources,
+      };
     }
-    await persist();
+    await persist(next);
+    if (currentWsKey.value !== wsKey) return;
+    if (!activeId.value) activeId.value = next[0]?.id ?? "";
   }
 
   return {
@@ -108,7 +98,16 @@ export function useRunConfigs() {
     add,
     update,
     remove,
-    detectAndAdd,
-    addTargets,
+    applyCandidates,
   };
+}
+
+export function taskDirectoryKey(path: string) {
+  const normalized = path.replaceAll("\\", "/")
+    .replace(/^\/\/\?\/UNC\//i, "//")
+    .replace(/^\/\/\?\//, "")
+    .replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(normalized) || path.includes("\\") && normalized.startsWith("//")
+    ? normalized.toLowerCase()
+    : normalized;
 }

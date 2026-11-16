@@ -555,12 +555,31 @@ export interface RunConfig {
    *  useRunProcess 合入），list_run_configs 读出时自动迁移剥除。可选——
    *  旧配置无此字段，缺省即不注入（走系统全局环境，旧行为不变）。 */
   env?: Record<string, string>;
+  packageCommand?: string;
+  cleanCommand?: string;
+  envFile?: string;
+  requiredEnv?: string[];
+  sources?: string[];
 }
 
 export interface RunTarget {
   name: string;
   cwd: string;
   command: string;
+}
+
+export interface ProjectTaskCandidate extends RunTarget {
+  packageCommand?: string;
+  cleanCommand?: string;
+  requiredEnv?: string[];
+  sources?: string[];
+}
+
+export interface ProjectTaskDiscovery {
+  candidates: ProjectTaskCandidate[];
+  warning?: string;
+  scanLimited?: boolean;
+  pendingDirectories?: string[];
 }
 
 /** 一个已登记的 JDK（机器级，存于 AppSettings.jdkRegistry）。`version` 为主版本

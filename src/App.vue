@@ -551,7 +551,7 @@ async function onSidebarWsChanged(path: string) {
   // 再切回会看到上一个工作区的陈旧数据（分支 unknown / 提交全空 / 对比报错）
   gitPanelRef.value?.reload();
   // Load run configurations for this workspace (auto-detects on first open).
-  await loadRunConfigs(path, path);
+  await loadRunConfigs(path);
   // 顺序敏感：list_run_configs 在 Rust 侧做存量 JAVA_HOME→工作区 JDK 迁移，
   // 迁移完成后 loadWorkspaceJdk 才能读到迁移值；提示判定在两者就绪后再跑。
   await loadWorkspaceJdk(path);
@@ -624,7 +624,7 @@ async function onRunProject(id?: string) {
   // 并行——启动一个不会停掉另一个。无 active 且无 id 时回退到旧 workbench send。
   const cfg = id ? runConfigs.value.find(c => c.id === id) : activeRunConfig.value;
   if (cfg) {
-    await startRunProcess(cfg);
+    await startRunProcess(cfg).catch(reportProjectTaskError);
   } else if (!id) {
     runProject();
   }
@@ -634,13 +634,23 @@ async function onStopProject(id?: string) {
   // 停止指定配置（下拉行的 ⏹ 带 id）；主按钮的 ⏹ 不带 id → 停当前选中的。
   // 只停这一个，不影响其他并行模块。
   const targetId = id ?? activeRunConfig.value?.id;
-  if (targetId) await stopRunProcess(targetId);
+  if (targetId) await stopRunProcess(targetId).catch(reportProjectTaskError);
 }
 
 async function onRestartProject() {
   const cfg = activeRunConfig.value;
   if (!cfg) return;
-  await restartRunProcess(cfg);
+  await restartRunProcess(cfg).catch(reportProjectTaskError);
+}
+
+function reportProjectTaskError(error: unknown) {
+  pushNotification({
+    severity: "warning",
+    source: "project-tasks",
+    title: "项目任务执行失败",
+    body: String(error),
+    timestamp: Date.now(),
+  });
 }
 
 function onSelectRunConfig(id: string) {
@@ -933,7 +943,7 @@ onMounted(async () => {
       // 活动工作区可能就是日常目录（上次切过去的）：名字要叫「日常」而不是文件夹名
       await ensureDailyWorkspace();
       projectName.value = workspaceDisplayName(info.root);
-      await loadRunConfigs(info.root, info.root);
+      await loadRunConfigs(info.root);
       // 同 onSidebarWsChanged：迁移（list_run_configs 内）→ 读工作区 JDK → 提示
       await loadWorkspaceJdk(info.root);
       void maybePromptJdk(info.root);

@@ -185,19 +185,23 @@ pub struct RunProcessStartArgs {
     env: BTreeMap<String, String>,
     rows: u16,
     cols: u16,
+    #[serde(flatten)]
+    task_env: super::run_configs::TaskEnvironment,
 }
 
 async fn run_process_start(core: Arc<Core>, a: RunProcessStartArgs) -> Result<String, String> {
     blocking(move || {
         let session_id = run_session_id(&a.config_id);
+        let cwd = PathBuf::from(a.cwd);
+        let env = super::run_configs::resolve_task_env(&cwd, &a.command, a.env, a.task_env)?;
         // rows/cols 由前端 fit 出 xterm 真实尺寸后传入——ConPTY 从第一帧起即与 xterm
         // 列宽一致，避免用固定 80 列 spawn 导致长行被提前 wrap 割裂（spawn→resize
         // 窗口期内的输出按错误列宽渲染会永久留在 buffer 里）。
         core.pty.spawn_run_command(
             &session_id,
-            &PathBuf::from(&a.cwd),
+            &cwd,
             &a.command,
-            &a.env,
+            &env,
             a.rows,
             a.cols,
             core.events(),

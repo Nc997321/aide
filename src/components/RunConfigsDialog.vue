@@ -2,18 +2,23 @@
 import AInput from "@/ui/AInput.vue";
 import { ref, computed, watch } from "vue";
 import { vOverlayLayer } from "../directives/overlayLayer";
-import { useRunConfigs } from "../composables/useRunConfigs";
+import { taskDirectoryKey, useRunConfigs } from "../composables/useRunConfigs";
+import { useRunProcess } from "../composables/useRunProcess";
+import { api } from "../api";
 import { useSettings } from "../composables/useSettings";
 import { useWorkspaceJdk } from "../composables/useWorkspaceJdk";
 import Icon from "./Icon.vue";
-import type { RunConfig, RunTarget } from "../types";
+import type { ProjectTaskCandidate, RunConfig } from "../types";
 
 const emit = defineEmits<{
   close: [];
 }>();
 
-const { configs, activeId, add, update, remove, detectAndAdd, addTargets, currentWsKey } =
+const { configs, activeId, add, update, remove, applyCandidates, currentWsKey } =
   useRunConfigs();
+const { runStates, start, stop, restart, runAction } = useRunProcess();
+const error = ref("");
+const executing = ref(false);
 const { settings } = useSettings();
 const { jdkHome } = useWorkspaceJdk();
 
@@ -34,11 +39,22 @@ watch(
 
 // ── Edit form (local draft) ─────────────────────────────────────────────────
 const draft = ref<RunConfig>({ id: "", name: "", cwd: "", command: "" });
+const envText = ref("");
+const requiredText = ref("");
+
+function formatEnv(config: RunConfig) {
+  return Object.entries(config.env ?? {}).map(([key, value]) => `${key}=${value}`).join("\n");
+}
 
 watch(
   selected,
   (cfg) => {
-    if (cfg) draft.value = { ...cfg };
+    error.value = "";
+    if (cfg) {
+      draft.value = { ...cfg };
+      envText.value = formatEnv(cfg);
+      requiredText.value = (cfg.requiredEnv ?? []).join(", ");
+    }
   },
   { immediate: true }
 );
@@ -47,7 +63,12 @@ const isDirty = computed(
   () => selected.value && (
     draft.value.name !== selected.value.name ||
     draft.value.cwd !== selected.value.cwd ||
-    draft.value.command !== selected.value.command
+    draft.value.command !== selected.value.command ||
+    draft.value.packageCommand !== selected.value.packageCommand ||
+    draft.value.cleanCommand !== selected.value.cleanCommand ||
+    draft.value.envFile !== selected.value.envFile ||
+    envText.value !== formatEnv(selected.value) ||
+    requiredText.value !== (selected.value.requiredEnv ?? []).join(", ")
   )
 );
 
@@ -64,31 +85,153 @@ const workspaceJdkLabel = computed(() => {
 });
 
 async function save() {
-  if (!selected.value) return;
-  await update({ ...draft.value });
+  if (!selected.value) return true;
+  const env: Array<[string, string]> = [];
+  const keyPattern = /^[A-Za-z_][A-Za-z_0-9]*$/;
+  const requiredEnv = [...new Set(requiredText.value.split(/[\s,，]+/).filter(Boolean))];
+  for (const line of envText.value.split("\n")) {
+    if (!line.trim()) continue;
+    const separator = line.indexOf("=");
+    const key = line.slice(0, separator).trim();
+    if (separator < 1 || !keyPattern.test(key) || key.toUpperCase() === "JAVA_HOME") {
+      error.value = "环境变量请逐行使用 KEY=VALUE。JAVA_HOME 由工作区 JDK 管理。";
+      return false;
+    }
+    env.push([key, line.slice(separator + 1)]);
+  }
+  if (requiredEnv.some(key => !keyPattern.test(key))) {
+    error.value = "必填变量名称无效";
+    return false;
+  }
+  try {
+    await update({ ...draft.value, env: Object.fromEntries(env), requiredEnv });
+    return true;
+  } catch (cause) {
+    error.value = String(cause);
+    return false;
+  }
+}
+
+const running = computed(() => runStates.value[selectedId.value] === "running");
+const packageRunning = computed(() => runStates.value[`${selectedId.value}__package`] === "running");
+const cleanRunning = computed(() => runStates.value[`${selectedId.value}__clean`] === "running");
+
+async function execute(action: "run" | "stop" | "package" | "clean") {
+  const id = selected.value?.id;
+  if (!id || executing.value) return;
+  executing.value = true;
+  error.value = "";
+  try {
+    if (action !== "stop" && isDirty.value && !await save()) return;
+    const config = configs.value.find(item => item.id === id);
+    if (!config) return;
+    if (action === "stop") await stop(id);
+    else if (action === "run") {
+      if (runStates.value[id] === "running") await restart(config);
+      else await start(config);
+    } else {
+      await runAction(config, action);
+    }
+    if (action !== "stop") emit("close");
+  } catch (cause) {
+    error.value = String(cause);
+  } finally {
+    executing.value = false;
+  }
 }
 
 // ── CRUD actions ─────────────────────────────────────────────────────────────
 async function addNew() {
-  const cfg = await add({ name: "新配置", cwd: currentWsKey.value, command: "" });
-  selectedId.value = cfg.id;
+  try {
+    if (isDirty.value && !await save()) return;
+    const cfg = await add({ name: "新配置", cwd: currentWsKey.value, command: "" });
+    selectedId.value = cfg.id;
+  } catch (cause) {
+    error.value = String(cause);
+  }
 }
 
 async function deleteSelected() {
   if (!selected.value) return;
-  await remove(selected.value.id);
+  try {
+    await remove(selected.value.id);
+  } catch (cause) {
+    error.value = String(cause);
+  }
 }
 
 // ── Auto-detect ──────────────────────────────────────────────────────────────
 const detecting = ref(false);
-const detectedTargets = ref<RunTarget[]>([]);
+const applying = ref(false);
+const detectedTargets = ref<ProjectTaskCandidate[] | null>(null);
+const detectionWarning = ref("");
+const scanLimited = ref(false);
+const scanDirectory = ref("");
+const pendingDirectories = ref<string[]>([]);
+const detectedWorkspace = ref("");
 const selectedTargetIds = ref<Set<string>>(new Set());
 
-async function runDetect() {
+function existingFor(target: ProjectTaskCandidate) {
+  return configs.value.find(config => taskDirectoryKey(config.cwd) === taskDirectoryKey(target.cwd));
+}
+
+function actionable(target: ProjectTaskCandidate) {
+  return Boolean(target.command || target.packageCommand || target.cleanCommand);
+}
+
+function changed(target: ProjectTaskCandidate) {
+  const existing = existingFor(target);
+  return !existing || Boolean(
+    (target.command && target.command !== existing.command) ||
+    (target.packageCommand && target.packageCommand !== existing.packageCommand) ||
+    (target.cleanCommand && target.cleanCommand !== existing.cleanCommand) ||
+    (target.sources?.length && JSON.stringify(target.requiredEnv ?? []) !== JSON.stringify(existing.requiredEnv ?? [])),
+  );
+}
+
+async function runDetect(subdirectory?: string) {
+  if (detecting.value || applying.value) return;
+  if (isDirty.value && !await save()) return;
+  const ws = currentWsKey.value;
   detecting.value = true;
-  detectedTargets.value = await detectAndAdd(currentWsKey.value);
-  selectedTargetIds.value = new Set(detectedTargets.value.map(t => t.cwd));
-  detecting.value = false;
+  error.value = "";
+  try {
+    const result = await api.discoverProjectTasks(ws, subdirectory);
+    if (ws !== currentWsKey.value) return;
+    detectedWorkspace.value = ws;
+    if (subdirectory) {
+      const combined = new Map((detectedTargets.value ?? []).map(target => [taskDirectoryKey(target.cwd), target]));
+      for (const target of result.candidates) {
+        const key = taskDirectoryKey(target.cwd);
+        const previous = combined.get(key);
+        if (previous && !actionable(target)) continue;
+        if (previous) selectedTargetIds.value.delete(previous.cwd);
+        combined.set(key, target);
+      }
+      detectedTargets.value = [...combined.values()];
+      for (const target of result.candidates) {
+        if (actionable(target) && !existingFor(target)) selectedTargetIds.value.add(target.cwd);
+      }
+    } else {
+      detectedTargets.value = result.candidates;
+      selectedTargetIds.value = new Set(result.candidates.filter(t => actionable(t) && !existingFor(t)).map(t => t.cwd));
+    }
+    detectionWarning.value = result.warning ?? "";
+    const remaining = subdirectory && !result.scanLimited
+      ? pendingDirectories.value.filter(path => {
+          const key = taskDirectoryKey(path);
+          const scope = taskDirectoryKey(subdirectory);
+          return key !== scope && !key.startsWith(`${scope}/`);
+        })
+      : subdirectory ? pendingDirectories.value : [];
+    pendingDirectories.value = [...new Set([...remaining, ...(result.pendingDirectories ?? [])])];
+    scanLimited.value = Boolean(subdirectory) || Boolean(result.scanLimited);
+    scanDirectory.value = "";
+  } catch (cause) {
+    error.value = String(cause);
+  } finally {
+    detecting.value = false;
+  }
 }
 
 function toggleTarget(cwd: string) {
@@ -101,37 +244,49 @@ function toggleTarget(cwd: string) {
 }
 
 async function confirmDetected() {
-  const chosen = detectedTargets.value.filter(t =>
-    selectedTargetIds.value.has(t.cwd)
-  );
-  await addTargets(chosen);
-  detectedTargets.value = [];
-  if (configs.value.length > 0) selectedId.value = configs.value[0].id;
+  const chosen = detectedTargets.value?.filter(t => selectedTargetIds.value.has(t.cwd)) ?? [];
+  if (applying.value || chosen.length === 0) return;
+  applying.value = true;
+  error.value = "";
+  try {
+    await applyCandidates(chosen, detectedWorkspace.value);
+    detectedTargets.value = null;
+    selectedId.value = existingFor(chosen[0])?.id ?? selectedId.value;
+  } catch (cause) {
+    error.value = String(cause);
+  } finally {
+    applying.value = false;
+  }
 }
 
 function closeDetect() {
-  detectedTargets.value = [];
+  if (detecting.value && detectedWorkspace.value === currentWsKey.value) return;
+  detectedTargets.value = null;
+  error.value = "";
 }
+
+watch(currentWsKey, closeDetect);
 
 // ── Close / save-and-close ───────────────────────────────────────────────────
 async function close() {
-  if (isDirty.value) await save();
+  if (applying.value || executing.value) return;
+  if (isDirty.value && !await save()) return;
   emit("close");
 }
 </script>
 
 <template>
   <div class="rcd-backdrop" v-overlay-layer @click.self="close">
-    <div class="rcd-dialog">
-      <div class="rcd-header">
+    <div class="rcd-dialog" :class="{ 'rcd-show-results': detectedTargets }">
+      <div class="rcd-header" :inert="Boolean(detectedTargets)">
         <svg width="14" height="14" viewBox="0 0 10 10" fill="var(--aide-success)" style="flex-shrink:0">
           <polygon points="2,1 9,5 2,9"/>
         </svg>
-        <span class="rcd-title">运行配置</span>
+        <span class="rcd-title">项目任务</span>
         <button class="rcd-close" @click="close">✕</button>
       </div>
 
-      <div class="rcd-body">
+      <div class="rcd-body" :inert="Boolean(detectedTargets)">
         <!-- Left: config list -->
         <div class="rcd-left">
           <div class="rcd-toolbar">
@@ -158,12 +313,12 @@ async function close() {
           </div>
 
           <div class="rcd-list-footer">
-            <button class="rcd-detect-btn" :disabled="detecting" @click="runDetect">
+            <button class="rcd-detect-btn" :disabled="detecting" @click="runDetect()">
               <svg v-if="!detecting" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
               </svg>
-              <span v-if="detecting">检测中…</span>
-              <span v-else>自动检测</span>
+              <span v-if="detecting">Haiku 分析中…</span>
+              <span v-else>识别项目任务</span>
             </button>
           </div>
         </div>
@@ -172,6 +327,14 @@ async function close() {
         <div class="rcd-right">
           <template v-if="selected">
             <div class="rcd-form-title">{{ draft.name || '(未命名)' }}</div>
+            <span v-if="running" class="rcd-hint">进程运行中</span>
+            <div class="rcd-task-actions">
+              <button class="rcd-btn-primary" :disabled="executing || !draft.command.trim()" @click="execute('run')">{{ running ? '重启' : '运行' }}</button>
+              <button v-if="running" class="rcd-btn-ghost" :disabled="executing" @click="execute('stop')">停止</button>
+              <button v-if="draft.packageCommand" class="rcd-btn-ghost" :disabled="executing || packageRunning || cleanRunning" @click="execute('package')">{{ packageRunning ? '打包中…' : '打包' }}</button>
+              <button v-if="draft.cleanCommand" class="rcd-btn-ghost" :disabled="executing || packageRunning || cleanRunning" @click="execute('clean')">{{ cleanRunning ? '清理中…' : '清理' }}</button>
+            </div>
+            <p v-if="error && !detectedTargets" class="rcd-error" role="alert">{{ error }}</p>
 
             <div class="rcd-field">
               <label>名称</label>
@@ -184,10 +347,37 @@ async function close() {
             </div>
 
             <div class="rcd-field">
-              <label>命令</label>
+              <label>运行命令</label>
               <AInput unstyled v-model="draft.command" type="text" placeholder="mvn spring-boot:run" />
               <span class="rcd-hint">在工作目录中执行的 shell 命令</span>
             </div>
+
+            <details class="rcd-task-details" :key="selectedId">
+              <summary>构建命令与启动环境</summary>
+              <div class="rcd-field">
+                <label for="rcd-package">打包命令</label>
+                <AInput id="rcd-package" unstyled v-model="draft.packageCommand" type="text" />
+              </div>
+              <div class="rcd-field">
+                <label for="rcd-clean">清理命令</label>
+                <AInput id="rcd-clean" unstyled v-model="draft.cleanCommand" type="text" />
+              </div>
+              <div class="rcd-field">
+                <label for="rcd-env-file">环境文件</label>
+                <AInput id="rcd-env-file" unstyled v-model="draft.envFile" type="text" placeholder=".env.local（相对工作目录）" />
+                <span class="rcd-hint">每次执行重新读取。支持单行 KEY=VALUE，变量值按字面传入。</span>
+              </div>
+              <div class="rcd-field">
+                <label for="rcd-required">必填环境变量</label>
+                <AInput id="rcd-required" unstyled v-model="requiredText" type="text" placeholder="MODEL_ENDPOINT, DATABASE_URL" />
+              </div>
+              <div class="rcd-field">
+                <label for="rcd-env">环境变量覆盖</label>
+                <textarea id="rcd-env" v-model="envText" rows="3" spellcheck="false" placeholder="每行一个 KEY=VALUE" />
+                <span class="rcd-hint">覆盖值保存在当前 Host 的任务配置中。密钥可通过环境文件提供。</span>
+              </div>
+              <p v-if="draft.sources?.length" class="rcd-hint">识别依据 · {{ draft.sources.join('、') }}</p>
+            </details>
 
             <div class="rcd-field">
               <label>JDK（工作区级）</label>
@@ -208,13 +398,30 @@ async function close() {
               <button class="rcd-btn-primary" :disabled="!isDirty" @click="save">保存更改</button>
             </div>
           </template>
-          <div v-else class="rcd-empty-state">选择左侧配置项进行编辑，或点击 ＋ 新建</div>
+          <div v-else class="rcd-empty-state">
+            <p v-if="error && !detectedTargets" class="rcd-error" role="alert">{{ error }}</p>
+            <span v-else>识别项目任务，或点击 ＋ 新建</span>
+          </div>
         </div>
       </div>
 
       <!-- Auto-detect results overlay -->
-      <div v-if="detectedTargets.length > 0" class="rcd-detect-overlay">
-        <div class="rcd-detect-header">检测到以下可运行目标</div>
+      <div v-if="detectedTargets" class="rcd-detect-overlay">
+        <div class="rcd-detect-header">确认项目任务</div>
+        <p v-if="detectionWarning" class="rcd-hint" role="status">{{ detectionWarning }}</p>
+        <details v-if="pendingDirectories.length" class="rcd-scan-directories" open>
+          <summary>可补扫的目录（{{ pendingDirectories.length }}）</summary>
+          <div class="rcd-task-actions">
+            <button v-for="path in pendingDirectories" :key="path" type="button" class="rcd-btn-ghost"
+              :disabled="detecting || applying" @click="runDetect(path)">补扫 {{ path }}</button>
+          </div>
+        </details>
+        <form v-if="scanLimited" class="rcd-task-actions" @submit.prevent="runDetect(scanDirectory.trim())">
+          <AInput v-model="scanDirectory" aria-label="工作区相对子目录" placeholder="工作区相对子目录，如 code/frontend" :disabled="detecting || applying" />
+          <button class="rcd-btn-ghost" type="submit" :disabled="!scanDirectory.trim() || detecting || applying">{{ detecting ? '识别中…' : '继续识别子目录' }}</button>
+        </form>
+        <p v-if="error" class="rcd-error" role="alert">{{ error }}</p>
+        <p v-if="!detectedTargets.length" class="rcd-hint">未发现项目任务</p>
         <div class="rcd-detect-list">
           <label
             v-for="t in detectedTargets"
@@ -224,17 +431,27 @@ async function close() {
             <input
               type="checkbox"
               :checked="selectedTargetIds.has(t.cwd)"
+              :disabled="!actionable(t) || !changed(t) || applying"
               @change="toggleTarget(t.cwd)"
             />
             <span class="rcd-detect-col">
-              <span class="rcd-detect-name">{{ t.name }}</span>
-              <span class="rcd-detect-cmd">{{ t.command }}</span>
+              <span class="rcd-detect-name">{{ t.name }} · {{ !actionable(t) ? '启动方式待确认' : !existingFor(t) ? '新增' : changed(t) ? '有更新' : '无变化' }}</span>
+              <span class="rcd-hint">{{ t.cwd }}</span>
+              <span v-if="t.command" class="rcd-detect-cmd">运行 · {{ t.command }}</span>
+              <span v-if="existingFor(t)?.command && t.command && existingFor(t)?.command !== t.command" class="rcd-hint">现有运行命令 · {{ existingFor(t)?.command }}</span>
+              <span v-if="t.packageCommand" class="rcd-detect-cmd">打包 · {{ t.packageCommand }}</span>
+              <span v-if="existingFor(t)?.packageCommand && t.packageCommand && existingFor(t)?.packageCommand !== t.packageCommand" class="rcd-hint">现有打包命令 · {{ existingFor(t)?.packageCommand }}</span>
+              <span v-if="t.cleanCommand" class="rcd-detect-cmd">清理 · {{ t.cleanCommand }}</span>
+              <span v-if="existingFor(t)?.cleanCommand && t.cleanCommand && existingFor(t)?.cleanCommand !== t.cleanCommand" class="rcd-hint">现有清理命令 · {{ existingFor(t)?.cleanCommand }}</span>
+              <span v-if="t.requiredEnv?.length" class="rcd-hint">必填变量 · {{ t.requiredEnv.join('、') }}</span>
+              <span v-if="existingFor(t) && t.sources?.length && JSON.stringify(t.requiredEnv ?? []) !== JSON.stringify(existingFor(t)?.requiredEnv ?? [])" class="rcd-hint">现有必填变量 · {{ existingFor(t)?.requiredEnv?.join('、') || '无' }} → {{ t.requiredEnv?.join('、') || '无' }}</span>
+              <span v-if="t.sources?.length" class="rcd-hint">依据 · {{ t.sources.join('、') }}</span>
             </span>
           </label>
         </div>
         <div class="rcd-detect-actions">
-          <button class="rcd-btn-ghost" @click="closeDetect">取消</button>
-          <button class="rcd-btn-primary" @click="confirmDetected">添加选中项</button>
+          <button class="rcd-btn-ghost" :disabled="detecting || applying" @click="closeDetect">关闭</button>
+          <button class="rcd-btn-primary" :disabled="detecting || applying || !selectedTargetIds.size" @click="confirmDetected">保存选中任务</button>
         </div>
       </div>
     </div>
@@ -242,6 +459,35 @@ async function close() {
 </template>
 
 <style scoped>
+.rcd-task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: calc(var(--aide-space-unit) * 2);
+}
+.rcd-scan-directories .rcd-task-actions {
+  max-height: 8em;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.rcd-task-details {
+  color: var(--aide-text-secondary);
+}
+.rcd-task-details summary {
+  cursor: pointer;
+}
+.rcd-task-details .rcd-field {
+  margin-block-start: calc(var(--aide-space-unit) * 2);
+}
+.rcd-task-details textarea {
+  resize: vertical;
+  background: var(--aide-bg-deep);
+  color: var(--aide-text-primary);
+  border: 1px solid var(--aide-border);
+}
+.rcd-error {
+  color: var(--aide-danger);
+  overflow-wrap: anywhere;
+}
 .rcd-backdrop {
   position: fixed;
   inset: 0;
@@ -524,6 +770,9 @@ async function close() {
   padding: 20px;
   gap: 12px;
   z-index: 10;
+}
+.rcd-show-results > :is(.rcd-header, .rcd-body) {
+  visibility: hidden;
 }
 .rcd-detect-header {
   font-size: 13px;

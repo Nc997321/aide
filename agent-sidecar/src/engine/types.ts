@@ -555,6 +555,7 @@ export type PermissionResponseWire =
 export type SidecarCommand =
   | import("../desktop/handoff.js").HandoffCommand
   | import("../desktop/terminalSuggestion.js").TerminalSuggestionCommand
+  | import("../desktop/projectTasks.js").ProjectTaskCommand
   | { cmd: "close_terminal_suggestions"; conversation: string }
   | {
       cmd: "send";

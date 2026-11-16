@@ -5,6 +5,7 @@ use portable_pty::{native_pty_system, Child, ChildKiller, CommandBuilder, Master
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -56,6 +57,9 @@ struct WaiterJob {
     events: Arc<dyn EventSink>,
     payload_kind: ExitPayload,
     startup_dir: Option<tempfile::TempDir>,
+    replaced: Arc<AtomicBool>,
+    output_buffer: Arc<Mutex<String>>,
+    exited_output: Arc<Mutex<HashMap<String, Arc<Mutex<String>>>>>,
 }
 
 struct ShellSession {
@@ -69,24 +73,29 @@ struct ShellSession {
     /// even while the waiter is blocked in `child.wait()`.
     killer: Arc<Mutex<Box<dyn ChildKiller + Send + Sync>>>,
     output_buffer: Arc<Mutex<String>>,
+    replaced: Arc<AtomicBool>,
 }
 
 pub struct ShellManager {
     sessions: Arc<Mutex<HashMap<String, ShellSession>>>,
+    exited_output: Arc<Mutex<HashMap<String, Arc<Mutex<String>>>>>,
 }
 
 impl ShellManager {
     pub fn new() -> Self {
         ShellManager {
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            exited_output: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
     /// Common launch path shared by `spawn_shell` and `spawn_run_command`.
     /// 骨架：杀旧会话 → 建 PTY+spawn 子进程 → 注册会话 → 起三个 worker 线程。
     fn launch(&self, params: LaunchParams) -> Result<(), String> {
-        // Kill existing PTY for this session if any.
-        self.kill_session(params.session_id);
+        self.kill_session_inner(params.session_id, true);
+        if let Ok(mut exited) = self.exited_output.lock() {
+            exited.remove(params.session_id);
+        }
 
         let OpenedPty {
             master,
@@ -98,6 +107,7 @@ impl ShellManager {
         } = open_pty(params.cmd, params.size, params.label)?;
 
         let (writer_tx, writer_rx) = mpsc::sync_channel::<String>(WRITE_QUEUE_CAP);
+        let replaced = Arc::new(AtomicBool::new(false));
         {
             let mut sessions = self.sessions.lock().map_err(|e| e.to_string())?;
             sessions.insert(
@@ -107,11 +117,12 @@ impl ShellManager {
                     writer_tx,
                     killer,
                     output_buffer: output_buffer.clone(),
+                    replaced: replaced.clone(),
                 },
             );
         }
 
-        spawn_reader(reader, output_buffer);
+        spawn_reader(reader, output_buffer.clone());
         spawn_writer(writer, writer_rx);
         spawn_waiter(WaiterJob {
             child,
@@ -120,6 +131,9 @@ impl ShellManager {
             events: params.events,
             payload_kind: params.payload_kind,
             startup_dir: params.startup_dir,
+            replaced,
+            output_buffer,
+            exited_output: self.exited_output.clone(),
         });
         Ok(())
     }
@@ -260,12 +274,20 @@ impl ShellManager {
 
     /// Kill a specific session's PTY.
     pub fn kill_session(&self, session_id: &str) {
+        self.kill_session_inner(session_id, false);
+    }
+
+    fn kill_session_inner(&self, session_id: &str, replacing: bool) {
         let session = {
             let mut sessions = match self.sessions.lock() {
                 Ok(s) => s,
                 Err(_) => return,
             };
-            sessions.remove(session_id)
+            let session = sessions.remove(session_id);
+            if let Some(session) = &session {
+                session.replaced.store(replacing, Ordering::Relaxed);
+            }
+            session
         };
         if let Some(session) = session {
             if let Ok(mut killer) = session.killer.lock() {
@@ -283,7 +305,11 @@ impl ShellManager {
             let data = std::mem::take(&mut *output);
             Ok(data)
         } else {
-            Ok(String::new())
+            let buffer = self.exited_output.lock().map_err(|e| e.to_string())?.remove(session_id);
+            match buffer {
+                Some(buffer) => Ok(std::mem::take(&mut *buffer.lock().map_err(|e| e.to_string())?)),
+                None => Ok(String::new()),
+            }
         }
     }
 }
@@ -360,12 +386,30 @@ fn spawn_waiter(job: WaiterJob) {
             events,
             payload_kind,
             startup_dir,
+            replaced,
+            output_buffer,
+            exited_output,
         } = job;
         let success = child.wait().ok().map(|s| s.success()).unwrap_or(false);
         drop(startup_dir);
 
         if let Ok(mut map) = sessions.lock() {
+            if replaced.load(Ordering::Relaxed)
+                || map.get(&sid).is_some_and(|session| !Arc::ptr_eq(&session.replaced, &replaced))
+            {
+                return;
+            }
             map.remove(&sid);
+            if matches!(payload_kind, ExitPayload::Run) {
+                if let Ok(mut exited) = exited_output.lock() {
+                    if exited.len() >= 32 {
+                        if let Some(key) = exited.keys().next().cloned() {
+                            exited.remove(&key);
+                        }
+                    }
+                    exited.insert(sid.clone(), output_buffer);
+                }
+            }
         }
         let payload = match payload_kind {
             ExitPayload::Plain => serde_json::json!({ "session_id": &sid }).to_string(),

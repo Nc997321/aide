@@ -30,7 +30,7 @@ import type {
   ProjectInfo, DiffEntry, DiffPair, DiffMode, LastEventInfo, ChangeRound, AppSettings,
   CommitEntry, CommitDetail, BranchInfo, GitStatusEntry, StashEntry,
   AheadBehind, FetchPullOutcome, TagEntry, CompareResult,
-  GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, JdkEntry, RecentView,
+  GrepMatch, ProviderConfig, ProviderConfigInput, ProviderModelMappings, RunConfig, RunTarget, ProjectTaskDiscovery, JdkEntry, RecentView,
   SearchOptions, SearchResponse, ReplacePreviewResponse, ReplaceFileInput, ApplyResult,
   SkillMeta, QueryResult, LspJumpResult,
   AppNotification, NotificationRecord,
@@ -401,10 +401,15 @@ export const api = {
   detectRunTargets(cwd: string): Promise<RunTarget[]> {
     return getTransport().invoke("detect_run_targets", { cwd });
   },
+  discoverProjectTasks(cwd: string, subdirectory?: string): Promise<ProjectTaskDiscovery> {
+    return getTransport().invoke("discover_project_tasks", { cwd, subdirectory });
+  },
+  checkProjectTask(cwd: string, command: string, env: Record<string, string>, options: { envFile?: string; requiredEnv?: string[] }): Promise<void> {
+    return getTransport().invoke("check_project_task", { cwd, command, env, ...options });
+  },
   /** size 具名对象：rows/cols 相邻同型不再可错位 */
-  // TODO: useRunProcess.ts:73,96 的 (…, dim.rows, dim.cols) 调用点待 B 路同步为 { rows, cols }
-  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>, size: { rows: number; cols: number }): Promise<string> {
-    return getTransport().invoke("run_process_start", { configId, cwd, command, env, rows: size.rows, cols: size.cols });
+  runProcessStart(configId: string, cwd: string, command: string, env: Record<string, string>, size: { rows: number; cols: number }, options?: { envFile?: string; requiredEnv?: string[] }): Promise<string> {
+    return getTransport().invoke("run_process_start", { configId, cwd, command, env, rows: size.rows, cols: size.cols, ...options });
   },
   runProcessStop(configId: string): Promise<void> {
     return getTransport().invoke("run_process_stop", { configId });

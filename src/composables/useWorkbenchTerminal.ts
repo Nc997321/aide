@@ -18,7 +18,6 @@ import {
   removeTab,
   markExited,
   clearExited,
-  isRunRestarting,
   killWorkspace,
   allSessionIds,
   workspaceKeyOf,
@@ -185,10 +184,6 @@ function ensureExitListener() {
       // 物理对象：标记并清理 DOM
       const s = sessions.get(p.session_id);
       if (s) {
-        // run 重启中收到的 pty-exit 是被 kill 的老进程发的（与新进程共用同一
-        // session_id）——整条忽略：不写退出行、不置 spawned=false（否则停掉新
-        // 进程轮询）、不 markExited。新进程的退出会另发一条 pty-exit。
-        if (s.kind === "run" && isRunRestarting(s.id)) return;
         s.spawned = false;
         closeSessionSuggestions(s);
         // run tab：不套 shell 的退出覆盖层（覆盖层会盖住程序输出且要交互重启），
@@ -199,7 +194,8 @@ function ensureExitListener() {
         if (s.kind === "run") {
           void api.pollPtyOutput(s.id).then((tail) => {
             if (tail) s.terminal.write(tail);
-            s.terminal.write("\r\n\x1b[36m[进程已退出]\x1b[0m\r\n");
+            const result = p.success === true ? "执行完成" : p.success === false ? "进程异常退出" : "进程已退出";
+            s.terminal.write(`\r\n\x1b[36m[${result}]\x1b[0m\r\n`);
           });
         }
       }

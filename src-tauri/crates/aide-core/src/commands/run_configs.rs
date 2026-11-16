@@ -8,15 +8,22 @@ use serde::Deserialize as _;
 #[allow(unused_imports)]
 use std::sync::Arc;
 
+#[path = "project_tasks.rs"]
+mod project_tasks;
+pub(super) use project_tasks::{resolve_task_env, TaskEnvironment};
+
 pub static COMMANDS: &[HostCommand] = &[
     command!("list_run_configs", list_run_configs),
     command!("save_run_configs", save_run_configs),
     command!("detect_run_targets", detect_run_targets),
     command!("detect_run_command", detect_run_command),
+    command!("discover_project_tasks", project_tasks::discover),
+    command!("check_project_task", project_tasks::check),
 ];
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io::Write;
 use std::path::Path;
 
 use aide_workspace::detect::markers::detect_run_targets as detect_targets;
@@ -37,6 +44,8 @@ pub struct RunConfig {
     /// default 回填空 → 不注入 → 原行为不变。
     #[serde(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    #[serde(flatten)]
+    pub tasks: project_tasks::TaskDetails,
 }
 
 fn encode_key(ws_key: &str) -> String {
@@ -115,13 +124,15 @@ pub struct SaveRunConfigsArgs {
 async fn save_run_configs(_core: Arc<Core>, a: SaveRunConfigsArgs) -> Result<(), String> {
     let SaveRunConfigsArgs { ws_key, configs } = a;
     blocking(move || -> Result<(), String> {
-    let path = configs_path(&ws_key);
-    if let Some(parent) = path.parent() {
+        let path = configs_path(&ws_key);
+        let parent = path.parent().ok_or("任务配置目录无效")?;
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let data = serde_json::to_string_pretty(&configs).map_err(|e| e.to_string())?;
-    fs::write(&path, data).map_err(|e| e.to_string())
-}).await
+        let mut temp = tempfile::NamedTempFile::new_in(parent).map_err(|e| e.to_string())?;
+        serde_json::to_writer_pretty(&mut temp, &configs).map_err(|e| e.to_string())?;
+        temp.flush().map_err(|e| e.to_string())?;
+        temp.persist(path).map_err(|e| e.to_string())?;
+        Ok(())
+    }).await
 }
 
 #[derive(Deserialize)]
@@ -175,6 +186,7 @@ mod tests {
     #[test]
     fn run_config_env_round_trip() {
         let cfg = RunConfig {
+            tasks: Default::default(),
             id: "rc_1".into(),
             name: "svc".into(),
             cwd: "/p".into(),

@@ -5,6 +5,26 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
+
+/// Yield matching files using the same ignore rules as workspace search.
+pub fn walk_project_files(
+    root: &Path,
+    include: impl Fn(&ignore::DirEntry) -> bool + Send + Sync + 'static,
+) -> impl Iterator<Item = PathBuf> {
+    WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .require_git(false)
+        .sort_by_file_name(|a, b| a.cmp(b))
+        .filter_entry(include)
+        .build()
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            entry.file_type()?.is_file().then(|| entry.into_path())
+        })
+}
 use regex::Regex;
 
 use crate::{FileEntry, GrepMatch};
