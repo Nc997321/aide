@@ -1,12 +1,15 @@
-// 图片输入能力判定：只保留「识别不支持图片的 400」所需的判定原语。
+// 图片输入判定：识别接口因模型能力或图片数据拒绝图片的 400。
 // 发送前探测（probeImageInput / ImageInputCapabilityCache / Read 图片守卫）已整体
 // 移除——400 由 imageRollback.ts 兜底（去图重写历史，会话不报废）。
 
-const IMAGE_UNSUPPORTED = /\bthis model does not support image input\b/i;
+const IMAGE_REJECTION = /\b(?:this model does not support image input|the image data you provided does not represent a valid image)\b/i;
 // SDKResultError 没有 api_error_status；真实 HTTP 状态只保留在 errors[] 的文本里。
-const IMAGE_UNSUPPORTED_400 = /\b(?:API\s+Error:\s*|HTTP\s*)400\b[\s\S]*\bthis model does not support image input\b/i;
-
-export { IMAGE_UNSUPPORTED_400 };
+export function isImageRejection400(text: string, status: unknown): boolean {
+  if (status !== undefined && status !== null && status !== 400) return false;
+  if (status === 400) return IMAGE_REJECTION.test(text);
+  const prefix = /\b(?:API\s+Error:\s*|HTTP\s*)400\b/i.exec(text);
+  return prefix !== null && IMAGE_REJECTION.test(text.slice(prefix.index + prefix[0].length));
+}
 
 export function classifyImageInputResult(message: unknown): true | false | null {
   if (!message || typeof message !== "object" || (message as { type?: unknown }).type !== "result") return null;
@@ -14,24 +17,14 @@ export function classifyImageInputResult(message: unknown): true | false | null 
     subtype?: unknown;
     is_error?: unknown;
     api_error_status?: unknown;
-    errors?: unknown;
-    result?: unknown;
   };
 
   if (result.subtype === "success" && result.is_error === false) return true;
 
-  const errors = [
-    ...(Array.isArray(result.errors) ? result.errors : []),
-    typeof result.result === "string" ? result.result : "",
-  ].join("\n");
-
-  return (
-    (result.api_error_status === 400 && IMAGE_UNSUPPORTED.test(errors))
-    || IMAGE_UNSUPPORTED_400.test(errors)
-  ) ? false : null;
+  return isImageRejection400(extractMessageText(message), result.api_error_status) ? false : null;
 }
 
-/** 从任意 SDK 消息里抽出可用于「不支持图片」判定的文本。
+/** 从 SDK 消息里抽出可用于判定图片拒绝原因的文本。
  *  - result 消息：errors[] + result 字符串
  *  - 合成 assistant 错误消息（model="<synthetic>"）：content[] 的 text 块
  *    真实 SDK 行为：CLI 把 400「this model does not support image input」包成一条

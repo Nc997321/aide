@@ -12,9 +12,9 @@ vi.mock("../mapper.js", () => ({
   mapSdkMessage: (...args: unknown[]) => mapSdkMessage(...args),
   isErrorResult: (msg: unknown) => isErrorResult(msg),
 }));
-const detectImageUnsupported = vi.fn((_msg: unknown) => false);
+const detectImageRejection = vi.fn((_msg: unknown) => false);
 vi.mock("../imageRollback.js", () => ({
-  detectImageUnsupported: (msg: unknown) => detectImageUnsupported(msg),
+  detectImageRejection: (msg: unknown) => detectImageRejection(msg),
 }));
 
 import { handleQueryMessage, type TurnContext } from "./turnMessages.js";
@@ -41,13 +41,13 @@ const msg = (m: Record<string, unknown>) => m as unknown as SDKMessage;
 
 beforeEach(() => {
   mapSdkMessage.mockClear();
-  detectImageUnsupported.mockReset().mockReturnValue(false);
+  detectImageRejection.mockReset().mockReturnValue(false);
   isErrorResult.mockReset().mockReturnValue(false);
 });
 
 describe("handleQueryMessage", () => {
   it("图片 400：普通会话命中检测 → markImageRollback；automation 一次性会话不标", () => {
-    detectImageUnsupported.mockReturnValue(true);
+    detectImageRejection.mockReturnValue(true);
     const ctx = stubCtx();
     handleQueryMessage(msg({ type: "assistant" }), q, ctx);
     expect(ctx.markImageRollback).toHaveBeenCalled();

@@ -4,7 +4,7 @@
 // 状态读写全部经 TurnContext 闭包注入——本模块无状态、可直测。
 import type { Query, SDKAssistantMessage, SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import type { ChatEvent } from "../types.js";
-import { detectImageUnsupported } from "../imageRollback.js";
+import { detectImageRejection } from "../imageRollback.js";
 import { isErrorResult, mapSdkMessage, type MapperDeps } from "../mapper.js";
 
 export interface TurnContext {
@@ -35,10 +35,10 @@ export function handleQueryMessage(
   q: Query,
   turn: TurnContext,
 ): "continue" | "terminate" | undefined {
-  // 图片 400 回滚：模型不支持图片时，历史里带图消息重放必 400（会话报废）。
+  // 图片 400 回滚：接口拒绝图片时，重放同一图片可能再次返回 400。
   // 检测到即 abort 杀 CLI（停一切写入），catch 里执行回滚（去图重写历史），
   // 下一轮 query 重放干净历史。automation 是一次性会话（400 后自毁），无需回滚。
-  if (!turn.isAutomation() && detectImageUnsupported(msg)) {
+  if (!turn.isAutomation() && detectImageRejection(msg)) {
     turn.markImageRollback();
   }
   // 用户消息回显：不是模型产出，不进 mapper（content 是用户原文，字符串分支会拿它当

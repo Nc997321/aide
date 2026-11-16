@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { detectImageUnsupported, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
+import { detectImageRejection, findSessionJsonl, rollbackImageMessage } from "./imageRollback.js";
 
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), "aide-rollback-"));
@@ -23,13 +23,22 @@ const SYNTHETIC_400 = {
   },
 };
 
-describe("detectImageUnsupported", () => {
+const INVALID_IMAGE_400 = "API Error: 400 The image data you provided does not represent a valid image. Please check your input and try again.";
+const SYNTHETIC_INVALID_IMAGE_400 = {
+  ...SYNTHETIC_400,
+  message: {
+    ...SYNTHETIC_400.message,
+    content: [{ type: "text", text: INVALID_IMAGE_400 }],
+  },
+};
+
+describe("detectImageRejection", () => {
   it("recognizes the synthetic assistant 400 (real SDK shape)", () => {
-    expect(detectImageUnsupported(SYNTHETIC_400)).toBe(true);
+    expect(detectImageRejection(SYNTHETIC_400)).toBe(true);
   });
 
   it("recognizes the result error shape", () => {
-    expect(detectImageUnsupported({
+    expect(detectImageRejection({
       type: "result",
       subtype: "error_during_execution",
       is_error: true,
@@ -38,11 +47,25 @@ describe("detectImageUnsupported", () => {
     })).toBe(true);
   });
 
+  it("recognizes the capture error in SDK assistant and result messages", () => {
+    expect(detectImageRejection({
+      type: "assistant",
+      is_api_error_message: true,
+      message: SYNTHETIC_INVALID_IMAGE_400.message,
+    })).toBe(true);
+    expect(detectImageRejection({
+      type: "result",
+      subtype: "error_during_execution",
+      is_error: true,
+      errors: [INVALID_IMAGE_400],
+    })).toBe(true);
+  });
+
   it("recognizes the real SDK event shape: is_api_error_message (snake_case)", () => {
     // 2026-08-21 smoke 实锤：jsonl 写 camelCase，但 SDK 事件流转发时是
     // is_api_error_message: true（且无 apiErrorStatus 字段）——camelCase 分支
     // 实际永不命中，回滚从未触发。这个用例钉住 snake_case 形态。
-    expect(detectImageUnsupported({
+    expect(detectImageRejection({
       type: "assistant",
       message: { role: "assistant", model: "<synthetic>", content: [{ type: "text", text: "API Error: 400 this model does not support image input (ref: abc)" }] },
       is_api_error_message: true,
@@ -55,7 +78,7 @@ describe("detectImageUnsupported", () => {
     { type: "assistant", message: { content: [{ type: "text", text: "normal reply" }] } },
     { type: "result", subtype: "success", is_error: false },
   ])("does not misclassify %o", (msg) => {
-    expect(detectImageUnsupported(msg)).toBe(false);
+    expect(detectImageRejection(msg)).toBe(false);
   });
 });
 
@@ -93,14 +116,14 @@ describe("rollbackImageMessage", () => {
     expect(after).toContain('"hi"');
   });
 
-  it("model-read image (tool_result): replaces image with error text, keeps tool_use pairing", () => {
+  it.each([SYNTHETIC_400, SYNTHETIC_INVALID_IMAGE_400])("model-read image (tool_result): replaces image with error text, keeps tool_use pairing", (error: typeof SYNTHETIC_400) => {
     const dir = tempDir();
     const file = join(dir, "s.jsonl");
     const before = [
       line({ type: "user", message: { role: "user", content: [{ type: "text", text: "keep" }] } }),
       line({ type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "Read", input: { file_path: "x.png" } }] } }),
       line({ type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: [{ type: "image", source: { type: "base64", data: "y" } }] }] } }),
-      line(SYNTHETIC_400),
+      line(error),
     ].join("\n");
     writeFileSync(file, before);
 
@@ -115,8 +138,7 @@ describe("rollbackImageMessage", () => {
     expect(after).toContain("图片输入不可用");
     expect(after).toContain('"is_error":true');
     expect(after).not.toContain('"type":"image"');
-    // synthetic 400 行仍被清掉（错误文本里故意含 "does not support image" 短语，
-    // 所以按 isApiErrorMessage 特征断言，不按短语）
+    // synthetic 400 行仍被清掉。
     expect(after).not.toContain("isApiErrorMessage");
   });
 

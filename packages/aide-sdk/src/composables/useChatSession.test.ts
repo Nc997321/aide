@@ -457,7 +457,7 @@ describe("useChatSession per-session store", () => {
     expect(state["uuid-a"]).toBe("waiting");
     expect(health["uuid-a"]).toBe("warning");
     const lastMessage = chat.messages.value[chat.messages.value.length - 1];
-    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "当前模型不支持图片输入，已移除该消息。文本已放回输入框，可手动重发。" });
+    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "模型接口拒绝了图片，已移除该消息。文本已放回输入框，可手动重发。" });
     // 文本暂存待 ChatPanel 回填输入框
     expect(chat.rollbackText.value).toBe("分析这张图");
 
@@ -479,7 +479,7 @@ describe("useChatSession per-session store", () => {
     expect(chat.isBusy.value).toBe(false);
     expect(chat.rollbackText.value).toBe("");
     const lastMessage = chat.messages.value[chat.messages.value.length - 1];
-    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "当前模型不支持图片输入，已移除图片内容并告知模型，对话继续。" });
+    expect(lastMessage?.blocks).toContainEqual({ type: "text", text: "模型接口拒绝了图片，已移除图片内容并告知模型，对话继续。" });
   });
 
   it("红点(warning)在下一条消息发出时清除，回到 running/绿", async () => {

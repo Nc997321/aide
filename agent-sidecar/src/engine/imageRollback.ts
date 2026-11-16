@@ -1,20 +1,20 @@
-// 图片 400 回滚：模型不支持图片时，从 SDK 会话历史里移除带图消息，
+// 图片 400 回滚：接口拒绝图片时，从 SDK 会话历史里移除带图消息，
 // 让会话不报废（历史里带图消息重放必 400，见 docs 讨论）。
 //
 // 独立模块、纯函数 + 文件操作，worker 只做薄接线（检测 → 调这里 → 重启 query）。
 import { existsSync, readFileSync, readdirSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { classifyImageInputResult, extractMessageText, IMAGE_UNSUPPORTED_400 } from "./imageInputCapability.js";
+import { classifyImageInputResult, extractMessageText, isImageRejection400 } from "./imageInputCapability.js";
 import { buildUserMessage } from "./mapper.js";
 import type { ChatEvent } from "./types.js";
 import type { SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 
-/** 识别「模型不支持图片」的 400 错误消息（SDK 的两种形态）：
+/** 识别接口拒绝图片的 400 错误消息（SDK 的两种形态）：
  *  - synthetic assistant 消息（真实 SDK 事件流形状：is_api_error_message + model="<synthetic>"，
  *    2026-08-21 smoke 实锤——CLI 写 jsonl 用 camelCase isApiErrorMessage，但 SDK 事件
  *    转发时是 snake_case is_api_error_message，camelCase 分支实际永不命中）
  *  - result 错误消息（部分网关让 CLI 非零退出时走这条） */
-export function detectImageUnsupported(msg: unknown): boolean {
+export function detectImageRejection(msg: unknown): boolean {
   const m = msg as {
     type?: unknown;
     isApiErrorMessage?: unknown;
@@ -25,7 +25,7 @@ export function detectImageUnsupported(msg: unknown): boolean {
     m?.type === "assistant" &&
     (m.isApiErrorMessage === true || m.is_api_error_message === true)
   ) {
-    return IMAGE_UNSUPPORTED_400.test(extractMessageText(msg));
+    return isImageRejection400(extractMessageText(msg), m.apiErrorStatus);
   }
   return classifyImageInputResult(msg) === false;
 }
@@ -68,7 +68,7 @@ function hasDirectImageBlock(content: unknown): boolean {
  *  tool_use 配对）。刻意不预设"必有文本可读"——纯视觉内容没有文本，OCR
  *  也无从谈起，模型自己判断。 */
 const TOOL_IMAGE_ERROR_TEXT =
-  "图片输入不可用：当前模型不支持图片输入（API 返回 400 this model does not support image input）。" +
+  "图片输入不可用：模型接口拒绝了此次读取返回的图片。" +
   "请勿再读取图片文件。若文件存在可读取的文本内容，可改为读取文本；" +
   "否则跳过该文件，继续处理用户的问题。";
 
@@ -96,23 +96,6 @@ function extractUserText(content: unknown): string {
     .filter((b) => b && typeof b === "object" && (b as { type?: unknown }).type === "text")
     .map((b) => String((b as { text?: unknown }).text ?? ""))
     .join("\n");
-}
-
-/** synthetic 图片 400 错误行（isApiErrorMessage/is_api_error_message + apiErrorStatus 400 + 文本匹配）。
- *  jsonl 里 CLI 写 camelCase（实测）；SDK 事件流是 snake_case——两态都认。 */
-function isSyntheticImageError(msg: unknown): boolean {
-  const m = msg as {
-    type?: unknown;
-    isApiErrorMessage?: unknown;
-    apiErrorStatus?: unknown;
-    is_api_error_message?: unknown;
-  };
-  if (
-    m?.type !== "assistant" ||
-    (m.isApiErrorMessage !== true && m.is_api_error_message !== true) ||
-    m.apiErrorStatus !== 400
-  ) return false;
-  return IMAGE_UNSUPPORTED_400.test(extractMessageText(msg));
 }
 
 export interface RollbackResult {
@@ -215,7 +198,7 @@ export function rollbackImageMessage(jsonlPath: string): RollbackResult {
       kept.push(lines[i].text);
       continue;
     }
-    if (isSyntheticImageError(msg)) continue;
+    if ((msg as { type?: unknown } | null)?.type === "assistant" && detectImageRejection(msg)) continue;
     kept.push(lines[i].text);
   }
 

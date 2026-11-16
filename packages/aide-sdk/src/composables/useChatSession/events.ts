@@ -1001,7 +1001,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     case "image_input_rollback": {
-      // 模型 400 不支持图片：sidecar 已处理会话历史（会话不报废）。两种形态：
+      // 模型接口以 400 拒绝图片：sidecar 已处理会话历史（会话不报废）。两种形态：
       // - 用户发图（text 非空）：整条消息已移除，文本暂存 rollbackText 由
       //   ChatPanel 回填输入框，用户手动重发。
       // - 模型 Read 图片（text 空）：tool_result 图片已替换为错误文本回喂模型，
@@ -1015,8 +1015,8 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         blocks: [{
           type: "text",
           text: rollbackText
-            ? "当前模型不支持图片输入，已移除该消息。文本已放回输入框，可手动重发。"
-            : "当前模型不支持图片输入，已移除图片内容并告知模型，对话继续。",
+            ? "模型接口拒绝了图片，已移除该消息。文本已放回输入框，可手动重发。"
+            : "模型接口拒绝了图片，已移除图片内容并告知模型，对话继续。",
         }],
         timestamp: Date.now(),
       });
