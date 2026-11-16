@@ -38,6 +38,7 @@ vi.mock("../composables/useSettings", () => ({
 import { mount } from "@vue/test-utils";
 import ChatMessage from "./ChatMessage.vue";
 import type { ChatMessage as ChatMessageType, ContentBlock } from "@/types/chat";
+import * as fileResolver from "@/composables/useFileResolver";
 
 /** 一条消息的 DOM 子树节点数（根节点本身 +1）。 */
 function nodeCount(wrapperElement: Element): number {
@@ -269,6 +270,36 @@ describe("ChatMessage — 媒体成果", () => {
     expect(noWorkspace.findAll(".media-artifact")).toHaveLength(0);
     noWorkspace.unmount();
   });
+});
+
+it("本地图片链接取消 WebView 导航并打开文件查看器", () => {
+  const openResolved = vi.fn();
+  const originalResolver = fileResolver.useFileResolver;
+  const resolver = vi.spyOn(fileResolver, "useFileResolver").mockImplementation((context) => ({
+    ...originalResolver(context),
+    openResolved,
+  }));
+  const message = makeMessage([{
+    type: "text",
+    text: "[打开本地图片](/C:/project/.runtime/frame.jpg) · [打开保存图（1280 × 720）](/C:/project/.runtime/frame.jpg)",
+  }], false);
+  const w = mount(ChatMessage, { props: { message, workspacePath: "C:/project" } });
+  try {
+    const links = w.findAll(".msg-text a");
+    expect(links).toHaveLength(2);
+    for (const link of links) {
+      const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+      link.element.dispatchEvent(click);
+      expect(click.defaultPrevented).toBe(true);
+    }
+    expect(openResolved.mock.calls).toEqual([
+      ["C:/project/.runtime/frame.jpg", "C:/project"],
+      ["C:/project/.runtime/frame.jpg", "C:/project"],
+    ]);
+  } finally {
+    w.unmount();
+    resolver.mockRestore();
+  }
 });
 
 describe("ChatMessage — 文档成果", () => {

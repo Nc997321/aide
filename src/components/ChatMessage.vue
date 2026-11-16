@@ -27,7 +27,7 @@ import { isMediaFilePath, resolveMediaLink } from "@aide/sdk/utils/mediaArtifact
 import { useMediaPreview } from "@/composables/useMediaPreview";
 import { isModelInList } from "@/utils/modelSelect";
 import { effortLabel } from "@aide/sdk/utils/effort";
-import { handleMarkdownAnchorClick } from "@aide/sdk/utils/markdown";
+import { handleMarkdownAnchorClick, localImagePath } from "@aide/sdk/utils/markdown";
 import { useBtwSession } from "@/composables/useBtwSession";
 import { useSettings } from "@/composables/useSettings";
 
@@ -155,9 +155,6 @@ const segments = computed<Segment[]>(() =>
       }),
 );
 
-// 只响应渲染期已判定为文件的 code（见 utils/markdown.ts codespan 渲染器 +
-// utils/fileLink.ts 判定规则），点击层不再自己做路径识别。openResolved 会先探测
-// 路径是否存在，不存在时在工作区内搜索（带加载态，多命中弹选择框）。
 /** 该 block 是否是消息最后一块且消息还在流式——流式尾块判定。index 是原 blocks
  *  下标（segmentBlocks 保留 Segment.index），不是 segments 下标（tool_group 聚合
  *  后 segments.length ≠ blocks.length）。文本流式尾块、思考流式期判定共用。 */
@@ -172,10 +169,11 @@ function handleTextClick(e: MouseEvent) {
 
   const anchorEl = target.closest("a[href]");
   const href = anchorEl?.getAttribute("href")?.trim() ?? "";
-  if (href && (shouldOpenExternally(href) || isMediaFilePath(href))) {
+  const imagePath = localImagePath(href);
+  if (imagePath || shouldOpenExternally(href) || isMediaFilePath(href)) {
     e.preventDefault();
     e.stopPropagation();
-    void openResolved(resolveMediaLink(href, props.workspacePath) ?? href, props.workspacePath);
+    void openResolved(imagePath ?? resolveMediaLink(href, props.workspacePath) ?? href, props.workspacePath);
     return;
   }
 
