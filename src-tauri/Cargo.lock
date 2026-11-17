@@ -153,6 +153,8 @@ dependencies = [
  "portable-pty",
  "qrcode",
  "regex",
+ "ring",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

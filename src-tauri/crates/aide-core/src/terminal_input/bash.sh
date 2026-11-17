@@ -12,7 +12,7 @@ if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
     else
         PROMPT_COMMAND="${PROMPT_COMMAND:+$PROMPT_COMMAND$'\n'}__aide_render_prose"
     fi
-    for __aide_keymap in emacs-standard vi-insertion vi-command; do
+    for __aide_keymap in emacs-standard vi-insert vi-command; do
         bind -m "$__aide_keymap" -x '"\e[27;9;13~":__aide_readline_submit'
         bind -m "$__aide_keymap" '"\e[27;9;14~":accept-line'
         bind -m "$__aide_keymap" '"\C-m":"\e[27;9;13~\e[27;9;14~"'

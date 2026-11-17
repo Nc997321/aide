@@ -22,7 +22,7 @@ import { useKnowledgeBase } from "../composables/useKnowledgeBase";
 import { useContextMenu } from "../composables/useContextMenu";
 import type { SourceInfo } from "../api/marketplace";
 
-/** 行序（与模板同序）：0 新增会话 / 1 插件 / 2 记忆观测台 / 3 知识库 */
+/** 行序（与模板同序）：0 新增会话 / 1 Aide 市场 / 2 记忆观测台 / 3 知识库 */
 const ROW = { NEW_SESSION: 0, PLUGIN: 1, OBSERVATORY: 2, KNOWLEDGE_BASE: 3 } as const;
 
 function mountNavGroup() {
@@ -36,14 +36,14 @@ beforeEach(() => {
 });
 
 describe("SidebarNavGroup 侧栏顶部导航组", () => {
-  it("渲染「新增会话」「插件」「记忆观测台」「知识库」四行；点击插件行切换主区面板开关", async () => {
+  it("渲染四个导航入口，点击 Aide 市场切换主区面板开关", async () => {
     const m = useMarketplace();
     m.closePanel();
     const w = mountNavGroup();
     const rows = w.findAll(".nav-row");
     expect(rows.length).toBe(4);
     expect(w.text()).toContain("新增会话");
-    expect(w.text()).toContain("插件");
+    expect(w.text()).toContain("Aide 市场");
     expect(w.text()).toContain("记忆观测台");
     expect(w.text()).toContain("知识库");
     // 浏览器入口 2026-09-20 搬去右栏 rail（它是右栏 tab，不再是主区一级视图）——
@@ -104,7 +104,7 @@ describe("SidebarNavGroup 侧栏顶部导航组", () => {
     const w = mountNavGroup();
     await w.findAll(".nav-row")[ROW.PLUGIN].trigger("contextmenu");
     expect(menu.visible.value).toBe(true);
-    expect(menu.items.value.map((i) => i.label)).toEqual(["打开插件市场", "刷新全部市场源"]);
+    expect(menu.items.value.map((i) => i.label)).toEqual(["打开 Aide 市场", "刷新全部市场源"]);
 
     menu.items.value[1]?.action?.();
     expect(api.refreshMarketplace).toHaveBeenCalledWith("s1");

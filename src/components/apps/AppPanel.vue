@@ -23,6 +23,7 @@ import {
 } from "../../composables/appBridge";
 import { useAppProcesses } from "../../composables/useAppProcesses";
 import { useApps } from "../../composables/useApps";
+import { useMarketplace } from "../../composables/useMarketplace";
 import { useFileResolver } from "../../composables/useFileResolver";
 import AppProcessList from "./AppProcessList.vue";
 import { useComposerInserter } from "../../composables/useComposerInserter";
@@ -169,7 +170,7 @@ async function act(run: () => Promise<void>) {
   }
 }
 const consent = () => act(() => appsApi.consent(props.app.id, props.app.grant));
-const setEnabled = (enabled: boolean) => act(() => appsApi.setEnabled(props.app.id, enabled));
+const manage = () => useMarketplace().openPanel({ category: "apps" });
 
 // ── 这个应用起的进程（顶条的「运行中」）──
 const procs = useAppProcesses();
@@ -191,18 +192,6 @@ onMounted(() => document.addEventListener("click", onDocClick));
 watch(myProcesses, (list) => {
   if (list.length === 0) procsOpen.value = false;
 });
-/** 「并结束 N 个进程」：禁用 / 卸载会连带结束它起的进程，动手前说清楚。 */
-const alsoEnds = computed(() => (myRunning.value.length ? `并结束 ${myRunning.value.length} 个进程` : ""));
-/** 有进程在跑时禁用要点两次（没有就一次，和原来一样）。 */
-const confirmingDisable = ref(false);
-function disable() {
-  if (myRunning.value.length && !confirmingDisable.value) {
-    confirmingDisable.value = true;
-    return;
-  }
-  confirmingDisable.value = false;
-  void setEnabled(false);
-}
 /** 位置是用户说了算的：清单只给初值。按钮常驻在面板顶上——不摆出来，没人知道应用还能待在另一侧。 */
 const relocation = computed(() =>
   props.app.placement === "right"
@@ -234,25 +223,6 @@ const devNotice = computed(() => {
     ? { text: "这是开发中的版本，agent 的改动会立刻生效。用着满意就安装，它会固定下来，之后的改动要你确认才生效。", action: "安装到 Aide" }
     : { text: "这是开发中的版本，只在打开这个工作区时出现，agent 的改动会立刻生效。用着满意就安装，它会一直留在 Aide 里。", action: "安装到 Aide" };
 });
-/** 「删掉眼前这一个」在三种状态下的叫法。Host 那边是同一条命令，删什么由它按状态定。 */
-const removal = computed(() => {
-  if (props.app.source === "user") {
-    return { label: "卸载", confirm: `确认卸载${alsoEnds.value}`, tip: "从 Aide 里彻底删掉这个应用（工作区里那份一样的副本也一起删）；它保存的数据会留着，重装还在" };
-  }
-  return props.app.installed
-    ? { label: "放弃改动", confirm: `确认放弃${alsoEnds.value}`, tip: "删掉这份还没安装的改动，回到已经安装的版本" }
-    : { label: "删除", confirm: `确认删除${alsoEnds.value}`, tip: "删掉工作区里这个开发中的应用；它保存的数据会留着" };
-});
-/** 卸载要点两次：第一次只是亮出确认。 */
-const confirmingUninstall = ref(false);
-function uninstall() {
-  if (!confirmingUninstall.value) {
-    confirmingUninstall.value = true;
-    return;
-  }
-  confirmingUninstall.value = false;
-  void act(() => appsApi.uninstall(props.app.id));
-}
 </script>
 
 <template>
@@ -279,27 +249,7 @@ function uninstall() {
       <button v-if="!app.error" class="app-btn" :disabled="busy" v-tooltip="relocation.tip" @click="relocate">
         {{ relocation.label }}
       </button>
-      <button
-        v-if="app.enabled && !app.error"
-        class="app-btn"
-        :class="{ 'app-btn--danger': confirmingDisable }"
-        :disabled="busy"
-        v-tooltip="'暂时关掉这个应用；它的数据保留，随时可以再启用。它起的进程会一并结束'"
-        @click="disable"
-        @blur="confirmingDisable = false"
-      >
-        {{ confirmingDisable ? `禁用${alsoEnds}` : "禁用" }}
-      </button>
-      <button
-        class="app-btn"
-        :class="{ 'app-btn--danger': confirmingUninstall }"
-        :disabled="busy"
-        v-tooltip="removal.tip"
-        @click="uninstall"
-        @blur="confirmingUninstall = false"
-      >
-        {{ confirmingUninstall ? removal.confirm : removal.label }}
-      </button>
+      <button v-if="app.enabled || app.error" class="app-btn" @click="manage">管理应用</button>
     </div>
 
     <div v-if="devNotice" class="app-notice">
@@ -321,7 +271,7 @@ function uninstall() {
 
     <div v-else-if="!app.enabled" class="app-card">
       <div class="app-card-title">「{{ app.name }}」已禁用</div>
-      <button class="app-btn app-btn--primary" :disabled="busy" @click="setEnabled(true)">启用</button>
+      <button class="app-btn app-btn--primary" @click="manage">管理应用</button>
     </div>
 
     <div v-else-if="!app.consented" class="app-card">
@@ -491,11 +441,6 @@ function uninstall() {
 .app-btn:disabled {
   opacity: 0.5;
   cursor: default;
-}
-
-.app-btn--danger {
-  border-color: var(--aide-danger);
-  color: var(--aide-danger);
 }
 
 .app-btn--primary {

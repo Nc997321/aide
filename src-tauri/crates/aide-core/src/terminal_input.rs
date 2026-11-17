@@ -9,7 +9,7 @@ trait ShellInput {
     fn configure(&self, command: &mut CommandBuilder, token: &str) -> io::Result<Option<TempDir>>;
 }
 
-fn ssh_bootstrap(token: &str) -> String {
+fn nested_shell_bootstrap(token: &str) -> String {
     use base64::Engine;
     let common = include_str!("terminal_input/common.sh");
     let execute = include_str!("terminal_input/ssh_execute.sh");
@@ -31,7 +31,7 @@ fn ssh_bootstrap(token: &str) -> String {
 #[cfg(unix)]
 fn ssh_hook(token: &str) -> String {
     include_str!("terminal_input/ssh_local.sh")
-        .replace("__AIDE_SSH_BOOTSTRAP__", &format!("'{}'", ssh_bootstrap(token)))
+        .replace("__AIDE_SSH_BOOTSTRAP__", &format!("'{}'", nested_shell_bootstrap(token)))
         .replace("__AIDE_INPUT_TOKEN__", token)
 }
 
@@ -40,11 +40,17 @@ struct PowerShell;
 impl ShellInput for PowerShell {
     fn configure(&self, command: &mut CommandBuilder, token: &str) -> io::Result<Option<TempDir>> {
         use base64::Engine;
+        let bootstrap = nested_shell_bootstrap(token);
         let script = include_str!("commands/terminal_input.ps1")
             .replace("__AIDE_INPUT_TOKEN__", token)
-            .replace("__AIDE_SSH_BOOTSTRAP__", &ssh_bootstrap(token));
+            .replace("__AIDE_SSH_BOOTSTRAP__", &bootstrap);
         #[cfg(windows)]
-        let script = format!("chcp 65001 >$null\n{script}");
+        let script = format!(
+            "chcp 65001 >$null\n{script}\n{}",
+            include_str!("terminal_input/wsl.ps1")
+                .replace("__AIDE_INPUT_TOKEN__", token)
+                .replace("__AIDE_WSL_BOOTSTRAP__", &bootstrap)
+        );
         let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         command.args(["-NoExit", "-EncodedCommand", &encoded]);
@@ -132,8 +138,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ssh_bootstrap_keeps_the_pty_as_the_shell_input() {
-        let command = ssh_bootstrap("0123456789abcdef0123456789abcdef");
+    fn nested_shell_bootstrap_keeps_the_pty_as_the_shell_input() {
+        let command = nested_shell_bootstrap("0123456789abcdef0123456789abcdef");
         assert!(command.contains("sh -c \"$(printf"));
         assert!(!command.contains("| sh"));
         assert!(!command.contains('\''));

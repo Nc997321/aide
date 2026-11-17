@@ -87,7 +87,7 @@ pub fn parse(text: &str, dir_name: &str) -> Result<Manifest, String> {
     Ok(m)
 }
 
-fn valid_id(id: &str) -> bool {
+pub(super) fn valid_id(id: &str) -> bool {
     let mut chars = id.chars();
     matches!(chars.next(), Some(c) if c.is_ascii_lowercase() || c.is_ascii_digit())
         && id.len() <= MAX_ID

@@ -15,6 +15,24 @@ export interface AppEventPayload {
 /** 应用起的进程有增减。收到就重新 `processList`。 */
 export const APP_PROCESSES_CHANGED_EVENT = "app-processes-changed";
 
+export interface MarketApp {
+  id: string;
+  name: string;
+  description: string;
+  availableVersion: string | null;
+  installedVersion: string | null;
+  localVersion: string | null;
+  enabled: boolean | null;
+  installed: boolean;
+  canUpdate: boolean;
+  shadowed: boolean;
+}
+
+interface MarketListing {
+  apps: MarketApp[];
+  catalogError: string | null;
+}
+
 /**
  * 侧栏应用：装在**当前窗口连着的 Host** 上（`~/.aide/apps`，受信任工作区的 `.aide/apps` 是开发态）。
  * 面板只在桌面，这些命令不进 Link 暴露目录。
@@ -22,6 +40,15 @@ export const APP_PROCESSES_CHANGED_EVENT = "app-processes-changed";
 export const appsApi = {
   list(): Promise<AppInfo[]> {
     return getTransport().invoke("app_list");
+  },
+  marketList(): Promise<MarketListing> {
+    return getTransport().invoke("app_market_list");
+  },
+  marketInstall(appId: string, version: string, previousVersion: string | null): Promise<void> {
+    return getTransport().invoke("app_market_install", { appId, version, previousVersion });
+  },
+  marketUninstall(appId: string, version: string): Promise<void> {
+    return getTransport().invoke("app_market_uninstall", { appId, version });
   },
   /** 应用界面经桥发来的调用。权限由 Host 按清单裁决，这里只是管道。
    *  `workspace` = 面板所在的工作区根（外层带上的，不是应用自己说的）；Host 只认登记过的工作区，

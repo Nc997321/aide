@@ -616,7 +616,7 @@ function openSettings() {
 
 // 插件市场已迁出设置页为一级主区视图：通知「查看」动作 → 打开主区市场面板
 function openMarketplacePanel() {
-  marketplace.openPanel();
+  marketplace.openPanel({ category: "plugins" });
 }
 
 async function onRunProject(id?: string) {

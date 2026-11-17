@@ -68,7 +68,7 @@ function onDockMenu(e: MouseEvent) {
     <div
       class="nav-row"
       :class="{ on: panelOpen }"
-      v-tooltip="'插件市场'"
+      v-tooltip="'Aide 市场'"
       @click="togglePanel"
       @contextmenu.prevent="onDockMenu"
     >
@@ -88,7 +88,7 @@ function onDockMenu(e: MouseEvent) {
           stroke-linejoin="round"
         />
       </svg>
-      <span class="nav-label">插件</span>
+      <span class="nav-label">Aide 市场</span>
       <span v-if="installedCount" class="nav-count">{{ installedCount }}</span>
     </div>
 

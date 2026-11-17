@@ -6,6 +6,7 @@ import { useLanguagePacks } from "../../composables/useLanguagePacks";
 import { api, openExternal } from "../../api";
 import MarketplacePluginCard from "./MarketplacePluginCard.vue";
 import LanguagePackCard from "./LanguagePackCard.vue";
+import MarketplaceApps from "./MarketplaceApps.vue";
 import Icon from "../Icon.vue";
 
 const props = defineProps<{
@@ -75,29 +76,32 @@ const suggestedPacks = computed(() =>
 );
 
 const activeCategory = ref("all");
+const section = ref<"apps" | "plugins" | "langpacks">("apps");
 const showHidden = ref(false);
 const sourcesRef = ref<HTMLElement | null>(null);
 const highlightSources = ref(false);
 
 onMounted(async () => {
+  takeRequestedCategory();
   void languagePacks.refresh();
   void detectLangs();
   await fetchSources();
   await Promise.all([fetchPlugins(), refreshInstalled()]);
-  // 外部要求直接落到某个分类（「语言环境」面板 →「语言服务器」）优先；
-  // 否则有精选插件时默认落「推荐」视图（仿设计稿首屏：Hero + 精选网格）
-  if (takeRequestedCategory()) return;
+  // Agent 插件有精选内容时默认展示推荐分类。
   if (featuredPlugins.value.length > 0 && activeCategory.value === "all") {
     activeCategory.value = "featured";
   }
 });
 
-function takeRequestedCategory(): boolean {
+function takeRequestedCategory() {
   const cat = requestedCategory.value;
-  if (!cat) return false;
-  activeCategory.value = cat;
+  if (!cat) return;
+  if (cat === "apps" || cat === "langpacks" || cat === "plugins") section.value = cat;
+  else {
+    section.value = "plugins";
+    activeCategory.value = cat;
+  }
   requestedCategory.value = null;
-  return true;
 }
 // 市场已经开着时再被要求跳分类（面板里又点了一次入口）
 watch(requestedCategory, () => void takeRequestedCategory());
@@ -182,10 +186,6 @@ const categories = computed(() => {
   if (installedVisibleCount.value > 0) {
     all.unshift({ key: "installed", label: "已安装", count: installedVisibleCount.value });
   }
-  // 「语言服务器」伪分类：Aide 自己的语言包（一键装到当前 Host），不来自任何市场源。
-  if (languagePacks.packs.value.length > 0) {
-    all.unshift({ key: "langpacks", label: "语言服务器", count: languagePacks.packs.value.length });
-  }
   // 「推荐」伪分类（精选推荐视图）置于最前，仅在有精选插件时出现。
   if (featuredPlugins.value.length > 0) {
     all.unshift({ key: "featured", label: "推荐", count: featuredPlugins.value.length });
@@ -196,7 +196,7 @@ const categories = computed(() => {
 // 右侧栏「热门标签」：真实分类按插件数排序取前 8（不含伪分类），点击跳转分类。
 const sideTags = computed(() =>
   categories.value
-    .filter((c) => !["featured", "installed", "all", "langpacks"].includes(c.key))
+    .filter((c) => !["featured", "installed", "all"].includes(c.key))
     .slice(0, 8),
 );
 
@@ -233,7 +233,7 @@ const enabledCount = computed(() => {
 <template>
   <div class="marketplace-tab">
     <!-- Error banner -->
-    <div v-if="error" class="error-banner">
+    <div v-if="section === 'plugins' && error" class="error-banner">
       <div class="error-body">
         <span class="error-text">{{ error }}</span>
         <div class="error-actions">
@@ -251,13 +251,12 @@ const enabledCount = computed(() => {
     <div class="main-head">
       <div class="row">
         <div>
-          <h1>插件市场</h1>
-          <div class="sub">扩展 Aide 的能力，让 AI 更懂你的工作</div>
+          <h1>Aide 市场</h1>
         </div>
         <div class="head-right">
           <div class="search">
             <span class="ic">⌕</span>
-            <AInput unstyled v-model="searchQuery" placeholder="搜索插件名或描述…" />
+            <AInput unstyled v-model="searchQuery" placeholder="搜索名称或描述…" />
           </div>
           <!-- 关闭 = 主区切回聊天（与记忆观测台头部 ✕ 同规格同语义：面板关掉，
                PaneLayout 由 v-show 保活，会话不掉线） -->
@@ -268,7 +267,13 @@ const enabledCount = computed(() => {
       </div>
     </div>
 
-    <div ref="sourcesRef" class="sources" :class="{ highlight: highlightSources }">
+    <nav class="market-sections" aria-label="市场类别">
+      <button class="ftag" type="button" :class="{ active: section === 'apps' }" :aria-pressed="section === 'apps'" @click="section = 'apps'">Aide 应用</button>
+      <button class="ftag" type="button" :class="{ active: section === 'plugins' }" :aria-pressed="section === 'plugins'" @click="section = 'plugins'">Agent 插件</button>
+      <button class="ftag" type="button" :class="{ active: section === 'langpacks' }" :aria-pressed="section === 'langpacks'" @click="section = 'langpacks'">语言服务器</button>
+    </nav>
+
+    <div v-if="section === 'plugins'" ref="sourcesRef" class="sources" :class="{ highlight: highlightSources }">
       <span class="lbl">源</span>
       <div
         v-for="s in sources"
@@ -285,9 +290,9 @@ const enabledCount = computed(() => {
       </div>
     </div>
 
-    <div class="content">
+    <div class="content" :class="{ 'content-single': section !== 'plugins' || sideTags.length === 0 }">
     <div class="list">
-      <div class="filter-row">
+      <div v-if="section === 'plugins'" class="filter-row">
         <span
           v-for="c in categories"
           :key="c.key"
@@ -300,7 +305,8 @@ const enabledCount = computed(() => {
       </div>
 
       <!-- 推荐视图：Hero + 精选推荐网格（仿设计稿首屏） -->
-      <template v-if="showFeaturedHome">
+      <MarketplaceApps v-if="section === 'apps'" :key="workspaceRoot" :search="searchQuery" />
+      <template v-else-if="section === 'plugins' && showFeaturedHome">
         <div class="hero">
           <div class="hero-text">
             <div class="hero-title">发现更多可能性</div>
@@ -332,7 +338,7 @@ const enabledCount = computed(() => {
         </div>
       </template>
 
-      <template v-else-if="activeCategory === 'langpacks'">
+      <template v-else-if="section === 'langpacks'">
         <div class="pack-intro">
           <div class="pack-intro-title">语言服务器</div>
           <div class="pack-intro-sub">
@@ -402,7 +408,7 @@ const enabledCount = computed(() => {
     </div>
 
     <!-- 右侧栏：热门标签（真实分类计数，点击跳转） -->
-    <aside v-if="sideTags.length" class="side">
+    <aside v-if="section === 'plugins' && sideTags.length" class="side">
       <div class="side-card">
         <h4>热门标签</h4>
         <div
@@ -419,7 +425,7 @@ const enabledCount = computed(() => {
     </aside>
     </div>
 
-    <div class="foot">
+    <div v-if="section === 'plugins'" class="foot">
       <span class="pill">{{ installedPlugins.size }} 已安装</span><span class="sep">·</span>
       <span class="pill">{{ enabledCount }} 已启用</span><span class="sep">·</span>
       <span>启用变更在下一次消息往返生效</span>
@@ -432,6 +438,14 @@ const enabledCount = computed(() => {
   display: flex;
   flex-direction: column;
   height: 100%;
+}
+.market-sections {
+  display: flex;
+  gap: 6px;
+  padding: 0 16px 8px;
+}
+.content.content-single {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 /* ── Error ── */
@@ -534,12 +548,6 @@ const enabledCount = computed(() => {
   font-size: 17px;
   font-weight: 600;
   letter-spacing: 0.01em;
-}
-
-.main-head .sub {
-  margin-top: 3px;
-  font-size: 11.5px;
-  color: var(--aide-text-muted);
 }
 
 /* ── 内容区：主列 + 右侧栏（仿设计稿双栏） ── */

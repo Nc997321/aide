@@ -459,47 +459,5 @@ function openGit() {
   gap: 8px;
 }
 
-.btn {
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 500;
-  white-space: nowrap;
-  padding: 6px 14px;
-  border-radius: var(--aide-radius-sm);
-  cursor: pointer;
-  border: 1px solid var(--aide-border);
-  background: var(--aide-bg-raised);
-  color: var(--aide-text-primary);
-  transition: background 0.12s, border-color 0.12s;
-}
-
-.btn:hover {
-  background: var(--aide-surface-hover);
-  border-color: var(--aide-text-muted);
-}
-
-.btn.primary {
-  background: var(--aide-accent);
-  border-color: var(--aide-accent);
-  color: var(--aide-text-on-accent);
-}
-
-.btn.primary:hover {
-  background: var(--aide-accent-hover);
-}
-
-.btn.danger {
-  color: var(--aide-danger);
-  border-color: color-mix(in srgb, var(--aide-danger) 30%, transparent);
-}
-
-.btn.danger:hover {
-  background: color-mix(in srgb, var(--aide-danger) 12%, transparent);
-  border-color: var(--aide-danger);
-}
-
-.btn[disabled] {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
 </style>
+<style scoped src="./marketplace-buttons.css"></style>

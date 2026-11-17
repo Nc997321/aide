@@ -606,7 +606,7 @@ defineExpose({ openPanel });
 
         <!-- 安装入口：主 = 插件市场「语言服务器」一键安装；次 = 手动安装说明（随包 HTML，系统浏览器打开） -->
         <div class="guide-row">
-          <button class="market-btn" @click="openLanguagePacks">在插件市场安装语言服务器</button>
+          <button class="market-btn" @click="openLanguagePacks">在 Aide 市场安装语言服务器</button>
           <button class="guide-btn" @click="openGuide">手动安装说明 ↗</button>
         </div>
       </div>

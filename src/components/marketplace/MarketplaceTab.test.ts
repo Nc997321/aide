@@ -22,6 +22,13 @@ const packsApi = vi.hoisted(() => ({ list: vi.fn(), install: vi.fn(), uninstall:
 vi.mock("@aide/sdk/api/lspPacks", () => ({ lspPacksApi: packsApi }));
 const sdkApi = vi.hoisted(() => ({ lspDetectLanguages: vi.fn() }));
 vi.mock("../../api", async (orig) => ({ ...(await orig<object>()), api: sdkApi }));
+const apps = vi.hoisted(() => ({
+  marketList: vi.fn(), marketInstall: vi.fn(), marketUninstall: vi.fn(),
+  setEnabled: vi.fn(), uninstall: vi.fn(),
+}));
+vi.mock("@aide/sdk/api/apps", () => ({ appsApi: apps }));
+const confirm = vi.hoisted(() => vi.fn());
+vi.mock("../../composables/useModal", () => ({ useModal: () => ({ confirm }) }));
 
 import MarketplaceTab from "./MarketplaceTab.vue";
 
@@ -58,7 +65,7 @@ const installedLocal: InstalledPlugin[] = [
   },
 ];
 
-async function mountTab(props: { workspaceRoot?: string } = {}) {
+async function mountTab(props: { workspaceRoot?: string } = {}, section?: "apps") {
   const w = mount(MarketplaceTab, {
     props,
     global: {
@@ -67,12 +74,17 @@ async function mountTab(props: { workspaceRoot?: string } = {}) {
     },
   });
   await flushPromises();
+  if (!section && w.find("button[aria-pressed='true']").text() === "Aide 应用") {
+    await w.findAll(".market-sections button").find((button) => button.text() === "Agent 插件")!.trigger("click");
+  }
   return w;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   __resetLanguagePacksForTest();
+  useMarketplace().searchQuery.value = "";
+  apps.marketList.mockResolvedValue({ apps: [], catalogError: null });
   packsApi.list.mockResolvedValue([pyPack, tsPack]);
   sdkApi.lspDetectLanguages.mockResolvedValue([]);
   api.listMarketplaceSources.mockResolvedValue([
@@ -80,6 +92,81 @@ beforeEach(() => {
   ]);
   api.fetchMarketplace.mockResolvedValue(catalogEntry);
   api.listInstalledPlugins.mockResolvedValue(installedLocal);
+});
+
+const counter = {
+  id: "counter", name: "计数器", description: "记录计数", availableVersion: "0.1.0",
+  installedVersion: null, localVersion: null, enabled: null, installed: false, canUpdate: false, shadowed: false,
+};
+
+it("默认打开 Aide 应用，安装后从 Host 刷新状态", async () => {
+  apps.marketList.mockResolvedValueOnce({ apps: [counter], catalogError: null })
+    .mockResolvedValueOnce({ apps: [{ ...counter, installed: true, installedVersion: "0.1.0" }], catalogError: null });
+  apps.marketInstall.mockResolvedValue(undefined);
+  const w = await mountTab({}, "apps");
+  const install = w.find(".app-card button");
+  expect(install.text()).toBe("安装");
+  await install.trigger("click");
+  await flushPromises();
+  expect(apps.marketInstall).toHaveBeenCalledWith("counter", "0.1.0", null);
+  expect(w.text()).toContain("已安装 0.1.0");
+});
+
+it("更新时向 Host 传入已安装版本并刷新版本", async () => {
+  const installed = { ...counter, installed: true, installedVersion: "0.1.0", availableVersion: "0.2.0", canUpdate: true };
+  apps.marketList.mockResolvedValueOnce({ apps: [installed], catalogError: null })
+    .mockResolvedValueOnce({ apps: [{ ...installed, installedVersion: "0.2.0", canUpdate: false }], catalogError: null });
+  apps.marketInstall.mockResolvedValue(undefined);
+  const w = await mountTab({}, "apps");
+  const update = w.find(".app-card button");
+  expect(update.text()).toBe("更新到 0.2.0");
+  await update.trigger("click");
+  await flushPromises();
+  expect(apps.marketInstall).toHaveBeenCalledWith("counter", "0.2.0", "0.1.0");
+  expect(w.text()).toContain("已安装 0.2.0");
+});
+
+it("目录离线时仍能从当前 Host 卸载市场版", async () => {
+  apps.marketList.mockResolvedValueOnce({
+    apps: [{ ...counter, installed: true, installedVersion: "0.1.0", availableVersion: null, shadowed: true }],
+    catalogError: "目录离线",
+  });
+  confirm.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  apps.marketUninstall.mockResolvedValue(undefined);
+  const w = await mountTab({}, "apps");
+  expect(w.text()).toContain("目录离线");
+  expect(w.text()).toContain("当前工作区的开发版优先显示");
+  const uninstall = w.find(".app-card button");
+  expect(uninstall.text()).toBe("卸载");
+  await uninstall.trigger("click");
+  await flushPromises();
+  expect(apps.marketUninstall).not.toHaveBeenCalled();
+  await uninstall.trigger("click");
+  await flushPromises();
+  expect(apps.marketUninstall).toHaveBeenCalledWith("counter", "0.1.0");
+});
+
+it("本地任务面板可以在市场禁用、重新启用并卸载", async () => {
+  const task = {
+    ...counter, id: "task-runner", name: "任务面板", installed: true, localVersion: "0.1.0",
+    availableVersion: null, enabled: true,
+  };
+  apps.marketList.mockResolvedValueOnce({ apps: [task], catalogError: null })
+    .mockResolvedValueOnce({ apps: [{ ...task, enabled: false }], catalogError: null })
+    .mockResolvedValueOnce({ apps: [task], catalogError: null });
+  apps.setEnabled.mockResolvedValue(undefined);
+  apps.uninstall.mockResolvedValue(undefined);
+  confirm.mockResolvedValue(true);
+  const w = await mountTab({}, "apps");
+  for (const label of ["禁用", "启用", "卸载"]) {
+    const button = w.findAll(".app-card button").find((item) => item.text() === label)!;
+    await button.trigger("click");
+    await flushPromises();
+  }
+  expect(apps.setEnabled.mock.calls).toEqual([["task-runner", false], ["task-runner", true]]);
+  expect(apps.uninstall).toHaveBeenCalledWith("task-runner");
+  expect(apps.marketUninstall).not.toHaveBeenCalled();
+  expect(w.find(".app-card").exists()).toBe(false);
 });
 
 describe("MarketplaceTab 头部关闭入口", () => {
@@ -189,8 +276,8 @@ describe("MarketplaceTab「语言服务器」分类", () => {
   it("有语言包时出现该分类；点进去列出语言包，当前项目在用的置顶并标出", async () => {
     sdkApi.lspDetectLanguages.mockResolvedValue(["typescript"]);
     const w = await mountTab({ workspaceRoot: "/ws" });
-    const tag = w.findAll(".ftag").find((t) => t.text().includes("语言服务器"));
-    expect(tag?.text()).toContain("2");
+    const tag = w.findAll(".market-sections button").find((t) => t.text() === "语言服务器");
+    expect(tag).toBeTruthy();
     await tag!.trigger("click");
     const names = w.findAll(".card .name").map((n) => n.text());
     expect(names).toEqual(["TypeScript / JavaScript", "Python"]);
@@ -212,7 +299,7 @@ describe("MarketplaceTab「语言服务器」分类", () => {
     expect(w.find(".pack-intro").exists()).toBe(true);
     expect(m.requestedCategory.value).toBeNull();
 
-    await w.findAll(".ftag").find((t) => t.text().includes("全部"))!.trigger("click");
+    await w.findAll(".market-sections button").find((t) => t.text() === "Agent 插件")!.trigger("click");
     expect(w.find(".pack-intro").exists()).toBe(false);
     m.openPanel({ category: "langpacks" });
     await flushPromises();

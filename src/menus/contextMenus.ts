@@ -321,7 +321,7 @@ export function marketplaceSectionMenuItems(
   onRefreshAll: () => void,
 ): MenuItem[] {
   return [
-    { label: "打开插件市场", action: onOpen },
+    { label: "打开 Aide 市场", action: onOpen },
     { label: "刷新全部市场源", action: onRefreshAll },
   ];
 }

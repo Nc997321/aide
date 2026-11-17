@@ -6,6 +6,7 @@
 
 pub mod bridge;
 pub mod manifest;
+mod market;
 pub mod net;
 pub mod process;
 pub mod servers;
@@ -31,6 +32,9 @@ pub static COMMANDS: &[HostCommand] = &[
     command!("app_set_enabled", app_set_enabled),
     command!("app_set_placement", app_set_placement),
     command!("app_install", app_install),
+    command!("app_market_list", app_market_list),
+    command!("app_market_install", app_market_install),
+    command!("app_market_uninstall", app_market_uninstall),
     command!("app_uninstall", app_uninstall),
     command!("app_process_list", app_process_list),
     command!("app_process_kill", app_process_kill),
@@ -374,6 +378,41 @@ pub struct AppIdArgs {
 async fn app_install(core: Arc<Core>, a: AppIdArgs) -> Result<(), String> {
     let (c, id) = (core.clone(), a.app_id.clone());
     blocking(move || store::install(&roots(&c), &a.app_id)).await?;
+    core.emit(APPS_CHANGED, json!({ "appId": id }));
+    Ok(())
+}
+
+async fn app_market_list(core: Arc<Core>, _a: crate::commands::NoArgs) -> Result<market::MarketListing, String> {
+    blocking(move || market::list(&roots(&core))).await
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppMarketInstallArgs {
+    app_id: String,
+    version: String,
+    previous_version: Option<String>,
+}
+
+async fn app_market_install(core: Arc<Core>, a: AppMarketInstallArgs) -> Result<(), String> {
+    let id = a.app_id.clone();
+    let c = core.clone();
+    blocking(move || market::install(&roots(&c), &a.app_id, &a.version, a.previous_version.as_deref())).await?;
+    core.emit(APPS_CHANGED, json!({ "appId": id }));
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppMarketUninstallArgs {
+    app_id: String,
+    version: String,
+}
+
+async fn app_market_uninstall(core: Arc<Core>, a: AppMarketUninstallArgs) -> Result<(), String> {
+    let id = a.app_id.clone();
+    let c = core.clone();
+    blocking(move || market::uninstall(&roots(&c), &a.app_id, &a.version)).await?;
     core.emit(APPS_CHANGED, json!({ "appId": id }));
     Ok(())
 }

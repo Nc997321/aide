@@ -458,7 +458,9 @@ pub fn write_mcp_file(roots: &Roots, entries: &[serde_json::Value]) -> Result<()
 ///
 /// 清单坏了的也删得掉（不走 `locate`）：否则 agent 写坏的应用会一直赖在侧栏上。
 pub fn uninstall(roots: &Roots, id: &str) -> Result<Source, String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
     manifest::safe_rel(id).ok().filter(|_| !id.contains('/')).ok_or(format!("应用 id「{id}」不合法"))?;
+    recover_market_update(roots, id, &roots.user_apps.join(id))?;
     let shown = roots
         .app_dirs()
         .into_iter()
@@ -468,7 +470,7 @@ pub fn uninstall(roots: &Roots, id: &str) -> Result<Source, String> {
         return Err(format!("没有应用「{id}」"));
     };
     let mut doomed = vec![(source, dir)];
-    if source == Source::User {
+    if source == Source::User && market_version(&doomed[0].1, id).is_none() {
         let copies = roots.app_dirs().into_iter().filter(|(s, _)| *s == Source::Workspace);
         doomed.extend(copies.map(|(s, root)| (s, root.join(id))).filter(|(_, d)| d.is_dir() && installed_as_is(roots, d)));
     }
@@ -491,6 +493,7 @@ pub fn uninstall(roots: &Roots, id: &str) -> Result<Source, String> {
 /// 记下用户的同意。`grant` 必须等于清单**此刻**的 grant：用户同意的是他看到的那一份，
 /// 弹窗开着的时候清单被改了（多申请了权限）就不算数。
 pub fn consent(roots: &Roots, id: &str, grant: &str) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
     let app = locate(roots, id)?;
     if app.manifest.grant() != grant {
         return Err("应用的权限在确认期间变了，请重新确认".into());
@@ -501,6 +504,7 @@ pub fn consent(roots: &Roots, id: &str, grant: &str) -> Result<(), String> {
 }
 
 pub fn set_enabled(roots: &Roots, id: &str, enabled: bool) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
     let app = locate(roots, id)?;
     let mut state = load_state(roots);
     state.disabled.retain(|k| k != &app.key);
@@ -513,6 +517,7 @@ pub fn set_enabled(roots: &Roots, id: &str, enabled: bool) -> Result<(), String>
 /// 用户在面板上把应用挪到另一个位置。只记在状态里，不改清单：清单是应用作者（agent）的文件，
 /// 位置是用户的偏好——改清单会让开发态与安装版「不一样了」，凭空冒出一条「更新安装」。
 pub fn set_placement(roots: &Roots, id: &str, placement: Placement) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
     let app = locate(roots, id)?;
     let mut state = load_state(roots);
     state.placements.insert(app.manifest.id, placement);
@@ -547,10 +552,12 @@ pub fn asset(roots: &Roots, id: &str, path: &str) -> Result<Vec<u8>, String> {
 /// 把开发态应用装成用户级：整目录复制到 `~/.aide/apps/<id>`（先落临时目录再换上，失败不留半截）。
 /// 装完要重新同意——同意记录按来源分开记。
 pub fn install(roots: &Roots, id: &str) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
     let app = locate(roots, id)?;
     if app.source != Source::Workspace {
         return Err(format!("应用「{id}」已经是安装版"));
     }
+    recover_market_update(roots, id, &roots.user_apps.join(id))?;
     fs::create_dir_all(&roots.user_apps).map_err(|e| e.to_string())?;
     let staging = roots.user_apps.join(format!(".{id}.installing"));
     let _ = fs::remove_dir_all(&staging);
@@ -586,13 +593,129 @@ pub fn install(roots: &Roots, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+const MARKET_RECEIPT: &str = ".aide-market-version";
+
+pub(super) fn market_recovery_ids(roots: &Roots) -> std::collections::BTreeSet<String> {
+    fs::read_dir(&roots.user_apps).into_iter().flatten().flatten().filter_map(|entry| {
+        let name = entry.file_name().into_string().ok()?;
+        let id = name.strip_prefix('.').and_then(|name| name.strip_suffix(".market-previous")).unwrap_or(&name);
+        manifest::valid_id(id).then(|| id.to_owned())
+    }).collect()
+}
+
+fn market_version(dir: &Path, id: &str) -> Option<String> {
+    if !fs::symlink_metadata(dir).ok()?.is_dir() {
+        return None;
+    }
+    let version = fs::read_to_string(dir.join(MARKET_RECEIPT)).ok()?;
+    let text = fs::read_to_string(dir.join(MANIFEST_FILE)).ok()?;
+    let app = manifest::parse(&text, id).ok()?;
+    (app.version == version && app.server.is_none()).then_some(version)
+}
+
+pub(super) fn market_installation(roots: &Roots, id: &str) -> Result<(bool, Option<String>, bool), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
+    let target = roots.user_apps.join(id);
+    recover_market_update(roots, id, &target)?;
+    let installed = target.try_exists().map_err(|e| e.to_string())?;
+    let version = market_version(&target, id);
+    let shadowed = locate(roots, id).is_ok_and(|app| app.source == Source::Workspace);
+    Ok((installed, version, shadowed))
+}
+
+fn market_backup(roots: &Roots, id: &str) -> PathBuf {
+    roots.user_apps.join(format!(".{id}.market-previous"))
+}
+
+fn recover_market_update(roots: &Roots, id: &str, target: &Path) -> Result<(), String> {
+    let backup = market_backup(roots, id);
+    if backup.try_exists().map_err(|e| e.to_string())? {
+        if market_version(&backup, id).is_none() {
+            return Err(format!("应用「{id}」的旧版备份无效"));
+        }
+        if target.try_exists().map_err(|e| e.to_string())? {
+            let retired = tempfile::Builder::new().prefix(".market-retired-").tempdir_in(&roots.user_apps)
+                .map_err(|e| e.to_string())?;
+            fs::rename(&backup, retired.path().join(id)).map_err(|e| e.to_string())?;
+        } else {
+            fs::rename(&backup, target).map_err(|e| format!("恢复旧版失败：{e}"))?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn install_market_app(
+    roots: &Roots,
+    id: &str,
+    version: &str,
+    previous: Option<&str>,
+    staging: &Path,
+) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
+    let target = roots.user_apps.join(id);
+    recover_market_update(roots, id, &target)?;
+    fs::write(staging.join(MARKET_RECEIPT), version).map_err(|e| e.to_string())?;
+
+    if let Some(previous) = previous {
+        if market_version(&target, id).as_deref() != Some(previous) {
+            return Err("市场安装版已变化，请刷新后重试".into());
+        }
+        let backup = market_backup(roots, id);
+        fs::rename(&target, &backup).map_err(|e| e.to_string())?;
+        if let Err(e) = fs::rename(staging, &target) {
+            recover_market_update(roots, id, &target)?;
+            return Err(e.to_string());
+        }
+        if let Err(e) = recover_market_update(roots, id, &target) {
+            tracing::warn!("[apps] 清理应用「{id}」旧版失败：{e}");
+        }
+    } else {
+        match fs::symlink_metadata(&target) {
+            Ok(_) => return Err(format!("此 Host 已存在同 ID 的应用「{id}」")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.to_string()),
+        }
+        let mut state = load_state(roots);
+        let key = state_key(Source::User, &target);
+        let was_disabled = state.disabled.contains(&key);
+        state.disabled.retain(|item| item != &key);
+        if state.grants.remove(&key).is_some() || was_disabled {
+            save_state(roots, &state)?;
+        }
+        fs::rename(staging, target).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+pub(super) fn uninstall_market_app(roots: &Roots, id: &str, version: &str) -> Result<(), String> {
+    let _guard = INSTALL_LOCK.lock().map_err(|e| e.to_string())?;
+    let target = roots.user_apps.join(id);
+    recover_market_update(roots, id, &target)?;
+    if market_version(&target, id).as_deref() != Some(version) {
+        return Err("市场安装版已变化，请刷新后重试".into());
+    }
+    // 先移出应用目录，再处理状态与文件。工作区副本和应用数据留在原处。
+    let retired = tempfile::Builder::new().prefix(".market-uninstall-").tempdir_in(&roots.user_apps)
+        .map_err(|e| e.to_string())?;
+    fs::rename(&target, retired.path().join(id)).map_err(|e| e.to_string())?;
+    let mut state = load_state(roots);
+    let key = state_key(Source::User, &target);
+    state.grants.remove(&key);
+    state.disabled.retain(|item| item != &key);
+    if let Err(e) = save_state(roots, &state) {
+        tracing::warn!("[apps] 清理已卸载应用「{id}」的状态失败：{e}");
+    }
+    Ok(())
+}
+
 /// 复制普通文件与目录；符号链接跳过（不把目录外的东西带进安装版）。
 fn copy_tree(from: &Path, to: &Path) -> Result<(), String> {
     fs::create_dir_all(to).map_err(|e| e.to_string())?;
     for entry in fs::read_dir(from).map_err(|e| e.to_string())?.flatten() {
         let kind = entry.file_type().map_err(|e| e.to_string())?;
         // 开发日志是开发态的东西，不带进安装版
-        if entry.file_name() == DEV_LOG {
+        if entry.file_name() == DEV_LOG || entry.file_name() == MARKET_RECEIPT {
             continue;
         }
         let dest = to.join(entry.file_name());
@@ -936,6 +1059,47 @@ pub(crate) mod tests {
         assert_eq!(uninstall(&roots, "snake").unwrap(), Source::User);
         assert!(list(&roots).is_empty(), "卸载后不能以「开发中」的样子冒回来");
         assert!(!dev.exists());
+    }
+
+    #[test]
+    fn market_update_and_uninstall_only_manage_the_receipted_user_copy() {
+        let roots = temp_roots("market_lifecycle");
+        let workspace = roots.workspace_apps.as_ref().unwrap();
+        write_app(workspace, "counter", &[]);
+        install(&roots, "counter").unwrap();
+        assert_eq!(market_installation(&roots, "counter").unwrap(), (true, None, false));
+        assert!(uninstall_market_app(&roots, "counter", "0.1.0").is_err());
+        uninstall(&roots, "counter").unwrap();
+        write_app(workspace, "counter", &[]);
+
+        write_app(&roots.user_apps, "staged", &[]);
+        let staging = roots.user_apps.join("staged");
+        let app_json = |version: &str| {
+            format!(r#"{{"id":"counter","name":"Counter","version":"{version}","panel":{{"entry":"ui/index.html"}}}}"#)
+        };
+        fs::write(staging.join(MANIFEST_FILE), app_json("0.1.0")).unwrap();
+        install_market_app(&roots, "counter", "0.1.0", None, &staging).unwrap();
+
+        let target = roots.user_apps.join("counter");
+        fs::rename(&target, market_backup(&roots, "counter")).unwrap();
+        assert_eq!(market_installation(&roots, "counter").unwrap().1.as_deref(), Some("0.1.0"));
+        assert!(target.is_dir());
+
+        write_app(&roots.user_apps, "staged", &[]);
+        fs::write(staging.join(MANIFEST_FILE), app_json("0.2.0")).unwrap();
+        assert!(install_market_app(&roots, "counter", "0.2.0", Some("0.0.1"), &staging).is_err());
+        assert_eq!(market_version(&target, "counter").as_deref(), Some("0.1.0"));
+        install_market_app(&roots, "counter", "0.2.0", Some("0.1.0"), &staging).unwrap();
+        assert_eq!(market_version(&target, "counter").as_deref(), Some("0.2.0"));
+
+        let data = roots.data.join("counter");
+        fs::create_dir_all(&data).unwrap();
+        fs::write(data.join("count"), "42").unwrap();
+        assert!(uninstall_market_app(&roots, "counter", "0.1.0").is_err());
+        uninstall_market_app(&roots, "counter", "0.2.0").unwrap();
+        assert!(!target.exists());
+        assert!(workspace.join("counter").join(MANIFEST_FILE).is_file());
+        assert_eq!(fs::read_to_string(data.join("count")).unwrap(), "42");
     }
 
     #[test]
