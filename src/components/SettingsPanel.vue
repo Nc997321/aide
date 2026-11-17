@@ -498,12 +498,12 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">界面字体</label>
                 <FontSelect v-model="fontFamilyLocal" />
-                <span class="field-hint">作用于界面正文（按钮/标签/面板）与聊天区，建议等宽字体</span>
+                <span class="field-hint">作用于界面与聊天正文</span>
               </div>
 
               <div class="settings-field">
                 <label class="field-label">工作台终端字体</label>
-                <FontSelect v-model="terminalFontFamilyLocal" />
+                <FontSelect v-model="terminalFontFamilyLocal" system-font-family="monospace" />
                 <span class="field-hint">作用于工作台终端、聊天流 Bash 输出块与后台任务面板</span>
               </div>
 
@@ -748,7 +748,7 @@ function onOverlayClick(e: MouseEvent) {
 
               <div class="settings-field">
                 <label class="field-label">文件编辑器字体</label>
-                <FontSelect v-model="editorFontFamilyLocal" />
+                <FontSelect v-model="editorFontFamilyLocal" system-font-family="monospace" />
                 <span class="field-hint">作用于文件编辑器与文件 diff 查看器</span>
               </div>
             </div>

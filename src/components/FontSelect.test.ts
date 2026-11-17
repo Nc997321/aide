@@ -137,6 +137,21 @@ describe("自定义输入防回写", () => {
 describe("下拉选择", () => {
   beforeEach(() => probeMock.mockReset());
 
+  it.each(["system-ui", "monospace"] as const)("系统默认保存为 %s，且无需探测到本机字体", async (systemFontFamily) => {
+    wrapper = mountSelect(JETBRAINS_STACK);
+    await wrapper.setProps({ systemFontFamily });
+    await wrapper.find("button.themed-select").trigger("click");
+    const option = Array.from(document.body.querySelectorAll(".themed-select-option"))
+      .find((el) => el.textContent?.trim() === "系统默认");
+    expect(option).toBeTruthy();
+    option?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await nextTick();
+    expect(lastEmitted(wrapper)).toBe(systemFontFamily);
+    await wrapper.setProps({ modelValue: systemFontFamily });
+    expect(labelOf(wrapper)).toBe("系统默认");
+    expect(wrapper.find("input.custom-input").exists()).toBe(false);
+  });
+
   it("点击候选 → emit 定形栈；回灌后不回跳自定义", async () => {
     wrapper = mountSelect("monospace", true);
     await nextTick();

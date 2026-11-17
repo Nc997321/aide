@@ -33,15 +33,19 @@ const CANDIDATES = [
   "Inter Variable",
 ];
 
-const props = defineProps<{ modelValue: string }>();
+const props = withDefaults(defineProps<{
+  modelValue: string;
+  systemFontFamily?: "system-ui" | "monospace";
+}>(), { systemFontFamily: "system-ui" });
 const emit = defineEmits<{ (e: "update:modelValue", v: string): void }>();
 
 const installedFonts = ref<string[]>([]);
-/** ThemedSelect 选中值：字体名 或 "__custom__"（自定义…） */
+/** ThemedSelect 选中值：字体名、系统字体通用族或 "__custom__"。 */
 const selectedValue = ref<string>("__custom__");
 const customValue = ref("");
 
 const options = computed(() => [
+  { value: props.systemFontFamily, label: "系统默认" },
   ...installedFonts.value.map((f) => ({ value: f, label: f })),
   { value: "__custom__", label: "自定义…" },
 ]);
@@ -50,6 +54,7 @@ const options = computed(() => [
  *  CJK 回退尾（YaHei 等）按设计就是本机已装字体，走栈探测分不出「选了
  *  候选」还是「随便一个栈」——walk 栈会总命中 YaHei，把打字回写成整栈。 */
 function storedStack(name: string): string {
+  if (name === props.systemFontFamily) return name;
   return `'${name}', ${CJK_MONO_FALLBACK}`;
 }
 
@@ -69,6 +74,7 @@ const measure: FontMeasurer = (fontSpec, text) => {
 /** 从持久化值解析选中项：候选的定形 → 该字体名；其余（默认栈 / 遗留配置 /
  *  自定义栈）→ null，落「自定义…」。 */
 function resolveSelection(value: string): string | null {
+  if (value === props.systemFontFamily) return value;
   return installedFonts.value.find((n) => value === storedStack(n)) ?? null;
 }
 

@@ -77,7 +77,7 @@ describe("jsdom 无 canvas 降级（真实组件 + 真探测）", () => {
     document.body.innerHTML = "";
   });
 
-  it("getContext 不可用 → 全部判未装，只列自定义…；自定义输入流程完好", async () => {
+  it("getContext 不可用 → 仍列系统默认和自定义；自定义输入流程完好", async () => {
     wrapper = mount(FontSelect, {
       props: { modelValue: "monospace" },
       global: { directives: { tooltip: () => {} } },
@@ -86,8 +86,7 @@ describe("jsdom 无 canvas 降级（真实组件 + 真探测）", () => {
     await wrapper.find("button.themed-select").trigger("click");
     await nextTick();
     const options = document.body.querySelectorAll(".themed-select-option");
-    expect(options).toHaveLength(1);
-    expect(options[0]?.textContent).toContain("自定义…");
+    expect(Array.from(options, (option) => option.textContent?.trim())).toEqual(["系统默认", "自定义…"]);
 
     // 降级环境下自定义输入仍完整可用（探测失效 ≠ 功能失效）
     const input = wrapper.find("input.custom-input");

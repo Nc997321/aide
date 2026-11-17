@@ -51,6 +51,9 @@ describe("resolveScopedFontFamily（编辑器/终端字体）", () => {
   it("界面字体也空 → 默认栈兜底", () => {
     expect(resolveScopedFontFamily(undefined, "")).toBe(MONO_FONT_STACK);
   });
+  it("界面使用系统字体时，未配置的编辑器和终端保留等宽默认栈", () => {
+    expect(resolveScopedFontFamily(undefined, "system-ui")).toBe(MONO_FONT_STACK);
+  });
   it("新字段已设置 → 用新字段", () => {
     const v = "'Consolas', 'PingFang SC', 'Microsoft YaHei', monospace";
     expect(resolveScopedFontFamily(v, uiFont)).toBe(v);

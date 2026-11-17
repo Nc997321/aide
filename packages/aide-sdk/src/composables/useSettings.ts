@@ -63,7 +63,7 @@ watch(
   () => settings.fontFamily,
   (v) => {
     if (typeof document === "undefined") return;
-    document.documentElement.style.setProperty("--aide-font-mono", v);
+    document.documentElement.style.setProperty("--aide-font-mono", v === "system-ui" ? "monospace" : v);
     // UI 正文（按钮/标签/面板）跟随界面字体；默认栈（用户未设置）时 UI_FONT_STACK
     // 随包 Maple 优先、Inter 兜底——用户显式选了字体后 UI 正文跟随所选栈。
     document.documentElement.style.setProperty(

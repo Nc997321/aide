@@ -33,6 +33,8 @@ export function resolveScopedFontFamily(
   stored: string | null | undefined,
   uiFont: string,
 ): string {
+  // 系统界面字体通常不是等宽字体，编辑器和终端回退到各自的等宽默认栈。
+  if (!stored && uiFont === "system-ui") return MONO_FONT_STACK;
   if (!stored) return uiFont || MONO_FONT_STACK;
   return resolveFontFamily(stored);
 }
