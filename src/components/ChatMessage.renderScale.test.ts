@@ -169,32 +169,26 @@ describe("ChatMessage — 定位锚点属性", () => {
 });
 
 describe("ChatMessage — 过程接线", () => {
-  it("正文保留原位且不撤掉写入预览，下一指令与结束才收起", async () => {
-    const write: ContentBlock = {
-      type: "tool_call", id: "write", name: "Write", input: { file_path: "src/a.ts", content: "const a = 2;" },
-      isPending: false, result: "updated",
+  it("代码变更在正文之间原位显示，后续工具和回合结束都不会将其收起", async () => {
+    const edit: ContentBlock = {
+      type: "tool_call", id: nextId(), name: "Edit", isPending: true,
+      input: { file_path: "src/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" },
     };
-    const message = makeMessage([toolCall(1), write], true);
-    const w = mount(ChatMessage, {
-      props: { message }, global: { directives: { tooltip: {} }, stubs: { StaticDiff: true } },
+    const message = makeMessage([toolCall(1), text(0), edit], true);
+    const wrapper = mount(ChatMessage, {
+      props: { message },
+      global: { directives: { tooltip: {} }, stubs: { StaticDiff: true } },
     });
-    try {
-      expect(w.findAll(".ti-row")).toHaveLength(1);
-      expect(w.find(".ti-peek-diff").exists()).toBe(true);
-      const withBody: ChatMessageType = { ...message, blocks: [...message.blocks, { type: "text", text: "保留的解释正文" }, thinking(0)] };
-      await w.setProps({ message: withBody });
-      expect(w.find(".msg-text").text()).toBe("保留的解释正文");
-      expect(w.find(".ti-peek-diff").exists()).toBe(true);
-      const next = { ...withBody, blocks: [...withBody.blocks, toolCall(2)] };
-      await w.setProps({ message: next });
-      expect(w.findAll(".process-group")).toHaveLength(2);
-      expect(w.find(".ti-peek").exists()).toBe(false);
-      await w.find(".ti-row").trigger("click");
-      expect(w.find(".process-history").exists()).toBe(true);
-      // 非当前组也必须在结束时收起，不能只依赖 current 从 true 变 false。
-      await w.setProps({ message: { ...next, streaming: false } });
-      expect(w.find(".process-history").exists()).toBe(false);
-    } finally { w.unmount(); }
+    expect(wrapper.find(".msg-turn > .tool-item .ti-change").exists()).toBe(true);
+    await wrapper.setProps({
+      message: { ...message, streaming: false, blocks: [toolCall(1), text(0), { ...edit, isPending: false }, toolCall(2), text(1)] },
+    });
+    const change = wrapper.get(".msg-turn > .tool-item");
+    expect(change.find("static-diff-stub").exists()).toBe(true);
+    expect(change.find(".ti-row").attributes("aria-expanded")).toBeUndefined();
+    await change.find(".ti-row").trigger("click");
+    expect(change.find(".ti-change").exists()).toBe(true);
+    wrapper.unmount();
   });
 
   it("后台入口经过当前行与历史行均可透传，点击徽章不展开过程", async () => {

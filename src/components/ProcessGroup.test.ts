@@ -1,28 +1,17 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { flushPromises, mount } from "@vue/test-utils";
+import { mount } from "@vue/test-utils";
 import { nextTick, reactive } from "vue";
 import type { ContentBlock, ToolCallBlock as ToolData } from "@/types/chat";
 import { segmentBlocks, type ProcessSegment } from "@/utils/blockSegments";
 import ProcessGroup from "./ProcessGroup.vue";
-import StaticDiff from "./fileviewer/StaticDiff.vue";
-import { locateEditStartLine } from "@/utils/changeCard";
 
 vi.mock("../composables/useSettings", () => ({
   useSettings: () => ({ settings: { terminalFontFamily: "", fontSize: 13 } }),
 }));
-vi.mock("../utils/changeCard", async importOriginal => ({
-  ...await importOriginal<typeof import("../utils/changeCard")>(),
-  locateEditStartLine: vi.fn().mockResolvedValue(1),
-}));
-
 const tool = (over: Partial<ToolData> = {}): ToolData => ({
   type: "tool_call", id: "read", name: "Read", input: { file_path: "src/a.ts" },
   result: "const a = 1;", isPending: false, ...over,
-});
-const edit = () => tool({
-  id: "edit", name: "Edit", isPending: true, result: undefined,
-  input: { file_path: "src/a.ts", old_string: "const a = 1;", new_string: "const a = 2;" },
 });
 function group(blocks: ContentBlock[], options = { finalized: false, showThinking: true }): ProcessSegment {
   const segment = segmentBlocks(blocks, options)[0];
@@ -60,38 +49,16 @@ describe("ProcessGroup", () => {
     expect(wrapper.find(".process-history").exists()).toBe(false);
   });
 
-  it("写入预览运行中和完成后都保留，正文/思考不撤掉，下一指令才收进历史", async () => {
-    const write = edit();
-    const wrapper = mountGroup(group([tool(), write]));
-    expect(wrapper.find(".ti-peek-diff").exists()).toBe(true);
-    expect(wrapper.findAll(".ti-row")).toHaveLength(1);
-    const completed = { ...write, isPending: false, result: "updated" };
-    const body: ContentBlock = { type: "text", text: "这里是解释" };
-    await wrapper.setProps({ segment: group([tool(), completed, { type: "thinking", text: "再想想" }, body]) });
-    expect(wrapper.find(".ti-peek-diff").exists()).toBe(true);
-    expect(wrapper.find(".ti-row").text()).toContain("修改了");
+  it("回答结束收起已打开的组，仍可手动查看", async () => {
+    const read = tool();
+    const wrapper = mountGroup(group([read]));
     await wrapper.find(".ti-row").trigger("click");
-    expect(wrapper.find(".ti-change").exists()).toBe(true);
-    expect(wrapper.find(".process-history").exists()).toBe(true);
-    await wrapper.setProps({ segment: group([tool(), completed, tool({ id: "next", isPending: true })]) });
-    expect(wrapper.find(".ti-peek").exists()).toBe(false);
-    expect(wrapper.findAll(".ti-row")).toHaveLength(1);
-    expect(wrapper.find(".process-history").exists()).toBe(false);
-    await wrapper.find(".ti-row").trigger("click");
-    expect(wrapper.findAll(".process-history .ti-row")).toHaveLength(2);
-  });
-
-  it("回答结束收起已打开的组和写入预览，仍可手动查看", async () => {
-    const write = { ...edit(), isPending: false, result: "updated" };
-    const wrapper = mountGroup(group([tool(), write]));
-    await wrapper.find(".ti-row").trigger("click");
-    expect(wrapper.find(".ti-change").exists()).toBe(true);
-    await wrapper.setProps({ segment: group([tool(), write], { finalized: true, showThinking: true }), finalized: true });
+    expect(wrapper.find(".ti-result").text()).toBe("const a = 1;");
+    await wrapper.setProps({ segment: group([read], { finalized: true, showThinking: true }), finalized: true });
     expect(wrapper.find(".ti-row").attributes("aria-expanded")).toBe("false");
-    expect(wrapper.find(".ti-peek").exists()).toBe(false);
-    expect(wrapper.find(".process-history").exists()).toBe(false);
+    expect(wrapper.find(".ti-result").exists()).toBe(false);
     await wrapper.find(".ti-row").trigger("click");
-    expect(wrapper.find(".ti-change").exists()).toBe(true);
+    expect(wrapper.find(".ti-result").exists()).toBe(true);
   });
 
   it("失败的历史在收起时仍有提示，单条过程不显示历史计数", () => {
@@ -130,28 +97,14 @@ describe("ProcessGroup", () => {
     expect(wrapper.find(".process-history").exists()).toBe(false);
   });
 
-  it("连续修改不同文件时重建当前步骤，不沿用上次的 diff 行号缓存", async () => {
-    vi.mocked(locateEditStartLine).mockResolvedValueOnce(12).mockResolvedValueOnce(34);
-    const first = edit();
-    const wrapper = mountGroup(group([first]));
-    await flushPromises();
-    expect(wrapper.findComponent(StaticDiff).props("firstLineNumber")).toBe(12);
-    const second = { ...edit(), id: "edit-second", input: { file_path: "src/b.ts", old_string: "const b = 1;", new_string: "const b = 2;" } };
-    await wrapper.setProps({ segment: group([first, second]) });
-    await flushPromises();
-    expect(wrapper.findComponent(StaticDiff).props("filePath")).toBe("src/b.ts");
-    expect(wrapper.findComponent(StaticDiff).props("firstLineNumber")).toBe(34);
-  });
-
   it("响应式结果回填更新当前标题，不关闭用户打开的详情", async () => {
-    const write = reactive(edit());
-    const wrapper = mountGroup(group([tool(), write]));
+    const read = reactive(tool({ id: "second", isPending: true, result: undefined }));
+    const wrapper = mountGroup(group([tool(), read]));
     await wrapper.find(".ti-row").trigger("click");
-    write.isPending = false;
-    write.result = "updated";
+    read.isPending = false;
+    read.result = "updated";
     await nextTick();
-    expect(wrapper.find(".ti-row").text()).toContain("修改了");
-    expect(wrapper.find(".ti-change").exists()).toBe(true);
+    expect(wrapper.find(".ti-result").text()).toBe("updated");
     expect(wrapper.find(".process-history").exists()).toBe(true);
   });
 

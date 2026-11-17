@@ -20,7 +20,7 @@ import ThinkingBlock from "./ThinkingBlock.vue";
 import TurnUsageBadge from "./TurnUsageBadge.vue";
 import SubsessionReportCard from "./subsession/SubsessionReportCard.vue";
 import WatchReportCard from "./watch/WatchReportCard.vue";
-import { segmentBlocks, type Segment } from "@/utils/blockSegments";
+import { isChangeTool, segmentBlocks, type Segment } from "@/utils/blockSegments";
 import { useFileResolver } from "@/composables/useFileResolver";
 import { parseFileLink, shouldOpenExternally } from "@/utils/fileLink";
 import { isMediaFilePath, resolveMediaLink } from "@aide/sdk/utils/mediaArtifacts";
@@ -229,8 +229,10 @@ function handleTextClick(e: MouseEvent) {
         />
         <ToolCallBlock
           v-else-if="seg.block.type === 'tool_call'"
+          :key="seg.block.id"
           :block="seg.block"
           :card="isUser"
+          :inline-change="!isUser && isChangeTool(seg.block.name)"
           :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
           @open-bg-dock="(taskId: string) => emit('open-bg-dock', taskId)"

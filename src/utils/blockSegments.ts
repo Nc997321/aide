@@ -1,6 +1,6 @@
 import type { ContentBlock } from "@/types/chat";
 
-/** 正文及引用/系统卡片保留原位；连续工具、助手与思考共用一个过程入口。 */
+/** 正文、代码变更及引用/系统卡片保留原位；其余连续过程共用一个入口。 */
 export type ProcessBlock = Extract<ContentBlock, { type: "tool_call" | "subagent" | "thinking" }>;
 export type ProcessBlocks = [ProcessBlock, ...ProcessBlock[]];
 export type ProcessSegment = { kind: "process"; blocks: ProcessBlocks; index: number; current: boolean };
@@ -8,7 +8,7 @@ export type Segment =
   | { kind: "block"; block: ContentBlock; index: number }
   | ProcessSegment;
 
-/** 代码变更类工具：头行带 +N −M 与「打开」，预览 / 展开体是 diff。 */
+/** 代码变更类工具：在对话中原位显示 diff。 */
 export const CHANGE_TOOL_NAMES: ReadonlySet<string> = new Set([
   "Edit",
   "MultiEdit",
@@ -44,6 +44,13 @@ export function segmentBlocks(blocks: readonly ContentBlock[], opts: SegmentOpti
     const block = blocks[index];
     if (block.type === "thinking" && !opts.showThinking && (opts.finalized || index !== blocks.length - 1)) continue;
     if (block.type === "text" && !block.text.trim()) continue;
+    if (block.type === "tool_call" && isChangeTool(block.name)) {
+      open = null;
+      current = null;
+      hasCommand = true;
+      out.push({ kind: "block", block, index });
+      continue;
+    }
     if (block.type === "tool_call" || block.type === "subagent" || block.type === "thinking") {
       if (open) open.blocks.push(block);
       else {

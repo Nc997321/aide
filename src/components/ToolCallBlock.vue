@@ -28,6 +28,8 @@ const props = withDefaults(
     /** 强制卡片外观。查询类工具默认是无框的「工具行」；用户气泡里的 @引用合成卡
      *  是附件而不是过程，落在 accent 实心底上，需要自己的底与边。 */
     card?: boolean;
+    /** 主对话中的变更原位显示，头行没有折叠交互。 */
+    inlineChange?: boolean;
     /** 「打开 ↗」定位用；缺省时 openResolved 退化为按原路径直接打开 */
     workspacePath?: string;
     /** 后台任务列表（仅 ChatMessage 链透传）——Bash 卡按 toolUseId 匹配出「后台运行中」徽章 */
@@ -78,7 +80,7 @@ const denialPillTip = computed(() =>
 
 /** 变更类工具且非错误时的统一 diff 数据；null 回退到普通结果文本展示。 */
 const changeInfo = computed<ChangeInfo | null>(() => {
-  if (!isChangeTool(props.block.name) || props.block.isError) return null;
+  if (!isChangeTool(props.block.name) || props.block.isError || denial.value) return null;
   return buildChangeInfo(props.block.name, props.block.input);
 });
 
@@ -124,7 +126,7 @@ const changePeek = computed(() => {
 });
 
 watch(
-  [() => expanded.value || changePeek.value !== null, changeInfo] as const,
+  [() => (props.inlineChange && !props.block.isPending) || expanded.value || changePeek.value !== null, changeInfo] as const,
   async ([shown, info]) => {
     if (!shown || !info || firstLine.value !== null) return;
     firstLine.value = await locateEditStartLine(info.filePath, info.pair.newText, info.pair.status);
@@ -176,7 +178,12 @@ const readRange = computed(() =>
 
 <template>
   <div :class="['tool-item', { 'tool-item--line': asLine, 'narr-row': asLine, 'tool-item--current': current }]">
-    <button class="ti-row" :aria-expanded="expanded" @click="expanded = !expanded">
+    <component
+      :is="inlineChange ? 'div' : 'button'"
+      class="ti-row"
+      :aria-expanded="inlineChange ? undefined : expanded"
+      @click="!inlineChange && (expanded = !expanded)"
+    >
       <template v-if="asLine">
         <span :class="['ti-icon', iconState && `ti-icon--${iconState}`]"><NarrationIcon :name="narration.icon" /></span>
         <NarrationText class="ti-narr" :segs="narration.segs" :live="narration.live" v-tooltip="inputSummary" />
@@ -227,15 +234,17 @@ const readRange = computed(() =>
         <span class="stat-add">+{{ changeInfo.addCount }}</span>
         <span v-if="changeInfo.delCount > 0" class="stat-del">-{{ changeInfo.delCount }}</span>
       </span>
-      <span
+      <component
+        :is="inlineChange ? 'button' : 'span'"
         v-if="changeInfo"
         class="ti-open"
         v-tooltip="'在文件查看器中打开并定位'"
         @click="openChangeFile"
-        >打开 ↗</span
+        >打开 ↗</component
       >
       <slot name="summary-extra" />
       <svg
+        v-if="!inlineChange"
         :class="['ti-chev', expanded ? 'ti-chev--open' : '']"
         width="8" height="12" viewBox="0 0 8 12" fill="none" aria-hidden="true"
       >
@@ -245,7 +254,7 @@ const readRange = computed(() =>
           stroke-linecap="round" stroke-linejoin="round"
         />
       </svg>
-    </button>
+    </component>
     <!-- 当前这一步的结果预览：拐角引出前几行，点它等同点头行（展开看全文） -->
     <div v-if="peek" class="ti-peek" @click="expanded = true">
       <span class="ti-elbow" aria-hidden="true"></span>
@@ -270,10 +279,10 @@ const readRange = computed(() =>
     </div>
     <!-- grep 顺带作答这次附了什么（lsp_glance 事件）：收起成一枚药丸，点开看定义 / 引用 -->
     <LspGlanceNote v-if="block.lspGlance?.length" :items="block.lspGlance" :workspace-path="workspacePath" />
-    <div v-if="expanded" class="ti-body">
+    <div v-if="inlineChange || expanded" :class="inlineChange ? 'ti-inline-change' : 'ti-body'">
       <BashOutputBlock v-if="isBash && block.result && !block.truncated" :content="block.result" :is-error="block.isError ?? false" />
       <div
-        v-else-if="changeInfo && !block.isPending"
+        v-else-if="changeInfo && (inlineChange || !block.isPending)"
         class="ti-change"
         :style="{ height: `${changeHeight}px` }"
       >
@@ -482,6 +491,9 @@ const readRange = computed(() =>
   padding: 1px 6px;
   border-radius: var(--aide-radius-sm);
   transition: all var(--aide-ease-t);
+  border: 0;
+  background: none;
+  cursor: pointer;
 }
 .ti-open:hover {
   color: var(--aide-accent);
@@ -507,6 +519,15 @@ const readRange = computed(() =>
 /* 变更卡的 diff 容器：定高（script 按行数估算），内部自滚 */
 .ti-change {
   overflow: hidden;
+}
+
+.tool-item--line div.ti-row {
+  cursor: default;
+  background: none;
+}
+
+.ti-inline-change {
+  margin-top: 3px;
 }
 
 .ti-result {

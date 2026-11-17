@@ -24,42 +24,20 @@ describe("segmentBlocks（单行过程入口）", () => {
   });
 
   it("不同工具和子代理合为同一个过程组", () => {
-    const segments = segmentBlocks([tool("Read"), tool("Grep"), subagent(), tool("Edit")]);
-    expect(shape(segments)).toEqual(["Read,Grep,subagent,Edit"]);
+    const segments = segmentBlocks([tool("Read"), tool("Grep"), subagent(), tool("Bash")]);
+    expect(shape(segments)).toEqual(["Read,Grep,subagent,Bash"]);
     expect(segments[0]).toMatchObject({ index: 0, current: true });
   });
 
-  it("正文和引用卡保留原位，切开过程组；index 使用原始块下标", () => {
-    const blocks: ContentBlock[] = [tool("Read"), text("结论"), tool("Bash"), { type: "image", data: "", mediaType: "image/png" }, tool("Edit")];
-    const segments = segmentBlocks(blocks);
-    expect(shape(segments)).toEqual(["Read", "text", "Bash", "image", "Edit"]);
-    expect(segments.map(segment => segment.index)).toEqual([0, 1, 2, 3, 4]);
-    expect(segments[0]).toMatchObject({ current: false });
-    expect(segments[4]).toMatchObject({ current: true });
-  });
-
-  it("正文到达不撤掉当前写入，下一指令才交接", () => {
-    const edit = tool("Write");
-    expect(segmentBlocks([edit, text("解释")])[0]).toMatchObject({ current: true });
-    const segments = segmentBlocks([edit, text("解释"), tool("Read")]);
-    expect(segments[0]).toMatchObject({ current: false });
-    expect(segments[2]).toMatchObject({ current: true });
-  });
-
-  it("结果是否pending不影响当前指令，回答结束后取消所有当前标记", () => {
-    for (const isPending of [true, false]) {
-      const segments = segmentBlocks([{ ...tool("Edit"), isPending }], { finalized: true });
+  it("正文、变更和引用卡保留原位，切开过程组", () => {
+    const blocks: ContentBlock[] = [tool("Read"), tool("Edit"), text("说明"), tool("Write"), { type: "image", data: "", mediaType: "image/png" }, tool("Bash")];
+    for (const finalized of [false, true]) {
+      const segments = segmentBlocks(blocks, { finalized });
+      expect(shape(segments)).toEqual(["Read", "tool_call", "text", "tool_call", "image", "Bash"]);
+      expect(segments.map(segment => segment.index)).toEqual([0, 1, 2, 3, 4, 5]);
       expect(segments[0]).toMatchObject({ current: false });
+      expect(segments[5]).toMatchObject({ current: !finalized });
     }
-  });
-
-  it("显示思考时思考加入过程，后续思考不提前取代写入标题", () => {
-    const segments = segmentBlocks([thinking("先想"), tool("Write"), thinking("再想")], { showThinking: true });
-    expect(shape(segments)).toEqual(["thinking,Write,thinking"]);
-    const segment = segments[0];
-    if (segment.kind !== "process") throw new Error("缺少过程组");
-    expect(processHead(segment.blocks)).toMatchObject({ name: "Write" });
-    expect(segment.current).toBe(true);
   });
 
   it("思考正文隐藏：中间思考省略，尾部思考只在流式时保留提示", () => {
@@ -76,12 +54,6 @@ describe("segmentBlocks（单行过程入口）", () => {
     if (tail.kind !== "process") throw new Error("缺少过程组");
     expect(tail.current).toBe(true);
     expect(processHead(tail.blocks)).toMatchObject({ text: "三" });
-  });
-
-  it("正文后的思考不撤掉之前写入的当前状态", () => {
-    const segments = segmentBlocks([tool("Edit"), text("解释"), thinking("继续想")], { showThinking: true });
-    expect(segments[0]).toMatchObject({ current: true });
-    expect(segments[2]).toMatchObject({ current: false });
   });
 
   it("变更工具名单包含全部写入类型，不把查询当变更", () => {
