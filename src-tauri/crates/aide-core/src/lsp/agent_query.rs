@@ -135,6 +135,7 @@ pub async fn run_agent_query(
     args: &Value,
     workspace_root: &str,
 ) -> AgentQueryOutcome {
+    let started = std::time::Instant::now();
     // 纯文本兜底不需要语言服务器（语义层没答上时 sidecar 用它补位），最先分派。
     if tool == "text" {
         let Some(name) = args.get("name").and_then(|v| v.as_str()) else {
@@ -185,10 +186,14 @@ pub async fn run_agent_query(
             return fail(AgentLspStatus::NoServer, "no language server for this file");
         };
         if let Err(e) = ensure_doc_open(access, &h, workspace_root, file, lang_id).await {
-            tracing::debug!(file, error = %e, "agent lsp: outline 前 didOpen 失败，继续");
+            return fail(AgentLspStatus::Error, &format!("could not open the outline document: {e}"));
         }
         let uri = crate::lsp::protocol::resolve_file_uri(workspace_root, file);
-        return crate::lsp::agent_nav::outline(&h, &uri, budget(args, OUTLINE_BUDGET)).await;
+        let remaining = budget(args, OUTLINE_BUDGET).saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return fail(AgentLspStatus::Timeout, "the server startup or document open used the outline budget");
+        }
+        return crate::lsp::agent_nav::outline(&h, &uri, remaining).await;
     }
     // 2. 坐标
     let pos = match resolve_position(args) {

@@ -202,6 +202,19 @@ describe("lsp_symbols / lsp_outline", () => {
     expect(text).toContain("Structure of src/lsp/mod.rs");
     expect(text).toContain("  method get  L3-6");
   });
+
+  it.each(["indexing", "timeout"])("outline %s 时返回有限的源码行", async (status) => {
+    const n = new LspNav({
+      cwd: ROOT,
+      query: async () => ({ ok: false, status }),
+      read: async () => Array.from({ length: 60 }, (_, i) => `source line ${i + 1}`).join("\n"),
+    });
+    const text = await n.outline({ file: "code/frontend/web/src/TestBenchPanel.vue" });
+    expect(text).toContain("UNVERIFIED");
+    expect(text).toContain("30\tsource line 30");
+    expect(text).toContain("offset=31");
+    expect(text).not.toContain("31\tsource line 31");
+  });
 });
 
 describe("reasonOf：文本兜底的原因如实", () => {

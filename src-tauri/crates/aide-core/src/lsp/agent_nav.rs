@@ -97,12 +97,14 @@ pub async fn outline(h: &Arc<ServerHandle>, uri: &str, budget: Duration) -> Valu
     let deadline = Instant::now() + budget;
     loop {
         let left = deadline.saturating_duration_since(Instant::now());
-        let per_try = left.max(Duration::from_millis(500));
+        if left.is_zero() {
+            return fail(AgentLspStatus::Timeout, "the outline query used its time budget");
+        }
         match h
             .request(
                 "textDocument/documentSymbol",
                 json!({ "textDocument": { "uri": uri } }),
-                per_try,
+                left,
             )
             .await
         {
@@ -126,7 +128,10 @@ pub async fn outline(h: &Arc<ServerHandle>, uri: &str, budget: Duration) -> Valu
             Ok(RequestOutcome::ServerGone) => {
                 return fail(AgentLspStatus::Gone, "the language server exited")
             }
-            Ok(RequestOutcome::Timeout) | Ok(RequestOutcome::NotReady) => {}
+            Ok(RequestOutcome::Timeout) => {
+                return fail(AgentLspStatus::Timeout, "documentSymbol did not respond within the budget")
+            }
+            Ok(RequestOutcome::NotReady) => {}
             Err(e) => return fail(AgentLspStatus::Error, &e),
         }
         if Instant::now() + RETRY_INTERVAL >= deadline {

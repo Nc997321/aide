@@ -76,10 +76,7 @@ impl ServerProfile for TsProfile {
 
 /// Vue 插件声明（插件目录 + 工作区有 `.vue` 两个条件都成立时才有值）。
 fn vue_plugins(workspace: &str) -> Option<Value> {
-    let plugin = crate::lsp::vue_plugin::find(workspace)?;
-    if !crate::lsp::vue_plugin::has_vue_files(workspace) {
-        return None;
-    }
+    let plugin = crate::lsp::vue_plugin::find_for_vue_workspace(workspace)?;
     Some(json!([{
         "name": crate::lsp::vue_plugin::PLUGIN_NAME,
         "location": plugin.to_string_lossy(),

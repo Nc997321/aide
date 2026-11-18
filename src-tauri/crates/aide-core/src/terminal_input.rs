@@ -51,10 +51,18 @@ impl ShellInput for PowerShell {
                 .replace("__AIDE_INPUT_TOKEN__", token)
                 .replace("__AIDE_WSL_BOOTSTRAP__", &bootstrap)
         );
-        let bytes: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let directory = tempfile::Builder::new().prefix("aide-terminal-").tempdir()?;
+        let startup = directory.path().join("startup.ps1");
+        std::fs::write(&startup, script)?;
+
+        // Keep the SSH/WSL payload off the Windows command line. Load it as
+        // interactive startup code and dot-source it so the hooks stay in scope.
+        command.env("AIDE_TERMINAL_STARTUP", dunce::simplified(&startup));
+        let loader = ". ([scriptblock]::Create([IO.File]::ReadAllText($env:AIDE_TERMINAL_STARTUP)))";
+        let bytes: Vec<u8> = loader.encode_utf16().flat_map(u16::to_le_bytes).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
         command.args(["-NoExit", "-EncodedCommand", &encoded]);
-        Ok(None)
+        Ok(Some(directory))
     }
 }
 
@@ -149,9 +157,16 @@ mod tests {
     fn configures_powershell_only_with_a_valid_token() {
         let program = "pwsh";
         let mut command = CommandBuilder::new(program);
-        configure(&mut command, program, Some("0123456789abcdef0123456789abcdef"));
+        let token = "0123456789abcdef0123456789abcdef";
+        let startup = configure(&mut command, program, Some(token)).expect("startup directory");
         assert_eq!(command.get_argv()[1], "-NoExit");
         assert_eq!(command.get_argv()[2], "-EncodedCommand");
+        assert!(command.get_argv()[3].len() < 1024);
+        let script = std::fs::read_to_string(startup.path().join("startup.ps1")).unwrap();
+        assert!(script.contains(token));
+        assert!(script.contains("function ssh"));
+        #[cfg(windows)]
+        assert!(script.contains("function wsl"));
 
         let mut command = CommandBuilder::new(program);
         configure(&mut command, program, Some("invalid"));

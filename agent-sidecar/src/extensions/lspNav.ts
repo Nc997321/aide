@@ -21,6 +21,7 @@ import {
   displayPath,
   enclosingLabel,
   notAnsweredText,
+  numberedLines,
   outlineText,
   referencesText,
   textFallbackText,
@@ -117,7 +118,24 @@ export class LspNav {
     const resp = await this.deps.query("outline", { file: abs }, OUTLINE_BUDGET_MS + 4_000);
     const nodes = (resp.symbols ?? []) as OutlineNode[];
     if (resp.status !== "ready" || nodes.length === 0) {
-      return notAnsweredText(resp.status, displayPath(abs, this.deps.cwd), resp.error);
+      const file = this.rel(abs);
+      if (!["indexing", "timeout", "gone", "ready"].includes(resp.status)) {
+        return notAnsweredText(resp.status, file, resp.error);
+      }
+      const detail = resp.error ?? `LSP status: ${resp.status}`;
+      const unavailable = `UNVERIFIED — no semantic outline for \`${file}\`. ${detail}`;
+      const lines = await this.lines(abs);
+      if (!lines?.some((line) => line.trim())) {
+        return `${unavailable}\nUse Grep in this file to locate lines for a ranged Read.`;
+      }
+      const end = Math.min(lines.length, 30);
+      const preview = lines.slice(0, end).map((line) =>
+        line.length > 200 ? `${line.slice(0, 200)}…` : line,
+      );
+      const next = end < lines.length
+        ? `\nUse Grep in this file or Read with offset=${end + 1} and a limit for more.`
+        : "";
+      return `${unavailable}\nSource preview (lines 1–${end} of ${lines.length}):\n${numberedLines(preview, 1, end)}${next}`;
     }
     this.remember(abs, nodes);
     return outlineText(displayPath(abs, this.deps.cwd), nodes);

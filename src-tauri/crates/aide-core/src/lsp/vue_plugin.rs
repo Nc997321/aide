@@ -37,10 +37,28 @@ pub fn find(workspace: &str) -> Option<PathBuf> {
 ///
 /// 按**扩展名**找（`find_source_with_ext`），不按语言：`.vue` 的服务归属是 TypeScript
 /// （见 `detector::from_ext`），而「有没有 .vue 文件」问的是文件形态，是另一件事。
-/// 复用同一份**有界**遍历（深度 ≤4、跳过重目录）：只做一次 `is_some()` 判定，找到第一个
-/// 就返回，不遍历全仓。Vue 项目的 `.vue` 一般躺在 `src/components/…`（3 层），4 层够。
+/// 复用探针的有界源码遍历，跳过依赖和构建目录。
+#[cfg(test)]
 pub fn has_vue_files(workspace: &str) -> bool {
     crate::lsp::detector::find_source_with_ext(Path::new(workspace), "vue").is_some()
+}
+
+/// 供 TypeScript profile 使用。代表文件的位置也能找到嵌套前端项目自己的依赖。
+pub fn find_for_vue_workspace(workspace: &str) -> Option<PathBuf> {
+    let root = Path::new(workspace);
+    let source = crate::lsp::detector::find_source_with_ext(root, "vue")?;
+    let local = source.parent()?.ancestors().take_while(|dir| *dir != root);
+    for dir in local {
+        let modules = dir.join("node_modules");
+        if let Some(plugin) = [modules.join(PLUGIN_NAME), nested(&modules)]
+            .into_iter()
+            .chain(pnpm_plugin_dirs(&modules))
+            .find(|plugin| plugin.join("package.json").is_file())
+        {
+            return Some(plugin);
+        }
+    }
+    find(workspace)
 }
 
 /// 候选目录，按「越可能是真值越靠前」排：
@@ -253,6 +271,18 @@ mod tests {
                 .join("node_modules").join(PLUGIN_NAME),
         );
         assert!(find(ws.to_str().unwrap()).is_some(), "pnpm .pnpm 布局没命中");
+    }
+
+    #[test]
+    fn resolves_plugin_from_nested_vue_project() {
+        let ws = tmp("nested-vue-project");
+        let web = ws.join("code").join("frontend").join("web");
+        let src = web.join("src");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("TestBenchPanel.vue"), "<template/>").unwrap();
+        let plugin = web.join("node_modules").join(PLUGIN_NAME);
+        install_at(&plugin);
+        assert_eq!(find_for_vue_workspace(ws.to_str().unwrap()), Some(plugin));
     }
 
     /// 只有一个空目录（没有 `package.json`）不算装上了——判据取真值，不猜目录存在。
