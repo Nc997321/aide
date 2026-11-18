@@ -7,6 +7,33 @@ import { userDenyMessage } from "./permissions.js";
 import type { ChatEvent } from "./types.js";
 import type { PermissionPolicySnapshot } from "./policy/types.js";
 
+const usageLogMocks = vi.hoisted(() => ({ observe: vi.fn(), create: vi.fn() }));
+vi.mock("./usageLog.js", () => ({ UsageLog: class {
+  constructor(options: unknown) { usageLogMocks.create(options); }
+  observe(msg: unknown) { usageLogMocks.observe(msg); }
+} }));
+
+it("records main and child SDK usage before dispatch without emitting diagnostic events", async () => {
+  usageLogMocks.observe.mockClear();
+  const messages = [
+    { type: "assistant", message: { id: "usage-main", content: [], usage: { input_tokens: 12 } } },
+    { type: "assistant", parent_tool_use_id: "agent-call", message: { id: "usage-child", content: [], usage: { input_tokens: 3 } } },
+  ];
+  const events: ChatEvent[] = [];
+  const worker = new SessionWorker("usage-routing", e => events.push(e), {
+    queryFn: (() => (async function* () { for (const msg of messages) yield msg; })()) as any,
+  });
+  try {
+    worker.handleCommand({ cmd: "send", session_id: "usage-routing", prompt: "test", cwd: os.tmpdir() } as any);
+    const deadline = Date.now() + 2000;
+    while (!usageLogMocks.observe.mock.calls.some(([m]) => m === messages[1]) && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 5));
+    }
+    expect(usageLogMocks.observe.mock.calls.map(([m]) => m)).toEqual(messages);
+    expect(events.some(e => String(e.type).includes("usage_log"))).toBe(false);
+  } finally { worker.stop(); }
+});
+
 /**
  * 验证 SessionWorker 的 fork 源 / 路由键设定逻辑。
  *

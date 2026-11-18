@@ -19,6 +19,9 @@ import { BgTaskTail } from "../desktop/bgTaskOutputTail.js";
 import { QueuedSendLedger, type QueuedSend } from "../desktop/jumpQueue.js";
 import { truncateTranscriptAt } from "../desktop/withdrawTurn.js";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { UsageLog } from "./usageLog.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
 import { reapSessionSubprocess } from "./subprocessReaper.js";
@@ -1226,6 +1229,11 @@ export class SessionWorker {
           loopQuery = q;
           this.providerDriftPending = false; // 新 env 已随本次 spawn 落地
           this.shouldForkNextConnect = false;
+          const usageLog = new UsageLog({
+            configDir: this.subprocessConfigDir() || join(homedir(), ".aide", "claude"),
+            routingId: this.routingKey,
+            parentSessionId: this.subsessionParent,
+          });
           // 输出样式：必须在首轮 prompt 被 CLI 取走之前落地（晚一步 = 第一条消息
           // 不变样，故不能挪到 session_init 之后）。只在建 query 时应用这一次——
           // 值虽每条 send 都刷新，但刻意不做会话中热切（见 outputStyle.ts 头注）。
@@ -1253,6 +1261,7 @@ export class SessionWorker {
           };
           let errorTerminated = false;
           for await (const msg of q) {
+            usageLog.observe(msg);
             // 先于分派记账：result 在这里清账，之后 handleQueryMessage 里接入的插队消息
             // 才落进新一轮的账。
             this.btwLedger.recordSdkMessage(msg);
