@@ -565,6 +565,8 @@ export interface PermissionRequest {
   id: string;
   name: string;
   input: unknown;
+  /** Host 确认本条主线程计划可交给子会话时才提供入口。 */
+  canDelegatePlan?: boolean;
   /** 这次请求是不是某个子代理内部发起的（而不是主线程）——缺省表示来自主线程。
    *  没有它，用户会在毫无上下文的情况下突然看到权限框弹出来，不知道是谁在问。 */
   fromSubagent?: { id: string; agentName: string };

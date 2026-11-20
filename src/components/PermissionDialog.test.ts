@@ -904,6 +904,14 @@ describe("PermissionDialog — 键盘确认（Enter/Esc）", () => {
     expect(respondEvent(wrapper, 1, 2)).toEqual(["pp1", true, undefined, "auto"]);
   });
 
+  it("可委派的计划多一个入口，只发送移交意图、不切主会话到 auto", async () => {
+    const wrapper = mountAttached({ permission: { ...planPerm(), canDelegatePlan: true } });
+    await wrapper.get('[data-action="delegate-plan"]').trigger("click");
+    expect(wrapper.emitted("respond")?.[0]).toEqual(["pp1", true, undefined, undefined, undefined, undefined, "subsession"]);
+    await wrapper.setProps({ permission: { ...planPerm(), fromSubagent: { id: "a", agentName: "a" } } });
+    expect(wrapper.find('[data-action="delegate-plan"]').exists()).toBe(false);
+  });
+
   // ── 按键提示 chip ──
 
   it("工具调用：允许/拒绝带 chip，允许并记住/进入自动模式不带", () => {

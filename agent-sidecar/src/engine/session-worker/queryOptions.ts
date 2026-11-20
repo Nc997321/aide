@@ -19,6 +19,7 @@ import { resolveClaudeExe } from "../claudeExe.js";
 import type { PreparedQueryContext } from "./queryContext.js";
 
 import { resolveSessionProfile, type SessionProfile } from "../sessionProfile.js";
+import { buildSessionPrompt, type ConversationMode } from "../../desktop/sessionPrompts.js";
 
 export interface QuerySpawnParts {
   runtime: {
@@ -46,6 +47,7 @@ export interface QuerySpawnParts {
     lspLanguages: string[];
   };
   branch: {
+    conversationMode?: ConversationMode;
     sessionProfile?: SessionProfile;
     automationConfig: AutomationConfig | undefined;
   };
@@ -93,11 +95,10 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // buildDispatchPluginsOption 不注入项目级散装 plugin（项目 skills/agents
     // 不进 agent）。user 级不受影响。
     ...(p.workspace.trusted ? {} : { strictMcpConfig: true }),
-    systemPrompt: profile.systemPrompt ?? {
-      type: "preset" as const,
-      preset: "claude_code" as const,
-      append: p.runtime.ctx.instructions,
-    },
+    systemPrompt: buildSessionPrompt(
+      !profile.toolsEnabled ? "chat" : p.branch.conversationMode === "daily" ? "daily" : "project",
+      p.runtime.ctx.instructions,
+    ),
     // 知识库只放行**读**工具（工具级规则）——写工具走权限弹窗，见 knowledgeMcp.ts。
     // 浏览器三个工具全放行：`browser_eval` 与 Bash 同信任级别，且只要它放行，单独给其余
     // 工具挂闸门就是装饰性的（见 browserMcp.ts 的论证）。唯一真控制 = AIDE_BROWSER_TOOLS=off。

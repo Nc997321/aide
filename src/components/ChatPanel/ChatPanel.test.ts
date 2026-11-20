@@ -2,6 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { mount, type VueWrapper } from "@vue/test-utils";
 import { nextTick, ref } from "vue";
+import { notePlanDelegation, __resetSubsessionsForTest, useSubsessions } from "@aide/sdk/composables/useSubsessions";
+import { handleChatEvent } from "@aide/sdk/composables/useChatSession/events";
 import type { ProviderConfig, ProviderModelMappings } from "@/types";
 
 // ── Tauri（useChatSession 模块级 import 需要）──
@@ -151,6 +153,7 @@ function effortValueOf(wrapper: VueWrapper): string {
 
 describe("ChatPanel 跨会话串修复", () => {
   beforeEach(() => {
+    __resetSubsessionsForTest();
     sessionModelMock.mockReset();
     sessionProviderMock.mockReset();
     // 默认返回 null（无持久化），用例可 override；避免 api.sessionProvider() 返回 undefined 炸 .catch
@@ -165,6 +168,21 @@ describe("ChatPanel 跨会话串修复", () => {
     prov.__resetForTest();
     prov.allProviders.value = [PROVIDER_P];
     prov.activeProviderId.value = "p_test";
+  });
+
+  it("计划交接显示子会话实际任务，按钮打开现有子会话面板", async () => {
+    const wrapper = mount(ChatPanel, { props: baseProps({ sessionId: "A", tasks: [{ id: "old", subject: "旧计划", status: "completed" }] }) });
+    notePlanDelegation("A", "preparing");
+    await flush();
+    expect(wrapper.text()).toContain("正在整理交接");
+    expect(wrapper.findComponent({ name: "TaskListPanel" }).exists()).toBe(false);
+    handleChatEvent({ type: "tasks_update", session_id: "child-plan", tasks: [{ id: "new", subject: "执行修改", status: "in_progress" }] });
+    notePlanDelegation("A", "spawned", "child-plan");
+    await flush();
+    expect(wrapper.findComponent({ name: "TaskListPanel" }).props("tasks")).toEqual([{ id: "new", subject: "执行修改", status: "in_progress" }]);
+    await wrapper.get(".plan-delegation-link").trigger("click");
+    expect(useSubsessions().drawerOpen.A).toBe(true);
+    wrapper.unmount();
   });
 
   it("模型：同供应商两个存活会话（currentModel 都是 Claude 别名，不在真实列表），切 A→B 显示 B 的 remembered，不串 A", async () => {

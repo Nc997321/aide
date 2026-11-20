@@ -21,7 +21,7 @@ import { CHAT_DISPLAY_HINT } from "../displayHint.js";
 import { DOCUMENT_ARTIFACT_HINT } from "../../desktop/documentArtifacts.js";
 import { loadLspHint } from "../lspHint.js";
 import { crossMemoryMcpRegistration } from "../crossMemory.js";
-import { subsessionMcpRegistration, type SubsessionContext } from "../../extensions/subsessions.js";
+import { subsessionMcpRegistration, type SubsessionContext, type SubsessionDeps } from "../../extensions/subsessions.js";
 
 import { resolveSessionProfile, type SessionProfile } from "../sessionProfile.js";
 
@@ -54,6 +54,7 @@ export interface QueryContextDeps {
   isSubsession?: boolean;
   /** 子会话工具读取的父会话现状（权限模式 / 模型 / 档位，子会话沿用）。缺省 = 不挂子会话工具。 */
   subsessionContext?: () => SubsessionContext;
+  subsessionSpawn?: SubsessionDeps["spawn"];
   /** builtinHooks 的会话适配器（worker 建闭包桥接 private 成员：
    *  policy/stopEffort/modelSwitchGuard）。 */
   session: HookBuildContext["session"];
@@ -118,12 +119,12 @@ export async function prepareQueryContext(deps: QueryContextDeps): Promise<Prepa
   const subsessionMcp = deps.subsessionContext
     ? subsessionMcpRegistration(
         { isChild: !!deps.isSubsession, automation: !!deps.automationConfig, trusted: deps.trusted, env: deps.processEnv },
-        { emit: deps.emit, context: deps.subsessionContext },
+        { emit: deps.emit, context: deps.subsessionContext, spawn: deps.subsessionSpawn },
       )
     : null;
 
   // Aide 指令加载：不依赖 SDK 文件系统 setting source，自己读 global + project
-  // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，追加到 preset system prompt。
+  // CLAUDE.md + 各附加工作区的 CLAUDE.md/记忆索引，与宿主角色提示组合。
   // settingSources 必须为空，否则 SDK 仍会去读 .claude/settings*.json，与 Aide
   // 独立设置体系冲突。
   // LSP 提示由这里按闸门算好再交进去（见 lspHint.ts）：闸门通过 = 内置通道已退役，

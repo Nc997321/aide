@@ -145,13 +145,14 @@ async function onSend(prompt: string, opts: SendOptions) {
 /** 权限响应转发：PermissionDialog 的 emit 载荷 → respondPermission 的具名对象
  *  （模板内联展开对象字面量会被 Vue 模板解析器当作语句块，故在此收口）。 */
 function onRespondPermission(
-  req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string },
+  req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string; planExecution?: "subsession" },
   sessionRules?: PermissionRuleDraft[],
 ) {
   respondPermission(req.id, req.approved, {
     answers: req.answers,
     nextMode: req.nextMode,
     reason: req.reason,
+    planExecution: req.planExecution,
     sessionRules,
   });
 }

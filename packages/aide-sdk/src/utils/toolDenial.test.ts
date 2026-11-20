@@ -7,6 +7,10 @@ const REAL_USER_DENIAL = `The user doesn't want to proceed with this tool use. T
 写入2，不要1`;
 
 describe("parseToolDenial", () => {
+  it("recognizes approved-plan handoff without rendering its internal instructions as rejection feedback", () => {
+    const result = "The user doesn't want to proceed with this tool use. To tell you how to proceed, the user said:\n[Aide plan delegation]\nThe user approved this exact plan...";
+    expect(parseToolDenial(result)).toEqual({ kind: "plan_delegation" });
+  });
   it("reads the real user-denial transcript shape back into kind + feedback", () => {
     expect(parseToolDenial(REAL_USER_DENIAL)).toEqual({
       kind: "user",

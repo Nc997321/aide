@@ -11,21 +11,45 @@ use super::parse::{
 };
 use super::{ChatMessageItem, LoadMessagesResult};
 
-/// 解析已经固定的快照；只允许末尾未完成行，损坏的中间行不能静默丢弃。
+/// 解析已经固定的快照；容许末尾未完成行，并裁掉以 API 错误告终的回合。
 pub fn parse_snapshot(text: &str) -> Result<Vec<ChatMessageItem>, String> {
     let mut lines: Vec<String> = Vec::new();
+    let mut turn_start = 0;
+    let mut turn_failed = false;
     let source: Vec<&str> = text.lines().collect();
     for (index, line) in source.iter().enumerate() {
         if line.trim().is_empty() {
             continue;
         }
-        if serde_json::from_str::<Value>(line).is_err() {
-            if index + 1 == source.len() && !text.ends_with('\n') {
-                break;
-            }
-            return Err(format!("会话快照第 {} 行损坏，无法可靠生成摘要", index + 1));
+        let entry = match serde_json::from_str::<Value>(line) {
+            Ok(entry) => entry,
+            Err(_) if index + 1 == source.len() && !text.ends_with('\n') => break,
+            Err(_) => return Err(format!("会话快照第 {} 行损坏，无法可靠生成摘要", index + 1)),
+        };
+        if entry["type"] == "user"
+            && !is_synthetic_user_entry(&entry)
+            && entry.pointer("/message/content").is_some_and(|content| {
+                content.is_string()
+                    || content.as_array().is_some_and(|blocks| {
+                        blocks.iter().any(|block| {
+                            matches!(block["type"].as_str(), Some("text" | "image"))
+                        })
+                    })
+            })
+        {
+            turn_start = lines.len();
+            turn_failed = false;
+        }
+        if entry["type"] == "assistant"
+            && (entry["isApiErrorMessage"] == true || entry["is_api_error_message"] == true)
+        {
+            turn_failed = true;
+            continue;
         }
         lines.push((*line).to_string());
+    }
+    if turn_failed {
+        lines.truncate(turn_start);
     }
     Ok(parse_transcript_lines(&lines))
 }

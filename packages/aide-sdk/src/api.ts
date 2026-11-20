@@ -83,6 +83,8 @@ export interface PermissionResponseParams {
   sessionId: string;
   id: string;
   approved: boolean;
+  /** 批准计划并交给新子会话；不放行主会话继续执行。 */
+  planExecution?: "subsession";
   /** AskUserQuestion 类工具的作答 */
   answers?: Record<string, string>;
   /** 「允许并切换模式」的目标模式 */

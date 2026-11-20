@@ -56,6 +56,7 @@ import {
   loadOlderPage,
   hasMoreOlder,
   messagesOf,
+  tasksOf,
   pendingPermissionsOf,
   respondPermissionFor,
 } from "@/composables/useChatSession";
@@ -128,7 +129,7 @@ const emit = defineEmits<{
   "set-permission-mode": [mode: string];
   /** 权限/提问请求的放行结果：req 具名对象（nextMode/reason 相邻 string 不再错位），
    *  sessionRules 为会话级规则草稿（「允许」文件工具时前端推导，随放行透传） */
-  "respond-permission": [req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string }, sessionRules?: PermissionRuleDraft[]];
+  "respond-permission": [req: { id: string; approved: boolean; answers?: Record<string, string>; nextMode?: string; reason?: string; planExecution?: "subsession" }, sessionRules?: PermissionRuleDraft[]];
   "update:bgDockSelectedId": [id: string];
   "update:subagentDockSelectedId": [id: string];
   /** hero 归属选择：选中的是会话归属，不是活动工作区（PaneGroup 据此改 pendingWs/defaultWs） */
@@ -322,6 +323,7 @@ async function onPermissionRespond(
   nextMode?: string,
   persistRule?: { scope: PermissionScope; rules: PermissionRuleDraft[] },
   reason?: string,
+  planExecution?: "subsession",
 ) {
   // 发送前确认：approved→发送 + 推进 lastUsed 基线 + 递增坐实信号（输入框据此清空
   // 输入）；取消→保留输入（回退对话框）。匹配 id 用 sc.request.id（即 PermissionDialog
@@ -357,7 +359,7 @@ async function onPermissionRespond(
     sessionRules = deriveSessionFileRules(props.permission.name, props.permission.input);
     if (sessionRules.length === 0) sessionRules = undefined;
   }
-  emit("respond-permission", { id, approved, answers, nextMode, reason }, sessionRules);
+  emit("respond-permission", { id, approved, answers, nextMode, reason, planExecution }, sessionRules);
 }
 
 /** 新会话发出首条消息时的语言服务器询问（输入框上方那条，LspSendPrompt）。**不阻塞发送**：
@@ -492,6 +494,19 @@ const inputStow = computed<"off" | "unless-draft" | "always">(() =>
 const subs = useSubsessions();
 const { state: sessionActivity } = useSessionState();
 const children = computed(() => subs.childrenOfSession(props.sessionId));
+const delegatedPlan = computed(() => props.sessionId ? subs.planDelegations[props.sessionId] : undefined);
+const displayedTasks = computed(() => {
+  const plan = delegatedPlan.value;
+  if (!plan) return props.tasks ?? [];
+  // 等子会话建立自己的清单，不把父会话旧的完成数冒充执行进度。
+  return plan.childId ? [...tasksOf(plan.childId)] : [];
+});
+const delegationLabel = computed(() => {
+  const plan = delegatedPlan.value;
+  if (plan?.status === "preparing") return "计划 · 正在整理交接";
+  if (plan?.status === "failed") return "计划 · 派发未确认，请查看会话说明";
+  return "子会话执行";
+});
 const childActivity = (id: string): ChildActivity => (sessionActivity[id] as ChildActivity | undefined) ?? "waiting";
 /** 子会话队头那条是不是提问（AskUserQuestion）：提问在父会话作答槽就地回答，答案回到子会话、由它接着做。 */
 function childQuestionOf(id: string): PermissionRequest | null {
@@ -796,12 +811,20 @@ function onOpenBgDock(taskId: string) {
       @stop="emit('interrupt')"
     />
     <!-- 会话头条：自动回报暂停提示 / 待办摘要（清单浮层下拉，不挤压消息区） -->
-    <div v-if="pausedCount !== null || (props.tasks && props.tasks.length > 0)" class="chat-col chat-head">
+    <div v-if="pausedCount !== null || delegatedPlan || displayedTasks.length" class="chat-col chat-head">
       <div v-if="pausedCount !== null" class="chat-paused">
         已暂停子会话自动回报（连续多次没有你的输入）<template v-if="pausedCount"> · {{ pausedCount }} 条待投递</template>
         · 发任意一条消息即恢复
       </div>
-      <TaskListPanel v-if="props.tasks && props.tasks.length > 0" :tasks="props.tasks" />
+      <div class="plan-delegation-row">
+        <TaskListPanel v-if="displayedTasks.length" :tasks="displayedTasks" />
+        <button
+          v-if="delegatedPlan"
+          class="plan-delegation-link"
+          :disabled="!delegatedPlan.childId"
+          @click="props.sessionId && (subs.drawerOpen[props.sessionId] = true)"
+        >{{ delegationLabel }}<template v-if="delegatedPlan.childId"> · 查看</template></button>
+      </div>
     </div>
 
     <!-- 滚动区 wrapper：接手 .chat-messages 的 flex 占位，并作为「回到底部」
@@ -1178,6 +1201,29 @@ function onOpenBgDock(taskId: string) {
 
 .chat-head {
   flex: none;
+}
+
+.plan-delegation-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+.plan-delegation-row > :first-child:not(.plan-delegation-link) {
+  flex: 1;
+  min-width: 0;
+}
+.plan-delegation-link {
+  display: block;
+  flex: none;
+  margin: var(--aide-space-unit) calc(var(--aide-space-unit) * 3);
+  color: var(--aide-accent);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.plan-delegation-link:disabled {
+  color: var(--aide-text-secondary);
+  cursor: default;
 }
 
 /* 自动回报被暂停（防乒乓）：一行提示，发消息即恢复 */

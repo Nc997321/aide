@@ -49,6 +49,7 @@ import {
   noteSubsessionReports,
   noteSubsessionResumed,
   noteSubsessionStarted,
+  notePlanDelegation,
 } from "../useSubsessions";
 import {
   sessionState,
@@ -494,6 +495,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         id: e["id"] as string,
         name: e["name"] as string,
         input: e["input"],
+        canDelegatePlan: e["canDelegatePlan"] === true,
         fromSubagent: e["fromSubagent"] as { id: string; agentName: string } | undefined,
       });
       setSessionState(sid, "attention");
@@ -1070,6 +1072,10 @@ export function handleChatEvent(e: Record<string, unknown>): void {
       break;
     }
     // ── 子会话（Host 广播，session_id = 父会话）──
+    case "plan_delegation": {
+      notePlanDelegation(sid, String(e["status"]), typeof e["childId"] === "string" ? e["childId"] : undefined);
+      break;
+    }
     case "subsession_started": {
       const child = e["childId"] as string;
       const title = (e["title"] as string) || "子会话";

@@ -63,6 +63,35 @@ describe("useChatSession per-session store", () => {
     for (const k of Object.keys(state)) removeSessionState(k);
   });
 
+  it("计划派发只发命令；状态和子会话进度由广播驱动，失败仍保留审批入口", async () => {
+    __resetSubsessionsForTest();
+    const chat = useChatSession(ref<string | null>("plan-parent"));
+    const child = useChatSession(ref<string | null>("plan-child"));
+    await flush();
+    emit({ type: "permission_request", session_id: "plan-parent", id: "plan-1", name: "ExitPlanMode", input: { plan: "Fix X" }, canDelegatePlan: true });
+    await flush();
+    expect(chat.pendingPermission.value?.canDelegatePlan).toBe(true);
+    invokeMock.mockRejectedValueOnce(new Error("write failed"));
+    await expect(chat.respondPermission("plan-1", true, { planExecution: "subsession" })).rejects.toThrow("write failed");
+    expect(chat.pendingPermission.value?.id).toBe("plan-1");
+    await chat.respondPermission("plan-1", true, { planExecution: "subsession" });
+    expect(invokeMock).toHaveBeenLastCalledWith("permission_response", expect.objectContaining({ sessionId: "plan-parent", id: "plan-1", approved: true, planExecution: "subsession" }));
+    const subs = useSubsessions();
+    expect(subs.planDelegations["plan-parent"]).toBeUndefined();
+    emit({ type: "plan_delegation", session_id: "plan-parent", status: "preparing" });
+    emit({ type: "permission_cancelled", session_id: "plan-parent", id: "plan-1" });
+    emit({ type: "plan_delegation", session_id: "plan-parent", status: "spawned", childId: "plan-child" });
+    emit({ type: "tasks_update", session_id: "plan-child", tasks: [{ id: "1", subject: "Fix X", status: "in_progress" }] });
+    await flush();
+    expect(chat.pendingPermission.value).toBeNull();
+    expect(subs.planDelegations["plan-parent"]).toEqual({ status: "spawned", childId: "plan-child" });
+    expect(child.tasks.value[0].subject).toBe("Fix X");
+    expect(chat.tasks.value).toEqual([]); // 不复制子会话任务到父会话。
+    emit({ type: "plan_delegation", session_id: "plan-parent", status: "cleared" });
+    await flush();
+    expect(subs.planDelegations["plan-parent"]).toBeUndefined();
+  });
+
   it("Host 发起的接续保留运行态；其他客户端仅凭落盘事件回种名称和归属", async () => {
     useChatSession(ref<string | null>(null));
     await flush();
@@ -596,6 +625,8 @@ describe("useChatSession per-session store", () => {
 
     // 确认 p1 后 p2 自动顶上，队列未清空前保持 attention
     await chat.respondPermission("p1", true);
+    expect(chat.pendingPermission.value?.id).toBe("p1"); // 命令不乐观出队，等广播。
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
     await flush();
     expect(chat.pendingPermission.value?.id).toBe("p2");
     expect(chat.pendingPermissionCount.value).toBe(1);
@@ -603,6 +634,7 @@ describe("useChatSession per-session store", () => {
 
     // 全部确认完才回到 running
     await chat.respondPermission("p2", true);
+    emit({ type: "permission_cancelled", id: "p2", session_id: "uuid-a" });
     await flush();
     expect(chat.pendingPermission.value).toBeNull();
     expect(chat.pendingPermissionCount.value).toBe(0);
@@ -655,7 +687,7 @@ describe("useChatSession per-session store", () => {
     expect(state["uuid-a"]).toBe("running");
   });
 
-  it("本地应答后回灌的 permission_cancelled 不再改写状态机（幂等）", async () => {
+  it("本地应答只发命令，permission_cancelled 坐实后重复广播幂等", async () => {
     const { state } = useSessionState();
     const sid = ref<string | null>("uuid-a");
     const chat = useChatSession(sid);
@@ -664,11 +696,12 @@ describe("useChatSession per-session store", () => {
     emit({ type: "permission_request", id: "p1", name: "Bash", input: {}, session_id: "uuid-a" });
     await flush();
 
-    await chat.respondPermission("p1", true); // 本地已乐观出队并置 running
+    await chat.respondPermission("p1", true);
     await flush();
-    expect(state["uuid-a"]).toBe("running");
+    expect(state["uuid-a"]).toBe("attention");
 
-    // sidecar 对本机决策同样广播：弹窗早已出队，不得二次动状态
+    // sidecar 对本机决策同样广播，全部客户端在这里一起坐实。
+    emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
     emit({ type: "permission_cancelled", id: "p1", session_id: "uuid-a" });
     await flush();
     expect(state["uuid-a"]).toBe("running");

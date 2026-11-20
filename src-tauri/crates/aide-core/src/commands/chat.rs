@@ -490,6 +490,16 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
     let profile = crate::session_store::our_session_profile(&session_id)
         .or(session_profile).unwrap_or_default();
     cmd["session_profile"] = json!(profile);
+    cmd["conversation_mode"] = json!(if profile == crate::session_store::SessionProfile::Chat {
+        "chat"
+    } else if crate::commands::workspace::daily::is_daily_path(
+        &crate::commands::workspace::daily::daily_path_in(&crate::paths::our_config_dir()),
+        &cwd_str,
+    ) {
+        "daily"
+    } else {
+        "project"
+    });
     if let Some(documents) = input_documents {
         cmd["input_documents"] = json!(documents);
     }
@@ -553,6 +563,8 @@ pub struct PermissionResponseArgs {
     id: String,
     approved: bool,
     #[serde(default)]
+    plan_execution: Option<String>,
+    #[serde(default)]
     always: Option<bool>,
     #[serde(default)]
     answers: Option<HashMap<String, String>>,
@@ -570,7 +582,7 @@ pub struct PermissionResponseArgs {
 }
 
 async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Result<(), String> {
-    let PermissionResponseArgs { session_id, id, approved, always, answers, next_mode, message, session_rules } = a;
+    let PermissionResponseArgs { session_id, id, approved, plan_execution, always, answers, next_mode, message, session_rules } = a;
     let runtime_mgr = &core.runtime;
     let mut cmd = json!({
         "cmd": "permission_response",
@@ -581,6 +593,9 @@ async fn permission_response(core: Arc<Core>, a: PermissionResponseArgs) -> Resu
     });
     if let Some(a) = answers {
         cmd["answers"] = json!(a);
+    }
+    if let Some(execution) = plan_execution {
+        cmd["planExecution"] = json!(execution);
     }
     if let Some(mode) = next_mode {
         cmd["nextMode"] = json!(mode);

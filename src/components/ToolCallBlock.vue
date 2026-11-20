@@ -64,7 +64,7 @@ const bgTask = computed(
 const denial = computed(() => (props.block.truncated ? null : parseToolDenial(props.block.result)));
 
 /** 人工拒绝 vs 命中权限规则：UI 要如实区分，别把规则拦截说成"你拒绝的"。 */
-const denialLabel = computed(() => (denial.value?.kind === "policy" ? "规则拒绝" : "已拒绝"));
+const denialLabel = computed(() => denial.value?.kind === "plan_delegation" ? "转交子会话" : denial.value?.kind === "policy" ? "规则拒绝" : "已拒绝");
 
 const denialReasonTip = computed(() =>
   denial.value?.reason
@@ -73,7 +73,9 @@ const denialReasonTip = computed(() =>
 );
 
 const denialPillTip = computed(() =>
-  denial.value?.kind === "policy"
+  denial.value?.kind === "plan_delegation"
+    ? "你批准了交给子会话执行，主会话保留计划模式并整理交接"
+    : denial.value?.kind === "policy"
     ? "命中权限规则被拦截，工具未执行"
     : "你拒绝了这次调用，工具未执行",
 );

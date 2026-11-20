@@ -22,6 +22,8 @@ import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { UsageLog } from "./usageLog.js";
+import { PlanDelegation } from "../extensions/planDelegation.js";
+import { subsessionToolsMounted } from "../extensions/subsessions.js";
 import { DeltaCoalescer } from "./deltaCoalescer.js";
 import { removeSessionRegistryEntryFromEnv } from "./claudeRegistry.js";
 import { reapSessionSubprocess } from "./subprocessReaper.js";
@@ -140,6 +142,8 @@ export class SessionWorker {
   readonly queue = new MessageQueue();
   readonly permMgr = new PermissionManager();
   private readonly executionPolicy = new ExecutionPolicy();
+  private readonly planDelegation = new PlanDelegation(e => this.emit(e));
+  private planDelegationAvailable = false;
   /** 会话策略状态（快照 + 会话级规则 + 权威 PreToolUse hook，见 policy/sessionHook.ts）。
    *  自动化状态不归它所有——注入活值 getter，hook 每次调用时读。 */
   private readonly policy = new SessionPolicy({
@@ -250,6 +254,7 @@ export class SessionWorker {
   // + 终态自毁。
   private automationConfig?: AutomationConfig;
   private sessionProfile: "assistant" | "chat" = "assistant";
+  private conversationMode: "chat" | "daily" | "project" = "project";
   private profileInitialized = false;
   /** 本会话是子会话时的父会话 id（Host 派发子会话的 send 带 subsession_parent）。 */
   private subsessionParent?: string;
@@ -785,6 +790,7 @@ export class SessionWorker {
       permissionCallback: this.permMgr.makeCallback(
         (e) => this.emit(e),
         this.subagentTracker,
+        () => this.planDelegationAvailable && !this.planDelegation.active,
       ),
       isAutomation: () => !!this.automationConfig,
       toolGuard: (tool, input, agentId) => this.executionPolicy.denyReason(tool, !!this.subsessionParent, input, !!agentId),
@@ -894,6 +900,20 @@ export class SessionWorker {
       this.enqueueSend(cmd);
 
     } else if (cmd.cmd === "permission_response") {
+      if (cmd.planExecution !== undefined) {
+        const plan = this.permMgr.planForDelegation(cmd.id);
+        // 迟到/重复应答不再派第二次；不合法组合也不能被当成普通批准放行。
+        if (!plan) return; // 重复/迟到应答幂等，不再派第二次。
+        if (!this.planDelegationAvailable || this.planDelegation.active || cmd.approved !== true || cmd.response || cmd.planExecution !== "subsession") {
+          this.emit({ type: "error", message: "这条计划当前不能派给子会话；未批准主会话执行。", fatal: false });
+          return;
+        }
+        this.applyPermissionMode("plan");
+        const message = this.planDelegation.begin(plan);
+        // 不放行 ExitPlanMode：让主会话只整理已有上下文并调用原有 session_spawn。
+        this.permMgr.resolve(cmd.id, { kind: "deny", message });
+        return;
+      }
       // 形状归一（标签形态 / 兼容扁平形态 → 规范决策）是本分支**唯一**的读法：
       // 下面只碰 decision，不再各自解释字段组合（词汇与规则见 engine/permissionResponse.ts）。
       const verdict = classifyPermissionResponse(cmd);
@@ -935,6 +955,7 @@ export class SessionWorker {
       this.applyPermissionPolicy(cmd.policy);
 
     } else if (cmd.cmd === "interrupt") {
+      this.planDelegation.clear();
       this.executionPolicy.clear();
       // 打断：排队消息撤回（退回输入框，见 interruptAndWithdrawQueue）；挂起的权限确认
       // 也一并撤销（policy hook 的 ask 路径没有 SDK signal，靠 cancelAll 兜底）。
@@ -1000,6 +1021,7 @@ export class SessionWorker {
       this.sessionProfile = cmd.session_profile ?? "assistant";
       this.profileInitialized = true;
     }
+    if (cmd.conversation_mode) this.conversationMode = cmd.conversation_mode;
     if (cmd.input_documents?.length) {
       if (!this.prepareInput) throw new Error("当前宿主不支持文档附件解析");
       cmd = await this.prepareInput(cmd);
@@ -1007,6 +1029,8 @@ export class SessionWorker {
     }
     this.watches.userActivity();
     this.applySendRuntimeConfig(cmd);
+    // 自动回报不改变委派；交接期间用户的新消息是补充指令，不能丢掉已批准的计划。
+    if (!cmd.display?.some(b => b.type === "subsession_report") && !cmd.automation) this.planDelegation.noteUserMessage();
     if (cmd.auto_title !== undefined) this.autoTitle = cmd.auto_title;
     // 归一在入口完成（守门）：非法/未知值绝不进 worker 状态，applyOutputStyle 只
     // 面对值域内的值或 null。
@@ -1146,6 +1170,9 @@ export class SessionWorker {
           //（装配细节与历史注释随迁 session-worker/queryContext.ts）。session 适配器
           // 闭包桥接 private 成员（直接传 this 会被名义类型规则挡掉）。
           const effectiveCwd = cwd ?? this.cwd ?? "";
+          this.planDelegationAvailable = this.sessionProfile !== "chat" && subsessionToolsMounted({
+            isChild: !!this.subsessionParent, automation: !!this.automationConfig, trusted, env: process.env,
+          });
           const queryCtx = await prepareQueryContext({
             sessionProfile: this.sessionProfile,
             cwd: effectiveCwd,
@@ -1164,6 +1191,7 @@ export class SessionWorker {
             watches: this.watches,
             automationConfig: this.automationConfig,
             isSubsession: !!this.subsessionParent,
+            subsessionSpawn: (args, run) => this.planDelegation.spawn(args, run),
             computerDenial: () => this.executionPolicy.computerDenial(),
             subsessionContext: () => ({
               permissionMode: this.permModes.current,
@@ -1216,6 +1244,7 @@ export class SessionWorker {
                   },
               branch: {
                 sessionProfile: this.sessionProfile,
+                conversationMode: this.conversationMode,
                 automationConfig: this.automationConfig,
               },
               model: {
@@ -1257,7 +1286,7 @@ export class SessionWorker {
               this.noteAssistantOutput(m);
               this.adoptAssistantModel(m);
             },
-            onResult: (qq) => this.finishTurn(qq),
+            onResult: (qq) => { this.planDelegation.turnEnded(); this.finishTurn(qq); },
           };
           let errorTerminated = false;
           for await (const msg of q) {

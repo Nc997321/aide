@@ -14,6 +14,7 @@ import {
 export interface PermissionRequestContext {
   signal?: AbortSignal;
   agentID?: string;
+  canDelegatePlan?: boolean;
 }
 
 /** Resolve outcome — the controller uses `toolName` to detect ExitPlanMode /
@@ -30,6 +31,7 @@ export interface ResolveOutcome {
 interface PendingEntry {
   resolve: (decision: PendingDecision) => void;
   toolName: string;
+  delegatedPlan?: string;
   /** Notify every connected client to dismiss this request. Fired on all
    *  terminal paths (settled by anyone, aborted, interrupt, bulk-approve). */
   emitCancelled: () => void;
@@ -108,6 +110,11 @@ export function unansweredDenyMessage(reason?: string): string {
 export class PermissionManager {
   private pending = new Map<string, PendingEntry>();
 
+  /** 只有真正挂起、来自主线程且宿主允许委派的计划才可移交。 */
+  planForDelegation(id: string): string | undefined {
+    return this.pending.get(id)?.delegatedPlan;
+  }
+
   /** 还挂着几条等人回应的请求（子会话空闲休眠据此判断「在等批准 / 回答」）。 */
   get pendingCount(): number {
     return this.pending.size;
@@ -139,18 +146,23 @@ export class PermissionManager {
     const fromSubagent = context.agentID
       ? { id: context.agentID, agentName: subagents?.getAgentName(context.agentID) ?? "子代理" }
       : undefined;
+    const plan = toolName === "ExitPlanMode" && context.canDelegatePlan && !context.agentID &&
+      input && typeof input === "object" && "plan" in input && typeof input.plan === "string" && input.plan.trim()
+      ? input.plan : undefined;
     emit({
       type: "permission_request",
       id,
       name: toolName,
       input,
       ...(fromSubagent ? { fromSubagent } : {}),
+      ...(plan ? { canDelegatePlan: true } : {}),
     });
     const decision = await new Promise<PendingDecision>(
       (resolve) => {
         this.pending.set(id, {
           resolve,
           toolName,
+          delegatedPlan: plan,
           emitCancelled: () => emit({ type: "permission_cancelled", id }),
         });
         context.signal?.addEventListener(
@@ -190,7 +202,7 @@ export class PermissionManager {
   /** SDK `canUseTool` adapter: delegates to `request` and returns the SDK
    *  `behavior: "allow" | "deny"` shape. The `suggestions` opt (formerly used
    *  for "always allow") is ignored — Aide rules persist via the settings UI. */
-  makeCallback(emit: (e: ChatEvent) => void, subagents?: SubagentTracker) {
+  makeCallback(emit: (e: ChatEvent) => void, subagents?: SubagentTracker, canDelegatePlan?: () => boolean) {
     return async (
       toolName: string,
       input: unknown,
@@ -199,7 +211,7 @@ export class PermissionManager {
       const result = await this.request(
         toolName,
         input,
-        { signal: opts?.signal, agentID: opts?.agentID },
+        { signal: opts?.signal, agentID: opts?.agentID, canDelegatePlan: canDelegatePlan?.() },
         emit,
         subagents,
       );

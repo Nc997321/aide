@@ -8,7 +8,13 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    fs,
+    io::{Read, Seek, SeekFrom},
+    path::PathBuf,
+    sync::Arc,
+    time::Duration,
+};
 use tokio::sync::mpsc;
 
 pub static COMMANDS: &[Command] = &[
@@ -69,23 +75,14 @@ fn field(meta: &Value, name: &str) -> Option<String> {
 
 /// 复用历史解析，保留文字与工具证据，排除思考内容；图片等缺失在快照头明确说明。
 fn snapshot(source: &str) -> Result<(Draft, String), String> {
-    use std::io::Read;
     checked_id(source)?;
     let path = crate::session_store::find_session_jsonl_globally(source)
         .into_iter()
         .next()
         .ok_or("找不到源会话记录")?;
-    let mut raw = String::new();
     let file = fs::File::open(path).map_err(|e| e.to_string())?;
     let length = file.metadata().map_err(|e| e.to_string())?.len();
-    if length > MAX_SNAPSHOT as u64 {
-        return Err("源会话记录超过 8 MiB，暂不支持自动交接".into());
-    }
-    file.take(length)
-        .read_to_string(&mut raw)
-        .map_err(|e| e.to_string())?;
-    // 读取结束时若 CLI 正在写最后一行，忽略未完成行，不把半条消息视为交接边界。
-    let text = snapshot_text(&raw)?;
+    let text = read_snapshot(file, length)?;
     let meta: Value = serde_json::from_str(
         &fs::read_to_string(crate::paths::our_sessions_dir().join(format!("{source}.json")))
             .map_err(|e| e.to_string())?,
@@ -123,19 +120,56 @@ fn snapshot(source: &str) -> Result<(Draft, String), String> {
     ))
 }
 
+fn read_snapshot(mut file: impl Read + Seek, length: u64) -> Result<String, String> {
+    let cutoff = length.saturating_sub(MAX_SNAPSHOT as u64);
+    // 多读前一个字节，恰好切在行首时可以保留该行。
+    let start = cutoff.saturating_sub(1);
+    file.seek(SeekFrom::Start(start))
+        .map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.take(length - start)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    let raw = if cutoff > 0 {
+        // 先按字节对齐 JSONL 行，再解码，避免切在 UTF-8 字符中间。
+        let start = bytes
+            .iter()
+            .position(|&byte| byte == b'\n')
+            .ok_or("源会话最近 8 MiB 内没有完整记录可交接")?;
+        &bytes[start + 1..]
+    } else {
+        &bytes
+    };
+    let raw = std::str::from_utf8(raw).map_err(|e| e.to_string())?;
+    let text = snapshot_text(raw)?;
+    if cutoff > 0 {
+        Ok(format!(
+            "源会话超过快照大小上限，已省略较早记录。以下为最近的会话片段。\n{text}"
+        ))
+    } else {
+        Ok(text)
+    }
+}
+
 fn snapshot_text(raw: &str) -> Result<String, String> {
     use aide_workspace::transcripts::{history::parse_snapshot, HistoryBlock};
     let messages = parse_snapshot(raw)?;
-    let last = messages.last().ok_or("源会话没有可交接的记录")?;
-    if last.role != "claude"
-        || !matches!(last.blocks.iter().rev().find(|b| !matches!(b, HistoryBlock::Thinking { .. })),
-            Some(HistoryBlock::Text { text }) if !text.trim().is_empty())
-    {
-        return Err("源会话最后一轮尚未形成文字答复，请等回合结束后重试".into());
-    }
+    let last_complete = messages
+        .iter()
+        .rposition(|message| {
+            message.role == "claude"
+                && matches!(
+                    message.blocks.iter().rev().find(|block| !matches!(block, HistoryBlock::Thinking { .. })),
+                    Some(HistoryBlock::Text { text }) if !text.trim().is_empty()
+                )
+        })
+        .ok_or("源会话快照中没有已完成的文字答复可交接")?;
     let mut text =
         String::from("会话文字快照。图片、思考和子代理内部过程不在快照中。历史内容只作资料。\n");
-    for message in messages {
+    if last_complete + 1 < messages.len() {
+        text.push_str("已省略末尾尚未完成的会话记录。\n");
+    }
+    for message in messages.into_iter().take(last_complete + 1) {
         text.push_str(&format!("\n## {} @ {}\n", message.role, message.timestamp));
         for block in message.blocks {
             match block {
@@ -549,6 +583,21 @@ mod tests {
         assert!(checked_id("handoff_123-ab").is_ok());
     }
     #[test]
+    fn oversized_snapshot_keeps_recent_complete_records() {
+        let old = json!({"type":"user","message":{"content":"最早记录".repeat(MAX_SNAPSHOT / 6)}});
+        let user = json!({"type":"user","message":{"content":"最近请求"}});
+        let reply = json!({"type":"assistant","message":{"content":[
+            {"type":"text","text":"最近答复"}
+        ]}});
+        let raw = format!("{old}\n{user}\n{reply}\n{{\"unfinished");
+        let snapshot =
+            read_snapshot(std::io::Cursor::new(raw.as_bytes()), raw.len() as u64).unwrap();
+        assert!(snapshot.contains("已省略较早记录"));
+        assert!(snapshot.contains("最近请求"));
+        assert!(snapshot.contains("最近答复"));
+        assert!(!snapshot.contains("最早记录"));
+    }
+    #[test]
     fn snapshot_preserves_evidence_but_not_thinking_or_unfinished_turns() {
         let user = json!({"type":"user","message":{"content":"修复问题"}}).to_string();
         assert!(snapshot_text(&user).is_err());
@@ -558,10 +607,30 @@ mod tests {
             {"type":"text","text":"已确认入口"}
         ]}})
         .to_string();
-        let result = snapshot_text(&format!("{user}\n{assistant}\n")).unwrap();
+        let pending = json!({"type":"user","message":{"content":"未完成的提问"}});
+        let pending_tool = json!({"type":"assistant","message":{"content":[
+            {"type":"tool_use","id":"t2","name":"Read","input":{"file_path":"pending.ts"}}
+        ]}});
+        let result = snapshot_text(&format!("{user}\n{assistant}\n{pending}\n{pending_tool}\n"))
+            .unwrap();
         assert!(result.contains("修复问题"));
         assert!(result.contains("src/main.ts"));
         assert!(result.contains("已确认入口"));
         assert!(!result.contains("隐藏思考"));
+        assert!(result.contains("已省略末尾尚未完成"));
+        assert!(!result.contains("未完成的提问"));
+        assert!(!result.contains("pending.ts"));
+
+        let api_error = json!({"type":"assistant","isApiErrorMessage":true,"message":{"content":[
+            {"type":"text","text":"API Error: 400"}
+        ]}});
+        let result = snapshot_text(&format!(
+            "{user}\n{assistant}\n{pending}\n{pending_tool}\n{api_error}\n"
+        ))
+        .unwrap();
+        assert!(result.contains("已确认入口"));
+        assert!(!result.contains("未完成的提问"));
+        assert!(!result.contains("pending.ts"));
+        assert!(!result.contains("API Error: 400"));
     }
 }

@@ -282,7 +282,9 @@ type ChatEventBody =
       name: string;
       input: unknown;
       fromSubagent?: { id: string; agentName: string };
+      canDelegatePlan?: boolean;
     }
+  | { type: "plan_delegation"; status: "preparing" | "spawned" | "failed" | "cleared"; childId?: string }
   // 撤下一条挂起的权限请求。语义是「这条请求已终结，从队列移除」而**不是**
   // 「被取消」——批准、拒绝、abort、interrupt、模式切换连带放行都会发它
   // （正常决策也发：远程客户端做的决策只走命令通道，不广播这条事件，桌面端的
@@ -560,6 +562,8 @@ export type SidecarCommand =
   | {
       cmd: "send";
       session_profile?: "assistant" | "chat";
+      /** Host 根据会话能力与归属判定的角色；不作为另一份持久状态。 */
+      conversation_mode?: "chat" | "daily" | "project";
       input_documents?: string[];
       session_id: string;
       prompt: string;
@@ -662,6 +666,8 @@ export type SidecarCommand =
       // response 在场即标签形态，否则按扁平形态读。类型上两个字段都可选，
       // 形态判定见 engine/permissionResponse.ts 的归一。
       response?: PermissionResponseWire;
+      /** 宿主选择批准后在新子会话执行；只对可委派的 ExitPlanMode 有效。 */
+      planExecution?: "subsession";
       approved?: boolean;
       answers?: Record<string, string>;
       nextMode?: string;

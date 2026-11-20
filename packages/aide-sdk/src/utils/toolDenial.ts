@@ -27,7 +27,7 @@ const POLICY_REASON_SEP = "\n\n";
 
 export interface ToolDenial {
   /** `user` = 人在弹窗点了拒绝；`policy` = 命中权限规则被拒（没人参与）。 */
-  kind: "user" | "policy";
+  kind: "user" | "policy" | "plan_delegation";
   /** 用户附言 / 策略理由。有附言才有值——没有就不该在 UI 上编一个。 */
   reason?: string;
 }
@@ -46,6 +46,8 @@ export function parseToolDenial(content?: string | null): ToolDenial | null {
     const at = text.indexOf(USER_FEEDBACK_MARK);
     if (at < 0) return { kind: "user" };
     const reason = text.slice(at + USER_FEEDBACK_MARK.length).trim();
+    // 对齐 sidecar extensions/planDelegation：SDK 通过 deny 留在计划模式，但用户批准了移交。
+    if (reason.startsWith("[Aide plan delegation]\n")) return { kind: "plan_delegation" };
     return reason ? { kind: "user", reason } : { kind: "user" };
   }
 

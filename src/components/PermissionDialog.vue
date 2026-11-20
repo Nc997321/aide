@@ -73,6 +73,7 @@ const emit = defineEmits<{
      *  反馈给模型。**不能**直接当工具结果正文：那会被模型读成命令输出
      *  （2026-09-08：「写入2」被当成 Write 的返回值）。 */
     reason?: string,
+    planExecution?: "subsession",
   ];
 }>();
 
@@ -689,6 +690,15 @@ const inputJson = computed(() => {
             </button>
             <div class="perm-actions-primary">
               <template v-if="isPlanApproval">
+                <button
+                  v-if="permission.canDelegatePlan"
+                  class="perm-btn perm-btn--outline"
+                  data-action="delegate-plan"
+                  v-tooltip="'主会话整理已有探索，子会话使用 Auto 模式执行并回报结果'"
+                  @click="emit('respond', permission.id, true, undefined, undefined, undefined, undefined, 'subsession')"
+                >
+                  交给子会话执行
+                </button>
                 <!-- 批准后落到哪个模式由 nextMode 显式钉死，不靠 sidecar 回落：
                      删掉 acceptEdits 后编辑的「不再逐条问」归 auto 承担。 -->
                 <button class="perm-btn perm-btn--outline" @click="emit('respond', permission.id, true, undefined, 'manual')">
@@ -1214,6 +1224,8 @@ const inputJson = computed(() => {
 
 .perm-actions-primary {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   align-items: center;
   gap: 8px;
 }

@@ -40,6 +40,8 @@ export interface SubsessionContext {
 export interface SubsessionDeps {
   emit: (e: ChatEvent) => void;
   context: () => SubsessionContext;
+  /** 宿主计划移交策略；普通派活省略。实际启动仍复用 querySubsession。 */
+  spawn?: (args: Record<string, unknown>, run: (args: Record<string, unknown>, permissionMode?: string) => Promise<SubsessionResponse>) => Promise<SubsessionResponse>;
 }
 
 export interface SubsessionGate {
@@ -192,8 +194,20 @@ export function subsessionMcpRegistration(
           title: z.string().optional().describe("Short title shown in the sidebar (≤ 24 chars). Defaults to the start of the task."),
           model: z.string().optional().describe("Model for the sub-session. Defaults to this session's model."),
           new: z.boolean().optional().describe("Start a new sub-session even though idle ones exist. Only after a previous session_spawn listed them and none fits."),
+          exploration: z.object({
+            findings: z.string().describe("Completed exploration: facts, relevant symbols/locations, decisions, rejected approaches and existing changes. Use existing context; do not investigate again to fill this in."),
+            files: z.array(z.string()).describe("Known relevant paths; empty if not yet identified."),
+            checks: z.string().describe("Commands/results already verified, or explicitly not run. Do not invent evidence."),
+            open_questions: z.string().describe("Unresolved questions, clearly separated from established facts; say none if none."),
+          }).optional().describe("Required when the user chooses to delegate an approved plan. Include only concise existing findings, not the conversation or full files."),
         },
-        async (args) => textResult(formatSpawn(await querySubsession("spawn", args as Record<string, unknown>, deps))),
+        async (args) => {
+          const run = (a: Record<string, unknown>, permissionMode?: string) => querySubsession("spawn", a, {
+            ...deps,
+            context: () => ({ ...deps.context(), ...(permissionMode ? { permissionMode } : {}) }),
+          });
+          return textResult(formatSpawn(await (deps.spawn ? deps.spawn(args, run) : run(args))));
+        },
       ),
       tool(
         "session_message",

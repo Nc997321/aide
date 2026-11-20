@@ -56,6 +56,40 @@ async function flushPromises() {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+describe("plan approval delegation", () => {
+  it("settles the approval as a handoff, retains plan mode and ignores duplicate clicks", async () => {
+    const { worker, events } = makeWorker();
+    (worker as any).planDelegationAvailable = true;
+    const cb = worker._testCanUseTool();
+    const pending = cb("ExitPlanMode", { plan: "# Fix outline\nUse existing discovery." }, { signal: new AbortController().signal } as any);
+    const request = events.find(e => e.type === "permission_request");
+    expect(request.canDelegatePlan).toBe(true);
+    const cmd = { cmd: "permission_response", session_id: "test-sid", id: request.id, approved: true, planExecution: "subsession" } as const;
+    worker.handleCommand(cmd);
+    worker.handleCommand(cmd);
+    expect(await pending).toMatchObject({ behavior: "deny", message: expect.stringContaining("exploration") });
+    expect(events.filter(e => e.type === "permission_cancelled")).toHaveLength(1);
+    expect(events.filter(e => e.type === "plan_delegation")).toEqual([{ type: "plan_delegation", status: "preparing" }]);
+    expect(events.filter(e => e.type === "permission_modes_available").at(-1)?.current).toBe("plan");
+    worker.stop();
+  });
+
+  it("child-agent and unavailable plans do not advertise delegation", async () => {
+    const { worker, events } = makeWorker();
+    (worker as any).planDelegationAvailable = true;
+    const cb = worker._testCanUseTool();
+    const pending = cb("ExitPlanMode", { plan: "child plan" }, { signal: new AbortController().signal, agentID: "agent" } as any);
+    const request = events.find(e => e.type === "permission_request");
+    expect(request.canDelegatePlan).toBeUndefined();
+    worker.handleCommand({ cmd: "permission_response", session_id: "test-sid", id: request.id, approved: true, planExecution: "subsession" });
+    expect(events.some(e => e.type === "plan_delegation")).toBe(false);
+    expect(worker.permMgr.pendingCount).toBe(1);
+    worker.permMgr.cancelAll();
+    worker.stop();
+    await pending;
+  });
+});
+
 /**
  * 2026-09-14 事故回归：「余额不足（HTTP 402）」等错误终态之后重发，界面永远停在
  * 「正在思考」，CLI 起来了却一句话不说。
@@ -712,8 +746,8 @@ describe("SessionWorker — Aide 权限策略 PreToolUse hook", () => {
   });
 });
 
-describe("SessionWorker — 指令加载（settingSources:[] + preset systemPrompt）", () => {
-  it("query options use settingSources:[] and preset+append systemPrompt (no Claude settings.json)", async () => {
+describe("SessionWorker — 指令加载（settingSources:[] + Aide systemPrompt）", () => {
+  it("Host 日常模式进入自定义角色，仍不读取 Claude settings.json", async () => {
     let resolveCapture!: (opts: any) => void;
     const captured = new Promise<any>((r) => { resolveCapture = r; });
     const worker = new SessionWorker("sid", () => {}, {
@@ -723,11 +757,11 @@ describe("SessionWorker — 指令加载（settingSources:[] + preset systemProm
         return (async function* () { /* empty generator */ })() as any;
       }) as any,
     });
-    worker.handleCommand({ cmd: "send", session_id: "sid", prompt: "hi", cwd: "/tmp", env: {} } as any);
+    worker.handleCommand({ cmd: "send", session_id: "sid", prompt: "hi", cwd: "/tmp", env: {}, conversation_mode: "daily" } as any);
     const opts = await captured;
     expect(opts.settingSources).toEqual([]);
-    expect(opts.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
-    expect(typeof opts.systemPrompt.append).toBe("string");
+    expect(typeof opts.systemPrompt).toBe("string");
+    expect(opts.systemPrompt).toContain("围绕用户的实际事务");
     // policy hook is registered first on matcher ".*"
     expect(opts.hooks.PreToolUse[0].matcher).toBe(".*");
     worker.stop();

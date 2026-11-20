@@ -21,6 +21,13 @@ const mountBlock = (props: Record<string, unknown>) =>
   });
 
 describe("ToolCallBlock — 工具行", () => {
+  it("批准移交计划显示转交子会话，不把交接指令暴露成拒绝理由", () => {
+    const w = mountBlock({ block: block({ name: "ExitPlanMode", input: { plan: "Fix X" }, isError: true,
+      result: "The user doesn't want to proceed with this tool use. To tell you how to proceed, the user said:\n[Aide plan delegation]\ninternal handoff instructions" }) });
+    expect(w.get(".ti-deny-pill").text()).toBe("转交子会话");
+    expect(w.find(".ti-deny-reason").exists()).toBe(false);
+    expect(w.text()).not.toContain("internal handoff instructions");
+  });
   it("查询类工具是无框的工具行：头行是一句旁白，不露工具名", () => {
     const w = mountBlock({ block: block() });
     expect(w.classes()).toContain("tool-item--line");

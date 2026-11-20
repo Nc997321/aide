@@ -66,7 +66,8 @@ describe("buildSpawnQueryOptions", () => {
   it("信任工作区基线：无 strictMcpConfig，instructions/hooks/mcp/env 从 ctx 直通", () => {
     const o = buildSpawnQueryOptions(parts()) as Opts;
     expect(o.strictMcpConfig).toBeUndefined();
-    expect(o.systemPrompt).toEqual({ type: "preset", preset: "claude_code", append: "INST" });
+    expect(o.systemPrompt).toContain("面向产品负责人和架构师协作");
+    expect(o.systemPrompt).toContain("INST");
     expect(o.hooks).toEqual({ PreToolUse: [] });
     expect(o.mcpServers).toEqual({ biz: { type: "http" } });
     expect(o.env).toEqual({ PATH: "/bin" });
@@ -76,6 +77,18 @@ describe("buildSpawnQueryOptions", () => {
     expect(o.skills).toBe("all");
     expect(o.settingSources).toEqual([]);
     expect(o.allowDangerouslySkipPermissions).toBe(true);
+  });
+
+  it("日常角色与纯聊天能力分别判定，不让模式字段打开工具或混入工程角色", () => {
+    const daily = buildSpawnQueryOptions(parts({ branch: { conversationMode: "daily" } }));
+    expect(daily.systemPrompt).toContain("围绕用户的实际事务");
+    expect(daily.systemPrompt).not.toContain("面向产品负责人");
+    expect(daily.systemPrompt).toContain("INST");
+    const chat = buildSpawnQueryOptions(parts({ branch: { sessionProfile: "chat", conversationMode: "daily" } }));
+    expect(chat.systemPrompt).toContain("自然交流");
+    expect(chat.systemPrompt).not.toContain("INST");
+    expect(chat.systemPrompt).not.toContain("实际事务");
+    expect(chat.tools).toEqual([]);
   });
 
   it("会话级 worktree 切换工具被摘除（会改会话 cwd → 档案/基线对不上）；主会话与自动化都带", () => {

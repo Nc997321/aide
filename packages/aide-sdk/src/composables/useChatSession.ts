@@ -341,6 +341,7 @@ async function ensureSendWorkspace(sid: string): Promise<void> {
 // ── useChatSession（App.vue 顶层单例 + 各分屏组各调一次）─────────────────────
 
 export interface RespondPermissionOpts {
+  planExecution?: "subsession";
   answers?: Record<string, string>;
   nextMode?: string;
   reason?: string;
@@ -362,18 +363,12 @@ export async function respondPermissionFor(
   approved: boolean,
   opts: RespondPermissionOpts = {},
 ): Promise<void> {
-  const store = getStore(sid);
-  store.pendingPermissions = store.pendingPermissions.filter((p) => p.id !== id);
-  // 并发权限请求逐条确认：队列还有剩余时保持 attention（弹窗随队头自动切到
-  // 下一条），全部清空才回到 running。
-  const { setSessionState } = useSessionState();
-  if (store.pendingPermissions.length === 0) {
-    setSessionState(sid, "running"); // 权限批准后恢复生成（running 恒绿）
-  }
+  // 以 sidecar 的 permission_cancelled 为准；命令写入失败或委派校验失败时保留审批。
   await api.permissionResponse({
     sessionId: sid,
     id,
     approved,
+    planExecution: opts.planExecution,
     answers: opts.answers,
     nextMode: opts.nextMode,
     message: opts.reason,

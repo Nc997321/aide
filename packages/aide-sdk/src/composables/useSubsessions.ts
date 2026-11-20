@@ -31,6 +31,15 @@ const childrenOf = reactive<Record<string, SubsessionEntry[]>>({});
 const paused = reactive<Record<string, number>>({});
 /** 「子会话」tab 开着的父会话（纯 UI 状态，不落盘） */
 const drawerOpen = reactive<Record<string, boolean>>({});
+/** sidecar 广播的当前计划交接；进度使用子会话原有 tasks，不复制另一份任务状态。 */
+const planDelegations = reactive<Record<string, { status: "preparing" | "spawned" | "failed"; childId?: string }>>({});
+
+export function notePlanDelegation(parent: string, status: string, childId?: string): void {
+  if (status === "cleared") delete planDelegations[parent];
+  else if (status === "preparing" || status === "failed" || (status === "spawned" && childId)) {
+    planDelegations[parent] = { status, ...(childId ? { childId } : {}) };
+  }
+}
 
 function upsertChild(parent: string, entry: SubsessionEntry): void {
   parentOf[entry.id] = parent;
@@ -90,6 +99,10 @@ export function seedChildren(parent: string, list: readonly SubsessionListItem[]
 
 /** 子会话删掉 / 升为顶层：从缓存里摘掉。 */
 export function forgetSubsession(child: string): void {
+  delete planDelegations[child];
+  for (const [parent, plan] of Object.entries(planDelegations)) {
+    if (plan.childId === child) delete planDelegations[parent];
+  }
   const parent = parentOf[child];
   if (!parent) return;
   delete parentOf[child];
@@ -120,6 +133,7 @@ export function useSubsessions() {
     childrenOf,
     paused,
     drawerOpen,
+    planDelegations,
     parentIdOf: (sid: string | null | undefined): string | null => (sid ? (parentOf[sid] ?? null) : null),
     childrenOfSession: (sid: string | null | undefined): SubsessionEntry[] => (sid ? (childrenOf[sid] ?? []) : []),
   };
@@ -131,4 +145,5 @@ export function __resetSubsessionsForTest(): void {
   for (const k of Object.keys(childrenOf)) delete childrenOf[k];
   for (const k of Object.keys(paused)) delete paused[k];
   for (const k of Object.keys(drawerOpen)) delete drawerOpen[k];
+  for (const k of Object.keys(planDelegations)) delete planDelegations[k];
 }
