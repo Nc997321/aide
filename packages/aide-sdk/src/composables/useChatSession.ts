@@ -106,6 +106,8 @@ export interface SendOptions {
   /** 本会话**已知的附加目录全量**（@目录 授权；不是"本条新增"）。与 `workspace`
    *  语义不同：workspace 是会话归属（1 个），这是本会话的附加授权（N 个，粘性）。
    *  全量语义是有意的：sidecar 侧并集合并幂等，重连/换端重报一遍就自愈。 */
+  /** 工程协作根（包含于 additionalDirs）；空数组明确表示普通目录访问。 */
+  collaborationDirs?: string[];
   additionalDirs?: string[];
   /** 新会话刚分配出临时 id（无会话首发）时**同步**回调一次，早于任何派发：调用方要在
    *  sidecar 的第一条事件（session_title / session_init）到达之前登记「这个临时号是谁的」
@@ -133,6 +135,8 @@ interface QueuedSend {
   scene?: { id: string; label: string; icon?: string };
   /** 本会话已知的附加目录全量（见 SendOptions.additionalDirs）。排队消息必须带上：
    *  插队/promote 走的是同一条 send 链路，不带就等于授权只对直发那条生效。 */
+  /** 工程协作根（包含于 additionalDirs）；空数组明确表示普通目录访问。 */
+  collaborationDirs?: string[];
   additionalDirs?: string[];
 }
 
@@ -238,6 +242,7 @@ function buildUserDisplay(item: QueuedSend): UserMessageBlock[] {
           ...(m.range ? { range: m.range } : {}),
           // 目录引用要把种类带出去，否则接收端只画得出"合成 Read 卡"（见 E 段）
           ...(m.isDir ? { isDir: true } : {}),
+          ...(m.collaboration ? { collaboration: true } : {}),
         })),
         // 页面选区：清洗后的版本进 display（与发给模型的展开文本同源，两边看到的是同一份）。
         ...(item.pagerefs ?? []).slice(0, MAX_PAGE_REFS).map((r) => ({
@@ -300,6 +305,7 @@ function sendQueued(
     jumpQueue: opts.jumpQueue || null,
     queueId: opts.queueId ?? null,
     // 附加目录授权（D9：客户端已知全量）。Rust 裁定合法性 → sidecar 并集落账。
+    collaborationDirs: item.collaborationDirs,
     additionalDirs: item.additionalDirs?.length ? item.additionalDirs : null,
   }).catch((e) => {
     console.warn("send_message failed:", e);
@@ -465,6 +471,7 @@ export function useChatSession(sessionId: Ref<string | null>) {
       action: opts.action,
       scene: opts.scene,
       additionalDirs: opts.additionalDirs,
+      collaborationDirs: opts.collaborationDirs,
     };
 
     // resume：显式传入 > 已被 SDK 确认的 id 本身（aide id 就是 sdk id，无需查表）

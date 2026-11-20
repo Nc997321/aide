@@ -24,6 +24,10 @@ export interface MentionIo {
   /** 本会话已知的授权目录（`useSessionAttachedWorkspaces`）。命中 = 降档：只发一行宣告，
    *  不重发清单与指令（省 token、不重复注入）。缺省 = 全按首次处理。 */
   attachedDirs?: string[];
+  /** 明确的工程协作根；缺省兼容旧客户端（目录均按工程展开），空数组为普通引用。 */
+  collaborationDirs?: string[];
+  /** 已通过事件确认加载过工程上下文的根（普通目录升级为协作时仍须注入）。 */
+  knownCollaborationDirs?: string[];
   /** 取某目录所属工作区的 auto memory 索引（MEMORY.md 原文，宿主侧已按 200 行/25KiB 截断）。
    *  缺省 = 不注入记忆。为什么走能力位而不是在本模块拼路径：浏览器端没有 fs，而 key 规则
    *  （`: \ / `→`-`、点归一）只有 Rust 与 sidecar 两份真相源，SDK 不抄第三份。 */
@@ -37,6 +41,7 @@ export interface ResolvedMention {
   range?: MentionRange;
   /** 目录引用（@一个目录 = 授权 + 一级清单）。与 range 互斥（行号对目录无意义）。 */
   isDir?: boolean;
+  collaboration?: boolean;
 }
 
 export interface FileMentionResolution {
@@ -189,14 +194,17 @@ async function readDirMemory(dir: string, io: MentionIo): Promise<string> {
  *  - 已在账本内：只发一行宣告。用户把芯片留在输入框时不会每轮重注一遍清单。
  */
 async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
-  const known = (io.attachedDirs ?? []).some((d) => mentionPathKey(d) === mentionPathKey(dir));
+  const collaboration = io.collaborationDirs === undefined || io.collaborationDirs.some((d) => mentionPathKey(d) === mentionPathKey(dir));
+  const knownRoots = collaboration ? (io.knownCollaborationDirs ?? (io.collaborationDirs === undefined ? io.attachedDirs : [])) : io.attachedDirs;
+  const known = (knownRoots ?? []).some((d) => mentionPathKey(d) === mentionPathKey(dir));
   if (known) return `已授权目录：${dir}（本会话内持续有效；内容此前已注入，不重复展开）`;
 
   const entries = await io.listDir!(dir);
   const shown = entries.slice(0, MAX_DIR_ENTRIES);
   const listing = shown.map((e) => (e.is_dir ? `${e.name}/` : e.name)).join("\n");
   const more = entries.length > shown.length ? `\n…（共 ${entries.length} 个条目，已截断）` : "";
-  const [rules, memory] = await Promise.all([readDirRules(dir, io), readDirMemory(dir, io)]);
+  const [rules, memory] = collaboration
+    ? await Promise.all([readDirRules(dir, io), readDirMemory(dir, io)]) : ["", ""];
   return [
     `目录：${dir}（已授权访问，可直接 Read/Edit 其中文件）`,
     `一级条目（${entries.length} 个）：`,
@@ -221,8 +229,10 @@ async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
 export async function resolveFileMentions(
   text: string,
   io: MentionIo,
+  explicitMentions: string[] = [],
 ): Promise<FileMentionResolution> {
-  const paths = extractFileMentions(text);
+  // 选择器/芯片已持有精确路径，不能重新按空白切词（目录名可能含空格）。
+  const paths = [...new Set([...explicitMentions, ...extractFileMentions(text)])];
   if (paths.length === 0) return { sendText: text, resolved: [] };
 
   const resolved: ResolvedMention[] = [];
@@ -259,8 +269,10 @@ export async function resolveFileMentions(
       content = `${content.slice(0, MAX_MENTION_CHARS)}\n...(内容过长，已截断，完整内容共 ${total} 字符)`;
     }
     if (isDir) {
-      resolved.push({ path, content, isDir: true });
-      sections.push(`--- 引用目录：${path} ---\n${content}\n--- 目录结束：${path} ---`);
+      const collaboration = io.collaborationDirs?.some((d) => mentionPathKey(d) === mentionPathKey(path));
+      const kind = collaboration ? "工程" : "目录";
+      resolved.push({ path, content, isDir: true, ...(collaboration ? { collaboration: true } : {}) });
+      sections.push(`--- 引用${kind}：${path} ---\n${content}\n--- ${kind}结束：${path} ---`);
     } else {
       resolved.push(range ? { path, content, range } : { path, content });
       const label = formatMentionPath(path, range);
@@ -294,12 +306,12 @@ export function splitMentionSections(text: string): MentionSplit {
   const sections: ResolvedMention[] = [];
   const displayText = text
     .replace(
-      /\n*--- 引用(文件|目录)：(.+) ---\n([\s\S]*?)\n--- (?:文件|目录)结束：\2 ---/g,
+      /\n*--- 引用(文件|目录|工程)：(.+) ---\n([\s\S]*?)\n--- (?:文件|目录|工程)结束：\2 ---/g,
       (_match, kind: string, raw: string, content: string) => {
         // 标记里的路径可能带 `@path:12-48` 的行号后缀，回看时同样要还原成
         // 「路径 + 区间」，否则卡片标题丢了行号、与直发路径形状不一致。
         const { path, range } = parseMentionPath(raw);
-        if (kind === "目录") sections.push({ path, content, isDir: true });
+        if (kind === "目录" || kind === "工程") sections.push({ path, content, isDir: true, ...(kind === "工程" ? { collaboration: true } : {}) });
         else sections.push(range ? { path, content, range } : { path, content });
         return "";
       },

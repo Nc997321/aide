@@ -215,6 +215,7 @@ function blocksFromDisplay(
             // @目录（两块 display 定义同形，漂移会静默降级）→ 头行出「目录」药丸。
             // 与回看路径 transcriptMapping 必须同时带，否则重开历史就变回文件卡。
             ...(b.isDir ? { isDir: true } : {}),
+            ...(b.collaboration ? { collaboration: true } : {}),
           };
         // 页面选区卡片。字段原样搬运；缺关键字段只跳过该块。
         case "pageref":
@@ -1105,6 +1106,7 @@ export function handleChatEvent(e: Record<string, unknown>): void {
         strArray(e["dirs"]),
         strArray(e["rejected"]),
         typeof e["error"] === "string" ? e["error"] : undefined,
+        Array.isArray(e["collaborationDirs"]) ? strArray(e["collaborationDirs"]) : strArray(e["dirs"]),
       );
       break;
     }

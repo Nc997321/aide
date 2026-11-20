@@ -21,9 +21,7 @@ import {
  * 纯函数全部导出供单测，不依赖 Vue 运行时（与 useInlineMention 同款分层）。
  */
 
-/** 候选行上限：8 行 ≈ 252px，正好不触发弹层 280px 的滚动。 */
-export const MAX_SUGGESTIONS = 8;
-/** 向 Rust 要的全仓兜底条数：合并去重前多取一些，封顶交给 mergeSuggestions。 */
+/** 向 Rust 要的全仓兜底条数：限制遍历型查询的返回量；项目与本层目录不截断。 */
 const FUZZY_FETCH_LIMIT = 30;
 /** 全仓兜底防抖：遍历型查询，落键中途不跑。 */
 const FUZZY_DEBOUNCE_MS = 180;
@@ -177,7 +175,7 @@ export function fuzzySuggestions(paths: string[], root: string): MentionSuggesti
 }
 
 /**
- * 三源合并：项目 → 本层（保序）→ 兜底（保序），同 `rel` 去重、总共封顶 `MAX_SUGGESTIONS`。
+ * 三源合并：项目 → 本层（保序）→ 兜底（保序），同 `rel` 去重，完整保留候选，由 UI 滚动展示。
  * 保序是有意的：各组内部的次序由各自的生产者决定（项目按注册表序、本层按 Rust 排序）。
  */
 export function mergeSuggestions(
@@ -192,7 +190,6 @@ export function mergeSuggestions(
       if (seen.has(row.rel)) continue;
       seen.add(row.rel);
       out.push(row);
-      if (out.length === MAX_SUGGESTIONS) return out;
     }
   }
   return out;
@@ -244,6 +241,7 @@ export function useMentionSuggest(opts: {
   /** 其它已注册工作区（`useWorkspaces().workspaces` 直接传）。缺省 = 不列项目（老调用点行为不变）。 */
   projects?: () => ProjectSource[];
   fuzzyDebounceMs?: number;
+  mode?: () => "project" | "files";
 }): MentionSuggest {
   const token = ref<MentionToken | null>(null);
   const items = ref<MentionSuggestion[]>([]);
@@ -321,11 +319,16 @@ export function useMentionSuggest(opts: {
     if (!tok) return hide();
     const target = targetFor(tok);
     if (!target) return hide();
+    if (opts.mode?.() === "project") {
+      beginSearch(tok);
+      items.value = projectsFor(target);
+      return;
+    }
 
     const mySeq = beginSearch(tok);
     const entries = await entriesFor(target.dirAbs, mySeq);
     if (mySeq !== seq) return; // 过期：用户已经换层/改字
-    items.value = mergeSuggestions(projectsFor(target), localSuggestions(entries, target), []);
+    items.value = mergeSuggestions(opts.mode?.() === "files" ? [] : projectsFor(target), localSuggestions(entries, target), []);
     await appendFuzzy(target, mySeq);
   }
 

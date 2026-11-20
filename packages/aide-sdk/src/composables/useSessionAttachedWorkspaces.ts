@@ -16,6 +16,7 @@ import { reactive } from "vue";
  */
 export interface AttachedEntry {
   dirs: string[];
+  collaborationDirs: string[];
   /** 上一次带目录的 send 里被 Rust 判掉、没进账本的条目。 */
   rejected: string[];
   /** 活体扩根的失败原文（有值 = 当前轮没扩成功，等下一条 send 或下次 spawn 再落）。 */
@@ -30,7 +31,11 @@ export function useSessionAttachedWorkspaces() {
     return attached[sessionId]?.dirs ?? [];
   }
 
-  /** 未注册/被拒的目录（回声，见上）。 */
+  function collaborationOf(sessionId: string): string[] {
+    return attached[sessionId]?.collaborationDirs ?? [];
+  }
+
+  /** 无效/被拒的目录（回声，见上）。 */
   function rejectedOf(sessionId: string): string[] {
     return attached[sessionId]?.rejected ?? [];
   }
@@ -41,13 +46,14 @@ export function useSessionAttachedWorkspaces() {
   }
 
   /** 事件回灌：sidecar 发的是全量账本，整份覆盖。空账本 + 无回声 = 删条目。 */
-  function setAll(sessionId: string, dirs: string[], rejected: string[] = [], error?: string): void {
+  function setAll(sessionId: string, dirs: string[], rejected: string[] = [], error?: string, collaborationDirs: string[] = dirs): void {
     if (!dirs.length && !rejected.length && !error) {
       delete attached[sessionId];
       return;
     }
     attached[sessionId] = {
       dirs: [...dirs],
+      collaborationDirs: collaborationDirs.filter((d) => dirs.includes(d)),
       rejected: [...rejected],
       ...(error ? { error } : {}),
     };
@@ -75,6 +81,7 @@ export function useSessionAttachedWorkspaces() {
   return {
     attached,
     attachedOf,
+    collaborationOf,
     rejectedOf,
     errorOf,
     setAll,

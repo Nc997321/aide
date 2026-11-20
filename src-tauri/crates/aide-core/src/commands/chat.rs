@@ -142,7 +142,7 @@ fn build_send_command(
 }
 
 /// @目录 授权：过闸的目录进 `additional_dirs`，被拒的进 `attach_rejected`（**回声**，
-/// 前端据此显示"未注册，已忽略"——fail-closed 不能静默）。两者皆空则不落字段，
+/// 前端据此显示无效目录——fail-closed 不能静默）。两者皆空则不落字段，
 /// 与"没带这个功能"同形（旧端/鸿蒙缺席即此）。
 fn attach_additional_dirs(
     cmd: &mut serde_json::Value,
@@ -289,9 +289,12 @@ pub struct SendMessageArgs {
     #[serde(default)]
     pub(crate) workspace_root: Option<String>,
     /// @目录 授权：**客户端已知的附加目录全量**（非"本条新增"）。这里只搬运，合法性由
-    /// workspace/attach.rs 裁定（只认已注册工作区）。缺席/空 = 不动会话账本。
+    /// workspace/attach.rs 裁定（绝对路径、存在且为目录）。缺席/空 = 不动会话账本。
     #[serde(default)]
     pub(crate) additional_dirs: Option<Vec<String>>,
+    /// 工程上下文的加载范围；None 兼容旧端，Some([]) 明确只附加普通目录。
+    #[serde(default)]
+    pub(crate) collaboration_dirs: Option<Vec<String>>,
     /// 会话自持的 provider 身份（前端 stampProvider/restoreBinding 解析出的绑定）。
     /// None = 前端无绑定，走会话元数据 → 全局 active 兜底（见 resolve_send_provider）。
     #[serde(default)]
@@ -374,6 +377,7 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         queue_id,
         workspace_root,
         additional_dirs,
+        collaboration_dirs,
         provider,
     } = a;
     let mut timer = SendTimer::new();
@@ -451,14 +455,14 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
         .unwrap_or_else(|| DEFAULT_OUTPUT_STYLE.to_string());
 
     // @目录 授权：Rust 侧裁定后才下发——前端/远程客户端给什么都不作数（D4）。
-    // 读 state.json 是轻量 IO（同 is_path_trusted 的口径），不必 spawn_blocking。
+    // 这里只校验路径，不读写项目注册表或工作区信任。
     let attach = additional_dirs
         .as_deref()
         .map(|dirs| crate::commands::workspace::attach::resolve_attach_dirs(dirs, &cwd_str));
     // 被拒的条目：界面上有回声（attach_rejected → workspace_attached），这里再落一条日志，
     // 方便对着"@ 了却没生效"的现场查是哪一环丢的（Rust 是唯一裁定入口）。
     if let Some(rejected) = attach.as_ref().map(|a| &a.rejected).filter(|r| !r.is_empty()) {
-        tracing::warn!(?rejected, cwd = %cwd_str, "send_message: 附加目录被拒（未注册工作区/非法路径）");
+        tracing::warn!(?rejected, cwd = %cwd_str, "send_message: 附加目录被拒（非法目录路径）");
     }
 
     let mut cmd = build_send_command(
@@ -480,6 +484,16 @@ pub(crate) async fn dispatch_send(core: Arc<Core>, a: SendMessageArgs, extra: Se
             attach,
         },
     );
+
+    if let Some(roots) = collaboration_dirs {
+        let collaboration = crate::commands::workspace::attach::resolve_attach_dirs(&roots, &cwd_str);
+        // 工程上下文只能来自本次发送的有效访问根，避免两个范围漂移。
+        let allowed = cmd.get("additional_dirs").and_then(|v| v.as_array());
+        let roots: Vec<_> = collaboration.accepted.into_iter()
+            .filter(|root| allowed.is_some_and(|dirs| dirs.iter().any(|d| d.as_str() == Some(root.as_str()))))
+            .collect();
+        cmd["collaboration_dirs"] = json!(roots);
+    }
 
     if let Some(models) = active.model_allowlist() {
         cmd["model_allowlist"] = json!(models);
@@ -966,7 +980,7 @@ mod tests {
     }
 
     /// @目录 授权：过闸的进 `additional_dirs`（数组），被拒的进 `attach_rejected`
-    /// （**回声**——fail-closed 不能静默，前端据此显示"未注册，已忽略"）。
+    /// （**回声**——fail-closed 不能静默，前端据此显示无效目录）。
     #[test]
     fn build_send_command_carries_additional_dirs_and_rejections() {
         let cmd = build_send_command(

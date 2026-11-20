@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, computed } from "vue";
+import ReferencePickerDialog from "../ReferencePickerDialog.vue";
 import ThemedSelect from "../ThemedSelect.vue";
 import ChatSendButton from "../ChatSendButton.vue";
 import ModelEffortPicker from "./ModelEffortPicker.vue";
@@ -17,7 +18,7 @@ import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/us
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
-import { resolveFileMentions, formatMentionPath, attachedDirsFrom } from "@/utils/fileMentions";
+import { resolveFileMentions, formatMentionPath, attachedDirsFrom, isAbsoluteishPath, joinPath } from "@/utils/fileMentions";
 import { useSessionAttachedWorkspaces } from "@/composables/useSessionAttachedWorkspaces";
 import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
@@ -752,13 +753,13 @@ function mediaSelectionLabel(ref: MediaRef): string {
 
 // ── `@` 补全下拉（与 `/` 菜单并列的第二套补全）──────────────────────────────
 // 取数/排序/缓存/竞态全在 useMentionSuggest 里；这里只管两件事：事件 → 刷新、
-// 选中 → 改写文本（引用交回 useInlineMention 转芯片，不新开第二条转芯片路径）。
+// 候选/选择器保留精确路径写入草稿；手输/粘贴仍由 useInlineMention 解析。
 // 两套补全互斥：`/` 看整串文本（须以 / 开头且无空格），`@` 看光标锚定的 token。
+const mentionMode = ref<"project" | "files">("project");
 const {
   token: suggestToken,
   items: suggestItems,
   active: suggestActive,
-  visible: suggestOpen,
   refresh: refreshMentions,
   hide: hideSuggest,
   move: moveSuggest,
@@ -767,8 +768,41 @@ const {
   workspacePath: () => props.workspacePath ?? "",
   // 其它已注册工作区（跨项目开发的主力用法）：候选里排在前面，选中即 @目录 授权
   projects: () => useWorkspaces().workspaces.value,
+  mode: () => mentionMode.value,
 });
-const suggestVisible = computed(() => suggestOpen.value && !slashDropdownVisible.value);
+const suggestVisible = computed(() => suggestToken.value !== null && !slashDropdownVisible.value);
+function selectMentionMode(mode: "project" | "files") {
+  mentionMode.value = mode;
+  lastSuggestSig = "";
+  refreshSuggest();
+  nextTick(() => textareaEl.value?.focus());
+}
+const referencePickerOpen = ref(false);
+let referenceToken: { at: number; query: string } | null = null;
+let referenceDraftKey = "";
+function openReferencePicker() {
+  referenceToken = suggestToken.value ? { ...suggestToken.value } : null;
+  referenceDraftKey = draftKey.value;
+  hideSuggest();
+  referencePickerOpen.value = true;
+}
+function addPickedReference(path: string, isDir: boolean) {
+  if (draftKey.value !== referenceDraftKey) return;
+  const existing = pendingMentions.value.find((m) => m.path === path && !m.range);
+  if (!existing) pendingMentions.value.push({ path, isDir });
+  const tok = referenceToken;
+  if (tok && inputText.value.slice(tok.at, tok.at + tok.query.length + 1) === `@${tok.query}`) {
+    inputText.value = inputText.value.slice(0, tok.at) + inputText.value.slice(tok.at + tok.query.length + 1);
+  }
+  referenceToken = null;
+  nextTick(() => textareaEl.value?.focus());
+}
+watch(draftKey, () => { referencePickerOpen.value = false; });
+const mentionDropdownEl = ref<HTMLElement | null>(null);
+watch([suggestActive, suggestVisible], async () => {
+  await nextTick();
+  mentionDropdownEl.value?.querySelector(".skill-item--active")?.scrollIntoView?.({ block: "nearest" });
+});
 
 /** 上一次已算过的「光标 + 文本」指纹：input/keyup/click 会为同一次编辑都到这儿，
  *  去重后既省一次 IPC，也保证方向键选行（keyup 会跟一发）不会把高亮打回首行。 */
@@ -808,13 +842,23 @@ function pickSuggest(action: "commit" | "drill") {
   // 防御：token 必须还在原处（菜单开着时文本若已变，先重新同步再让用户选）
   if (ta.value.slice(tok.at, tok.at + 1 + tok.query.length) !== `@${tok.query}`) return refreshSuggest();
 
+  if (action === "commit") {
+    // 候选已经携带精确路径和类型，直接写入草稿；不要按空格重解析文件名。
+    const path = isAbsoluteishPath(item.rel) ? item.rel : joinPath(props.workspacePath ?? "", item.rel);
+    const existing = pendingMentions.value.find((m) => m.path === path && !m.range);
+    if (existing && item.origin === "project") existing.collaboration = true;
+    else if (!existing) pendingMentions.value.push({ path, isDir: item.isDir, ...(item.origin === "project" ? { collaboration: true } : {}) });
+    inputText.value = ta.value.slice(0, tok.at) + ta.value.slice(tok.at + 1 + tok.query.length);
+    hideSuggest();
+    nextTick(() => { ta.focus(); ta.setSelectionRange(tok.at, tok.at); });
+    return;
+  }
+  if (action === "drill") mentionMode.value = "files";
   const { text, caret } = applyPick(ta.value, tok, item, action);
   inputText.value = text;
   nextTick(() => {
     ta.setSelectionRange(caret, caret);
-    if (action === "drill") return refreshSuggest();
-    hideSuggest();
-    void scanMentions(); // 唯一转芯片路径：写回 `@rel ` 后由它认领
+    refreshSuggest();
   });
 }
 
@@ -832,7 +876,7 @@ function suggestDirHint(item: MentionSuggestion): string {
 
 /** Enter：@ 菜单开着时选中、不发消息（与 / 菜单同款「先吃掉按键」语义）。 */
 function onEnterKey() {
-  if (suggestVisible.value) return pickSuggest("commit");
+  if (suggestVisible.value && currentSuggest()) return pickSuggest("commit");
   if (slashDropdownVisible.value && filteredSkills.value.length) {
     return selectSkill(filteredSkills.value[slashSelectedIndex.value]);
   }
@@ -865,8 +909,9 @@ function onArrowRight(e: KeyboardEvent) {
 // 只读镜像：真相在 sidecar worker 的账本里，这里只认 `workspace_attached` 事件
 // （全量、幂等）。发送时把已知全量一起报上去（D9），重连自愈靠它。
 const attachStore = useSessionAttachedWorkspaces();
+const collaborationRoots = computed(() => props.sessionId ? attachStore.collaborationOf(props.sessionId) : []);
 const attachedDirs = computed(() => (props.sessionId ? attachStore.attachedOf(props.sessionId) : []));
-/** 被 Rust 判掉（未注册/非法）的目录——回声，不参与授权。 */
+/** 被 Rust 判掉（无效路径）的目录——回声，不参与授权。 */
 const rejectedDirs = computed(() => (props.sessionId ? attachStore.rejectedOf(props.sessionId) : []));
 /** 活体扩根失败的原文（有值 = 本轮没扩成功，下条消息/新会话会再落）。 */
 const attachError = computed(() => (props.sessionId ? attachStore.errorOf(props.sessionId) : undefined));
@@ -969,7 +1014,7 @@ function handleTabKey(e: KeyboardEvent) {
     cyclePermissionMode(e);
     return;
   }
-  if (suggestVisible.value) {
+  if (suggestVisible.value && currentSuggest()) {
     e.preventDefault();
     pickSuggest("commit");
     return;
@@ -1317,8 +1362,9 @@ async function performSend() {
   // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
   // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
   // 自己打的字混在一个气泡里，读起来很差。
+  const collaborationDirs = captured.mentions.filter((m) => m.collaboration).map((m) => m.path);
   const inputDocuments: string[] = [];
-  const mentionResolution = await resolveFileMentions(mentionPrefix + finalPrompt, {
+  const mentionResolution = await resolveFileMentions(finalPrompt, {
     readFile: async (path) => {
       if (props.mode === "chat" && /\.(pdf|docx)$/i.test(path)) {
         inputDocuments.push(path);
@@ -1330,10 +1376,12 @@ async function performSend() {
     // 宣告，不把清单和指令每轮重注一遍。
     listDir: props.mode === "chat" ? undefined : api.listDirectory,
     attachedDirs: attachedDirs.value,
+    collaborationDirs,
+    knownCollaborationDirs: collaborationRoots.value,
     // 对方仓的 auto memory 索引（F6：query 只 spawn 一次，中途 @ 的记忆只有这条路
     // 当轮可达）。memory 目录的 key 规则在 Rust，前端不抄——由命令按目录解析。
     memoryIndex: props.mode === "chat" ? undefined : (dir) => memoryObservatoryApi.indexForDir(dir),
-  });
+  }, captured.mentions.map((m) => formatMentionPath(m.path, m.range)));
 
   // @目录 授权：本条 @ 的目录（剔主根、去重后）并上本端已知账本 —— **已知全量**语义
   // （D9）：sidecar 侧并集合并幂等，杀 sidecar / 重连后重报一遍就自愈。
@@ -1368,6 +1416,7 @@ async function performSend() {
     scene: scene ? { id: scene.id, label: scene.label, icon: scene.icon } : undefined,
     permissionMode: selectedPermissionMode.value || undefined,
     additionalDirs: allAttached.length ? allAttached : undefined,
+    collaborationDirs: [...new Set([...collaborationRoots.value, ...collaborationDirs])],
   };
 
   // 发送前确认门控（变体 C）已上移到 ChatPanel（onSendRequest）：这里把本次发送
@@ -1468,7 +1517,13 @@ const { actions: quickActions } = useQuickActions();
     </div>
     <!-- @ 提及补全下拉：与 / 菜单同位置（输入盒上方、贴左右边距），锚在输入盒而非光标。
          同层命中行尾留空、全仓兜底挂「全仓」弱标签并显示所在目录（两者一眼可分）。 -->
-    <div v-if="suggestVisible" class="skill-dropdown mention-dropdown">
+    <div v-if="suggestVisible" ref="mentionDropdownEl" class="skill-dropdown mention-dropdown" @wheel.stop>
+      <div class="mention-modes" role="tablist" aria-label="引用类型">
+        <button type="button" role="tab" :aria-selected="mentionMode === 'project'" @mousedown.prevent @click="selectMentionMode('project')">工程协作</button>
+        <button type="button" role="tab" :aria-selected="mentionMode === 'files'" @mousedown.prevent @click="selectMentionMode('files')">文件与目录</button>
+      </div>
+      <div class="mention-mode-hint">{{ mentionMode === 'project' ? '加载所选工程的规则与记忆' : '引用文件，或允许访问目录；不自动加载工程规则与记忆' }}</div>
+      <div class="mention-results">
       <div
         v-for="(item, i) in suggestItems"
         :key="item.rel"
@@ -1507,6 +1562,9 @@ const { actions: quickActions } = useQuickActions();
           >→ 进入</button>
         </span>
       </div>
+      <div v-if="!suggestItems.length" class="mention-empty">没有匹配项</div>
+      </div>
+      <button v-if="mentionMode === 'files'" type="button" class="mention-browse" @mousedown.prevent @click="openReferencePicker">＋ 浏览其他文件或文件夹…</button>
       <div v-if="mentionProjectTip" class="mention-tip">
         <UsageTipText :text="mentionProjectTip.text" />
       </div>
@@ -1517,6 +1575,7 @@ const { actions: quickActions } = useQuickActions();
         <span><kbd>Esc</kbd> 关闭</span>
       </div>
     </div>
+    <ReferencePickerDialog v-model:visible="referencePickerOpen" :initial-path="workspacePath ?? ''" @confirm="addPickedReference" />
     <!-- 输入框、图片缩略图、模型工具栏放进同一个带边框的盒子里，工具栏焊在底部——
          不再是"模型栏单独一行浮在输入框上方"，避免贴图片时模型栏被顶得到处跑。 -->
     <!-- 忙碌时排队、正在等安全边界（当前回合结束）的消息：sidecar 已登记，不可撤回 -->
@@ -1589,7 +1648,7 @@ const { actions: quickActions } = useQuickActions();
           <FileTypeIcon v-else class="mention-chip-icon" :name="mentionName(m.path)" :size="13" />
           <!-- 区间引用（编辑器选区）在文件名后带 :起-止，一眼区分整文件引用 -->
           <span class="mention-chip-name">
-            {{ mentionName(m.path) }}<span v-if="m.range" class="mention-chip-range">:{{ m.range.start }}-{{ m.range.end }}</span>
+            <span v-if="m.isDir">{{ m.collaboration ? '协作工程 · ' : '目录 · ' }}</span>{{ mentionName(m.path) }}<span v-if="m.range" class="mention-chip-range">:{{ m.range.start }}-{{ m.range.end }}</span>
           </span>
           <button class="mention-chip-remove" @click="pendingMentions.splice(i, 1)">×</button>
         </div>
@@ -1609,11 +1668,11 @@ const { actions: quickActions } = useQuickActions();
             <path :d="folderIconPath" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
           </svg>
           <span class="attach-chip-name">{{ mentionName(d) }}</span>
-          <span class="attach-chip-tag">已授权</span>
+          <span class="attach-chip-tag">{{ collaborationRoots.includes(d) ? '工程协作' : '目录访问' }}</span>
         </div>
         <UsageTipText v-if="attachedTip" class="attach-tip" :text="attachedTip.text" />
         <div v-if="rejectedDirs.length" class="attach-warn" v-tooltip="rejectedDirs.join('\n')">
-          未注册，已忽略：{{ mentionName(rejectedDirs[0])
+          目录无效，已忽略：{{ mentionName(rejectedDirs[0])
           }}<span v-if="rejectedDirs.length > 1"> 等 {{ rejectedDirs.length }} 个</span>
         </div>
         <div v-else-if="attachError" class="attach-warn" v-tooltip="attachError">
@@ -2024,6 +2083,20 @@ const { actions: quickActions } = useQuickActions();
 }
 
 /* ── `@` 提及补全行（容器复用 .skill-dropdown，行密度与 .skill-item 对齐） ── */
+.mention-dropdown { display: flex; flex-direction: column; overflow: hidden; }
+.mention-modes { display: flex; flex-shrink: 0; border-bottom: 1px solid var(--aide-border); }
+.mention-modes button { flex: 1; padding: 8px; border: 0; background: transparent; color: var(--aide-text-secondary); font: inherit; font-size: 12px; cursor: pointer; }
+.mention-modes button[aria-selected="true"] { color: var(--aide-accent); background: var(--aide-surface-hover); }
+.mention-empty { padding: 8px 10px; color: var(--aide-text-muted); font-size: 12px; }
+.mention-mode-hint { flex-shrink: 0; padding: 6px 10px; color: var(--aide-text-muted); font-size: 11px; }
+.mention-results { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.mention-browse {
+  flex-shrink: 0; width: 100%; text-align: left; padding: 8px 10px;
+  border: 0; border-top: 1px solid var(--aide-border); background: transparent;
+  color: var(--aide-text-secondary); font: inherit; font-size: 12px; cursor: pointer;
+}
+.mention-browse:hover { background: var(--aide-surface-hover); color: var(--aide-text-primary); }
+.mention-dropdown > .mention-foot, .mention-dropdown > .mention-tip { flex-shrink: 0; }
 .mention-item {
   align-items: center;
   gap: 7px;

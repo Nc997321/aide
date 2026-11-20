@@ -42,7 +42,7 @@ import {
 } from "./modelSwitchGuard.js";
 import { applyEffortSwitch, normalizeEffort } from "./effortSwitch.js";
 import type { EffortSettable } from "./effortSwitch.js";
-import { applyAttachExtension, decideAttach } from "./attachDirs.js";
+import { applyAttachExtension, decideAttach, dirKey } from "./attachDirs.js";
 import type { FlagSettingsQuery } from "./attachDirs.js";
 import { applyOutputStyle, normalizeOutputStyle, type OutputStyle } from "./session-worker/outputStyle.js";
 import { buildCliEnv, sessionEnvOf } from "./cliEnv.js";
@@ -198,6 +198,8 @@ export class SessionWorker {
    *  销毁即清（会话内粘性）。spawn 时进 options.additionalDirectories；会话中走
    *  applyFlagSettings 实时扩根（见 attachDirs.ts；实测有效见方案「spike 实测」S1）。 */
   private additionalDirs: string[] = [];
+  /** additionalDirs 的子集：只有工程协作自动加载规则与记忆。 */
+  private collaborationDirs: string[] = [];
   /** 可选模型名册（列表 + 真名/别名互译，见 modelRoster.ts）；currentModel 账面留 worker。 */
   private readonly modelRoster = new ModelRoster();
   private modelAllowlist: string[] | undefined;
@@ -395,7 +397,7 @@ export class SessionWorker {
     // 前端选择器每条消息都带当前 effort（同 initialModel 语义，同值幂等无回执）；
     // 没带的调用方回落 provider env 默认。
     this.applyEffort(this.envOverrides.CLAUDE_CODE_EFFORT_LEVEL);
-    this.applyAttachedDirs(cmd.additional_dirs, cmd.attach_rejected);
+    this.applyAttachedDirs(cmd.additional_dirs, cmd.attach_rejected, cmd.collaboration_dirs);
   }
 
   /** @目录 授权（方案 C 段）：账本合并 + 落地，与 applyEffort 同款分工——query 未起
@@ -403,13 +405,19 @@ export class SessionWorker {
    *  applyFlagSettings 实时扩根。无变化且无回声时整条 no-op（不广播）。
    *  接线点在 handleSend 入口，早于 !currentQuery 分支与 startLoop —— 首条消息带的
    *  目录因此能在 spawn 时就落地。 */
-  private applyAttachedDirs(incoming?: string[], rejected?: string[]): void {
+  private applyAttachedDirs(incoming?: string[], rejected?: string[], collaboration?: string[]): void {
+    // 旧端的已知全量回报不能把先前明确的普通目录升级为工程。
+    const legacyNewRoots = (incoming ?? []).filter((root) => !this.additionalDirs.some((d) => dirKey(d) === dirKey(root)));
+    const scopes = decideAttach(this.collaborationDirs, collaboration ?? legacyNewRoots);
+    this.collaborationDirs = scopes.dirs;
     if (!incoming?.length && !rejected?.length) return;
+    const decision = decideAttach(this.additionalDirs, incoming ?? [], rejected ?? []);
+    decision.active ||= scopes.active;
     applyAttachExtension(
       this.currentQuery as FlagSettingsQuery | null,
-      decideAttach(this.additionalDirs, incoming ?? [], rejected ?? []),
+      decision,
       {
-        emit: (e) => this.emit(e),
+        emit: (e) => this.emit(e.type === "workspace_attached" ? { ...e, collaborationDirs: this.collaborationDirs } : e),
         commit: (dirs) => {
           this.additionalDirs = dirs;
         },
@@ -1179,10 +1187,10 @@ export class SessionWorker {
             trusted,
             // 附加根的记忆注入只在 spawn 期进 system prompt（F6：中途 @ 的走消息级
             // 目录段当轮送达）
-            attachedDirs: this.additionalDirs,
-            // read_memory 的授权根，现取：@目录账本（additionalDirs 在 commit 时整体换新数组）
+            attachedDirs: this.collaborationDirs,
+            // read_memory 的工程根，现取：协作范围（普通目录不自动纳入记忆上下文）
             // + 本轮用户消息里圈选的文档所关联的工作区（随最新一条消息整表替换，见 KbScopeStore）。
-            memoryRoots: () => [...new Set([...this.additionalDirs, ...this.kbScopes.linkedRoots()])],
+            memoryRoots: () => [...new Set([...this.collaborationDirs, ...this.kbScopes.linkedRoots()])],
             lspLanguages,
             processEnv: process.env,
             sessionEnv: sessionEnvOf(process.env, this.envOverrides),

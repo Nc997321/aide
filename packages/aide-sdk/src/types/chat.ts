@@ -38,6 +38,7 @@ export interface ToolCallBlock {
    *  **两条构建路径都要带**（events.ts 的 display 映射 / transcriptMapping.ts 的
    *  历史回看），漏一条就会"实时是目录卡、重开变成文件卡"。 */
   isDir?: boolean;
+  collaboration?: boolean;
   /** grep 顺带作答附了什么（sidecar 广播的 `lsp_glance` 事件）：Grep / Bash 行下方的「LSP 补充」标记。
    *  只来自实时事件（含断线回放）；从磁盘重开的历史会话没有这份结构。 */
   lspGlance?: LspGlanceItem[];
@@ -490,7 +491,7 @@ export type UserMessageBlock =
   | { type: "action"; actionId: string; label: string; icon?: string }
   /** @引用：path 供展示标题，content 是展开进 prompt 的那部分内容；
    *  range 表示该内容只是文件的这一段（编辑器选区引用），缺省=整文件。 */
-  | { type: "mention"; path: string; content: string; range?: MentionRange; isDir?: boolean }
+  | { type: "mention"; path: string; content: string; range?: MentionRange; isDir?: boolean; collaboration?: boolean }
   /** 页面选区：浏览器里点选的元素 + 用户意见。发给模型的是展开文本（utils/pageRefs），
    *  这里只描述「有什么」。不认识该块的客户端跳过它，整条消息不消失。 */
   | ({ type: "pageref" } & PageRef)

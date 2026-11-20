@@ -140,6 +140,8 @@ describe("ChatInputBox · @ 补全接线", () => {
   it("打 @ 弹候选（数据源＝list_directory），目录在前", async () => {
     const w = mountBox();
     await typeAt(w, "@");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
 
     expect(listDirectoryMock).toHaveBeenCalledWith(WORKSPACE, false, false);
     expect(w.find(".mention-dropdown").exists()).toBe(true);
@@ -149,18 +151,22 @@ describe("ChatInputBox · @ 补全接线", () => {
   it("回车在菜单开着时只选中、**不发消息**（并转成引用芯片）", async () => {
     const w = mountBox();
     await typeAt(w, "@");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
     await textarea(w).trigger("keydown", { key: "Enter" });
     await flushPromises();
     await nextTick();
 
     expect(w.emitted("send-request")).toBeUndefined();
-    expect(w.find(".mention-chip-name").text()).toBe("docs"); // 高亮在首行（目录在前、按名升序）
+    expect(w.find(".mention-chip-name").text()).toBe("目录 · docs"); // 高亮在首行（目录在前、按名升序）
     expect((textarea(w).element as HTMLTextAreaElement).value).toBe("");
   });
 
   it("Tab 与回车同义：引用当前高亮项", async () => {
     const w = mountBox();
     await typeAt(w, "@");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
     await textarea(w).trigger("keydown", { key: "Tab" });
     await flushPromises();
     await nextTick();
@@ -172,6 +178,8 @@ describe("ChatInputBox · @ 补全接线", () => {
   it("→ 进入目录：文本续成 @<该目录>/ 并列出该层子项（不发消息）", async () => {
     const w = mountBox();
     await typeAt(w, "@");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
     await textarea(w).trigger("keydown", { key: "ArrowRight" });
     await flushPromises();
     await nextTick();
@@ -184,6 +192,8 @@ describe("ChatInputBox · @ 补全接线", () => {
   it("↑↓ 移动高亮；随后的 keyup 不会把高亮打回首行", async () => {
     const w = mountBox();
     await typeAt(w, "@");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
     await textarea(w).trigger("keydown", { key: "ArrowDown" });
     await textarea(w).trigger("keyup", { key: "ArrowDown" });
     await flushPromises();
@@ -204,6 +214,8 @@ describe("ChatInputBox · @ 补全接线", () => {
       const w = mountBox();
       findFilesByNameMock.mockResolvedValue([`${WORKSPACE}/src/a/chat.rs`]);
       await typeAt(w, "@cha");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
       expect(findFilesByNameMock).not.toHaveBeenCalled(); // 防抖窗口内还没发
 
       await vi.advanceTimersByTimeAsync(200); // 越过 180ms 防抖
@@ -237,7 +249,7 @@ describe("ChatInputBox · @ 补全接线", () => {
     await nextTick();
 
     expect(w.emitted("send-request")).toBeUndefined();
-    expect(w.find(".mention-chip-name").text()).toBe("backend-api");
+    expect(w.find(".mention-chip-name").text()).toBe("协作工程 · backend-api");
   });
 
   it("项目名按包含匹配（@back → backend-api）", async () => {
@@ -290,11 +302,12 @@ describe("ChatInputBox · @ 补全接线", () => {
     expect((textarea(w).element as HTMLTextAreaElement).value).toBe("@");
   });
 
-  it("无命中不弹空菜单；回车回到正常发送", async () => {
+  it("无命中保留模式入口；回车回到正常发送", async () => {
     const w = mountBox();
     listDirectoryMock.mockResolvedValue([]);
     await typeAt(w, "@zzz");
-    expect(w.find(".mention-dropdown").exists()).toBe(false);
+    expect(w.find(".mention-empty").exists()).toBe(true);
+    expect(w.findAll('[role="tab"]')).toHaveLength(2);
 
     await textarea(w).trigger("keydown", { key: "Enter" });
     await flushPromises();
@@ -363,7 +376,7 @@ describe("ChatInputBox · 使用小提示（时机提示）", () => {
     workspaces.value = [{ key: "k1", name: "C:/other/backend-api", missing: false }];
     const w = mountBox();
     await typeAt(w, "@");
-    expect(w.find(".mention-tip").text()).toContain("跨项目");
+    expect(w.find(".mention-tip").text()).toContain("工程协作");
   });
 
   it("@ 菜单里没有别的项目 → 不提示", async () => {
@@ -578,5 +591,50 @@ describe("纯聊天输入", () => {
     expect(opts.inputDocuments).toEqual([path]);
     expect(mocks.readFileContent).not.toHaveBeenCalledWith(path);
     expect(opts.mentions.resolved[0].path).toBe(path);
+  });
+});
+
+
+describe("工程协作与目录访问的交互", () => {
+  it("默认工程模式与普通目录选择传递不同用途，保留正文和含空格路径", async () => {
+    const w = mountBox();
+    await typeAt(w, "请检查 @");
+    expect(w.get('[role="tab"]').attributes("aria-selected")).toBe("true");
+    await w.get('[role="tab"]:nth-child(2)').trigger("click");
+    await flushPromises();
+    await w.get(".mention-browse").trigger("click");
+    const picker = w.findComponent({ name: "ReferencePickerDialog" });
+    picker.vm.$emit("confirm", "/work/shared assets", true);
+    picker.vm.$emit("update:visible", false);
+    await flushPromises();
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("请检查 ");
+    expect(w.get(".mention-chip-name").text()).toBe("目录 · shared assets");
+    mocks.readFileContent.mockRejectedValue(new Error("directory"));
+    listDirectoryMock.mockResolvedValue([]);
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const [, opts] = w.emitted("send-request")![0] as [string, any];
+    expect(opts.additionalDirs).toEqual(["/work/shared assets"]);
+    expect(opts.collaborationDirs).toEqual([]);
+    expect(opts.mentions.resolved[0].path).toBe("/work/shared assets");
+    expect(mocks.readFileContent.mock.calls.some(([p]) => p.endsWith("/CLAUDE.md"))).toBe(false);
+  });
+  it("工程候选添加协作卡片并发送工程上下文范围", async () => {
+    useWorkspaces().workspaces.value = [{ key: "other", name: "/work/engine", missing: false }];
+    const w = mountBox();
+    await typeAt(w, "@");
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    expect(w.get(".mention-chip-name").text()).toBe("协作工程 · engine");
+    mocks.readFileContent.mockImplementation(async (p) => {
+      if (p.endsWith("CLAUDE.md")) return "engine rules";
+      throw new Error("directory");
+    });
+    listDirectoryMock.mockResolvedValue([]);
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+    const [, opts] = w.emitted("send-request")![0] as [string, any];
+    expect(opts.collaborationDirs).toEqual(["/work/engine"]);
+    expect(opts.mentions.sendText).toContain("engine rules");
   });
 });

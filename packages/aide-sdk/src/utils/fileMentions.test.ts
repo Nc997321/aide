@@ -373,3 +373,35 @@ describe("splitMentionSections", () => {
     });
   });
 });
+
+
+describe("工程协作与目录访问", () => {
+  it("普通目录只列内容，不自动读取规则或记忆；含空格路径完整保留", async () => {
+    const path = "/work/shared assets";
+    const readFile = vi.fn().mockRejectedValue(new Error("directory"));
+    const memoryIndex = vi.fn();
+    const result = await resolveFileMentions("看一下", {
+      readFile, listDir: async () => [{ name: "photo.png", is_dir: false }],
+      memoryIndex, collaborationDirs: [],
+    }, [path]);
+    expect(result.resolved).toEqual([{ path, isDir: true, content: expect.stringContaining("photo.png") }]);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(memoryIndex).not.toHaveBeenCalled();
+    expect(result.sendText).not.toContain("本仓指令");
+  });
+  it("普通目录升级为工程协作时加载上下文，并在转录中保留用途", async () => {
+    const path = "/work/engine";
+    const readFile = vi.fn(async (p: string) => {
+      if (p.endsWith("/CLAUDE.md")) return "project rules";
+      throw new Error("directory");
+    });
+    const memoryIndex = vi.fn(async () => "project memory");
+    const result = await resolveFileMentions("协作", {
+      readFile, listDir: async () => [], memoryIndex,
+      attachedDirs: [path], collaborationDirs: [path], knownCollaborationDirs: [],
+    }, [path]);
+    expect(result.sendText).toContain("project rules");
+    expect(result.sendText).toContain("project memory");
+    expect(splitMentionSections(result.sendText).sections[0]).toMatchObject({ path, isDir: true, collaboration: true });
+  });
+});

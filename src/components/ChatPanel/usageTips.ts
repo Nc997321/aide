@@ -65,14 +65,14 @@ export const TIPS: readonly UsageTip[] = [
   {
     id: "mention-project",
     slot: "mention-project",
-    text: "@ 另一个项目 = 授权它的目录，本会话里 agent 可以跨项目读改",
+    text: "工程协作会加载对方工程的规则与记忆；普通访问请选择「文件与目录」",
     retiredBy: "cross-project",
     maxShows: 5,
   },
   {
     id: "project-attached",
     slot: "project-attached",
-    text: "已授权的项目整个会话有效；要解除就开新会话",
+    text: "目录访问范围在当前会话持续有效；要解除就开新会话",
   },
   {
     id: "context-high",

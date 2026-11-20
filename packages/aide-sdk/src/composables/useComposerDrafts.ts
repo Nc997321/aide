@@ -15,6 +15,7 @@ import type { MediaRef } from "../types/chat";
  * 只在内存里：重启不保留（落盘要另议——图片 base64 可能很大）。
  */
 export interface ComposerMention {
+  collaboration?: boolean;
   path: string;
   isDir: boolean;
   range?: { start: number; end: number };

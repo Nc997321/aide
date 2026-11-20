@@ -95,7 +95,7 @@ export type UserMessageBlock =
   // 只引用了这一段（编辑器选区），缺省=整文件。isDir 表示引用的是目录（@目录 =
   // 授权 + 一级清单，见 2026-09-17 跨目录方案）。与 aide-sdk/src/types/chat.ts 同形
   // ——**两份必须同形，漂移会让 display 静默失效**（降级成纯文本，不报错）。
-  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean }
+  | { type: "mention"; path: string; content: string; range?: { start: number; end: number }; isDir?: boolean; collaboration?: boolean }
   // 页面选区（浏览器里点选的元素 + 用户意见）：sidecar 不解释，原样随 user_message 回灌。
   // 与 aide-sdk/src/types/chat.ts 的 `pageref` 块 / `PageRef` **必须同形**——漂移会让
   // display 静默降级成纯文本，不报错。设计：docs/superpowers/specs/2026-10-02-browser-pick-to-agent-design.md
@@ -300,7 +300,7 @@ type ChatEventBody =
   // 附加目录账本（@目录 授权）：**全量**账本、幂等，各端整份覆盖。dirs = 当前生效的
   // 全部附加目录；rejected = 本次被 Rust 判掉（未注册/非法）的条目；error = 活体扩根
   // （applyFlagSettings）失败的原文。后两者是"别静默"的回声，不参与授权。
-  | { type: "workspace_attached"; dirs: string[]; rejected?: string[]; error?: string }
+  | { type: "workspace_attached"; dirs: string[]; collaborationDirs?: string[]; rejected?: string[]; error?: string }
   // 忙时发的消息已交给 CLI 排队（不打断当前回合）——各端据此显示「排队」提示条。
   // id = 发起方生成的排队 id（同时是 SDK 消息 uuid），撤回 / 接入按它对账；prompt 供提示条展示原文。
   | { type: "jump_queued"; id: string; prompt: string }
@@ -575,11 +575,12 @@ export type SidecarCommand =
       display?: UserMessageBlock[];
       cwd?: string;
       permission_mode?: string;
-      // 附加目录：**客户端已知全量**（不是"本条新增"），Rust 已裁定过（只认已注册
-      // 工作区）。并集合并进 worker 账本 → spawn 落 options.additionalDirectories、
+      // 附加目录：**客户端已知全量**（不是"本条新增"），Rust 已校验过路径（绝对、存在且为目录）。并集合并进 worker 账本 → spawn 落 options.additionalDirectories、
       // 会话中落 applyFlagSettings。缺席（旧端/鸿蒙）与空数组等价：不动账本。
       additional_dirs?: string[];
-      // 本次被 Rust 判掉、没进 additional_dirs 的条目——纯回声（前端显示"未注册，已忽略"）。
+      /** 工程上下文根；缺席兼容旧端，空数组为普通目录访问。 */
+      collaboration_dirs?: string[];
+      // 本次被 Rust 判掉、没进 additional_dirs 的条目——纯回声（前端显示无效目录）。
       attach_rejected?: string[];
       // 供应商连接身份真的漂移了才带 true——worker 原地 resume 重建 query（不 fork，会话 id 不变）。
       provider_switched?: boolean;

@@ -230,7 +230,7 @@ const readRange = computed(() =>
       </span>
       <!-- @目录 引用卡：右侧「目录」药丸（真 Read 恒缺省）。目录与文件在头行一眼可分。 -->
       <span v-if="block.isDir" class="ti-dirpill">
-        <span class="relay-pill relay-pill--dir">目录</span>
+        <span class="relay-pill relay-pill--dir">{{ block.collaboration ? '工程协作' : '目录' }}</span>
       </span>
       <span v-if="changeInfo" class="ti-diff">
         <span class="stat-add">+{{ changeInfo.addCount }}</span>

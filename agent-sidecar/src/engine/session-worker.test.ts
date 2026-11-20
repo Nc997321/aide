@@ -1915,3 +1915,22 @@ describe("纯聊天装配与异步附件", () => {
     } finally { worker.stop(); }
   });
 });
+
+
+describe("目录用途的会话账本", () => {
+  it("普通根不会加载工程上下文，旧端重报也不升级；明确协作后广播升级", () => {
+    const { worker, events } = makeWorker();
+    const w = worker as any;
+    try {
+      w.applyAttachedDirs(["/data/shared"], [], []);
+      expect(w.additionalDirs).toEqual(["/data/shared"]);
+      expect(w.collaborationDirs).toEqual([]);
+      expect(events.at(-1)).toMatchObject({ type: "workspace_attached", dirs: ["/data/shared"], collaborationDirs: [] });
+      w.applyAttachedDirs(["/data/shared"], []);
+      expect(w.collaborationDirs).toEqual([]);
+      w.applyAttachedDirs(["/data/shared"], [], ["/data/shared"]);
+      expect(w.collaborationDirs).toEqual(["/data/shared"]);
+      expect(events.at(-1)).toMatchObject({ collaborationDirs: ["/data/shared"] });
+    } finally { worker.stop(); }
+  });
+});

@@ -22,7 +22,6 @@ import {
   projectSuggestions,
   mergeSuggestions,
   applyPick,
-  MAX_SUGGESTIONS,
   type ProjectSource,
 } from "./useMentionSuggest";
 
@@ -219,20 +218,21 @@ describe("mergeSuggestions（三源排序 / 去重 / 上限）", () => {
     expect(names(mergeSuggestions(proj, local, sameName))).toEqual(["backend-api", "src", "src-tauri", "src"]);
   });
 
-  it("项目占满上限时，本层与兜底被挤掉", () => {
+  it("超过八个项目时，仍完整保留项目、本层与兜底", () => {
     const manyProj = Array.from({ length: 12 }, (_, i) => ({
       name: `p${i}`, dir: "C:/work", rel: `C:/work/p${i}`, isDir: true, origin: "project" as const,
     }));
     const merged = mergeSuggestions(manyProj, local, fuzzy);
-    expect(merged).toHaveLength(MAX_SUGGESTIONS);
-    expect(merged.every((r) => r.origin === "project")).toBe(true);
+    expect(merged).toHaveLength(12 + local.length + fuzzy.length);
+    expect(merged.slice(0, 12)).toEqual(manyProj);
+    expect(merged.slice(12)).toEqual([...local, ...fuzzy]);
   });
 
-  it("封顶 MAX_SUGGESTIONS 条", () => {
+  it("超过八条的候选不截断", () => {
     const many = Array.from({ length: 20 }, (_, i) => ({
       name: `f${i}.ts`, dir: "", rel: `f${i}.ts`, isDir: false, origin: "fuzzy" as const,
     }));
-    expect(mergeSuggestions([], [], many)).toHaveLength(MAX_SUGGESTIONS);
+    expect(mergeSuggestions([], [], many)).toHaveLength(20);
   });
 });
 

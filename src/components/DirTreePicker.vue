@@ -12,6 +12,8 @@ const props = withDefaults(defineProps<{
   mode?: TreeMode;
   /** 多选（排除目录用）。 */
   multiple?: boolean;
+  /** mixed 模式下允许选中文件夹（引用选择器）。 */
+  selectDirectories?: boolean;
   /** 锁定根：非空时跳过盘符、隐藏 quick-roots、goUp 不跳出根、地址栏只读（限工作空间内）。 */
   root?: string;
   /** 快速入口覆盖：给了就不列本机盘符（远程工作区选目录：目标机的家目录与 `/`）。 */
@@ -75,8 +77,11 @@ onMounted(async () => {
     } catch (_e) {
       roots.value = [];
     }
-    // 默认展开第一个根
-    if (roots.value.length) {
+    // 调用方给出初始位置时，从该目录开始浏览。
+    const initial = typeof path.value === "string" ? path.value : "";
+    if (initial) {
+      await expandRoot(initial);
+    } else if (roots.value.length) {
       await expandRoot(roots.value[0].path);
     }
   }
@@ -152,7 +157,7 @@ async function toggleNode(node: TreeNode) {
 // - file/mixed：目录→展开（不选中）；文件→选中（单选设值 / 多选 toggle）
 function selectNode(node: TreeNode) {
   if (node.is_dir) {
-    if (props.mode === "directory") {
+    if (props.mode === "directory" || props.selectDirectories) {
       setSelected(node.path);
     } else {
       toggleNode(node);
@@ -210,6 +215,15 @@ const addrReadonly = computed(() => !!props.root || props.multiple);
 const addrValue = computed(() => (props.multiple || Array.isArray(path.value)) ? "" : (path.value as string));
 const addrPlaceholder = computed(() => props.multiple ? "在下方树中勾选目录" : "输入或选择目录路径");
 
+async function navigateAddress() {
+  if (addrReadonly.value || !addrValue.value.trim()) return;
+  const target = addrValue.value.trim();
+  try {
+    const [kind] = await api.pathTypes([target]);
+    if (kind === "dir") await jumpToRoot(target);
+  } catch { /* 调用方确认时校验路径并报告错误。 */ }
+}
+
 function onAddrInput(e: Event) {
   if (props.multiple) return;
   path.value = (e.target as HTMLInputElement).value;
@@ -228,6 +242,7 @@ function onAddrInput(e: Event) {
         :readonly="addrReadonly"
         spellcheck="false"
         @input="onAddrInput"
+        @keydown.enter.prevent="navigateAddress"
       />
       <button
         class="hidden-toggle"

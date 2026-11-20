@@ -75,6 +75,8 @@ export interface SendMessageParams {
   /** **客户端已知的附加目录全量**（非"本条新增"）：Rust 裁定（只认已注册工作区）后下发
    *  sidecar 做并集合并，幂等——重连/换端把已知全量再报一遍即可自愈（worker 账本随进程
    *  消失，见方案 D9）。与 `workspaceRoot`（会话主根/归属）语义不同。 */
+  /** 工程协作根（包含于 additionalDirs）；空数组明确表示普通目录访问。 */
+  collaborationDirs?: string[] | null;
   additionalDirs?: string[] | null;
 }
 
