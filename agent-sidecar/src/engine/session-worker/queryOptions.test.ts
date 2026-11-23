@@ -66,8 +66,10 @@ describe("buildSpawnQueryOptions", () => {
   it("信任工作区基线：无 strictMcpConfig，instructions/hooks/mcp/env 从 ctx 直通", () => {
     const o = buildSpawnQueryOptions(parts()) as Opts;
     expect(o.strictMcpConfig).toBeUndefined();
-    expect(o.systemPrompt).toContain("面向产品负责人和架构师协作");
-    expect(o.systemPrompt).toContain("INST");
+    expect(o.systemPrompt).toMatchObject({ type: "preset", preset: "claude_code" });
+    expect(o.systemPrompt.append).toContain("面向不亲自编写代码的产品负责人和架构师协作");
+    expect(o.systemPrompt.append).toContain("用户和产品经理的视角");
+    expect(o.systemPrompt.append).toContain("INST");
     expect(o.hooks).toEqual({ PreToolUse: [] });
     expect(o.mcpServers).toEqual({ biz: { type: "http" } });
     expect(o.env).toEqual({ PATH: "/bin" });
