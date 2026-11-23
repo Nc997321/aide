@@ -238,13 +238,16 @@ const showThinking = computed(() => props.thinking && props.thinkingLabel !== fa
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .astrip-thinking,
+  /* 容器只停淡入；纯色回退只给文字本身——background 上容器会把整行涂成
+     一条实心灰带（文字同色继承，全行不可读，2026-11-23 截图实锤）。 */
+  .astrip-thinking {
+    animation: none;
+  }
   .astrip-thinking-text {
     animation: none;
-    background: var(--aide-text-muted);
-    -webkit-background-clip: initial;
-    background-clip: initial;
-    -webkit-text-fill-color: initial;
+    background: none;
+    color: var(--aide-text-muted);
+    -webkit-text-fill-color: currentColor;
   }
   .astrip-chip--run .astrip-chip-dot,
   .astrip-chip--attn .astrip-chip-dot {
