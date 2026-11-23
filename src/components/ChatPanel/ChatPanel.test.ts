@@ -483,8 +483,11 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
     vi.useRealTimers();
   });
 
+  // 提示宿主有两处：消息流末尾的 ThinkingLine（有活动 chip 时）与底部 ActivityStrip（无 chip 时）。
+  // 出场/轮换逻辑在 ChatPanel 里与宿主无关，测试只关心「这条提示在不在」。
+  const TIP_SEL = ".tline .usage-tip-body, .astrip .usage-tip-body";
   const tipText = (w: VueWrapper) => {
-    const el = w.find(".tline .usage-tip-body");
+    const el = w.find(TIP_SEL);
     return el.exists() ? el.text() : null;
   };
 
@@ -513,6 +516,14 @@ describe("ChatPanel — 「正在思考」旁的小提示轮播", () => {
     const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true, focused: false }), global: { directives: { tooltip: () => {} } } });
     await vi.advanceTimersByTimeAsync(5000);
     expect(tipText(w)).toBeNull();
+  });
+
+  it("有活动 chip 时提示宿主挪到消息流末尾的 ThinkingLine（ActivityStrip 不再重复出）", async () => {
+    const bg = { id: "t1", command: "pnpm build", status: "running", output: "", startedAt: 0 };
+    const w = mount(ChatPanel, { props: baseProps({ sessionId: "A", isBusy: true, bgTasks: [bg], messages: [{ id: "m1", role: "user", blocks: [{ type: "text", text: "hi" }], timestamp: 0 }] }), global: { directives: { tooltip: () => {} } } });
+    await vi.advanceTimersByTimeAsync(4000);
+    expect(w.find(".tline .usage-tip-body").exists()).toBe(true);
+    expect(w.find(".astrip .usage-tip-body").exists()).toBe(false);
   });
 });
 
