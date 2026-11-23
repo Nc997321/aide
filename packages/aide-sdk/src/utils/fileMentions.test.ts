@@ -7,6 +7,7 @@ import {
   normalizeMentionPath,
   parseMentionPath,
   resolveFileMentions,
+  scanMentionTokens,
   splitMentionSections,
 } from "./fileMentions";
 
@@ -53,6 +54,40 @@ describe("parseMentionPath", () => {
     const { path, range } = parseMentionPath(raw);
     expect(formatMentionPath(path, range)).toBe(raw);
     expect(formatMentionPath("/a.ts")).toBe("/a.ts");
+  });
+});
+
+describe("scanMentionTokens（@path 词法唯一事实源）", () => {
+  it("返回 token 位置与终止分隔符；endPos 不含分隔符", () => {
+    expect(scanMentionTokens("hi @src/a.ts 看看")).toEqual([
+      { atIdx: 3, token: "src/a.ts", endPos: 12, terminator: " " },
+    ]);
+  });
+
+  it("文末 token 的 terminator 为空（调用方据此区分「还在输入」）", () => {
+    expect(scanMentionTokens("@src/a.ts")).toEqual([
+      { atIdx: 0, token: "src/a.ts", endPos: 9, terminator: "" },
+    ]);
+  });
+
+  it("中文标点也是边界（与旧 extractFileMentions 行为一致）", () => {
+    expect(scanMentionTokens("@/a.ts，顺便看看")).toEqual([
+      { atIdx: 0, token: "/a.ts", endPos: 6, terminator: "，" },
+    ]);
+  });
+
+  it("空格文件名只截出前缀——文本语法表达不了空格路径，这类路径必须走结构化芯片", () => {
+    expect(scanMentionTokens("@C:\\土壤温度水分变送器 485型.pdf ")).toEqual([
+      { atIdx: 0, token: "C:\\土壤温度水分变送器", endPos: 13, terminator: " " },
+    ]);
+  });
+
+  it("裸 @ 与邮箱不产生 token", () => {
+    expect(scanMentionTokens("see a@b.com 和 @ 符号")).toEqual([]);
+  });
+
+  it("extractFileMentions 基于同一词法", () => {
+    expect(extractFileMentions("@/a.ts @/b.ts")).toEqual(["/a.ts", "/b.ts"]);
   });
 });
 

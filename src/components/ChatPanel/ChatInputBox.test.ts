@@ -23,6 +23,9 @@ const mocks = vi.hoisted(() => ({
   pathTypes: vi.fn<(paths: string[]) => Promise<string[]>>(),
   readFileContent: vi.fn<(path: string) => Promise<string>>(),
   scanPluginSkills: vi.fn(async () => [] as unknown[]),
+  clipboardReadFiles: vi.fn<() => Promise<{ paths: string[] }>>(),
+  clipboardReadImage: vi.fn<() => Promise<string | null>>(),
+  uploadLocalFiles: vi.fn<(paths: string[]) => Promise<string[]>>(),
 }));
 vi.mock("@aide/sdk/api", () => ({
   api: new Proxy(
@@ -32,6 +35,9 @@ vi.mock("@aide/sdk/api", () => ({
       pathTypes: mocks.pathTypes,
       readFileContent: mocks.readFileContent,
       scanPluginSkills: mocks.scanPluginSkills,
+      clipboardReadFiles: mocks.clipboardReadFiles,
+      clipboardReadImage: mocks.clipboardReadImage,
+      uploadLocalFiles: mocks.uploadLocalFiles,
     },
     { get: (t, k) => (typeof k === "string" && k in t ? (t as Record<string, unknown>)[k] : vi.fn(async () => undefined)) },
   ),
@@ -591,6 +597,51 @@ describe("纯聊天输入", () => {
     expect(opts.inputDocuments).toEqual([path]);
     expect(mocks.readFileContent).not.toHaveBeenCalledWith(path);
     expect(opts.mentions.resolved[0].path).toBe(path);
+  });
+});
+
+describe("粘贴/拖入的结构化芯片通道", () => {
+  it("含空格的文件名直建芯片：输入框不留 @文本，发送走结构化通道（2026-11-23 事故回归）", async () => {
+    const spacePath = join(tmpdir(), "土壤温度水分变送器 485型使用说明书.pdf");
+    mocks.clipboardReadFiles.mockResolvedValue({ paths: [spacePath] });
+    mocks.clipboardReadImage.mockResolvedValue(null);
+    mocks.uploadLocalFiles.mockImplementation(async (paths: string[]) => paths);
+    mocks.pathTypes.mockResolvedValue(["file"]);
+    mocks.readFileContent.mockResolvedValue("PDF 正文");
+    const w = mountBox({ mode: "chat" });
+
+    await textarea(w).trigger("paste", { clipboardData: { getData: () => "" } });
+    await flushPromises();
+
+    // 直建芯片：输入框没有 @路径 文本残留（旧行为会插 "@...变送器" 截断文本）
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("");
+    expect(w.get(".mention-chip-name").text()).toContain("485型使用说明书.pdf");
+
+    await typeAt(w, "看看这个型号是哪个刻度");
+    await textarea(w).trigger("keydown", { key: "Enter" });
+    await flushPromises();
+
+    const [prompt, opts] = w.emitted("send-request")![0] as [string, Record<string, any>];
+    // 气泡/模型原文都不含 @路径 前缀；纯聊天里 PDF 走宿主预解析（input_documents），
+    // 芯片持有的是完整路径——旧行为下无芯片，这条消息会带着截断的 @文本裸发给模型
+    expect(prompt).toBe("看看这个型号是哪个刻度");
+    expect(opts.inputDocuments).toEqual([spacePath]);
+    expect(opts.mentions.resolved).toEqual([{ path: spacePath, content: "（文档将在发送时解析）" }]);
+    expect(mocks.readFileContent).not.toHaveBeenCalledWith(spacePath);
+  });
+
+  it("校验不存在的粘贴路径回退成 @文本，交给扫描器/发送时解析", async () => {
+    mocks.clipboardReadFiles.mockResolvedValue({ paths: ["C:/repo/missing.ts"] });
+    mocks.clipboardReadImage.mockResolvedValue(null);
+    mocks.uploadLocalFiles.mockImplementation(async (paths: string[]) => paths);
+    mocks.pathTypes.mockResolvedValue(["none"]);
+    const w = mountBox();
+
+    await textarea(w).trigger("paste", { clipboardData: { getData: () => "" } });
+    await flushPromises();
+
+    expect((textarea(w).element as HTMLTextAreaElement).value).toBe("@C:/repo/missing.ts ");
+    expect(w.find(".mention-chip").exists()).toBe(false);
   });
 });
 

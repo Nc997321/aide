@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { DirEntry } from "@aide/sdk/utils/fileMentions";
+import { scanMentionTokens } from "@aide/sdk/utils/fileMentions";
 
 const mocks = vi.hoisted(() => ({
   listDirectory: vi.fn(),
@@ -254,9 +255,9 @@ describe("applyPick（下钻 vs 引用）", () => {
     expect(mentionTokenAt(text, caret)).toEqual({ at: 0, query: "src/components/" });
   });
 
-  it("引用后的文本正好能被 findMentionTokens 认领 → 交由 useInlineMention 转芯片", () => {
+  it("引用后的文本正好能被唯一词法扫描器认领 → 交由 useInlineMention 转芯片", () => {
     const { text } = applyPick("@src/", tok, file, "commit");
-    expect(/@([^\s@]+) /.exec(text)?.[1]).toBe("src/main.ts");
+    expect(scanMentionTokens(text).map((m) => m.token)).toEqual(["src/main.ts"]);
   });
 
   it("句中替换只动 token 本身，其余文本原样", () => {

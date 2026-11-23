@@ -22,13 +22,13 @@ import {
 describe("findMentionTokens", () => {
   it("匹配行首 @token + 空格", () => {
     expect(findMentionTokens("@src/a.ts ")).toEqual([
-      { token: "src/a.ts", atIdx: 0, endPos: 10 },
+      { token: "src/a.ts", atIdx: 0, endPos: 9 },
     ]);
   });
 
   it("匹配空格后的 @token", () => {
     expect(findMentionTokens("hi @src/a.ts ")).toEqual([
-      { token: "src/a.ts", atIdx: 3, endPos: 13 },
+      { token: "src/a.ts", atIdx: 3, endPos: 12 },
     ]);
   });
 
@@ -40,8 +40,14 @@ describe("findMentionTokens", () => {
     expect(r[1].atIdx).toBe(6);
   });
 
-  it("无尾随空格不匹配（未触发）", () => {
+  it("无尾随分隔符不匹配（未提交，可能还在输入）", () => {
     expect(findMentionTokens("@src/a.ts")).toEqual([]);
+  });
+
+  it("中文标点视为提交分隔符（与发送时提取同一份词法）", () => {
+    expect(findMentionTokens("@src/a.ts，看看")).toEqual([
+      { token: "src/a.ts", atIdx: 0, endPos: 9 },
+    ]);
   });
 
   it("不误吞邮箱 a@b.com", () => {
@@ -54,11 +60,16 @@ describe("findMentionTokens", () => {
 
   it("换行后行首 @token 命中（边界含换行）", () => {
     const r = findMentionTokens("x\n@p.ts ");
-    expect(r).toEqual([{ token: "p.ts", atIdx: 2, endPos: 8 }]);
+    expect(r).toEqual([{ token: "p.ts", atIdx: 2, endPos: 7 }]);
   });
 
   it("@@ 双 @ 不匹配", () => {
     expect(findMentionTokens("@@a.ts ")).toEqual([]);
+  });
+
+  it("空格文件名只截出前缀（文本词法以空白为界，空格路径必须走结构化芯片）", () => {
+    const r = findMentionTokens("@C:\\土壤温度水分变送器 485型.pdf ");
+    expect(r).toEqual([{ token: "C:\\土壤温度水分变送器", atIdx: 0, endPos: 13 }]);
   });
 });
 
@@ -137,7 +148,7 @@ describe("useInlineMention", () => {
 
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/utils/paste.ts"]);
     expect(addMention).toHaveBeenCalledWith("C:/repo/src/utils/paste.ts", false, undefined);
-    expect(inputText.value).toBe("");
+    expect(inputText.value).toBe(" "); // 提交空格留在文本里（本就是用户输入的间隔）
   });
 
   it("手打 @path:12-48：剥掉行号后缀再校验，芯片带回区间", async () => {
@@ -158,7 +169,7 @@ describe("useInlineMention", () => {
     // path_types 只认真实路径——行号后缀必须先剥掉，否则校验必 misses
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/a.ts"]);
     expect(addMention).toHaveBeenCalledWith("C:/repo/src/a.ts", false, { start: 12, end: 48 });
-    expect(inputText.value).toBe("");
+    expect(inputText.value).toBe(" ");
   });
 
   it("不存在的路径保留纯文本、不转芯片", async () => {
@@ -198,7 +209,7 @@ describe("useInlineMention", () => {
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/a.ts", "C:/repo/b"]);
     expect(addMention).toHaveBeenNthCalledWith(1, "C:/repo/a.ts", false, undefined);
     expect(addMention).toHaveBeenNthCalledWith(2, "C:/repo/b", true, undefined);
-    expect(inputText.value).toBe("");
+    expect(inputText.value).toBe("  "); // 两个提交空格都留下
   });
 
   it("IME 组合输入期间不转换", async () => {
@@ -221,9 +232,10 @@ describe("useInlineMention", () => {
     expect(inputText.value).toBe("@a.ts ");
   });
 
-  it("scan() 主动触发：模拟 paste/drop 程序化插入 @path 文本后立即转换", async () => {
-    // 粘贴/拖入走 insertAtCursor 程序化改 inputText，不触发 @input；
-    // 调用方在插入后主动调 scan() 唤醒检测器。
+  it("scan() 主动触发：回退插入的 @path 文本（路径校验未命中）也能被转换", async () => {
+    // 结构化通道（粘贴/拖入）直建芯片不走这里；scan() 现在只服务两类文本：
+    // 手打 @（onInput 已自动触发）与路径校验未命中回退成的 @path 文本（调用方
+    // insertAtCursor 程序化改 inputText，不触发 @input，须主动 scan 唤醒）。
     mocks.pathTypes.mockResolvedValue(["file"]);
     const inputText = ref("");
     const addMention = vi.fn();
@@ -239,6 +251,6 @@ describe("useInlineMention", () => {
 
     expect(mocks.pathTypes).toHaveBeenCalledWith(["C:/repo/src/a.ts"]);
     expect(addMention).toHaveBeenCalledWith("C:/repo/src/a.ts", false, undefined);
-    expect(inputText.value).toBe("");
+    expect(inputText.value).toBe(" ");
   });
 });

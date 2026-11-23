@@ -146,15 +146,50 @@ function sliceLines(content: string, range: MentionRange): string {
   return lines.slice(start - 1, end).join("\n");
 }
 
-/** 从消息文本中提取 `@<path>` 引用（Aide 自己的文本约定，来自文件树/剪贴板粘贴/
- *  编辑器选区——见 paste.ts 与 useMentionInserter）。要求 `@` 前是行首或空白，
- *  避免误伤 "user@example.com" 这类文本。带行号后缀（`@path:12-48`）时原样保留，
- *  由 parseMentionPath 在使用点解析。 */
+/** `@path` 文本语法的**唯一**扫描器：输入框芯片转换（useInlineMention）与
+ * 发送前注入（resolveFileMentions/extractFileMentions）必须共用这一份词法，
+ * 历史上两处各写各的正则、分隔符规则不一致，文件名带空格/紧跟中文标点时
+ * 一边认一边不认（裂缝实录见 2026-11-23 纯聊天 PDF 附件静默丢失排查）。
+ *
+ * 语法：`@` 前须为行首或空白（不误吞邮箱 `a@b.com`）；token = 到分隔符为止
+ * 的非空串。分隔符 = 空白 + 常见中文标点 + `@` 本身——中文提示词常紧跟路径
+ * 不留空格（"@C:\a.md 看看这个，顺便……"），\S+ 会把标点吞进路径。
+ *
+ * 注意边界：**路径可含空格，文本语法天生表达不了空格路径**——这类路径只允许
+ * 走结构化通道（芯片持有精确路径，见 useMentionInserter），扫描器对截断出的
+ * 前缀会校验不存在而被调用方跳过，这是设计事实而非缺陷。 */
+const MENTION_DELIM = /[\s，。！？；：、@]/;
+
+export interface MentionTokenScan {
+  /** `@` 在文本中的索引。 */
+  atIdx: number;
+  /** token 原文（@ 与分隔符之间，不含 @）。 */
+  token: string;
+  /** token 结束索引（不含分隔符；= atIdx + 1 + token.length）。 */
+  endPos: number;
+  /** token 后紧邻的分隔符字符（文末无字符时为 ""）——调用方据此判断「已提交」。 */
+  terminator: string;
+}
+
+export function scanMentionTokens(text: string): MentionTokenScan[] {
+  const out: MentionTokenScan[] = [];
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] !== "@") continue;
+    if (i > 0 && !/\s/.test(text[i - 1])) continue;
+    let j = i + 1;
+    while (j < text.length && !MENTION_DELIM.test(text[j])) j++;
+    if (j === i + 1) continue; // 裸 @
+    out.push({ atIdx: i, token: text.slice(i + 1, j), endPos: j, terminator: text[j] ?? "" });
+    i = j - 1;
+  }
+  return out;
+}
+
+/** 从消息文本中提取 `@<path>` 引用 token 列表（去重）。发送前注入用——
+ *  只取 token 本身；带行号后缀（`@path:12-48`）时原样保留，由 parseMentionPath
+ *  在使用点解析。词法见 scanMentionTokens，别在这里另写正则。 */
 export function extractFileMentions(text: string): string[] {
-  // 路径在非空白字符里截止于常见中文标点——中文提示词经常紧跟在路径后面
-  // 不留空格（如"@C:\a.md 看看这个，顺便……"里的逗号），\S+ 会把标点也吞进路径。
-  const matches = [...text.matchAll(/(?:^|\s)@([^\s，。！？；：、]+)/g)].map((m) => m[1]);
-  return [...new Set(matches)];
+  return [...new Set(scanMentionTokens(text).map((m) => m.token))];
 }
 
 /** 消息级注入的单文件上限：截断并留一行说明。这是**一次性摘要**的预算，持久规则
@@ -219,6 +254,13 @@ async function dirMentionContent(dir: string, io: MentionIo): Promise<string> {
  * 内容——那是 TUI 按键输入层的行为，query() 完全绕过，模型收到的只是字面量文本，
  * 读不读全凭它自己判断。所以这里要在发送前把每个 @path 真的读出来拼进发给模型的
  * 文本里，让模型确定拿到内容，而不是赌它会主动去读。
+ *
+ * 两条通道，调用方不许混（2026-11-23 收口）：
+ *  - **结构化通道**（`explicitMentions`）：芯片持有的精确路径，可为任意字符（含空格）。
+ *    调用方不得把这些路径再序列化进 `text`——文本词法以空白为界，含空格的路径会被
+ *    截断成不存在的前缀，白跑一次读失败。
+ *  - **文本通道**（扫描 `text`）：只服务手打 @ 且未转成芯片的字面量；词法见
+ *    scanMentionTokens（唯一事实源）。
  *
  * `@目录` 走同一条路：readFile 对目录必然失败，再用 listDir 二次判别——成功即目录
  * （授权 + 一级清单），也失败则维持"静默忽略"的旧行为。

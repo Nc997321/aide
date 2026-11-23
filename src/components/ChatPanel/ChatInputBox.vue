@@ -18,7 +18,7 @@ import type { ImageAttachment, PendingJump, SendOptions } from "@/composables/us
 import { api } from "@/api";
 import { resolvePastePayload } from "@/utils/paste";
 import type { PasteResolution } from "@/utils/paste";
-import { resolveFileMentions, formatMentionPath, attachedDirsFrom, isAbsoluteishPath, joinPath } from "@/utils/fileMentions";
+import { resolveFileMentions, formatMentionPath, normalizeMentionPath, attachedDirsFrom, isAbsoluteishPath, joinPath } from "@/utils/fileMentions";
 import { useSessionAttachedWorkspaces } from "@/composables/useSessionAttachedWorkspaces";
 import { nextPermissionMode } from "@/utils/permissionModeCycle";
 import { peekFileClipboard, clearFileClipboard } from "@/composables/useFileClipboard";
@@ -729,18 +729,22 @@ function kbChipLabel(r: { ref: { title: string; lineStart: number; lineEnd: numb
   const lines = r.ref.lineStart === r.ref.lineEnd ? `第 ${r.ref.lineStart} 行` : `第 ${r.ref.lineStart}–${r.ref.lineEnd} 行`;
   return `${r.ref.title || "未命名文档"} · ${lines}`;
 }
-// 输入框 `@path `→mention 芯片转换层（与来源无关：手打/粘贴/拖入都走这）。
-// paste/drop 管道把文件引用以 `@path ` 文本插进 textarea，这里统一扫描转换。
+// 输入框 `@path `→mention 芯片转换层（现在只服务**手打 @** 这一种来源；
+// 粘贴/拖入的结构化通道见 applyPasteResolution，不经过文本扫描）。
 const { onInput: handleMentionInput, scan: scanMentions } = useInlineMention({
   inputText,
   textareaEl,
   workspacePath: () => props.workspacePath ?? "",
-  addMention: (path, isDir, range) => {
-    if (!pendingMentions.value.some((m) => mentionKey(m.path, m.range) === mentionKey(path, range))) {
-      pendingMentions.value.push({ path, isDir, range });
-    }
-  },
+  addMention: addMentionChip,
 });
+
+/** 芯片入列（去重键 = 路径 + 区间）。唯一入口：手打扫描、粘贴/拖入、文件树
+ *  「添加到对话」都汇到这里。 */
+function addMentionChip(path: string, isDir: boolean, range?: { start: number; end: number }) {
+  if (!pendingMentions.value.some((m) => mentionKey(m.path, m.range) === mentionKey(path, range))) {
+    pendingMentions.value.push({ path, isDir, range });
+  }
+}
 
 const mentionName = pathBasename;
 const folderIconPath = FOLDER_ICON_PATH;
@@ -1113,8 +1117,8 @@ async function handlePaste(e: ClipboardEvent) {
   }
 }
 
-/** 把 resolvePastePayload 的结果落进输入框：文本→光标插入；图片路径→base64 附件。
- *  paste 与 drop 共用这条管道，确保两种"把文件弄进输入"的来源行为一致。 */
+/** 把 resolvePastePayload 的结果落进输入框：文本→光标插入；文件路径→芯片；
+ *  图片路径→base64 附件。paste 与 drop 共用这条管道，确保两种"把文件弄进输入"的来源行为一致。 */
 async function applyPasteResolution(res: PasteResolution) {
   if (res.text) {
     insertAtCursor(res.text);
@@ -1122,6 +1126,27 @@ async function applyPasteResolution(res: PasteResolution) {
     // 的 @input 事件——检测器不会自醒。这里插入 @path 文本后主动扫一次，让芯片
     // 转换立即发生，不必等用户再按键。纯文本扫描无 token 即 no-op。
     void scanMentions();
+  }
+  // 结构化通道：确切路径直接建芯片，**不**插 `@path ` 文本再走扫描——文本词法
+  // 以空白为界，文件名带空格会被截断成不存在的前缀而静默丢失（2026-11-23 事故）。
+  // 校验不存在的（如纯文本粘贴里的相对引用）才回退成文本，交给扫描/发送时解析。
+  if (res.mentionPaths.length) {
+    let types: ("file" | "dir" | "none")[] = [];
+    try {
+      types = await api.pathTypes(res.mentionPaths);
+    } catch {
+      /* IPC 失败：全部回退文本，不阻断输入 */
+    }
+    const missed: string[] = [];
+    res.mentionPaths.forEach((p, i) => {
+      const t = types[i];
+      if (t === "file" || t === "dir") addMentionChip(normalizeMentionPath(p), t === "dir");
+      else missed.push(p);
+    });
+    if (missed.length) {
+      insertAtCursor(missed.map((p) => `@${p}`).join(" ") + " ");
+      void scanMentions();
+    }
   }
   if (res.imagePaths.length) usageTips.markUsed("paste-image");
   let failed = 0;
@@ -1166,7 +1191,7 @@ function handleDragOver(e: DragEvent) {
 /** 把拖入的文件接进现有粘贴管道。两路来源：
  *  - 外部 OS 文件：dataTransfer.files。WebView2 不一定暴露 File.path——有则
  *    用真实路径（零额外设施），无则读字节落临时盘兜底拿路径。统一走
- *    resolvePastePayload → @path 引用 / 图片附件。
+ *    resolvePastePayload → 芯片（确切路径，支持空格文件名）/ 图片附件。
  *  - 文件树内部拖入：TreeNodeItem.onDragStart 同时 cut(path) 设了 in-app 剪贴板，
  *    以其为准（WebView2 下 dataTransfer.getData 偶发返回空）。拖入输入框是
  *    "引用"不是"移动"，处理后清 cut 态，避免残留半透明与误移。
@@ -1179,7 +1204,7 @@ async function handleDrop(e: DragEvent) {
   await ingestFiles(Array.from(dt.files ?? []));
 }
 
-/** 拖入 / `＋` 菜单选取的文件进对话：图片成附件，其余成 @引用（与粘贴同一套判定）。
+/** 拖入 / `＋` 菜单选取的文件进对话：图片成附件，其余成芯片（与粘贴同一套判定）。
  *  dropped 为空 = 内部文件树拖入（走文件剪贴板条目）。 */
 async function ingestFiles(dropped: File[]) {
   let paths: string[] = [];
@@ -1297,13 +1322,13 @@ async function performSend() {
   const hasImages = captured.images.length > 0;
   const hasMediaRefs = captured.mediaRefs.length > 0;
   const kbrefs = kbChips.value.map((r) => ({ ...r.ref }));
-  // 引用芯片 → @path 前缀：发送时才展开成文本，走与手打/粘贴 @path 完全相同的
-  // resolveFileMentions 管道（历史 transcript 也因此天然兼容，无需迁移）。
-  const mentionPrefix = captured.mentions.length
-    ? captured.mentions.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ") + " "
-    : "";
+  // 引用芯片是**结构化通道**：不序列化进 prompt 文本。用户气泡只放原文（芯片由
+  // useChatSession 渲染成 mention 卡片块），展开内容只走 mentions.sendText 给模型。
+  // 历史教训：曾把芯片展开成 "@path " 文本前缀，文本词法以空白为界，带空格的路径
+  // 被截断成不存在的前缀、静默丢失（2026-11-23 事故）；且只有手打 @ 才应被文本扫描。
+  const hasMentions = captured.mentions.length > 0;
   // 忙碌时不再拦截：useChatSession 会带排队标记透传，sidecar 在安全边界续发
-  if (!text && !hasImages && !hasMediaRefs && !mentionPrefix && !kbrefs.length) return;
+  if (!text && !hasImages && !hasMediaRefs && !hasMentions && !kbrefs.length) return;
   if (captured.mediaRefs.length > MAX_MEDIA_REFS) {
     showToast(`媒体引用最多 ${MAX_MEDIA_REFS} 条，请先移除多余项`, "danger");
     return;
@@ -1328,8 +1353,9 @@ async function performSend() {
           if (!btwPanelOpen.value) toggleBtwPanel();
           return;
         }
-        // 引用芯片在 btw 里只带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
-        emit("send-btw", mentionPrefix + args);
+        // 引用芯片在 btw 里只能带 @path 字面量（支线没有 mention 展开通道），模型可自行 Read。
+        const btwPrefix = captured.mentions.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ");
+        emit("send-btw", btwPrefix ? `${btwPrefix} ${args}` : args);
         pendingImages.value = [];
         pendingMentions.value = [];
         usageTips.markUsed("btw");
@@ -1337,7 +1363,9 @@ async function performSend() {
       }
       // prompt 类：菜单点击与手打同出口；取消确认则保留输入、什么都不发。
       // 发送坐实后的输入清空由 sendConfirmedNonce watcher 统一负责。
-      await runPromptAction(action, mentionPrefix + text);
+      // 快捷动作没有 mention 展开通道，同 btw：芯片只能带 @path 字面量。
+      const actionPrefix = captured.mentions.map((m) => "@" + formatMentionPath(m.path, m.range)).join(" ");
+      await runPromptAction(action, actionPrefix ? `${actionPrefix} ${text}` : text);
       return;
     }
   }
@@ -1362,6 +1390,9 @@ async function performSend() {
   // （见踩坑记录）。展开后的内容不进 finalPrompt（用户气泡显示用的原文），
   // 只进 mentionResolution.sendText（发给模型用）——避免文件内容和用户
   // 自己打的字混在一个气泡里，读起来很差。
+  // 两通道：芯片 = 结构化（explicitMentions，含空格路径安全）；finalPrompt 里
+  // 剩下的 @字面量 = 手打未转芯片，发送时由唯一词法扫描兜底。别把芯片路径
+  // 序列化进 finalPrompt（见上方 hasMentions 注释的事故记录）。
   const collaborationDirs = captured.mentions.filter((m) => m.collaboration).map((m) => m.path);
   const inputDocuments: string[] = [];
   const mentionResolution = await resolveFileMentions(finalPrompt, {
@@ -1423,7 +1454,7 @@ async function performSend() {
   // 的 provider/模型并进 opts 上报，由 ChatPanel 判定是否弹确认形态。确认后/直接
   // 发送后经 sendConfirmedNonce 坐实清空输入；取消确认不递增，输入保留。
   sendSnapshot = captured;
-  emit("send-request", mentionPrefix + finalPrompt, {
+  emit("send-request", finalPrompt, {
     ...sendOpts,
     effectiveProvider: identity.effectiveProvider.value,
     effectiveModel: selectedModel.value,

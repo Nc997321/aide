@@ -1,6 +1,6 @@
 import { nextTick, type Ref } from "vue";
 import { api } from "../api";
-import { parseMentionPath, normalizeMentionPath, joinPath, isAbsoluteishPath } from "../utils/fileMentions";
+import { parseMentionPath, normalizeMentionPath, joinPath, isAbsoluteishPath, scanMentionTokens } from "../utils/fileMentions";
 
 // 路径语法（拼接/绝对性判定）已迁到 SDK 的 fileMentions（mention 路径的唯一真相源）；
 // 这里 re-export 给既有调用点（SearchPanel、本模块单测），新代码请直接引包。
@@ -19,7 +19,10 @@ export { joinPath, isAbsoluteishPath };
  * 只认真实路径，所以校验前先剥后缀，命中后再把区间原样带回芯片。
  *
  * 设计要点：
- * - 触发＝`@token` 后紧跟空格；`@` 前须为边界（行首/空白），不误吞邮箱 `a@b.com`。
+ * - 触发＝`@token` 后紧跟分隔符（空格/中文标点，词法 = SDK scanMentionTokens，
+ *   唯一事实源）；`@` 前须为边界（行首/空白），不误吞邮箱 `a@b.com`。
+ * - 路径含空格的文件不会、也不能靠文本扫描识别（词法以空白为界）——拖/粘贴
+ *   走结构化芯片通道（applyPasteResolution 直建芯片），只有手打 @ 才经过这里。
  * - 仅真实存在的路径才转（`path_types` 返回 file/dir）；不存在保留纯文本。
  * - 多 token 一次批量 `path_types`（一次 IPC 处理多文件粘贴/拖入）。
  * - 异步竞态：请求序号 + 转换前片段复核双保险。
@@ -50,20 +53,17 @@ export function resolveCandidate(token: string, workspacePath: string): string {
 }
 
 /**
- * 扫描文本里所有 `@token ` 模式（`@` + 非空白非@字符 + 一个空格）。
- * `@` 前须为边界（行首或空白字符），否则跳过——避免误吞邮箱 `a@b.com`。
- * 用字面量空格而非 `\s`，避免吃掉用户输入的换行/制表符。
+ * 扫描文本里所有 `@token`（词法唯一事实源 = SDK scanMentionTokens，这里只做
+ * 交互层的「提交」判定）。
+ * 转换触发＝token 后面跟了分隔符（空格/中文标点/换行，即用户"提交"了这个
+ * token）；token 悬在文末（terminator 为空）说明还在输入，不转。
+ * 旧实现要求字面量空格才触发，与发送时提取的词法（中文标点也是边界）不一致：
+ * "@a.md，看看"发送时能认出、输入框却不转芯片。统一后两边同一份词法。
  */
 export function findMentionTokens(text: string): MentionTokenMatch[] {
-  const re = /@([^\s@]+) /g;
-  const out: MentionTokenMatch[] = [];
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const atIdx = m.index;
-    if (atIdx > 0 && !/\s/.test(text[atIdx - 1])) continue;
-    out.push({ token: m[1], atIdx, endPos: atIdx + m[0].length });
-  }
-  return out;
+  return scanMentionTokens(text)
+    .filter((m) => m.terminator !== "")
+    .map((m) => ({ token: m.token, atIdx: m.atIdx, endPos: m.endPos }));
 }
 
 export function useInlineMention(opts: {
@@ -127,7 +127,8 @@ export function useInlineMention(opts: {
       const h = hits[i];
       if (!h) continue;
       const { token, atIdx, endPos } = h.match;
-      if (text2.slice(atIdx, endPos) !== `@${token} `) continue; // 片段已变，放弃
+      if (text2.slice(atIdx, endPos) !== `@${token}`) continue; // 片段已变，放弃
+      // 只摘 @token，留下触发提交的分隔符（空格/标点本就是用户输入的间隔）。
       text2 = text2.slice(0, atIdx) + text2.slice(endPos);
       applied.unshift({ atIdx, path: h.path, isDir: h.isDir, range: h.range });
     }
