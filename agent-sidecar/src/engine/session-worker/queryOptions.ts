@@ -166,7 +166,11 @@ export function buildSpawnQueryOptions(p: QuerySpawnParts): Options {
     // 只带 persistSession:false,不碰工具列表(缓存前缀红线)。
     // 自动化:tools 收成白名单 + maxTurns/maxBudgetUsd 护栏透传。
     ...automationQueryOverrides(p.branch.automationConfig),
-    ...(!profile.toolsEnabled ? { tools: [], allowedTools: [], mcpServers: {}, hooks: {}, strictMcpConfig: true } : {}),
+    // 纯聊天：摘掉所有工具/插件/技能/hooks，但保留 WebSearch（联网搜索是只读的，
+    // 纯聊天照样需要查资料）；它同时进 allowedTools，免得每搜一次弹一次确认。
+    ...(!profile.toolsEnabled
+      ? { tools: ["WebSearch"], allowedTools: ["WebSearch"], mcpServers: {}, hooks: {}, strictMcpConfig: true }
+      : {}),
     env: p.runtime.cliEnv,
   };
 }

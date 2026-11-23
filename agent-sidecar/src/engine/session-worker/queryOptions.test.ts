@@ -48,13 +48,13 @@ describe("buildSpawnQueryOptions", () => {
     expect(result.disallowedTools).not.toContain("Glob");
     expect(result.allowedTools).not.toContain("Glob");
   });
-  it("纯聊天不暴露任何工具/插件/技能/hooks，即使已有上下文或自动化覆盖", () => {
+  it("纯聊天只留 WebSearch，插件/技能/hooks/MCP 全摘，即使已有上下文或自动化覆盖", () => {
     const o = buildSpawnQueryOptions(parts({ branch: {
       sessionProfile: "chat",
       automationConfig: { taskId: "t", runId: "r", preset: "auto", tools: ["Read"], mcpAllowlist: [], taskDir: "", sessionDir: "" },
     } }));
-    expect(o.tools).toEqual([]);
-    expect(o.allowedTools).toEqual([]);
+    expect(o.tools).toEqual(["WebSearch"]);
+    expect(o.allowedTools).toEqual(["WebSearch"]);
     expect(o.mcpServers).toEqual({});
     expect(o.hooks).toEqual({});
     expect(o.skills).toEqual([]);
@@ -90,7 +90,7 @@ describe("buildSpawnQueryOptions", () => {
     expect(chat.systemPrompt).toContain("自然交流");
     expect(chat.systemPrompt).not.toContain("INST");
     expect(chat.systemPrompt).not.toContain("实际事务");
-    expect(chat.tools).toEqual([]);
+    expect(chat.tools).toEqual(["WebSearch"]);
   });
 
   it("会话级 worktree 切换工具被摘除（会改会话 cwd → 档案/基线对不上）；主会话与自动化都带", () => {

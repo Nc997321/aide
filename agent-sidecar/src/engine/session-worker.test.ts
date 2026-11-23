@@ -1908,7 +1908,7 @@ describe("纯聊天装配与异步附件", () => {
       release();
       await vi.waitFor(() => expect(options).toBeDefined());
       worker._emitForTest({ type: "session_init", session_id: "real-chat" });
-      expect(options.tools).toEqual([]);
+      expect(options.tools).toEqual(["WebSearch"]);
       expect(options.mcpServers).toEqual({});
       expect(events).toContainEqual(expect.objectContaining({ type: "session_init", session_profile: "chat" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "user_message", text: expect.stringContaining("文档正文") }));
