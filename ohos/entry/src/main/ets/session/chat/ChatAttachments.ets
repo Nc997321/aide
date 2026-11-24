@@ -28,6 +28,8 @@ import { image } from '@kit.ImageKit';
 import { media } from '@kit.MediaKit';
 import { util } from '@kit.ArkTS';
 import { common } from '@kit.AbilityKit';
+import { BusinessError } from '@kit.BasicServicesKit';
+import { hilog } from '@kit.PerformanceAnalysisKit';
 import { SendImage, SendDisplayBlock } from '../../sdk/types';
 import { uuid } from './ChatWire';
 import { api } from '../../sdk/api';
@@ -232,14 +234,24 @@ export class ChatAttachments {
       return;
     }
     try {
-      const profile: cameraPicker.PickerProfile = new cameraPicker.PickerProfile();
-      profile.cameraPosition = camera.CameraPosition.CAMERA_POSITION_BACK;
+      // PickerProfile 属性在 SDK 里 readonly：new 后赋值会抛
+      // "Cannot assign to read only property"，必须对象字面量整体构造（官方示例同式）
+      const profile: cameraPicker.PickerProfile = {
+        cameraPosition: camera.CameraPosition.CAMERA_POSITION_BACK
+      };
       const r: cameraPicker.PickerResult =
         await cameraPicker.pick(ctx, [cameraPicker.PickerMediaType.PHOTO], profile);
+      if (r.resultCode !== 0) {
+        hilog.warn(0x0000, 'aide', 'cameraPicker.pick rejected: code=%{public}d uri=%{public}s',
+          r.resultCode, r.resultUri);
+      }
       if (r.resultCode === 0 && r.resultUri !== '') {
         await this.addImageUris([r.resultUri]);
       }
-    } catch (e) {
+    } catch (error) {
+      const err: BusinessError = error as BusinessError;
+      hilog.error(0x0000, 'aide', 'cameraPicker.pick failed: code=%{public}d msg=%{public}s',
+        err.code, err.message);
       this.pickToast('相机拉起失败');
     }
   }
