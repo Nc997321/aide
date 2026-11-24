@@ -23,8 +23,7 @@ const props = withDefaults(defineProps<{
   truncated?: TruncatedInfo;
   streaming?: boolean;
   presentation?: "standalone" | "process";
-  showContent?: boolean;
-}>(), { presentation: "standalone", showContent: true });
+}>(), { presentation: "standalone" });
 const expanded = defineModel<boolean>("expanded", { default: false });
 
 /** 用户是否手动 toggle 过——一旦操作，details 开合完全由用户决定，流式默认不再覆盖。 */
@@ -51,7 +50,7 @@ const TAIL_MAX_CHUNKS = 400;
  *
  *  非流式时把源锁成空串：历史消息挂载时不必白算一遍块表（模板那时走
  *  streamingBody 全文渲染，根本不看块表）。 */
-const streamSource = computed(() => (props.streaming && props.showContent ? props.text : ""));
+const streamSource = computed(() => (props.streaming ? props.text : ""));
 const { settled, clipped, chunks } = useStreamChunks(streamSource, { maxChunks: TAIL_MAX_CHUNKS });
 
 // 流式期：thinking-body 限高 320px + 钉底跟随（逐字增长时内部滚到底），让用户看到
@@ -115,16 +114,14 @@ function onToggle(e: Event) {
     <summary class="thinking-head">
       <span class="thinking-caret" aria-hidden="true"></span>
       <span>{{ streaming ? "正在思考…" : "思考" }}</span>
-      <template v-if="showContent">
-        <span aria-hidden="true">·</span>
-        <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
-      </template>
+      <span aria-hidden="true">·</span>
+      <span class="thinking-count">{{ truncated ? Math.round(truncated.originalBytes / 2) : text.length }} 字</span>
       <slot name="summary-extra" />
     </summary>
     <!-- 流式期：前缀文本节点 + 逐块淡入的尾巴。模板刻意写成紧凑形式——容器的
          white-space 是 pre-wrap，元素之间任何残留的空白文本节点都会渲染成可见空格。
          非流式期回整段渲染（折叠态子树不排版，全文布局只付一次）。 -->
-    <div v-if="showContent" ref="bodyRef" class="thinking-body">
+    <div ref="bodyRef" class="thinking-body">
       <template v-if="streaming"
         ><span v-if="clipped">…</span
         ><span>{{ settled }}</span

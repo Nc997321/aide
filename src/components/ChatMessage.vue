@@ -205,7 +205,6 @@ function handleTextClick(e: MouseEvent) {
           v-if="seg.kind === 'process'"
           :segment="seg"
           :finalized="!message.streaming"
-          :show-thinking="settings.showThinking"
           :workspace-path="workspacePath"
           :bg-tasks="bgTasks"
           @open-bg-dock="emit('open-bg-dock', $event)"

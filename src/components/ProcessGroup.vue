@@ -7,7 +7,6 @@ import ProcessStep from "./ProcessGroup/ProcessStep.vue";
 const props = defineProps<{
   segment: ProcessSegment;
   finalized: boolean;
-  showThinking: boolean;
   workspacePath?: string;
   bgTasks?: BgTask[];
 }>();
@@ -15,9 +14,9 @@ const emit = defineEmits<{ "open-bg-dock": [taskId: string] }>();
 
 const expanded = ref(false);
 const head = computed(() => processHead(props.segment.blocks));
-const history = computed(() => props.segment.blocks.filter(block =>
-  block !== head.value && (block.type !== "thinking" || props.showThinking),
-));
+// 思考块的可见性在 segmentBlocks 按 showThinking 收口（关 = 不进 segment），
+// 到这里只剩"该显示的"，历史不再二次过滤。
+const history = computed(() => props.segment.blocks.filter(block => block !== head.value));
 const failedCount = computed(() => history.value.filter(block =>
   block.type !== "thinking" && block.isError,
 ).length);
@@ -33,7 +32,6 @@ watch([stepKey, () => props.segment.current, () => props.finalized], () => { exp
       v-model:expanded="expanded"
       :block="head"
       :current="segment.current"
-      :show-thinking="showThinking"
       :workspace-path="workspacePath"
       :bg-tasks="bgTasks"
       @open-bg-dock="emit('open-bg-dock', $event)"
@@ -49,7 +47,6 @@ watch([stepKey, () => props.segment.current, () => props.finalized], () => { exp
             v-for="(block, index) in history"
             :key="block.type === 'thinking' ? `thinking-${index}` : block.id"
             :block="block"
-            :show-thinking="showThinking"
             :workspace-path="workspacePath"
             :bg-tasks="bgTasks"
             @open-bg-dock="emit('open-bg-dock', $event)"

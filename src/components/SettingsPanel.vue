@@ -531,7 +531,7 @@ function onOverlayClick(e: MouseEvent) {
               <div class="settings-field">
                 <label class="field-label">显示思考过程</label>
                 <div class="toggle-row">
-                  <span class="field-hint">在对话里显示 agent 的思考内容。关闭时只在思考期间显示「正在思考…」</span>
+                  <span class="field-hint">在对话里显示 agent 的思考内容。关闭时思考过程完全不出现，进度看输入框上方的状态条</span>
                   <label class="toggle">
                     <input v-model="showThinkingLocal" type="checkbox" />
                     <span class="toggle-track"></span>

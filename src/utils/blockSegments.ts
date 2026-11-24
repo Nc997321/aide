@@ -42,7 +42,11 @@ export function segmentBlocks(blocks: readonly ContentBlock[], opts: SegmentOpti
 
   for (let index = 0; index < blocks.length; index++) {
     const block = blocks[index];
-    if (block.type === "thinking" && !opts.showThinking && (opts.finalized || index !== blocks.length - 1)) continue;
+    // 「不显示思考过程」= 思考块彻底不渲染——流式中也不留「正在思考…」占位行。
+    // 状态感知归输入框上方的状态条（推敲中·计时·中断）。2026-11-24 用户拍板去掉
+    // "放行流式尾块"例外；下方 segment 里 thinking 只可能出现在 showThinking=true 时，
+    // 渲染层（ProcessGroup/ThinkingBlock）无需再对思考做二次隐藏。
+    if (block.type === "thinking" && !opts.showThinking) continue;
     if (block.type === "text" && !block.text.trim()) continue;
     if (block.type === "tool_call" && isChangeTool(block.name)) {
       open = null;

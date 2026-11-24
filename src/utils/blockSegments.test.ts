@@ -40,11 +40,15 @@ describe("segmentBlocks（单行过程入口）", () => {
     }
   });
 
-  it("思考正文隐藏：中间思考省略，尾部思考只在流式时保留提示", () => {
+  it("思考正文隐藏（默认关）：思考块彻底不渲染，流式尾块也不留提示", () => {
     expect(shape(segmentBlocks([tool("Read"), thinking("隐藏"), tool("Grep")]))).toEqual(["Read,Grep"]);
     expect(shape(segmentBlocks([thinking("隐藏"), text("正文")]))).toEqual(["text"]);
-    expect(shape(segmentBlocks([thinking("正在想")]))).toEqual(["thinking"]);
+    // 2026-11-24 起「关」= 零渲染：流式中的尾部思考同样不放行（状态归输入框上方状态条）。
+    expect(segmentBlocks([thinking("正在想")])).toEqual([]);
+    expect(segmentBlocks([thinking("正在想")], { finalized: false })).toEqual([]);
     expect(segmentBlocks([thinking("结束")], { finalized: true })).toEqual([]);
+    // 开关=开 时思考照常进组。
+    expect(shape(segmentBlocks([thinking("想")], { showThinking: true }))).toEqual(["thinking"]);
   });
 
   it("只有思考时取最后一个思考块，正文之间只保留最后一组为current", () => {

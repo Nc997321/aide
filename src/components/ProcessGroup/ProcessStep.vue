@@ -8,7 +8,6 @@ import ThinkingBlock from "../ThinkingBlock.vue";
 withDefaults(defineProps<{
   block: ProcessBlock;
   current?: boolean;
-  showThinking: boolean;
   workspacePath?: string;
   bgTasks?: BgTask[];
 }>(), { current: false });
@@ -40,7 +39,6 @@ const emit = defineEmits<{ "open-bg-dock": [taskId: string] }>();
     :text="block.text"
     :truncated="block.truncated"
     :streaming="current"
-    :show-content="showThinking"
   >
     <template #summary-extra><slot name="summary-extra" /></template>
     <template #history><slot name="history" /></template>

@@ -19,9 +19,9 @@ function group(blocks: ContentBlock[], options = { finalized: false, showThinkin
   return segment;
 }
 const wrappers: ReturnType<typeof mount>[] = [];
-function mountGroup(segment: ProcessSegment, showThinking = true) {
+function mountGroup(segment: ProcessSegment) {
   const wrapper = mount(ProcessGroup, {
-    props: { segment, finalized: false, showThinking },
+    props: { segment, finalized: false },
     global: {
       directives: { tooltip: {} },
       stubs: { BashOutputBlock: true, StaticDiff: true, SubagentTimeline: true },
@@ -124,13 +124,13 @@ describe("ProcessGroup", () => {
     expect(wrapper.find(".process-history").exists()).toBe(true);
   });
 
-  it("隐藏思考开关不泄露思考内容；命令后隐藏思考不计入历史", () => {
-    const hidden = mountGroup(group([{ type: "thinking", text: "不能显示" }], { finalized: false, showThinking: false }), false);
-    expect(hidden.text()).toContain("正在思考");
-    expect(hidden.find(".thinking-body").exists()).toBe(false);
-    expect(hidden.text()).not.toContain("不能显示");
-    const command = mountGroup(group([tool(), { type: "thinking", text: "隐藏" }], { finalized: false, showThinking: false }), false);
-    expect(command.find(".ti-row").exists()).toBe(true);
-    expect(command.find(".process-count").exists()).toBe(false);
+  it("隐藏思考开关下思考块不进组（渲染层无思考可泄露）", () => {
+    // 开关=关时 segmentBlocks 直接丢思考块：纯思考段为空，渲染层不存在"半渲染"路径。
+    expect(segmentBlocks([{ type: "thinking", text: "秘密" }], { showThinking: false })).toEqual([]);
+    const command = group([tool(), { type: "thinking", text: "隐藏" }], { finalized: false, showThinking: false });
+    const wrapper = mountGroup(command);
+    expect(wrapper.find(".ti-row").exists()).toBe(true);
+    expect(wrapper.find(".process-count").exists()).toBe(false);
+    expect(wrapper.text()).not.toContain("隐藏");
   });
 });
