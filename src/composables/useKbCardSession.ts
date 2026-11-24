@@ -125,7 +125,7 @@ export function editSelectionRequest(p: PermissionRequest | null): { selectionId
 
 /** 新会话的名字：侧栏「日常」里一眼认出它是哪篇文档的圈选对话。 */
 export function cardSessionTitle(docTitle: string): string {
-  return `知识库 · ${docTitle.trim() || "未命名文档"}`;
+  return `资料库 · ${docTitle.trim() || "未命名文档"}`;
 }
 
 /** 这条会话还在吗：映射可能指向已被删除的会话（侧栏删了、别的端删了、磁盘被清）。

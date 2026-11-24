@@ -104,7 +104,7 @@ function onInvitePaste(e: ClipboardEvent): void {
   <div class="kb-login">
     <div class="kb-login-form">
       <form class="kb-card" @submit.prevent="onSubmit">
-      <h2>{{ mode === "setup" ? "初始化知识库" : mode === "join" ? "加入知识库" : "登录知识库" }}</h2>
+      <h2>{{ mode === "setup" ? "初始化资料库" : mode === "join" ? "加入资料库" : "登录资料库" }}</h2>
       <p v-if="mode === 'setup'" class="kb-sub">
         这个实例还没有任何用户。创建第一个管理员，之后由他邀请同事。
       </p>

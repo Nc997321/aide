@@ -140,7 +140,7 @@ export function useKnowledgeBase() {
       // 连不上服务。initialized 留 null → 界面按"已初始化"显示登录页，
       // 这样网络恢复后不用改任何状态就能直接登录。
       user.value = null;
-      fail(e, "连接知识库服务失败");
+      fail(e, "连接资料库服务失败");
       ready.value = true;
       return;
     }
@@ -174,9 +174,9 @@ export function useKnowledgeBase() {
         void pushKnowledgeRuntime(); // token 已清 → 主进程删镜像文件
         error.value = "登录已过期，请重新登录";
       } else if (isNetworkFailure(e)) {
-        error.value = `连不上知识库服务（${getBaseUrl()}），稍后重试`;
+        error.value = `连不上资料库服务（${getBaseUrl()}），稍后重试`;
       } else {
-        fail(e, "连接知识库服务失败");
+        fail(e, "连接资料库服务失败");
       }
     } finally {
       ready.value = true;

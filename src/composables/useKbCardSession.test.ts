@@ -106,8 +106,8 @@ describe("映射与标题", () => {
     expect(parseSidMap('{"a":"s1","b":2,"c":""}')).toEqual({ a: "s1" });
   });
   it("标题带文档名；没标题给兜底", () => {
-    expect(cardSessionTitle("发布流程")).toBe("知识库 · 发布流程");
-    expect(cardSessionTitle("  ")).toBe("知识库 · 未命名文档");
+    expect(cardSessionTitle("发布流程")).toBe("资料库 · 发布流程");
+    expect(cardSessionTitle("  ")).toBe("资料库 · 未命名文档");
   });
 });
 
@@ -122,7 +122,7 @@ describe("send：新会话落日常、临时号先登记", () => {
     await nextTick();
     expect(sid).toBeTruthy();
     expect(card.sid.value).toBe(sid);
-    expect(useSessionNames().takePendingTitle(sid!)).toBe("知识库 · 发布流程");
+    expect(useSessionNames().takePendingTitle(sid!)).toBe("资料库 · 发布流程");
     const call = invokeMock.mock.calls.find((c) => c[0] === "send_message");
     expect(JSON.stringify(call![1])).toContain("/home/u/.aide/workspace");
 

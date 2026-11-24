@@ -26,7 +26,7 @@ export function decideSpace(requested: string | undefined, spaces: KbSpaceBrief[
       kind: "ask",
       text:
         "No spaceId was given, and the signed-in user can see no knowledge base spaces. " +
-        "Ask the user to check their space membership in the 知识库 panel.",
+        "Ask the user to check their space membership in the 资料库 panel.",
     };
   }
 

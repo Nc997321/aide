@@ -144,7 +144,7 @@ export const TIPS: readonly UsageTip[] = [
   {
     id: "t-kb-selection",
     slot: "thinking",
-    text: "在知识库文档里圈出一段再发，agent 只会改你圈的那段",
+    text: "在资料库文档里圈出一段再发，agent 只会改你圈的那段",
     retiredBy: "kb-selection",
   },
   {

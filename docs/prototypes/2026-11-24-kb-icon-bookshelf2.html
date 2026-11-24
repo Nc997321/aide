@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<title>资料库图标 · 书架极简版</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #1b1d22; color: #e6e8ee; padding: 32px 40px 48px; }
+  h1 { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+  .sub { font-size: 12.5px; color: #8a90a0; margin-bottom: 24px; }
+  .row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .card { width: 300px; background: #23262d; border: 1px solid #33373f; border-radius: 12px; padding: 16px 18px 14px; }
+  .card .name { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
+  .card .desc { font-size: 12px; color: #8a90a0; margin-bottom: 12px; line-height: 1.5; }
+  .preview { display: flex; align-items: center; gap: 24px; background: #1b1d22; border-radius: 8px; padding: 14px 16px; }
+  .preview .p { display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  .preview .p span { font-size: 10.5px; color: #6b7180; }
+  .preview svg { color: #9aa1b0; display: block; }
+  .sz15 { width: 15px; height: 15px; }
+  .sz48 { width: 48px; height: 48px; }
+</style>
+</head>
+<body>
+  <h1>资料库 · 书架极简版</h1>
+  <div class="sub">上一版嫌杂——这版全部砍到 3~4 个大色块：书更宽、缝更宽、笔画总数减半。15px = 侧栏真实尺寸。</div>
+
+  <div class="row">
+    <!-- A. 无框三书脊 -->
+    <div class="card">
+      <div class="name">A · 无框三书脊</div>
+      <div class="desc">只要一条底线 + 三本宽书，高矮错落。最简，像书店的 logo。</div>
+      <div class="preview">
+        <div class="p"><svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 20.5h16"/>
+          <path d="M6.3 8.5h3v12h-3z"/>
+          <path d="M10.9 11.5h3v9h-3z"/>
+          <path d="M15.5 6.5h3v14h-3z"/>
+        </svg><span>15px</span></div>
+        <div class="p"><svg class="sz48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 20.5h16"/>
+          <path d="M6.3 8.5h3v12h-3z"/>
+          <path d="M10.9 11.5h3v9h-3z"/>
+          <path d="M15.5 6.5h3v14h-3z"/>
+        </svg><span>48px</span></div>
+      </div>
+    </div>
+
+    <!-- B. 框 + 三本宽书 -->
+    <div class="card">
+      <div class="name">B · 框 + 三本宽书</div>
+      <div class="desc">书柜框留着、内部只放三本宽书，缝隙大。框感强但不挤。</div>
+      <div class="preview">
+        <div class="p"><svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5h15v17h-15z"/>
+          <path d="M6.8 8h3v12.5h-3z"/>
+          <path d="M11.2 10.2h3v10.3h-3z"/>
+          <path d="M15.6 7h2.8v13.5h-2.8z"/>
+        </svg><span>15px</span></div>
+        <div class="p"><svg class="sz48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5h15v17h-15z"/>
+          <path d="M6.8 8h3v12.5h-3z"/>
+          <path d="M11.2 10.2h3v10.3h-3z"/>
+          <path d="M15.6 7h2.8v13.5h-2.8z"/>
+        </svg><span>48px</span></div>
+      </div>
+    </div>
+
+    <!-- C. U 形书立 + 三本书 -->
+    <div class="card">
+      <div class="name">C · U 形书立</div>
+      <div class="desc">去掉顶边只剩侧板 + 底板，书大一点。比 B 轻一格。</div>
+      <div class="preview">
+        <div class="p"><svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5v17h15v-17"/>
+          <path d="M7 9h3.2v11.5H7z"/>
+          <path d="M11.6 7.5h3.2v13H11.6z"/>
+          <path d="M16.2 10.5h2.4v10H16.2z"/>
+        </svg><span>15px</span></div>
+        <div class="p"><svg class="sz48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5v17h15v-17"/>
+          <path d="M7 9h3.2v11.5H7z"/>
+          <path d="M11.6 7.5h3.2v13H11.6z"/>
+          <path d="M16.2 10.5h2.4v10H16.2z"/>
+        </svg><span>48px</span></div>
+      </div>
+    </div>
+
+    <!-- D. 两站一横 -->
+    <div class="card">
+      <div class="name">D · 两站一横</div>
+      <div class="desc">框内两本站立 + 右下角一本横放，形状对比强、只有三块。</div>
+      <div class="preview">
+        <div class="p"><svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5h15v17h-15z"/>
+          <path d="M6.8 7.5h3.2v13H6.8z"/>
+          <path d="M11 9.5h3v11H11z"/>
+          <path d="M14.8 17.6h4v2.9h-4z"/>
+        </svg><span>15px</span></div>
+        <div class="p"><svg class="sz48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4.5 3.5h15v17h-15z"/>
+          <path d="M6.8 7.5h3.2v13H6.8z"/>
+          <path d="M11 9.5h3v11H11z"/>
+          <path d="M14.8 17.6h4v2.9h-4z"/>
+        </svg><span>48px</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h1 style="margin-top:36px">与邻居并排（15px 真实尺寸）</h1>
+  <div class="row">
+    <div class="card" style="display:flex;gap:18px;align-items:center;width:auto;padding:14px 20px">
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M4.5 9.5 5.6 4.5h12.8l1.1 5"/>
+        <path d="M3.5 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0"/>
+        <path d="M6 12v8h12v-8"/>
+        <path d="M9.5 20v-4a2.5 2.5 0 0 1 5 0v4"/>
+      </svg>
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M12 5a3 3 0 1 0-5.997.125 4 4 0 0 0-2.526 5.77 4 4 0 0 0 .556 6.588A4 4 0 1 0 12 18Z"/>
+        <path d="M12 5a3 3 0 1 1 5.997.125 4 4 0 0 1 2.526 5.77 4 4 0 0 1-.556 6.588A4 4 0 1 1 12 18Z"/>
+        <path d="M15 13a4.5 4.5 0 0 0-1.41 2.775"/>
+        <path d="M9 13a4.5 4.5 0 0 1-1.41 2.775"/>
+        <path d="M17.99 9.125a4.5 4.5 0 0 1 .001 5.75"/>
+        <path d="M6.01 9.125a4.5 4.5 0 0 0-.001 5.75"/>
+      </svg>
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M4 20.5h16"/>
+        <path d="M6.3 8.5h3v12h-3z"/>
+        <path d="M10.9 11.5h3v9h-3z"/>
+        <path d="M15.5 6.5h3v14h-3z"/>
+      </svg>
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M4.5 3.5h15v17h-15z"/>
+        <path d="M6.8 8h3v12.5h-3z"/>
+        <path d="M11.2 10.2h3v10.3h-3z"/>
+        <path d="M15.6 7h2.8v13.5h-2.8z"/>
+      </svg>
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M4.5 3.5v17h15v-17"/>
+        <path d="M7 9h3.2v11.5H7z"/>
+        <path d="M11.6 7.5h3.2v13H11.6z"/>
+        <path d="M16.2 10.5h2.4v10H16.2z"/>
+      </svg>
+      <svg class="sz15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="color:#9aa1b0">
+        <path d="M4.5 3.5h15v17h-15z"/>
+        <path d="M6.8 7.5h3.2v13H6.8z"/>
+        <path d="M11 9.5h3v11H11z"/>
+        <path d="M14.8 17.6h4v2.9h-4z"/>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

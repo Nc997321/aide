@@ -325,7 +325,7 @@ const otherAsk = computed(() => (card.permission.value && !ask.value ? card.perm
 
 async function answerAsk(approved: boolean): Promise<void> {
   try {
-    await card.respond(approved, approved ? undefined : "用户在知识库卡片里拒绝了这次修改");
+    await card.respond(approved, approved ? undefined : "用户在资料库卡片里拒绝了这次修改");
   } catch (e) {
     showToast(`没能回复 AI：${String(e)}`);
   }

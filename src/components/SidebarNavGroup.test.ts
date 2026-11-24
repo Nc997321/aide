@@ -45,7 +45,7 @@ describe("SidebarNavGroup 侧栏顶部导航组", () => {
     expect(w.text()).toContain("新增会话");
     expect(w.text()).toContain("Aide 市场");
     expect(w.text()).toContain("记忆观测台");
-    expect(w.text()).toContain("知识库");
+    expect(w.text()).toContain("资料库");
     // 浏览器入口 2026-09-20 搬去右栏 rail（它是右栏 tab，不再是主区一级视图）——
     // 挡在这里，免得有人顺手往侧栏加回去。
     expect(w.text()).not.toContain("浏览器");

@@ -255,7 +255,7 @@ async function request<T>(
 function networkError(): KbError {
   return new KbError(
     "network",
-    `连不上知识库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
+    `连不上资料库服务（${getBaseUrl()}）。确认 knowledge-server 已启动`,
     0,
   );
 }

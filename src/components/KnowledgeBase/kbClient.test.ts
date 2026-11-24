@@ -77,7 +77,7 @@ describe("kb.getAsset", () => {
   it("网络层失败给的是「连不上服务」，不是通用错误", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
-    await expect(kb.getAsset("x")).rejects.toThrow(/连不上知识库服务/);
+    await expect(kb.getAsset("x")).rejects.toThrow(/连不上资料库服务/);
   });
 });
 

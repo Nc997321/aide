@@ -28,7 +28,7 @@ const NOTES: Record<string, { note: string; caution?: boolean }> = {
   "aide-search": { note: "在工作区内按文件名查找文件，限制搜索范围与结果数量" },
   "aide-docs": { note: "读写 docx / pdf 文档" },
   "aide-knowledge": {
-    note: "知识库读写：含新建、覆盖、移动、删除文档，任务内不再逐次确认",
+    note: "资料库读写：含新建、覆盖、移动、删除文档，任务内不再逐次确认",
     caution: true,
   },
   "aide-memory": { note: "只读参考其他工作区的记忆" },

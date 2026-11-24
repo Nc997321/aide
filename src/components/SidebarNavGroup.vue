@@ -72,21 +72,12 @@ function onDockMenu(e: MouseEvent) {
       @click="togglePanel"
       @contextmenu.prevent="onDockMenu"
     >
-      <svg class="nav-icon" viewBox="0 0 24 24" fill="none">
-        <path
-          d="M21 8L12 3L3 8V16L12 21L21 16V8Z"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
-        <path
-          d="M3 8L12 13L21 8M12 13V21"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        />
+      <!-- 店面（雨棚 + 门洞，24 网格内联版）：「市场」的隐喻，与立方体区分 -->
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M4.5 9.5 5.6 4.5h12.8l1.1 5" />
+        <path d="M3.5 9.5a2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0 2.5 2.5 0 0 0 5 0" />
+        <path d="M6 12v8h12v-8" />
+        <path d="M9.5 20v-4a2.5 2.5 0 0 1 5 0v4" />
       </svg>
       <span class="nav-label">Aide 市场</span>
       <span v-if="installedCount" class="nav-count">{{ installedCount }}</span>
@@ -110,13 +101,15 @@ function onDockMenu(e: MouseEvent) {
       <span class="nav-label">记忆观测台</span>
     </div>
 
-    <div class="nav-row" :class="{ on: kbOpen }" v-tooltip="'团队知识库'" @click="toggleKb">
-      <!-- 书本（24 网格内联版，与上面两行同一字形语言） -->
+    <div class="nav-row" :class="{ on: kbOpen }" v-tooltip="'团队资料库'" @click="toggleKb">
+      <!-- 书架（柜框 + 三本宽书，24 网格内联版）：「资料库」的隐喻 -->
       <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
-        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+        <path d="M4.5 3.5h15v17h-15z" />
+        <path d="M6.8 8h3v12.5h-3z" />
+        <path d="M11.2 10.2h3v10.3h-3z" />
+        <path d="M15.6 7h2.8v13.5h-2.8z" />
       </svg>
-      <span class="nav-label">知识库</span>
+      <span class="nav-label">资料库</span>
     </div>
 
     <!-- 应用名是应用自己写的：只进文本节点。自带的图标只当图片用（mask / img），内容不进 HTML；没有就用内置字形。 -->

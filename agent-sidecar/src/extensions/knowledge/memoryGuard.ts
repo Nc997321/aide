@@ -35,7 +35,7 @@ export function isMemoryFilePath(configDir: string, file: string): boolean {
 }
 
 export const MEMORY_GUARD_REASON =
-  "这一轮是知识库里「圈选一段让 AI 改」的定点编辑，不写入记忆。只改圈中的那一段；要记住什么，请在普通对话里明说。";
+  "这一轮是资料库里「圈选一段让 AI 改」的定点编辑，不写入记忆。只改圈中的那一段；要记住什么，请在普通对话里明说。";
 
 export function makeKbMemoryGuardHook(opts: { configDir: string; scopes: KbScopeStore | undefined }): HookCallback | null {
   const { configDir, scopes } = opts;

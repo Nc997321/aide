@@ -48,7 +48,7 @@ const statusChip = computed<{ text: string; tone: "work" | "ok" | "bad" | "idle"
         <path d="M7 3h7l5 5v13H7z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
         <path d="M14 3v5h5M10 13h6M10 17h4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
       </svg>
-      <span class="kr-title" v-tooltip="`知识库《${block.title}》`">{{ block.title || "未命名文档" }}</span>
+      <span class="kr-title" v-tooltip="`资料库《${block.title}》`">{{ block.title || "未命名文档" }}</span>
       <span class="kr-lines">{{ lines }}</span>
       <span class="kr-comment" :class="{ 'kr-comment--empty': !block.comment }">{{ block.comment || "（仅指出这一处）" }}</span>
       <span v-if="statusChip" class="kr-status" :class="`kr-status--${statusChip.tone}`">

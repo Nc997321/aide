@@ -300,7 +300,7 @@ function buildIngestFileTool(env: NodeJS.ProcessEnv, cwd: string) {
 function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
   return tool(
     "delete_document",
-    "Delete a knowledge base node together with everything under it (sub-folders and documents alike). This is a soft delete: it disappears from every list, search and read path, and the 知识库 panel has NO restore — use it only when the user explicitly names something to delete, never to tidy up on your own.",
+    "Delete a knowledge base node together with everything under it (sub-folders and documents alike). This is a soft delete: it disappears from every list, search and read path, and the 资料库 panel has NO restore — use it only when the user explicitly names something to delete, never to tidy up on your own.",
     { documentId: z.string().describe("Document id (uuid) from search or list_documents") },
     (args) => kbWrite(env, (client) => deleteDocument(client, { documentId: args.documentId })),
   );
@@ -309,7 +309,7 @@ function buildDeleteDocumentTool(env: NodeJS.ProcessEnv) {
 function buildEditSelectionTool(env: NodeJS.ProcessEnv, scopes: KbScopeStore) {
   return tool(
     "edit_selection",
-    "Rewrite the part of a knowledge base document that the USER selected (circled) in the 知识库 panel — and nothing else. The user's message lists each selection with an id (s1, s2, …). You supply only the replacement text: it replaces the selected source text EXACTLY, so write just that piece (keep its own markdown form, e.g. a list item stays a list item), never repeat the text around it. The position is fixed by the user's selection; you cannot change it. If the user's request would need changes outside the selection, do not do them — say so instead. Read the document first with read_document if you need the surrounding context.",
+    "Rewrite the part of a knowledge base document that the USER selected (circled) in the 资料库 panel — and nothing else. The user's message lists each selection with an id (s1, s2, …). You supply only the replacement text: it replaces the selected source text EXACTLY, so write just that piece (keep its own markdown form, e.g. a list item stays a list item), never repeat the text around it. The position is fixed by the user's selection; you cannot change it. If the user's request would need changes outside the selection, do not do them — say so instead. Read the document first with read_document if you need the surrounding context.",
     {
       selectionId: z.string().describe("The selection id from the user's message, e.g. \"s1\""),
       newText: z.string().describe("The replacement for the selected text. Empty string deletes the selection."),

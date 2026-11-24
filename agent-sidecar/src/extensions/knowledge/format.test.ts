@@ -133,7 +133,7 @@ describe("formatSpaces / formatDocumentList", () => {
 
 describe("KB_NOT_CONNECTED_TEXT", () => {
   it("指向知识库面板登录（这是「未配置」唯一的用户可见出口）", () => {
-    expect(KB_NOT_CONNECTED_TEXT).toContain("知识库 panel");
+    expect(KB_NOT_CONNECTED_TEXT).toContain("资料库 panel");
     expect(KB_NOT_CONNECTED_TEXT).toContain("sign in");
   });
 });

@@ -23,13 +23,13 @@ async function copy(text: string): Promise<void> {
   <div v-if="banner.kind === 'upgrade'" class="kb-update" data-kb-update>
     <span class="kb-update-text">
       <template v-if="banner.latest">
-        知识库服务有新版本 <b>{{ banner.latest }}</b>（当前 {{ banner.current ?? "旧版本" }}）。
+        资料库服务有新版本 <b>{{ banner.latest }}</b>（当前 {{ banner.current ?? "旧版本" }}）。
       </template>
-      <template v-else>知识库服务是 <b>{{ banner.current ?? "旧版本" }}</b>。</template>
+      <template v-else>资料库服务是 <b>{{ banner.current ?? "旧版本" }}</b>。</template>
       <template v-if="banner.required">这个客户端需要更新的服务端才能正常使用。</template>
       <template v-if="banner.isAdmin">在服务器上放 docker-compose.yml 的目录里运行：</template>
-      <template v-else>请联系知识库管理员，在服务器上放 docker-compose.yml 的目录里运行：</template>
-      <small>命令会把目标版本写进 .env（覆盖里面旧的 KB_IMAGE），只重启知识库服务，不动数据库和数据。</small>
+      <template v-else>请联系资料库管理员，在服务器上放 docker-compose.yml 的目录里运行：</template>
+      <small>命令会把目标版本写进 .env（覆盖里面旧的 KB_IMAGE），只重启资料库服务，不动数据库和数据。</small>
     </span>
     <code class="kb-update-cmd">{{ banner.command }}</code>
     <button class="kb-update-link" @click="copy(banner.command)">{{ copied ? "已复制" : "复制命令" }}</button>

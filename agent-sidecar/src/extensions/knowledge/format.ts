@@ -16,7 +16,7 @@ import { findSection, parseOutline, sliceLines, type KbHeading } from "./outline
 /** 未配置 / 已登出时的引导文本（工具恒挂，未登录也有话可说——设计 spec §5.1）。 */
 export const KB_NOT_CONNECTED_TEXT =
   "The knowledge base is not connected — no credentials are saved for this desktop. " +
-  "Ask the user to sign in from the 知识库 panel, then retry (no new session is needed).";
+  "Ask the user to sign in from the 资料库 panel, then retry (no new session is needed).";
 
 /** `read_document` 输出上限：超出截断并显式注明。 */
 export const KB_READ_MAX_CHARS = 100_000;
@@ -46,7 +46,7 @@ export function stripHighlight(s: string): string {
 export function formatFailure(f: KbFailure): string {
   switch (f.kind) {
     case "unauthorized":
-      return "The knowledge base rejected the saved credentials (401). Tell the user to sign in again from the 知识库 panel, then retry — no new session is needed.";
+      return "The knowledge base rejected the saved credentials (401). Tell the user to sign in again from the 资料库 panel, then retry — no new session is needed.";
     case "forbidden":
       return "The signed-in account has no permission for this space or document (403). Ask the user to check space membership, or pick another space.";
     case "not_found":
@@ -58,7 +58,7 @@ export function formatFailure(f: KbFailure): string {
     case "server":
       return `The knowledge base returned a server error (${f.status}). Retry once; if it persists, tell the user to check the knowledge base service.`;
     case "network":
-      return `Could not reach the knowledge base at ${f.baseUrl} (${f.detail}). Retry once; if it persists, check that the service is running and that the address in the 知识库 panel is right.`;
+      return `Could not reach the knowledge base at ${f.baseUrl} (${f.detail}). Retry once; if it persists, check that the service is running and that the address in the 资料库 panel is right.`;
     case "timeout":
       return "The knowledge base request timed out. Retry once; if it keeps timing out, tell the user the service may be overloaded.";
     case "bad_response":
@@ -177,7 +177,7 @@ export function formatDocumentView(doc: KbDocument, sel: DocumentSelector): stri
 
 export function formatSpaces(spaces: KbSpace[]): string {
   if (spaces.length === 0) {
-    return "The signed-in user can see no knowledge base spaces. Ask the user to check their space membership in the 知识库 panel.";
+    return "The signed-in user can see no knowledge base spaces. Ask the user to check their space membership in the 资料库 panel.";
   }
   const lines = spaces.map(
     (s) => `- ${s.name} — id ${s.id} (key ${s.key}, visibility ${s.visibility}${s.role ? `, your role ${s.role}` : ""})`,
@@ -232,7 +232,7 @@ export function formatDeletedDocument(title: string, documentId: string, deleted
     : "";
   return (
     `Deleted "${title}"${subs} (documentId ${documentId}). It is gone from every list, search and read path, ` +
-    "and the 知识库 panel has no restore — an admin would have to recover it from the database."
+    "and the 资料库 panel has no restore — an admin would have to recover it from the database."
   );
 }
 
@@ -254,6 +254,6 @@ export function warnTruncatedSource(oldContent: string): string {
   if (oldContent.length <= KB_READ_MAX_CHARS) return "";
   return (
     `\n⚠ The previous body was ${oldContent.length} characters, longer than read_document can show (${KB_READ_MAX_CHARS}). ` +
-    "If you carried over only what you read, the tail is now gone — check the version history in the 知识库 panel and re-apply the missing part."
+    "If you carried over only what you read, the tail is now gone — check the version history in the 资料库 panel and re-apply the missing part."
   );
 }
